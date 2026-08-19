@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Json.Schema;
@@ -14,6 +15,13 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Webhooks;
 
+/// <summary>
+/// The <c>netclaw webhooks</c> surface. Reads run against canonical disk with no
+/// daemon. Writes are daemon-only, so every <c>set</c> or <c>delete</c> test that
+/// reaches the write step supplies a <see cref="FakeWebhookDaemon"/> and asserts
+/// the patch the CLI sent. A test that stops at argument grammar, at the merge
+/// preview, or at <c>--dry-run</c> never contacts the daemon and passes none.
+/// </summary>
 public sealed class WebhooksCommandTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
@@ -245,46 +253,56 @@ public sealed class WebhooksCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Set_NewRoute_CreatesFile()
+    public async Task Set_NewRoute_SendsTheRouteToTheDaemon()
     {
+        var daemon = FakeWebhookDaemon.Healthy(_paths);
+
         var result = await WebhooksCommand.RunAsync([
             "webhooks", "set", "new-route",
             "--prompt", "Test prompt",
             "--secret", "test-secret"
-        ], _paths);
+        ], _paths, output: null, daemon.Api);
 
         Assert.Equal(0, result);
-        Assert.True(File.Exists(Path.Combine(_paths.WebhooksDirectory, "new-route.json")));
+        using var body = daemon.SingleUpsertBody("new-route");
+        Assert.Equal("Test prompt", body.RootElement.GetProperty("prompt").GetString());
+        Assert.Equal("test-secret", body.RootElement.GetProperty("secret").GetString());
+
+        // The daemon writes the file, so the CLI must leave the directory alone.
+        Assert.False(File.Exists(Path.Combine(_paths.WebhooksDirectory, "new-route.json")));
     }
 
     [Fact]
     public async Task Set_WriteFailure_DoesNotReportSuccess()
     {
-        Directory.CreateDirectory(Path.Combine(_paths.WebhooksDirectory, "blocked-route.json"));
+        var daemon = new FakeWebhookDaemon(_paths, request => request.Method == HttpMethod.Put
+            ? new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            : FakeWebhookDaemon.RouteList());
         using var output = new StringWriter();
 
-        var exception = await Assert.ThrowsAnyAsync<SystemException>(() => WebhooksCommand.RunAsync([
+        var result = await WebhooksCommand.RunAsync([
             "webhooks", "set", "blocked-route",
             "--prompt", "Test prompt",
             "--secret", "test-secret"
-        ], _paths, output));
+        ], _paths, output, daemon.Api);
 
-        Assert.True(exception is IOException or UnauthorizedAccessException,
-            $"Expected a persistence IO exception, got {exception.GetType().Name}: {exception.Message}");
+        Assert.Equal(1, result);
         Assert.DoesNotContain("[OK]", output.ToString(), StringComparison.Ordinal);
     }
 
     [Fact]
     public async Task Set_WithUppercaseRoute_NormalizesToLowercase()
     {
+        var daemon = FakeWebhookDaemon.Healthy(_paths);
+
         var result = await WebhooksCommand.RunAsync([
             "webhooks", "set", "GitHub-Issues",
             "--prompt", "Test prompt",
             "--secret", "test-secret"
-        ], _paths);
+        ], _paths, output: null, daemon.Api);
 
         Assert.Equal(0, result);
-        Assert.True(File.Exists(Path.Combine(_paths.WebhooksDirectory, "github-issues.json")));
+        Assert.Contains(daemon.Calls, call => call.Method == "PUT" && call.Path == "/api/webhooks/github-issues");
     }
 
     [Theory]
@@ -426,8 +444,10 @@ public sealed class WebhooksCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Set_TimestampedHmac_Persists_advanced_settings()
+    public async Task Set_TimestampedHmac_Sends_advanced_settings()
     {
+        var daemon = FakeWebhookDaemon.Healthy(_paths);
+
         var result = await WebhooksCommand.RunAsync([
             "webhooks", "set", "stripe-events",
             "--prompt", "Process Stripe event",
@@ -438,31 +458,35 @@ public sealed class WebhooksCommandTests : IDisposable
             "--signature-field", "signature",
             "--signed-payload-separator", "::",
             "--signature-tolerance-seconds", "120"
-        ], _paths);
+        ], _paths, output: null, daemon.Api);
 
         Assert.Equal(0, result);
-        var route = ReadRoute("stripe-events");
-        Assert.Equal(WebhookVerifierKind.HmacTimestamped, route.Verification.Kind);
-        Assert.Equal("Stripe-Signature", route.Verification.SignatureHeaderName);
-        Assert.Equal("timestamp", route.Verification.TimestampField);
-        Assert.Equal("signature", route.Verification.SignatureField);
-        Assert.Equal("::", route.Verification.SignedPayloadSeparator);
-        Assert.Equal(120, route.Verification.ToleranceSeconds);
+        using var body = daemon.SingleUpsertBody("stripe-events");
+        var patch = body.RootElement;
+        Assert.Equal("HmacTimestamped", patch.GetProperty("verificationKind").GetString());
+        Assert.Equal("Stripe-Signature", patch.GetProperty("signatureHeaderName").GetString());
+        Assert.Equal("timestamp", patch.GetProperty("timestampField").GetString());
+        Assert.Equal("signature", patch.GetProperty("signatureField").GetString());
+        Assert.Equal("::", patch.GetProperty("signedPayloadSeparator").GetString());
+        Assert.Equal(120, patch.GetProperty("toleranceSeconds").GetInt32());
     }
 
     [Fact]
     public async Task Set_HeaderSecret_Accepts_documented_hyphenated_spelling()
     {
+        var daemon = FakeWebhookDaemon.Healthy(_paths);
+
         var result = await WebhooksCommand.RunAsync([
             "webhooks", "set", "internal-events",
             "--prompt", "Process internal event",
             "--secret", "shared-secret",
             "--verification-kind", "header-secret",
             "--secret-header", "X-Internal-Secret"
-        ], _paths);
+        ], _paths, output: null, daemon.Api);
 
         Assert.Equal(0, result);
-        Assert.Equal(WebhookVerifierKind.HeaderSecret, ReadRoute("internal-events").Verification.Kind);
+        using var body = daemon.SingleUpsertBody("internal-events");
+        Assert.Equal("HeaderSecret", body.RootElement.GetProperty("verificationKind").GetString());
     }
 
     [Fact]
@@ -503,22 +527,28 @@ public sealed class WebhooksCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Set_Unrelated_update_preserves_legacy_verifier_without_timestamp_fields()
+    public async Task Set_Unrelated_update_leaves_the_legacy_verifier_untouched()
     {
         CreateValidRoute("legacy-route");
+        var daemon = FakeWebhookDaemon.Healthy(_paths);
 
         var result = await WebhooksCommand.RunAsync([
             "webhooks", "set", "legacy-route",
             "--rate-limit", "12"
-        ], _paths);
+        ], _paths, output: null, daemon.Api);
 
         Assert.Equal(0, result);
-        var route = ReadRoute("legacy-route");
-        Assert.Equal(WebhookVerifierKind.Hmac, route.Verification.Kind);
-        Assert.Equal(12, route.RateLimitPerMinute);
-        var json = File.ReadAllText(Path.Combine(_paths.WebhooksDirectory, "legacy-route.json"));
-        Assert.DoesNotContain("ToleranceSeconds", json, StringComparison.Ordinal);
-        Assert.DoesNotContain("TimestampField", json, StringComparison.Ordinal);
+
+        // The patch carries only the flag the operator passed. Every verifier
+        // field stays null, so the daemon keeps the stored HMAC settings and adds
+        // no timestamp fields to a route that has none.
+        using var body = daemon.SingleUpsertBody("legacy-route");
+        var patch = body.RootElement;
+        Assert.Equal(12, patch.GetProperty("rateLimitPerMinute").GetInt32());
+        Assert.Equal(JsonValueKind.Null, patch.GetProperty("verificationKind").ValueKind);
+        Assert.Equal(JsonValueKind.Null, patch.GetProperty("toleranceSeconds").ValueKind);
+        Assert.Equal(JsonValueKind.Null, patch.GetProperty("timestampField").ValueKind);
+        Assert.Equal(JsonValueKind.Null, patch.GetProperty("signatureField").ValueKind);
     }
 
     [Fact]
@@ -574,17 +604,27 @@ public sealed class WebhooksCommandTests : IDisposable
     public async Task Delete_ExistingRoute_ReturnsZero()
     {
         CreateValidRoute("delete-me");
+        var daemon = FakeWebhookDaemon.Healthy(_paths);
 
-        var result = await WebhooksCommand.RunAsync(["webhooks", "delete", "delete-me", "--force"], _paths);
+        var result = await WebhooksCommand.RunAsync(
+            ["webhooks", "delete", "delete-me", "--force"], _paths, output: null, daemon.Api);
 
         Assert.Equal(0, result);
-        Assert.False(File.Exists(Path.Combine(_paths.WebhooksDirectory, "delete-me.json")));
+        Assert.Contains(daemon.Calls, call => call.Method == "DELETE" && call.Path == "/api/webhooks/delete-me");
     }
 
     [Fact]
     public async Task Delete_NonexistentRoute_ReturnsOne()
     {
-        var result = await WebhooksCommand.RunAsync(["webhooks", "delete", "nonexistent", "--force"], _paths);
+        // The daemon owns the route set, so a missing route is its 404, not a
+        // missing file on the CLI's disk.
+        var daemon = new FakeWebhookDaemon(_paths, request => request.Method == HttpMethod.Delete
+            ? new HttpResponseMessage(HttpStatusCode.NotFound)
+            : FakeWebhookDaemon.RouteList());
+
+        var result = await WebhooksCommand.RunAsync(
+            ["webhooks", "delete", "nonexistent", "--force"], _paths, output: null, daemon.Api);
+
         Assert.Equal(1, result);
     }
 

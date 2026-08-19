@@ -238,9 +238,9 @@ public sealed class DaemonApi
 
     /// <summary>
     /// Lists the daemon's webhook routes. The CLI also uses this call as its
-    /// write-path probe: a transport failure means the daemon is down, and a 404
-    /// means the daemon predates the resource. Both answers select direct-file
-    /// mode; every other failure status is a hard error.
+    /// write availability probe: a transport failure means the daemon is down,
+    /// and a 404 means the daemon predates the resource. Every answer other than
+    /// success fails the mutation; there is no local write path.
     /// </summary>
     public async Task<HttpResponseMessage> ListWebhookRoutesAsync(CancellationToken ct = default)
     {

@@ -862,11 +862,11 @@ static async Task RunAsync(string[] args)
     {
         var webhooksSubcommand = args.Length > 1 ? args[1] : "list";
 
-        // `set` and `delete` mutate routes, so they belong to the daemon when it
-        // runs — they need the DaemonApi client. Building the DI host parses local
-        // config (netclaw.json, secrets.json); a corrupt file must produce a
-        // readable error, not a stack trace. Every other subcommand reads route
-        // files, which stay canonical, so it needs no daemon.
+        // `set` and `delete` mutate routes, which only the daemon does — they need
+        // the DaemonApi client. Building the DI host parses local config
+        // (netclaw.json, secrets.json); a corrupt file must produce a readable
+        // error, not a stack trace. Every other subcommand reads route files,
+        // which stay canonical, so it needs no daemon.
         if (webhooksSubcommand is "set" or "delete")
         {
             try

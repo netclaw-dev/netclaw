@@ -70,11 +70,13 @@ delivery endpoint:
 - `PUT /api/webhooks/{route}` -> create or update; requires Operator authority
 - `DELETE /api/webhooks/{route}` -> remove the route
 
-The `netclaw webhooks` CLI writes through this resource when the daemon is
-reachable. When the daemon is down, or an older daemon lacks the resource, the
-CLI writes the route file directly and prints one stderr notice that names the
-direct-file mode. A daemon rejection (validation or authorization) fails the
-command and never falls back to a direct file write.
+The `netclaw webhooks` CLI manages routes through this resource. `set` and
+`delete` require a running daemon: when the daemon does not answer, when an older
+daemon lacks the resource, or when the daemon rejects the call, the command fails
+and changes no file. The CLI never writes a route file. `list`, `show`, and
+`validate` read the route files on disk, which stay canonical. To author a route
+without a daemon, write the route file to the webhooks directory; the daemon
+loads it at startup.
 
 **Approval gate:** Webhooks run without a human — they cannot prompt for
 approval. The same rules as reminders apply: shell commands must be pre-approved

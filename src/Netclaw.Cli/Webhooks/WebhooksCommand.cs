@@ -13,11 +13,11 @@ namespace Netclaw.Cli.Webhooks;
 /// <summary>
 /// Handles <c>netclaw webhooks &lt;subcommand&gt;</c> CLI subcommands.
 /// <para>
-/// Reads (<c>list</c>, <c>show</c>, <c>validate</c>) are always offline: disk is
+/// Reads (<c>list</c>, <c>show</c>, <c>validate</c>) are always local: disk is
 /// the canonical route store and the daemon actor holds no cache, so a file read
-/// is always current. Writes (<c>set</c>, <c>delete</c>) go to the daemon when it
-/// is reachable and serves the route resource — see
-/// <see cref="WebhookRouteWriteGateway"/> for the mode rule.
+/// is always current, and <c>show</c> needs the secret that the API never
+/// returns. Writes (<c>set</c>, <c>delete</c>) require the daemon — see
+/// <see cref="WebhookRouteDaemonClient"/>. There is no local write path.
 /// </para>
 /// </summary>
 internal static class WebhooksCommand
@@ -26,9 +26,9 @@ internal static class WebhooksCommand
     /// Runs one <c>netclaw webhooks</c> invocation.
     /// </summary>
     /// <param name="daemonApi">
-    /// The daemon client for route mutations. Null is the offline invocation:
-    /// the write path falls to direct file mode and says so on stderr, the same
-    /// disclosed state as an unreachable daemon.
+    /// The daemon client for route mutations. The read subcommands never use it,
+    /// so they accept null. A null on <c>set</c> or <c>delete</c> fails the
+    /// command exactly as an unreachable daemon does.
     /// </param>
     public static async Task<int> RunAsync(
         string[] args,
@@ -43,14 +43,14 @@ internal static class WebhooksCommand
             return WriteHelp(output);
 
         var store = new WebhookRouteStore(paths);
-        var gateway = new WebhookRouteWriteGateway(daemonApi, Console.Error);
+        var daemon = new WebhookRouteDaemonClient(daemonApi);
 
         return subcommand switch
         {
             "list" => RunList(args, store, paths, output),
             "show" => RunShow(args, store, paths, output),
-            "set" => await RunSetAsync(args, store, paths, output, gateway),
-            "delete" => await RunDeleteAsync(args, store, output, gateway),
+            "set" => await RunSetAsync(args, store, paths, output, daemon),
+            "delete" => await RunDeleteAsync(args, output, daemon),
             "validate" => RunValidate(args, paths, output),
             _ => WriteHelp(output)
         };
@@ -290,7 +290,7 @@ internal static class WebhooksCommand
         WebhookRouteStore store,
         NetclawPaths paths,
         TextWriter output,
-        WebhookRouteWriteGateway gateway)
+        WebhookRouteDaemonClient daemon)
     {
         if (args.Length < 3 || HasFlag(args, "--help") || HasFlag(args, "-h"))
         {
@@ -320,8 +320,8 @@ internal static class WebhooksCommand
         if (!TryResolveTextInput(args, "--notify-instructions", "--notify-instructions-file", out var notifyInstructions, out var hasNotifyInstructions))
             return 1;
 
-        // Argument grammar stays local in both modes: these checks read only the
-        // command line, so they answer the same way with or without a daemon.
+        // Argument grammar stays local: these checks read only the command line,
+        // so they answer the same way with or without a daemon.
         if (!TryGetFlagValue(args, "--verification-kind", out var verificationKindText, out var hasVerificationKind))
             return 1;
 
@@ -422,11 +422,14 @@ internal static class WebhooksCommand
             return 1;
         }
 
-        var routeSaved = false;
         var updatedExistingRoute = false;
 
         // Merges the parsed flags onto the stored route and validates the result.
-        // A null definition tells the store to leave the file untouched.
+        // It is a local preview: it answers --create-only / --update-only, the
+        // Created-or-Updated wording, and --dry-run before the command contacts
+        // the daemon. A null definition means the command sends nothing. The
+        // daemon re-reads and re-validates the patch, so it stays the one
+        // enforcement point.
         (WebhookRouteConfig? Definition, int Result) Merge(WebhookRouteConfig? existing)
         {
             var exists = existing is not null;
@@ -541,68 +544,47 @@ internal static class WebhooksCommand
                 return (null, 0);
             }
 
-            routeSaved = true;
             updatedExistingRoute = exists;
             return (route, 0);
         }
 
-        // A dry run saves nothing, so it needs no write path and prints no mode notice.
-        var mode = WebhookRouteWriteMode.DirectFile;
-        if (!dryRun)
-        {
-            var resolution = await gateway.ResolveModeAsync(CancellationToken.None);
-            if (resolution.Failed)
-            {
-                Console.Error.WriteLine($"[FAIL] {resolution.Error}");
-                return 1;
-            }
-
-            mode = resolution.Mode;
-        }
-
+        WebhookRouteConfig? existing;
+        WebhookRouteConfig? merged;
         int result;
         try
         {
-            if (mode is WebhookRouteWriteMode.DirectFile)
-            {
-                result = store.Update(routeName, CancellationToken.None, Merge);
-            }
-            else
-            {
-                // Daemon mode. The local read is a preview only: it answers
-                // --create-only / --update-only, the Created-or-Updated wording,
-                // and the same validation text the file path prints, so the two
-                // modes agree. The daemon re-reads and re-validates the patch, so
-                // it stays the one enforcement point.
-                var existing = ReadExistingRoute(store, routeName);
-                (var merged, result) = Merge(existing);
-                if (merged is not null)
-                {
-                    var saved = await gateway.UpsertAsync(
-                        routeName,
-                        BuildPatch(existing is null),
-                        CancellationToken.None);
-                    if (!saved.Success)
-                    {
-                        Console.Error.WriteLine($"[FAIL] {saved.Error}");
-                        return 1;
-                    }
-                }
-            }
+            existing = ReadExistingRoute(store, routeName);
+            (merged, result) = Merge(existing);
         }
-        catch (Exception ex) when (ex is InvalidDataException or TimeoutException)
+        catch (InvalidDataException ex)
         {
             Console.Error.WriteLine($"[FAIL] {ex.Message}");
             return 1;
         }
 
-        if (routeSaved)
+        // A dry run and a rejected merge both send nothing, so neither needs the
+        // daemon. Merge already reported the reason.
+        if (merged is null)
+            return result;
+
+        var available = await daemon.EnsureAvailableAsync(CancellationToken.None);
+        if (!available.Success)
         {
-            var action = updatedExistingRoute ? "Updated" : "Created";
-            output.WriteLine($"[OK] {action} webhook route '{routeName}'.");
-            output.WriteLine($"     File: {Path.Combine(paths.WebhooksDirectory, $"{routeName}.json")}");
-            output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
+            Console.Error.WriteLine($"[FAIL] {available.Error}");
+            return 1;
         }
+
+        var saved = await daemon.UpsertAsync(routeName, BuildPatch(existing is null), CancellationToken.None);
+        if (!saved.Success)
+        {
+            Console.Error.WriteLine($"[FAIL] {saved.Error}");
+            return 1;
+        }
+
+        var action = updatedExistingRoute ? "Updated" : "Created";
+        output.WriteLine($"[OK] {action} webhook route '{routeName}'.");
+        output.WriteLine($"     File: {Path.Combine(paths.WebhooksDirectory, $"{routeName}.json")}");
+        output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
 
         return result;
 
@@ -642,8 +624,9 @@ internal static class WebhooksCommand
         => onFlag ? true : offFlag ? false : null;
 
     /// <summary>
-    /// Reads the stored route for the daemon-mode preview. An unparseable file
-    /// raises the same error the direct-file path raises inside the store.
+    /// Reads the stored route for the merge preview. An unparseable file stops
+    /// the command: the CLI must not send a patch built on a route it could not
+    /// read.
     /// </summary>
     private static WebhookRouteConfig? ReadExistingRoute(WebhookRouteStore store, string routeName)
     {
@@ -658,9 +641,8 @@ internal static class WebhooksCommand
 
     private static async Task<int> RunDeleteAsync(
         string[] args,
-        WebhookRouteStore store,
         TextWriter output,
-        WebhookRouteWriteGateway gateway)
+        WebhookRouteDaemonClient daemon)
     {
         if (args.Length < 3)
         {
@@ -684,41 +666,23 @@ internal static class WebhooksCommand
             }
         }
 
-        var resolution = await gateway.ResolveModeAsync(CancellationToken.None);
-        if (resolution.Failed)
+        var available = await daemon.EnsureAvailableAsync(CancellationToken.None);
+        if (!available.Success)
         {
-            Console.Error.WriteLine($"[FAIL] {resolution.Error}");
+            Console.Error.WriteLine($"[FAIL] {available.Error}");
             return 1;
         }
 
-        bool deleted;
-        if (resolution.Mode is WebhookRouteWriteMode.DirectFile)
+        // The probe already ran, so a 404 here is a missing route, not an old
+        // daemon without the resource.
+        var removed = await daemon.DeleteAsync(routeName, CancellationToken.None);
+        if (!removed.Success && !removed.NotFound)
         {
-            try
-            {
-                deleted = store.Delete(routeName, CancellationToken.None);
-            }
-            catch (TimeoutException ex)
-            {
-                Console.Error.WriteLine($"[FAIL] {ex.Message}");
-                return 1;
-            }
-        }
-        else
-        {
-            // The mode is already resolved, so a 404 here is a missing route, not
-            // an old daemon without the resource.
-            var removed = await gateway.DeleteAsync(routeName, CancellationToken.None);
-            if (!removed.Success && !removed.NotFound)
-            {
-                Console.Error.WriteLine($"[FAIL] {removed.Error}");
-                return 1;
-            }
-
-            deleted = removed.Success;
+            Console.Error.WriteLine($"[FAIL] {removed.Error}");
+            return 1;
         }
 
-        if (!deleted)
+        if (!removed.Success)
         {
             Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' not found.");
             return 1;
@@ -1002,6 +966,9 @@ internal static class WebhooksCommand
         output.WriteLine("Routes are stored in ~/.netclaw/config/webhooks/<route>.json");
         output.WriteLine("and served at /api/webhooks/<route> by the daemon.");
         output.WriteLine();
+        output.WriteLine("'set' and 'delete' need a running daemon: the daemon owns route");
+        output.WriteLine("changes. 'list', 'show', and 'validate' read the files directly.");
+        output.WriteLine();
         output.WriteLine("Note: This command manages INBOUND webhook routes (external services");
         output.WriteLine("calling Netclaw). For OUTBOUND notifications (Netclaw posting to Slack),");
         output.WriteLine("see `netclaw secrets set Slack.BotToken` and notification target config.");
@@ -1012,7 +979,8 @@ internal static class WebhooksCommand
     {
         output.WriteLine("Usage: netclaw webhooks set <route> [options]");
         output.WriteLine();
-        output.WriteLine("Create or update an inbound webhook route.");
+        output.WriteLine("Create or update an inbound webhook route. The daemon must be");
+        output.WriteLine("running: it owns every route change. --dry-run needs no daemon.");
         output.WriteLine();
         output.WriteLine("Required (for new routes):");
         output.WriteLine("  --prompt <text>              Prompt instructions for the agent");

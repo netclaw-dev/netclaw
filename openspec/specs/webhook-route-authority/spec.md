@@ -45,9 +45,9 @@ The daemon SHALL expose `/api/webhooks` (list), `/api/webhooks/{name}` (get, ups
 - **WHEN** the daemon evaluates it
 - **THEN** the request is rejected by the same auth rules as the other `/api` surfaces
 
-### Requirement: CLI selects its write path explicitly
+### Requirement: CLI route mutations require the daemon
 
-The CLI SHALL use the daemon API for webhook route mutations when the daemon is reachable and the resource exists. The CLI SHALL write route files directly only when the daemon is unreachable or an old daemon returns 404 for the resource, and SHALL print one notice on stderr naming the direct-file mode. CLI flags, exit codes, and stdout formats SHALL be identical in both modes. An API error other than unreachable or 404 SHALL fail the command and SHALL NOT fall back to the file path.
+The CLI SHALL send every webhook route mutation to the daemon API. The CLI SHALL NOT write a route file. When the daemon does not answer, or answers 404 for the resource, or refuses the call, the command SHALL fail and SHALL leave every route file unchanged. The failure message SHALL name the state and the remedy. The CLI read subcommands (`list`, `show`, `validate`) SHALL keep reading canonical disk, because disk is the route store and `show` reveals a secret that the API never returns. Argument grammar, `--dry-run`, and the merge preview SHALL run before the daemon call and SHALL keep their own messages and exit codes. The supported daemon-absent path is a route file authored on disk outside the CLI, which the daemon loads at startup.
 
 #### Scenario: Daemon reachable routes through the API
 
@@ -56,20 +56,35 @@ The CLI SHALL use the daemon API for webhook route mutations when the daemon is 
 - **THEN** the CLI sends the mutation to `/api/webhooks/{name}`
 - **AND** writes no file itself
 
-#### Scenario: Daemon down falls back with a disclosed mode
+#### Scenario: Daemon down fails the command
 
 - **GIVEN** no running daemon
 - **WHEN** the operator runs `netclaw webhooks set` with valid arguments
-- **THEN** the CLI writes the route file directly
-- **AND** prints one stderr notice that names the direct-file mode
-- **AND** stdout and the exit code match the API-mode success shape
+- **THEN** the command fails with exit code 1
+- **AND** the error names the daemon as unreachable and tells the operator to start it
+- **AND** no route file is created or changed
+
+#### Scenario: Old daemon without the resource fails the command
+
+- **GIVEN** a running daemon that predates the webhook route resource
+- **WHEN** the operator runs `netclaw webhooks set` and the probe answers 404
+- **THEN** the command fails with exit code 1
+- **AND** the error tells the operator to upgrade the daemon
+- **AND** no route file is created or changed
 
 #### Scenario: Validation rejection does not bypass the daemon
 
 - **GIVEN** a running daemon that rejects a mutation with a validation error
 - **WHEN** the CLI receives the 400 response
 - **THEN** the command fails with the validator's message
-- **AND** no direct file write occurs
+- **AND** no route file is created or changed
+
+#### Scenario: Dry run needs no daemon
+
+- **GIVEN** an operator who runs `netclaw webhooks set --dry-run`
+- **WHEN** the CLI validates the merged route
+- **THEN** it reports the result without a daemon call
+- **AND** writes no file
 
 ### Requirement: Version-skew tolerance for one deprecation release
 

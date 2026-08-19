@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="WebhookRouteWriteGateway.cs" company="Petabridge, LLC">
+// <copyright file="WebhookRouteDaemonClient.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -9,87 +9,69 @@ using Netclaw.Cli.Daemon;
 
 namespace Netclaw.Cli.Webhooks;
 
-/// <summary>Which writer puts a webhook route on disk.</summary>
-internal enum WebhookRouteWriteMode
-{
-    /// <summary>The daemon writes the route through its route actor.</summary>
-    Daemon,
-
-    /// <summary>This process writes the route file itself.</summary>
-    DirectFile
-}
-
-/// <summary>
-/// Outcome of the write-path probe. A non-null <see cref="Error"/> is a hard
-/// failure: the caller reports it and stops. It never selects a write mode,
-/// because a fall back on a daemon error would bypass the daemon's enforcement
-/// point.
-/// </summary>
-internal readonly record struct WebhookRouteModeResolution(WebhookRouteWriteMode Mode, string? Error)
-{
-    public bool Failed => Error is not null;
-}
-
 /// <summary>Outcome of one webhook route call against the daemon.</summary>
+/// <param name="Success">True when the daemon accepted the call.</param>
+/// <param name="NotFound">
+/// True only for a delete of a route the daemon does not hold. The availability
+/// probe never sets it: a 404 there means the daemon predates the resource, which
+/// is a hard failure with its own message.
+/// </param>
+/// <param name="Error">The message to report. It is null when the call succeeded.</param>
 internal readonly record struct WebhookRouteApiResult(bool Success, bool NotFound, string? Error);
 
 /// <summary>
-/// The one write-path seam for webhook routes. Every CLI surface that mutates a
-/// route resolves its mode here, so the command and the config TUI cannot drift
-/// into two different rules.
+/// The one write path for webhook routes. Every CLI surface that mutates a route
+/// calls the daemon through this client, so the command and the config TUI cannot
+/// drift into two different rules.
 /// <para>
-/// The rule (design D4): the daemon owns route mutations when it is reachable
-/// and serves the resource. Only two answers select direct-file mode — the
-/// daemon does not answer at all, or an old daemon answers 404 for the resource.
-/// Both print one notice on stderr, so the operator always knows which writer
-/// ran. Every other failure fails the caller with the daemon's message.
+/// The rule (design D4): the daemon owns route mutations. There is no local write
+/// path and no fallback. A daemon that does not answer, a daemon that does not
+/// serve the resource, and a daemon that refuses the call all fail the command.
+/// The supported daemon-absent path is a route file authored on disk and loaded
+/// at daemon startup, not a CLI write.
 /// </para>
 /// </summary>
-internal sealed class WebhookRouteWriteGateway
+internal sealed class WebhookRouteDaemonClient
 {
-    /// <summary>
-    /// The direct-file notice. One text covers both direct-file causes: the
-    /// operator needs to know which writer ran, not which probe answer picked it.
-    /// </summary>
-    internal const string DirectFileNotice =
-        "notice: direct-file mode. The daemon webhook route API is unavailable, so this command writes the route file directly.";
+    /// <summary>The daemon did not answer, so no route mutation can happen.</summary>
+    internal const string DaemonUnreachableMessage =
+        "The daemon is not reachable. Start the daemon to manage webhook routes.";
+
+    /// <summary>The daemon answered but predates the webhook route resource.</summary>
+    internal const string DaemonMissingResourceMessage =
+        "This daemon does not serve the webhook route API. Upgrade the daemon.";
 
     private readonly DaemonApi? _daemonApi;
-    private readonly TextWriter _noticeWriter;
-    private WebhookRouteModeResolution? _resolved;
+    private WebhookRouteApiResult? _availability;
 
     /// <summary>
-    /// Creates the gateway. <paramref name="daemonApi"/> is null when the caller
-    /// has no daemon client at all — an offline invocation, which is the same
-    /// disclosed direct-file state as an unreachable daemon, not a silent bypass.
+    /// Creates the client. <paramref name="daemonApi"/> is null when the caller
+    /// holds no daemon client at all. That is the same operator-visible state as
+    /// an unreachable daemon — this process cannot reach one — so the probe fails
+    /// with the same message. It never selects a local write.
     /// </summary>
-    public WebhookRouteWriteGateway(DaemonApi? daemonApi, TextWriter noticeWriter)
+    public WebhookRouteDaemonClient(DaemonApi? daemonApi)
     {
         _daemonApi = daemonApi;
-        _noticeWriter = noticeWriter;
     }
 
     /// <summary>
-    /// Resolves the write path. The probe runs once per gateway instance, so one
-    /// CLI invocation picks one writer and prints at most one notice.
+    /// Reports whether the daemon can serve a route mutation. The probe runs once
+    /// per client instance, so one CLI invocation asks one time.
     /// </summary>
-    public async Task<WebhookRouteModeResolution> ResolveModeAsync(CancellationToken ct)
+    public async Task<WebhookRouteApiResult> EnsureAvailableAsync(CancellationToken ct)
     {
-        if (_resolved is { } cached)
+        if (_availability is { } cached)
             return cached;
 
-        var resolution = await ProbeAsync(ct);
-        _resolved = resolution;
-
-        if (resolution is { Mode: WebhookRouteWriteMode.DirectFile, Failed: false })
-            _noticeWriter.WriteLine(DirectFileNotice);
-
-        return resolution;
+        var availability = await ProbeAsync(ct);
+        _availability = availability;
+        return availability;
     }
 
     /// <summary>
     /// Sends one field-level route patch to the daemon. Call it only after
-    /// <see cref="ResolveModeAsync"/> answered <see cref="WebhookRouteWriteMode.Daemon"/>.
+    /// <see cref="EnsureAvailableAsync"/> reported success.
     /// </summary>
     public async Task<WebhookRouteApiResult> UpsertAsync(
         string routeName,
@@ -111,9 +93,8 @@ internal sealed class WebhookRouteWriteGateway
         catch (Exception ex) when (IsDaemonUnreachable(ex, ct))
         {
             // The daemon died between the probe and this write. Fail with a
-            // readable error and do NOT fall back to a direct file write: the
-            // daemon may have applied the change before the connection broke,
-            // and a file write here could apply it twice.
+            // readable error that names the uncertainty: the daemon may have
+            // applied the change before the connection broke.
             return new WebhookRouteApiResult(
                 Success: false,
                 NotFound: false,
@@ -122,8 +103,8 @@ internal sealed class WebhookRouteWriteGateway
     }
 
     /// <summary>
-    /// Deletes one route through the daemon. The mode is already resolved when
-    /// this runs, so a 404 here means the route is missing, never an old daemon.
+    /// Deletes one route through the daemon. The probe already ran when this
+    /// runs, so a 404 here means the route is missing, never an old daemon.
     /// </summary>
     public async Task<WebhookRouteApiResult> DeleteAsync(string routeName, CancellationToken ct)
     {
@@ -144,9 +125,8 @@ internal sealed class WebhookRouteWriteGateway
         }
         catch (Exception ex) when (IsDaemonUnreachable(ex, ct))
         {
-            // Same rule as UpsertAsync: a mid-flight transport failure fails
-            // the command with a readable error and never falls back to a
-            // direct file write.
+            // Same rule as UpsertAsync: a mid-flight transport failure fails the
+            // command with a readable error.
             return new WebhookRouteApiResult(
                 Success: false,
                 NotFound: false,
@@ -161,12 +141,12 @@ internal sealed class WebhookRouteWriteGateway
 
     private DaemonApi RequireDaemonApi()
         => _daemonApi ?? throw new InvalidOperationException(
-            "The webhook route gateway has no daemon client. Resolve the write mode before you call the daemon.");
+            "The webhook route client has no daemon client. Probe availability before you call the daemon.");
 
-    private async Task<WebhookRouteModeResolution> ProbeAsync(CancellationToken ct)
+    private async Task<WebhookRouteApiResult> ProbeAsync(CancellationToken ct)
     {
         if (_daemonApi is null)
-            return new WebhookRouteModeResolution(WebhookRouteWriteMode.DirectFile, Error: null);
+            return Unavailable(DaemonUnreachableMessage);
 
         try
         {
@@ -174,22 +154,23 @@ internal sealed class WebhookRouteWriteGateway
 
             // An old daemon has no route resource, so the path resolves to nothing.
             if (response.StatusCode is HttpStatusCode.NotFound)
-                return new WebhookRouteModeResolution(WebhookRouteWriteMode.DirectFile, Error: null);
+                return Unavailable(DaemonMissingResourceMessage);
 
             if (response.IsSuccessStatusCode)
-                return new WebhookRouteModeResolution(WebhookRouteWriteMode.Daemon, Error: null);
+                return new WebhookRouteApiResult(Success: true, NotFound: false, Error: null);
 
-            // The daemon answered and refused. It is the enforcement point, so
-            // its refusal stops the command instead of selecting the file path.
-            return new WebhookRouteModeResolution(
-                WebhookRouteWriteMode.Daemon,
-                await DescribeFailureAsync(response, ct));
+            // The daemon answered and refused. It is the enforcement point, so its
+            // refusal stops the command and keeps its own message.
+            return Unavailable(await DescribeFailureAsync(response, ct));
         }
         catch (Exception ex) when (IsDaemonUnreachable(ex, ct))
         {
-            return new WebhookRouteModeResolution(WebhookRouteWriteMode.DirectFile, Error: null);
+            return Unavailable(DaemonUnreachableMessage);
         }
     }
+
+    private static WebhookRouteApiResult Unavailable(string error)
+        => new(Success: false, NotFound: false, Error: error);
 
     /// <summary>
     /// Reports whether the failure means "no daemon answered". The client puts
@@ -203,7 +184,7 @@ internal sealed class WebhookRouteWriteGateway
     /// Reads the daemon's own message out of a failure response. The route
     /// handlers answer either <c>{"error": ...}</c> or a problem document with
     /// <c>detail</c>; an unreadable body degrades to the status code, which is
-    /// still the daemon's answer and never a fall back to the file path.
+    /// still the daemon's answer.
     /// </summary>
     private static async Task<string> DescribeFailureAsync(HttpResponseMessage response, CancellationToken ct)
     {

@@ -9,9 +9,10 @@
 **Goals:**
 
 - One mutation authority for webhook routes inside the daemon.
-- CLI writes route through the daemon when it is reachable.
+- CLI writes routes only through the daemon.
 - Deterministic tests: message ordering, not thread choreography.
-- Full backward compatibility across a version-skew window in both directions.
+- An old CLI keeps working against a new daemon: its direct file write stays visible, because the actor holds no cache.
+- A new CLI against an old daemon fails loudly and names the upgrade. Per D4 it does not fall back.
 
 **Non-Goals:**
 
@@ -33,9 +34,21 @@ Implementation finding (supersedes the original signal-based wording): no route 
 
 `/api/webhooks` endpoints are thin minimal-API handlers that `Ask` the actor with the standard request timeout and map results to HTTP statuses (validation failure → 400 with the validator's message; unknown route → 404; success → 200/204). Same auth middleware and exposure-mode rules as every `/api/*` surface. Agent tools inside the daemon `Ask` the actor directly — no loopback HTTP.
 
-### D4: CLI mode selection is explicit and probe-based
+### D4: CLI route mutations are daemon-only
 
-`WebhooksCommand` resolves its write path once per invocation: daemon reachable and resource present → API path; daemon down, unreachable, or 404 on the resource (old daemon) → direct file path with one stderr notice naming the mode. Exit codes and stdout formats are identical in both modes. The notice goes to stderr so scripts that parse stdout are untouched. A hard API error other than unreachable/404 (e.g., 400 validation, 401 auth) fails the command — it does NOT fall back to the file path, because that would bypass the daemon's enforcement point.
+REWORKED BY MAINTAINER DECISION. The first implementation gave the CLI a disclosed dual mode: daemon when reachable, direct file write with a stderr notice otherwise. The maintainer was asked whether the CLI should fall back to direct file writes when the daemon is unreachable, and answered verbatim: **"Don't have it."** There is no fallback, no `--offline` flag, and no local write path of any kind.
+
+`WebhooksCommand` probes availability once per invocation, immediately before the write. Three answers fail the command with exit code 1 and no file change:
+
+- The daemon does not answer (transport failure, timeout, or no daemon client at all) → "The daemon is not reachable. Start the daemon to manage webhook routes."
+- The daemon answers 404 for the resource (a daemon that predates it) → "This daemon does not serve the webhook route API. Upgrade the daemon."
+- The daemon answers any other failure status → the daemon's own message, because the daemon is the enforcement point.
+
+A transport failure between the probe and the write also fails the command. The daemon may have applied the change before the connection broke, so the CLI reports the uncertainty rather than repeating the write.
+
+Reads (`list`, `show`, `validate`) stay on canonical disk. That is the read path, not a fallback: disk is the route store, the actor holds no cache, and `show --show-secret` needs a secret the API never returns. Argument grammar, `--dry-run`, and the merge preview all run before the probe, so they keep their own messages and exit codes with no daemon present.
+
+The supported daemon-absent authoring path is a route file written on disk outside the CLI, which the daemon loads at startup.
 
 ### D5: Ask timeout and failure semantics
 
@@ -43,12 +56,12 @@ Tool and HTTP fronts use the daemon's standard ask timeout. A store I/O failure 
 
 ### D6: Test replacement, not test repair
 
-The Windows-flaky choreography test is deleted and replaced by: (a) actor tests proving mailbox serialization of concurrent RMW (two `Ask`s, deterministic final state), (b) endpoint tests for `/api/webhooks` status mapping, (c) a CLI mode-selection test (daemon up → API call recorded; daemon down → file written and notice emitted), (d) ONE narrow store-level cross-process-guard test that exercises the mutex through the store API without asserting on scheduling (outcome-only, no bounded event waits) — retained only until the mutex follow-up removes both.
+The Windows-flaky choreography test is deleted and replaced by: (a) actor tests proving mailbox serialization of concurrent RMW (two `Ask`s, deterministic final state), (b) endpoint tests for `/api/webhooks` status mapping, (c) CLI command tests per daemon answer (daemon up → API call recorded and no file written; daemon down → exit 1 with the unreachable message and no file written; old daemon 404 → exit 1 with the upgrade message and no file written; 400/401/403 → exit 1 with the daemon's message and no file written), (d) ONE narrow store-level cross-process-guard test that exercises the mutex through the store API without asserting on scheduling (outcome-only, no bounded event waits) — retained only until the mutex follow-up removes both.
 
 ## Risks / Trade-offs
 
 - [Skew window: old CLI writes while actor holds cached state] → D2 reconciliation from the existing hot-reload signal; mutex retained under the store; per-route files bound the blast radius to same-route RMW.
-- [CLI now depends on daemon availability for its primary path] → D4 explicit dual mode preserves offline configuration; only reachability/404 selects the file path, so enforcement cannot be bypassed by inducing errors.
+- [CLI now depends on daemon availability for every route mutation] → accepted by maintainer decision (D4). A fallback would hide a misconfigured or stopped daemon and would let an operator bypass the enforcement point by inducing an error. An operator without a daemon authors the route file on disk and starts the daemon, which loads it.
 - [Actor becomes a throughput bottleneck] → route mutations are rare, low-volume operator/agent actions; a single mailbox is far above the required throughput.
 - [Two fronts drift (HTTP vs tools)] → both are thin `Ask` adapters over the same messages; validation lives only in the actor.
 - [Skill/docs drift] → `netclaw-operations` skill row updated in the same PR per the skills sync rule.

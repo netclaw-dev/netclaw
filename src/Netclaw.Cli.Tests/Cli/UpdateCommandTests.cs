@@ -17,7 +17,7 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
-[Collection("Update verification")]
+[Collection(ConsoleRedirectionCollection.Name)]
 public sealed class UpdateCommandTests : IDisposable
 {
     /// <summary>
