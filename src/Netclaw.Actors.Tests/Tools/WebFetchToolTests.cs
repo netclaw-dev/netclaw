@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -733,6 +734,79 @@ public class WebFetchToolTests : IDisposable
             CancellationToken.None);
 
         Assert.DoesNotContain("content truncated", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_same_url_same_frozen_second_saves_two_distinct_files()
+    {
+        // Regression for the filename collision bug: the saved-content
+        // filename used only second-precision time as its unique part. Two
+        // fetches of the same URL within one second built the same filename,
+        // and the second write silently overwrote the first (File.WriteAllText
+        // truncates an existing file; it does not throw). Freeze the clock at
+        // one second and fetch twice to prove both files now survive.
+        var frozenTime = new FakeTimeProvider(DateTimeOffset.Parse("2026-01-01T00:00:00Z"));
+        var handler = new SequencedHttpHandler(
+            ("<html><head><title>First</title></head><body><p>First fetch content.</p></body></html>", "text/html"),
+            ("<html><head><title>Second</title></head><body><p>Second fetch content.</p></body></html>", "text/html"));
+        var httpClient = new HttpClient(handler);
+        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path, timeProvider: frozenTime);
+
+        var firstResult = await tool.ExecuteAsync(
+            ToolInput.Create("Url", "https://example.com/same-page"),
+            TestToolExecutionContext.CreateUnbound(),
+            CancellationToken.None);
+
+        var secondResult = await tool.ExecuteAsync(
+            ToolInput.Create("Url", "https://example.com/same-page"),
+            TestToolExecutionContext.CreateUnbound(),
+            CancellationToken.None);
+
+        var files = Directory.GetFiles(_dir.Path, "*.html");
+        Assert.Equal(2, files.Length);
+
+        var firstPath = ExtractSavedPath(firstResult);
+        var secondPath = ExtractSavedPath(secondResult);
+        Assert.NotEqual(firstPath, secondPath);
+        Assert.True(File.Exists(firstPath));
+        Assert.True(File.Exists(secondPath));
+
+        var firstContent = await File.ReadAllTextAsync(firstPath, TestContext.Current.CancellationToken);
+        var secondContent = await File.ReadAllTextAsync(secondPath, TestContext.Current.CancellationToken);
+        Assert.Contains("First fetch content.", firstContent);
+        Assert.Contains("Second fetch content.", secondContent);
+    }
+
+    private static string ExtractSavedPath(string toolResult)
+    {
+        const string marker = "Saved to: ";
+        var start = toolResult.IndexOf(marker, StringComparison.Ordinal) + marker.Length;
+        var end = toolResult.IndexOf(" (", start, StringComparison.Ordinal);
+        return toolResult[start..end];
+    }
+
+    private sealed class SequencedHttpHandler : HttpMessageHandler
+    {
+        private readonly (byte[] Bytes, string ContentType)[] _responses;
+        private int _index;
+
+        public SequencedHttpHandler(params (string Content, string ContentType)[] responses)
+        {
+            _responses = [.. responses.Select(r => (Encoding.UTF8.GetBytes(r.Content), r.ContentType))];
+        }
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken ct)
+        {
+            var (bytes, contentType) = _responses[Math.Min(_index++, _responses.Length - 1)];
+            var content = new ByteArrayContent(bytes);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(contentType);
+            var response = new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+            {
+                Content = content
+            };
+            return Task.FromResult(response);
+        }
     }
 
     private sealed class CountingHttpHandler(string content, string contentType) : HttpMessageHandler

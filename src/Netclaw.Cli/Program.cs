@@ -126,8 +126,7 @@ static async Task RunAsync(string[] args)
             }
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
+        var builder = CreateQuietHostBuilder(args);
         if (mode is "doctor")
         {
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
@@ -135,10 +134,6 @@ static async Task RunAsync(string[] args)
             builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
             builder.Services.AddDoctorChecks();
         }
-
-        // Suppress framework console logging
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         if (mode is "init")
         {
@@ -350,11 +345,7 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        var builder = CreateQuietHostBuilder(args);
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
@@ -458,11 +449,7 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        var builder = CreateQuietHostBuilder(args);
 
         if (statsTui)
         {
@@ -535,10 +522,7 @@ static async Task RunAsync(string[] args)
                     return;
                 }
 
-                var pairBuilder = Host.CreateApplicationBuilder(args);
-                ConfigureConfigServices(pairBuilder.Services, pairBuilder.Configuration);
-                pairBuilder.Logging.ClearProviders();
-                pairBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+                var pairBuilder = CreateQuietHostBuilder(args);
 
                 using var pairHost = pairBuilder.Build();
                 var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
@@ -590,10 +574,7 @@ static async Task RunAsync(string[] args)
                     return;
                 }
 
-                var devBuilder = Host.CreateApplicationBuilder(args);
-                ConfigureConfigServices(devBuilder.Services, devBuilder.Configuration);
-                devBuilder.Logging.ClearProviders();
-                devBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+                var devBuilder = CreateQuietHostBuilder(args);
 
                 using var devHost = devBuilder.Build();
                 var devApi = devHost.Services.GetRequiredService<DaemonApi>();
@@ -672,10 +653,7 @@ static async Task RunAsync(string[] args)
         if ((mcpSubcommand is "tools" or "permissions") && args.Length <= 2)
         {
             // Bare `netclaw mcp tools` or `netclaw mcp permissions` → TUI mode
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
             builder.Services.AddSingleton<TuiNavigation>();
 
@@ -696,10 +674,7 @@ static async Task RunAsync(string[] args)
         if (mcpSubcommand is "auth" or "list" or "tools" or "permissions")
         {
             // auth/list/tools/permissions need the daemon — spin up DI to get DaemonApi
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
             using var mcpHost = builder.Build();
             var mcpPaths = mcpHost.Services.GetRequiredService<NetclawPaths>();
             var mcpDaemonApi = mcpHost.Services.GetRequiredService<DaemonApi>();
@@ -725,12 +700,9 @@ static async Task RunAsync(string[] args)
         // Bare invocation → TUI; subcommands → plain CLI
         if (args.Length == 1)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddProviderDescriptors();
             builder.Services.AddProviderOAuthServices();
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-provider-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -759,11 +731,8 @@ static async Task RunAsync(string[] args)
         // Bare invocation → TUI; subcommands → plain CLI
         if (args.Length == 1)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddProviderDescriptors();
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-model-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -792,11 +761,8 @@ static async Task RunAsync(string[] args)
         var isTuiInvocation = args.Length == 1 || (args.Length > 1 && args[1] is "tui");
         if (isTuiInvocation)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddSingleton(paths);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-approvals-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -821,10 +787,7 @@ static async Task RunAsync(string[] args)
     {
         if (args.Length > 1 && args[1] is "ui" or "tui")
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-reminder-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -848,10 +811,7 @@ static async Task RunAsync(string[] args)
         }
         else
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
             using var host = builder.Build();
             Environment.ExitCode = await ReminderCommand.RunAsync(args, host.Services.GetRequiredService<DaemonApi>());
         }
@@ -873,10 +833,7 @@ static async Task RunAsync(string[] args)
             // files, so this path must not make them a new way to crash.
             try
             {
-                var builder = Host.CreateApplicationBuilder(args);
-                ConfigureConfigServices(builder.Services, builder.Configuration);
-                builder.Logging.ClearProviders();
-                builder.Logging.SetMinimumLevel(LogLevel.Warning);
+                var builder = CreateQuietHostBuilder(args);
                 using var skillHost = builder.Build();
                 var skillPaths = skillHost.Services.GetRequiredService<NetclawPaths>();
                 skillPaths.EnsureDirectoriesExist();
@@ -947,10 +904,7 @@ static async Task RunAsync(string[] args)
     // ── Self-update ──
     if (mode is "update")
     {
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        var builder = CreateQuietHostBuilder(args);
 
         using var host = builder.Build();
         var paths = host.Services.GetRequiredService<NetclawPaths>();
@@ -983,10 +937,7 @@ static async Task RunAsync(string[] args)
 
         if (onceMode)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
 
             using var host = builder.Build();
             using var scope = host.Services.CreateScope();
@@ -1160,10 +1111,10 @@ static void WriteCrashLog(Exception ex)
 // identical editor (simplify-netclaw-init).
 static async Task RunConfigEditorAsync(string[] args)
 {
-    var builder = Host.CreateApplicationBuilder(args);
-    // ConfigureConfigServices registers NetclawPaths (same paths the caller already
-    // ensured on disk), so no separate paths registration is needed here.
-    ConfigureConfigServices(builder.Services, builder.Configuration);
+    // CreateQuietHostBuilder's ConfigureConfigServices call registers NetclawPaths (same
+    // paths the caller already ensured on disk), so no separate paths registration is
+    // needed here.
+    var builder = CreateQuietHostBuilder(args);
     builder.Services.AddSingleton(new ConfigDashboardNavigationState());
     // Marks this as the embedded config host so the routed Provider/Model managers navigate back
     // to the dashboard (rather than exiting) when backed out — the standalone hosts omit it.
@@ -1181,8 +1132,6 @@ static async Task RunConfigEditorAsync(string[] args)
         .AddSectionEditor<SecurityPostureStepViewModel>()
         .AddSectionEditor<FeatureSelectionStepViewModel>()
         .AddSectionEditor<ExposureModeStepViewModel>();
-    builder.Logging.ClearProviders();
-    builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
     var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-config-trace.log");
     builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -1216,14 +1165,11 @@ static async Task RunConfigEditorAsync(string[] args)
     if (navigationState.PendingAction == ConfigDashboardAction.RunDoctor)
     {
         var doctorArgs = new[] { "doctor" };
-        var doctorBuilder = Host.CreateApplicationBuilder(doctorArgs);
-        ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
+        var doctorBuilder = CreateQuietHostBuilder(doctorArgs);
         doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
         doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
         doctorBuilder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
         doctorBuilder.Services.AddDoctorChecks();
-        doctorBuilder.Logging.ClearProviders();
-        doctorBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         using var doctorHost = doctorBuilder.Build();
         using var scope = doctorHost.Services.CreateScope();
@@ -1970,6 +1916,20 @@ static void WriteDailyTable(List<DaemonStats.DailyRow> rows)
 // ═══════════════════════════════════════════════════════════════════════
 // Shared configuration services (all modes)
 // ═══════════════════════════════════════════════════════════════════════
+
+// Builds a HostApplicationBuilder with the shared config chain wired up and framework
+// console logging suppressed to Warning — console output is reserved for CLI/TUI
+// output, not framework log noise. Callers add mode-specific registrations after
+// this returns; the WebApplicationBuilder-based chat/sessions/headless path builds
+// its own builder because it needs a listening HTTP host, not this simpler shape.
+static HostApplicationBuilder CreateQuietHostBuilder(string[] args)
+{
+    var builder = Host.CreateApplicationBuilder(args);
+    ConfigureConfigServices(builder.Services, builder.Configuration);
+    builder.Logging.ClearProviders();
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+    return builder;
+}
 
 static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
 {

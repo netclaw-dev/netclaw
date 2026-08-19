@@ -1363,16 +1363,6 @@ assert_memory_explicit_store() {
     stdout_tool_called 'store_memory' || stdout_tool_called 'update_memory'
 }
 
-assert_memory_checkpoint_enqueue() {
-    # turn_memory_checkpoint_enqueued (TurnLog/Akka) no longer lands in the file logs after the
-    # log-stream partition (#1472). A turn-complete checkpoint that was enqueued is proven by the
-    # curation worker processing it (MEL, in daemon.log) — whether the fact is later kept or
-    # dropped. Combined with no explicit memory tool call, this verifies automatic enqueue.
-    daemon_log_contains 'Memory checkpoint curation completed.*trigger=turn-complete' \
-        && ! stdout_tool_called 'store_memory' \
-        && ! stdout_tool_called 'update_memory'
-}
-
 assert_memory_recall_filters() {
     # After overfetch fix: at least one candidate selection should reduce the set.
     daemon_log_tail | awk '
@@ -2614,8 +2604,11 @@ run_all() {
     run_case memory_explicit_store "explicit remember request uses store_memory" \
         "Please save this to your cross-session memory for later reference using store_memory: my preferred airline is United. Just acknowledge once you've saved it."
 
-    run_case memory_checkpoint_enqueue "checkpoint enqueued for non-identity fact" \
-        "During my commute I prefer aisle seats on flights because I like to stand up easily. Just acknowledge and do not save anything explicitly."
+    # memory_checkpoint_enqueue was retired with the Path A turn-complete lane
+    # (issue #666): a plain turn no longer enqueues a curation checkpoint, so
+    # the case's asserted log line can no longer occur. Automatic formation now
+    # flows through the observer/distillation lane; add a case for it when that
+    # lane exposes a stable log contract.
 
     run_case memory_recall_filters "candidate selection with score filtering" \
         "Tell me about my travel preferences"

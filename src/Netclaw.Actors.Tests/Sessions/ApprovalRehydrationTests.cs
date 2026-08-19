@@ -201,8 +201,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         // Idle timeout with the recovered approval still pending: the session
         // passivates (approval state is journaled) instead of deferring forever.
         var escapedId = Uri.EscapeDataString(sessionId.Value);
+        // The resolve budget bounds the session spawn and recovery under a
+        // starved CI scheduler. It does not measure correctness.
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
-            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            .ResolveOne(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Watch(child);
         child.Tell(new LeaveSession(rejoinProbe) { SessionId = sessionId });
         child.Tell(ReceiveTimeout.Instance);
@@ -1516,8 +1518,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
+        // The resolve budget bounds the session spawn and recovery under a
+        // starved CI scheduler. It does not measure correctness.
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
-            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            .ResolveOne(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Watch(child);
 
         // Drop the subscriber and force the idle timeout so the session enters
@@ -1550,8 +1554,13 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     private async Task ColdRespawnAsync(SessionId sessionId)
     {
         var escapedId = Uri.EscapeDataString(sessionId.Value);
+        // The resolve waits for the session child to finish its spawn and its
+        // Akka.Persistence recovery. The budget bounds that multi-hop startup
+        // under a starved CI scheduler. It does not measure correctness. About
+        // twenty cold-respawn tests call this helper, so a short budget makes
+        // the whole group flake at once.
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
-            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            .ResolveOne(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Watch(child);
         Sys.Stop(child);
         await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);

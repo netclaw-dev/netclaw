@@ -77,7 +77,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
             Content = "trigger error"
         }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);
@@ -105,7 +105,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
             Content = "first"
         }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
-        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var firstError = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
@@ -114,7 +114,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
             Content = "second"
         }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
-        var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var secondError = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.NotEqual(firstError.CorrelationId, secondError.CorrelationId);
@@ -144,7 +144,7 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
             Content = "trigger timeout"
         }, TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
 
-        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var error = await subscriber.ExpectMsgAsync<ErrorOutput>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(ErrorCategory.Timeout, error.Category);
         Assert.NotEqual(Guid.Empty, error.CorrelationId);

@@ -349,12 +349,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("delivery-retry-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -391,12 +386,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("stale-delivery-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -435,12 +425,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("processing-delivery-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -484,12 +469,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("delivery-budget-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -534,12 +514,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("transport-failure-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -586,12 +561,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("unknown-failure-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {

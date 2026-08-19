@@ -2,9 +2,9 @@
 # Ensure VHS (charmbracelet/vhs) is installed for the interactive tape harness.
 #
 # Installation strategy:
-#   - If `vhs` is already on PATH, do nothing.
-#   - On Linux x86_64: install vhs from the upstream release with SHA256 verification,
-#     and ensure ttyd / ffmpeg are present (apt-get if available).
+#   - If the pinned vhs and its runtime tools exist, do nothing.
+#   - On Linux x86_64: install vhs and ttyd from pinned upstream releases.
+#     Install the imageio-ffmpeg static binary. Verify all files with SHA256.
 #   - On macOS: install vhs / ttyd / ffmpeg via Homebrew.
 #   - Other platforms: print install hints and fail.
 #
@@ -21,15 +21,22 @@ VHS_VERSION="${VHS_VERSION:-0.11.0}"
 # comment above. The pin matters for screenshot regression: a VHS bump can
 # change the bundled font/renderer and silently drift every baseline PNG.
 VHS_LINUX_X64_SHA256="${VHS_LINUX_X64_SHA256:-99cb634587eaae0473c1ea377db80c3a048c27f99fe0a7febb1a1e8cb7ee5009}"
+TTYD_VERSION="${TTYD_VERSION:-1.7.7}"
+# SHA256 of ttyd.x86_64 from the upstream SHA256SUMS file.
+TTYD_LINUX_X64_SHA256="${TTYD_LINUX_X64_SHA256:-8a217c968aba172e0dbf3f34447218dc015bc4d5e59bf51db2f2cd12b7be4f55}"
+# SHA256 of the imageio-ffmpeg 0.6.0 manylinux2014 x86_64 wheel from PyPI.
+FFMPEG_WHEEL_SHA256="${FFMPEG_WHEEL_SHA256:-c7e46fcec401dd990405049d2e2f475e2b397779df2519b544b8aab515195282}"
 # 0.11.0 is the minimum that supports `Wait+Screen /pattern/`.
 # Earlier versions (e.g. 0.8.0) parse `Wait` as an unknown command.
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
 if have vhs; then
-  installed="$(vhs --version 2>/dev/null | awk '{print $NF}' | sed 's/^v//')"
-  echo "vhs ${installed:-unknown} already installed at $(command -v vhs)"
-  exit 0
+  installed="$(vhs --version 2>/dev/null | sed -n 's/.*version v\([^ ]*\).*/\1/p')"
+  if [[ "$installed" == "$VHS_VERSION" ]] && have ttyd && have ffmpeg && have python3; then
+    echo "vhs ${installed} and its runtime tools are already installed."
+    exit 0
+  fi
 fi
 
 uname_s="$(uname -s)"
@@ -76,30 +83,47 @@ EOF
 esac
 
 # Linux x86_64 path.
-
-if have apt-get; then
-  echo "Installing vhs runtime deps (ttyd, ffmpeg) via apt-get..."
-  # Force non-interactive mode so apt never tries to open whiptail dialogs
-  # (e.g., the kernel-upgrade prompt) when running on a CI runner or under
-  # an SSH/agent session.
-  export DEBIAN_FRONTEND=noninteractive
-  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
-    apt-get update
-    apt-get install -y --no-install-recommends ttyd ffmpeg ca-certificates curl
-  else
-    sudo -E apt-get update
-    sudo -E apt-get install -y --no-install-recommends ttyd ffmpeg ca-certificates curl
+for dep in curl python3; do
+  if ! have "$dep"; then
+    echo "ERROR: '$dep' is required to install and run vhs." >&2
+    exit 1
   fi
-else
-  for dep in ttyd ffmpeg curl; do
-    if ! have "$dep"; then
-      echo "WARNING: '$dep' is not on PATH and apt-get is unavailable. vhs will likely fail." >&2
-    fi
-  done
-fi
+done
 
 tmp="$(mktemp -d)"
 trap 'rm -rf "$tmp"' EXIT
+
+if ! have ffmpeg; then
+  ffmpeg_wheel="$tmp/imageio-ffmpeg.whl"
+  ffmpeg_url="https://files.pythonhosted.org/packages/a0/2d/43c8522a2038e9d0e7dbdf3a61195ecc31ca576fb1527a528c877e87d973/imageio_ffmpeg-0.6.0-py3-none-manylinux2014_x86_64.whl"
+  echo "Downloading the pinned imageio-ffmpeg binary..."
+  curl -fsSL "$ffmpeg_url" -o "$ffmpeg_wheel"
+  echo "${FFMPEG_WHEEL_SHA256}  ${ffmpeg_wheel}" | sha256sum -c -
+  python3 -m zipfile -e "$ffmpeg_wheel" "$tmp/imageio-ffmpeg"
+
+  ffmpeg_binary="$tmp/imageio-ffmpeg/imageio_ffmpeg/binaries/ffmpeg-linux-x86_64-v7.0.2"
+  ffmpeg_dest="${FFMPEG_INSTALL_PATH:-/usr/local/bin/ffmpeg}"
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    install -m 0755 "$ffmpeg_binary" "$ffmpeg_dest"
+  else
+    sudo install -m 0755 "$ffmpeg_binary" "$ffmpeg_dest"
+  fi
+fi
+
+if ! have ttyd; then
+  ttyd_binary="$tmp/ttyd"
+  ttyd_url="https://github.com/tsl0922/ttyd/releases/download/${TTYD_VERSION}/ttyd.x86_64"
+  echo "Downloading ttyd ${TTYD_VERSION} from ${ttyd_url}..."
+  curl -fsSL "$ttyd_url" -o "$ttyd_binary"
+  echo "${TTYD_LINUX_X64_SHA256}  ${ttyd_binary}" | sha256sum -c -
+
+  ttyd_dest="${TTYD_INSTALL_PATH:-/usr/local/bin/ttyd}"
+  if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+    install -m 0755 "$ttyd_binary" "$ttyd_dest"
+  else
+    sudo install -m 0755 "$ttyd_binary" "$ttyd_dest"
+  fi
+fi
 
 archive="$tmp/vhs.tar.gz"
 url="https://github.com/charmbracelet/vhs/releases/download/v${VHS_VERSION}/vhs_${VHS_VERSION}_Linux_x86_64.tar.gz"

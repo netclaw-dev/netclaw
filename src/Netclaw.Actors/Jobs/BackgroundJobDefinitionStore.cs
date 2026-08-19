@@ -29,11 +29,21 @@ public sealed class BackgroundJobDefinitionStore
     private readonly Dictionary<string, RejectedLegacyBackgroundJobDefinition> _rejectedLegacyDefinitions =
         new(StringComparer.Ordinal);
     private readonly ILogger _logger;
+    private readonly Action<string, bool> _deleteDirectory;
 
     public BackgroundJobDefinitionStore(NetclawPaths paths, ILogger<BackgroundJobDefinitionStore>? logger = null)
+        : this(paths, logger ?? NullLogger<BackgroundJobDefinitionStore>.Instance, Directory.Delete)
+    {
+    }
+
+    internal BackgroundJobDefinitionStore(
+        NetclawPaths paths,
+        ILogger<BackgroundJobDefinitionStore> logger,
+        Action<string, bool> deleteDirectory)
     {
         _directory = paths.JobsDirectory;
-        _logger = logger ?? NullLogger<BackgroundJobDefinitionStore>.Instance;
+        _logger = logger;
+        _deleteDirectory = deleteDirectory;
         Directory.CreateDirectory(_directory);
     }
 
@@ -228,7 +238,7 @@ public sealed class BackgroundJobDefinitionStore
 
                 if (Directory.Exists(fullDir))
                 {
-                    Directory.Delete(fullDir, recursive: true);
+                    _deleteDirectory(fullDir, true);
                     removed = true;
                 }
             }
