@@ -564,6 +564,16 @@ start_eval_daemon() {
     local deadline=$((SECONDS + 60))
     while (( SECONDS < deadline )); do
         if curl -fsS "http://127.0.0.1:$EVAL_PORT/api/health/ready" >/dev/null 2>&1; then
+            # The container runs with --network host, so any process on this
+            # port can answer the host-side readiness poll — including another
+            # eval run's daemon. Readiness must also prove THIS container's
+            # daemon is alive, or the whole run interrogates a stranger while
+            # every daemon-log assert reads its own dead container's empty log.
+            if ! docker exec "$EVAL_CONTAINER_NAME" pgrep -f netclawd >/dev/null 2>&1; then
+                echo "ERROR: port $EVAL_PORT answered but this container's daemon is not running — another daemon owns the port. Set NETCLAW_EVAL_PORT to a free port." >&2
+                docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
+                exit 2
+            fi
             echo "Eval daemon ready at http://127.0.0.1:$EVAL_PORT"
             return 0
         fi
