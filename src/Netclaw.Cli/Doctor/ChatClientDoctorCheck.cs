@@ -171,7 +171,15 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
     {
         var supported = descriptor.Auth.SupportedAuthMethods;
         if (supported.Contains(AuthMethod.None))
-            return null;
+        {
+            // Optional-auth provider (e.g. openai-compatible): "No auth" is complete
+            // by definition, but an entry that explicitly declares ApiKey without a
+            // stored key is a misconfiguration — the transport would silently send
+            // unauthenticated requests to an endpoint the operator said needs a key.
+            return provider.AuthMethod == AuthMethod.ApiKey && provider.ApiKey.IsNullOrEmpty()
+                ? $"provider '{providerName}' ({descriptor.TypeKey}) declares AuthMethod ApiKey but has no ApiKey in secrets.json."
+                : null;
+        }
 
         var hasApiKey = !provider.ApiKey.IsNullOrEmpty();
         var hasOAuthToken = !provider.OAuthAccessToken.IsNullOrEmpty();

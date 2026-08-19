@@ -22,7 +22,7 @@ and a `type` (well-known identifier). Manage them with `netclaw provider`:
 |------|------|-------|
 | `ollama` | Endpoint only | `--endpoint http://host:11434` |
 | `openai` | API key **or** OAuth (ChatGPT sub) | Codex backend for OAuth path |
-| `openai-compatible` | Endpoint; optional API key | Generic OpenAI-shape proxies, llama.cpp, vLLM. Also DwarfStar (ds4): `--endpoint http://127.0.0.1:8000`, run `ds4-server` separately, model ids `deepseek-v4-flash` / `deepseek-v4-pro`, context window auto-detected |
+| `openai-compatible` | Endpoint; optional API key (Bearer) | Generic OpenAI-shape proxies, llama.cpp, vLLM. Also DwarfStar (ds4): `--endpoint http://127.0.0.1:8000`, run `ds4-server` separately, model ids `deepseek-v4-flash` / `deepseek-v4-pro`, context window auto-detected. For gated endpoints (LiteLLM, intranet gateways), add `--api-key <key>`; the key is stored in `secrets.json` and sent as `Authorization: Bearer`. `netclaw init` and the `netclaw provider` TUI offer the same choice ("No auth (local endpoint)" vs "API Key"). An entry that declares `AuthMethod: ApiKey` without a stored key is reported by `netclaw doctor`. |
 | `anthropic` | API key | `sk-ant-...` |
 | `openrouter` | API key | `sk-or-...` |
 | `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |

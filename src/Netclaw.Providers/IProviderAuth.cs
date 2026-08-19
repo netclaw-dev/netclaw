@@ -33,11 +33,23 @@ public sealed class ApiKeyAuth : IProviderAuth
 }
 
 /// <summary>
-/// Provider requires no authentication — just an endpoint (Ollama, OpenAI-compatible).
+/// Provider requires no authentication — just an endpoint (Ollama).
 /// </summary>
 public sealed class EndpointOnlyAuth : IProviderAuth
 {
     public IReadOnlyList<AuthMethod> SupportedAuthMethods { get; } = [AuthMethod.None];
+}
+
+/// <summary>
+/// Provider takes an endpoint where auth is optional — an API key may be
+/// supplied as a Bearer token (OpenAI-compatible backends behind a gateway).
+/// <see cref="AuthMethod.None"/> is first so local no-auth endpoints remain
+/// the default selection in the TUI.
+/// </summary>
+public sealed class EndpointOrApiKeyAuth : IProviderAuth
+{
+    public IReadOnlyList<AuthMethod> SupportedAuthMethods { get; } =
+        [AuthMethod.None, AuthMethod.ApiKey];
 }
 
 /// <summary>

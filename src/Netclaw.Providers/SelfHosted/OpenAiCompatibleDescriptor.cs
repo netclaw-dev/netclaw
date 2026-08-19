@@ -26,7 +26,7 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     public string DisplayName => "OpenAI-compatible (llama.cpp / vLLM / DwarfStar ds4)";
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";
-    public IProviderAuth Auth { get; } = new EndpointOnlyAuth();
+    public IProviderAuth Auth { get; } = new EndpointOrApiKeyAuth();
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
