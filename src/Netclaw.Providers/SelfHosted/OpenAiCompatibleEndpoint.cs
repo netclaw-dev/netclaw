@@ -16,8 +16,11 @@ public sealed record OpenAiCompatibleEndpoint(
         var baseUri = new Uri(endpoint.TrimEnd('/'));
         var basePath = baseUri.AbsolutePath.TrimEnd('/');
 
-        if (basePath.EndsWith("/api/v1", StringComparison.OrdinalIgnoreCase)
-            || basePath.EndsWith("/v1", StringComparison.OrdinalIgnoreCase))
+        // A trailing version segment (v1, v4, ...) means the operator already
+        // pinned an API version — appending another "v1/..." would produce a
+        // /v4/v1/chat/completions 404 on hosts like api.z.ai. Bare hosts and
+        // unversioned paths keep the /v1 default below.
+        if (HasVersionedSuffix(basePath))
         {
             return new OpenAiCompatibleEndpoint(
                 baseUri,
@@ -31,6 +34,41 @@ public sealed record OpenAiCompatibleEndpoint(
             ChatCompletionsPath: Combine(basePath, "v1/chat/completions"),
             ModelsPath: Combine(basePath, "v1/models"),
             ApiKey: apiKey);
+    }
+
+    /// <summary>
+    /// Relative model-listing path for a base URL: "/models" when the base
+    /// already pins a version segment (…/v4), "/v1/models" otherwise. Probe
+    /// callers string-concatenate this onto the base (no separator is
+    /// inserted), so it MUST start with "/". It must stay in sync with
+    /// <see cref="FromBaseUrl"/>, which bakes the same version-suffix rule
+    /// into the runtime <see cref="ModelsPath"/>.
+    /// </summary>
+    public static string RelativeModelsPath(string endpoint)
+    {
+        try
+        {
+            var basePath = new Uri(endpoint.TrimEnd('/')).AbsolutePath.TrimEnd('/');
+            return HasVersionedSuffix(basePath) ? "/models" : "/v1/models";
+        }
+        catch (UriFormatException)
+        {
+            // Malformed base: keep the unversioned default and let the HTTP
+            // layer surface the connection failure through its error path.
+            return "/v1/models";
+        }
+    }
+
+    private static bool HasVersionedSuffix(string basePath)
+    {
+        var lastSlash = basePath.LastIndexOf('/');
+        if (lastSlash < 0)
+            return false;
+
+        var segment = basePath[(lastSlash + 1)..];
+        return segment.Length > 1
+            && (segment[0] == 'v' || segment[0] == 'V')
+            && segment[1..].All(char.IsDigit);
     }
 
     private static string Combine(string basePath, string suffix)

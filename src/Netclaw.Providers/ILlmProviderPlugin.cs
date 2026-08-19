@@ -77,4 +77,10 @@ public enum ReasoningSuppressionDialect
     /// DeepSeek's hosted API: emits top-level <c>thinking: { type: "disabled" }</c>.
     /// </summary>
     DeepSeekThinking,
+
+    /// <summary>
+    /// Z.ai's hosted API (GLM): emits top-level <c>thinking: { type: "disabled" }</c>.
+    /// Same wire shape as DeepSeek; kept distinct so each provider's dialect is named.
+    /// </summary>
+    ZaiThinking,
 }

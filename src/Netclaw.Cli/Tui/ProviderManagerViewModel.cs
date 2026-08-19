@@ -41,7 +41,9 @@ public enum ProviderManagerState
     Details,
     RenameProvider,
     FixCredentials,
-    RemoveConfirm
+    FixApiKey,
+    RemoveConfirm,
+    AddCredentialsEndpoint
 }
 
 /// <summary>
@@ -513,6 +515,15 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             return;
         }
 
+        // Optional-auth endpoint with API key selected: endpoint first, then the key.
+        if (method == AuthMethod.ApiKey
+            && _registry.Get(NewProviderType!).Auth is EndpointOrApiKeyAuth)
+        {
+            CurrentState.Value = ProviderManagerState.AddCredentialsEndpoint;
+            NotifyStateChanged();
+            return;
+        }
+
         CurrentState.Value = ProviderManagerState.AddCredentials;
         NotifyStateChanged();
     }
@@ -653,6 +664,39 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Submit the endpoint stage of an optional-auth add flow (API key method
+    /// selected) and advance to the API key input.
+    /// </summary>
+    public void SubmitEndpointCredential(string? endpoint)
+    {
+        NewEndpoint = string.IsNullOrWhiteSpace(endpoint) ? null : endpoint;
+        CurrentState.Value = ProviderManagerState.AddCredentials;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Submit the endpoint stage of a fix-credentials flow. When the provider's
+    /// stored entry declares API key auth, advance to the key stage; otherwise
+    /// submit the fix for probing directly.
+    /// </summary>
+    public void SubmitFixEndpoint(string? endpoint)
+    {
+        FixEndpoint = string.IsNullOrWhiteSpace(endpoint)
+            ? DetailProvider?.Entry?.Endpoint
+            : endpoint;
+
+        if (DetailProvider?.Entry?.AuthMethod == AuthMethod.ApiKey)
+        {
+            FixApiKey = null;
+            CurrentState.Value = ProviderManagerState.FixApiKey;
+            NotifyStateChanged();
+            return;
+        }
+
+        SubmitFixCredentials();
+    }
+
+    /// <summary>
     /// Submit fixed credentials and start validation probe.
     /// </summary>
     public void SubmitFixCredentials()
@@ -662,7 +706,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var type = DetailProvider.ProviderType;
         var descriptor = _registry.Get(type);
 
-        if (descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
+        // Key required when the provider type only offers API key auth, or when
+        // this entry itself declares API key auth. Optional-auth providers
+        // (openai-compatible) configured with No auth fix their endpoint only.
+        var keyRequired = descriptor.Auth.SupportedAuthMethods is [AuthMethod.ApiKey]
+            || DetailProvider.Entry?.AuthMethod == AuthMethod.ApiKey;
+        if (keyRequired && string.IsNullOrWhiteSpace(FixApiKey))
         {
             StatusMessage.Value = "API key is required.";
             RequestRedraw();
@@ -1016,10 +1065,20 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 break;
             case ProviderManagerState.AddCredentials:
                 var descriptor = _registry.Get(NewProviderType ?? "");
-                if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
+                if (descriptor.Auth is EndpointOrApiKeyAuth && NewAuthMethod == AuthMethod.ApiKey)
+                    CurrentState.Value = ProviderManagerState.AddCredentialsEndpoint;
+                else if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
                     GoBackToList();
                 else
                     CurrentState.Value = ProviderManagerState.AddSelectAuth;
+                NotifyStateChanged();
+                break;
+            case ProviderManagerState.AddCredentialsEndpoint:
+                CurrentState.Value = ProviderManagerState.AddSelectAuth;
+                NotifyStateChanged();
+                break;
+            case ProviderManagerState.FixApiKey:
+                CurrentState.Value = ProviderManagerState.FixCredentials;
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddValidating:

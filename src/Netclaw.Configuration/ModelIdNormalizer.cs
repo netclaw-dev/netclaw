@@ -41,6 +41,7 @@ public static partial class ModelIdNormalizer
         ["mixtral"] = "mistralai",
         ["qwen"] = "qwen",
         ["deepseek"] = "deepseek",
+        ["glm"] = "zai",
         ["phi"] = "microsoft",
     };
 

@@ -25,17 +25,25 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     public string TypeKey => "openai-compatible";
     public string DisplayName => "OpenAI-compatible (llama.cpp / vLLM / DwarfStar ds4)";
     public string DefaultEndpoint => "http://localhost:11434";
+    // Unversioned default. The probe resolves the effective path per
+    // endpoint via OpenAiCompatibleEndpoint.RelativeModelsPath because a
+    // base that already pins a version (…/v4) must not get another "/v1".
     public string ModelListingPath => "/v1/models";
-    public IProviderAuth Auth { get; } = new EndpointOnlyAuth();
+    public IProviderAuth Auth { get; } = new EndpointOrApiKeyAuth();
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)
     {
+        var effectiveBase = string.IsNullOrWhiteSpace(entry.Endpoint)
+            ? DefaultEndpoint
+            : entry.Endpoint;
+        var listingPath = OpenAiCompatibleEndpoint.RelativeModelsPath(effectiveBase);
+
         return ProbeHelpers.ExecuteProbeAsync(
             _httpClient,
             TypeKey,
             DefaultEndpoint,
-            ModelListingPath,
+            listingPath,
             entry.Endpoint,
             request =>
             {

@@ -22,16 +22,21 @@ internal static class OAuthFlowViews
     /// <summary>
     /// Map auth methods to user-friendly display labels for selection lists.
     /// Uses custom per-provider labels from <see cref="MultiAuth.AuthMethodLabels"/> when available.
+    /// <see cref="AuthMethod.None"/> is included only when the provider offers
+    /// it alongside other methods (e.g. optional-key OpenAI-compatible endpoints);
+    /// single-method None providers never render a picker at all.
     /// </summary>
     public static List<string> BuildAuthMethodLabels(IProviderAuth auth)
     {
         var customLabels = (auth as MultiAuth)?.AuthMethodLabels;
+        var includeNone = auth.SupportedAuthMethods.Count > 1;
         return [.. auth.SupportedAuthMethods
-            .Where(m => m != AuthMethod.None)
+            .Where(m => includeNone || m != AuthMethod.None)
             .Select(m => customLabels?.TryGetValue(m, out var label) == true
                 ? label
                 : m switch
                 {
+                    AuthMethod.None => "No auth (local endpoint)",
                     AuthMethod.ApiKey => "API Key",
                     AuthMethod.OAuthPkce => "OAuth Login (recommended)",
                     AuthMethod.OAuthDevice => "OAuth Device Flow",
@@ -56,6 +61,7 @@ internal static class OAuthFlowViews
 
         return label switch
         {
+            "No auth (local endpoint)" => AuthMethod.None,
             "API Key" => AuthMethod.ApiKey,
             "OAuth Login (recommended)" => AuthMethod.OAuthPkce,
             "OAuth Device Flow" => AuthMethod.OAuthDevice,

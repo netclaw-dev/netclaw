@@ -576,6 +576,13 @@ internal static class ProviderCommand
             return;
         }
 
+        if (descriptor.Auth is EndpointOrApiKeyAuth)
+        {
+            writer.WriteLine($"{descriptor.DisplayName} takes an endpoint and an optional API key (sent as a Bearer token).");
+            writer.WriteLine("Pass --api-key only if your endpoint requires authentication.");
+            return;
+        }
+
         if (descriptor.Auth is OAuthAuth)
         {
             writer.WriteLine($"{descriptor.DisplayName} uses OAuth. Run `netclaw provider` to authenticate.");

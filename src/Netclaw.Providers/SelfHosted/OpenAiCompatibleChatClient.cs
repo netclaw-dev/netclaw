@@ -22,6 +22,10 @@ public enum OpenAiCompatibleWireProfile
     // DeepSeek requires a thinking field and reasoning_content replay rules.
     // The generic OpenAI-compatible payload does not apply these rules.
     DeepSeek,
+    // Z.ai (GLM) uses the same thinking shape and reasoning_content replay as
+    // DeepSeek, but maps reasoning effort to thinking enabled/disabled only —
+    // Z.ai has no reasoning_effort gradation field.
+    Zai,
 }
 
 public sealed class OpenAiCompatibleChatClient : IChatClient
@@ -258,6 +262,8 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
 
         if (_wireProfile == OpenAiCompatibleWireProfile.DeepSeek)
             ApplyDeepSeekReasoning(body, options?.Reasoning?.Effort);
+        else if (_wireProfile == OpenAiCompatibleWireProfile.Zai)
+            ApplyZaiReasoning(body, options?.Reasoning?.Effort);
 
         // Pass through additional properties as top-level JSON fields.
         // Enables provider-specific options like chat_template_kwargs for llama.cpp.
@@ -296,6 +302,19 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                 body["reasoning_effort"] = "max";
                 break;
         }
+    }
+
+    // Z.ai exposes a binary thinking toggle only; it has no reasoning_effort
+    // gradation. Any non-null effort enables thinking, None disables it.
+    private static void ApplyZaiReasoning(JsonObject body, ReasoningEffort? effort)
+    {
+        var type = effort switch
+        {
+            null => "enabled",
+            ReasoningEffort.None => "disabled",
+            _ => "enabled",
+        };
+        body["thinking"] = new JsonObject { ["type"] = type };
     }
 
     /// <summary>
@@ -524,7 +543,8 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
                     break;
 
                 case TextReasoningContent reasoning
-                    when wireProfile == OpenAiCompatibleWireProfile.DeepSeek
+                    when (wireProfile == OpenAiCompatibleWireProfile.DeepSeek
+                          || wireProfile == OpenAiCompatibleWireProfile.Zai)
                          && !string.IsNullOrEmpty(reasoning.Text):
                     reasoningSegments.Add(reasoning.Text);
                     break;

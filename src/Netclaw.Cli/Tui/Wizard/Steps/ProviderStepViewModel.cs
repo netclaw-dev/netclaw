@@ -24,7 +24,8 @@ namespace Netclaw.Cli.Tui.Wizard.Steps;
 /// Wizard step for selecting and configuring the LLM provider.
 /// Sub-steps: 0=provider selection, 1=auth method, 2=credentials, 3=validation,
 /// 4=model selection, 5=OAuth device flow, 6=OAuth browser flow,
-/// 7=GitHub Copilot host mode, 8=GitHub Enterprise host, 9=GitHub Enterprise API base.
+/// 7=GitHub Copilot host mode, 8=GitHub Enterprise host, 9=GitHub Enterprise API base,
+/// 10=API key entry after endpoint (optional-auth OpenAI-compatible).
 /// </summary>
 public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
 {
@@ -95,6 +96,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         7 => "  Choose whether GitHub Copilot should authenticate through GitHub.com or GitHub Enterprise.",
         8 => "  Enter the GitHub Enterprise web host used for OAuth.",
         9 => "  Enter the GitHub Enterprise API base, or leave blank to use the derived default.",
+        10 => "  Enter the API key for your endpoint. It will be stored in secrets.json.",
         _ => ""
     };
 
@@ -143,6 +145,9 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
                 return true;
             case 9: // GitHub Enterprise API base → GitHub Enterprise host
                 _currentSubStep = 8;
+                return true;
+            case 10: // Optional API key after endpoint → endpoint input
+                _currentSubStep = 2;
                 return true;
             case 4: // Model selection → credentials
                 _currentSubStep = SelectedAuthMethod switch
@@ -449,7 +454,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             AuthMethod = SelectedAuthMethod,
             Endpoint = !string.IsNullOrWhiteSpace(EndpointInput)
                 ? EndpointInput
-                : _registry.TryGet(providerName, out var desc) && desc.Auth is EndpointOnlyAuth
+                : _registry.TryGet(providerName, out var desc) && desc.Auth is EndpointOnlyAuth or EndpointOrApiKeyAuth
                     ? desc.DefaultEndpoint
                     : null,
             VendorOptions = VendorOptions,
@@ -657,7 +662,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
 
         var endpoint = !string.IsNullOrWhiteSpace(vm.EndpointInput)
             ? vm.EndpointInput
-            : _registry.TryGet(providerType, out var descriptor) && descriptor.Auth is EndpointOnlyAuth
+            : _registry.TryGet(providerType, out var descriptor) && descriptor.Auth is EndpointOnlyAuth or EndpointOrApiKeyAuth
                 ? descriptor.DefaultEndpoint
                 : null;
 

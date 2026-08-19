@@ -22,12 +22,13 @@ and a `type` (well-known identifier). Manage them with `netclaw provider`:
 |------|------|-------|
 | `ollama` | Endpoint only | `--endpoint http://host:11434` |
 | `openai` | API key **or** OAuth (ChatGPT sub) | Codex backend for OAuth path |
-| `openai-compatible` | Endpoint; optional API key | Generic OpenAI-shape proxies, llama.cpp, vLLM. Also DwarfStar (ds4): `--endpoint http://127.0.0.1:8000`, run `ds4-server` separately, model ids `deepseek-v4-flash` / `deepseek-v4-pro`, context window auto-detected |
+| `openai-compatible` | Endpoint; optional API key (Bearer) | Generic OpenAI-shape proxies, llama.cpp, vLLM. Also DwarfStar (ds4): `--endpoint http://127.0.0.1:8000`, run `ds4-server` separately, model ids `deepseek-v4-flash` / `deepseek-v4-pro`, context window auto-detected. For gated endpoints (LiteLLM, intranet gateways), add `--api-key <key>`; the key is stored in `secrets.json` and sent as `Authorization: Bearer`. `netclaw init` and the `netclaw provider` TUI offer the same choice ("No auth (local endpoint)" vs "API Key"). An entry that declares `AuthMethod: ApiKey` without a stored key is reported by `netclaw doctor`. |
 | `anthropic` | API key | `sk-ant-...` |
 | `openrouter` | API key | `sk-or-...` |
 | `github-copilot` | OAuth device flow only | Requires active Copilot subscription on the GitHub account |
 | `veniceai` | API key | OpenAI-compatible at `https://api.venice.ai/api/v1`. Suppresses Venice's prepended system prompt by default; opt in via `VendorOptions.IncludeVeniceSystemPrompt = true` |
 | `deepseek` | API key | DeepSeek hosted API at `https://api.deepseek.com/v1`. Current model ids: `deepseek-v4-flash` and `deepseek-v4-pro` |
+| `zai` | API key | Z.ai GLM Coding Plan at `https://api.z.ai/api/coding/paas/v4`. Current models: `glm-5.3`, `glm-5-turbo`, `glm-4.7`; requests for `glm-5.2`/`glm-5.1` are server-routed to `glm-5.3`. For the pay-as-you-go platform, set `--endpoint https://api.z.ai/api/paas/v4` |
 
 Provider-specific behavior toggles belong under
 `Providers.<name>.VendorOptions`. Netclaw keeps that bag opaque at the core

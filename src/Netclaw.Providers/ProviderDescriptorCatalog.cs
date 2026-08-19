@@ -10,6 +10,7 @@ using Netclaw.Providers.OpenAi;
 using Netclaw.Providers.OpenRouter;
 using Netclaw.Providers.SelfHosted;
 using Netclaw.Providers.VeniceAi;
+using Netclaw.Providers.Zai;
 
 namespace Netclaw.Providers;
 
@@ -30,6 +31,7 @@ public sealed class ProviderDescriptorCatalog
         GitHubCopilot = GetRequired<GitHubCopilotDescriptor>(descriptors);
         VeniceAi = GetRequired<VeniceAiDescriptor>(descriptors);
         DeepSeek = GetRequired<DeepSeekDescriptor>(descriptors);
+        Zai = GetRequired<ZaiDescriptor>(descriptors);
     }
 
     public OllamaDescriptor Ollama { get; }
@@ -47,6 +49,8 @@ public sealed class ProviderDescriptorCatalog
     public VeniceAiDescriptor VeniceAi { get; }
 
     public DeepSeekDescriptor DeepSeek { get; }
+
+    public ZaiDescriptor Zai { get; }
 
     public IReadOnlyList<IProviderDescriptor> All { get; }
 
@@ -67,6 +71,7 @@ public sealed class ProviderDescriptorCatalog
             new GitHubCopilotDescriptor(httpClient, copilotTokenExchanger),
             new VeniceAiDescriptor(httpClient),
             new DeepSeekDescriptor(httpClient),
+            new ZaiDescriptor(httpClient),
         ]);
     }
 

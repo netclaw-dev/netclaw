@@ -92,6 +92,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     ProviderManagerState.AddGitHubCopilotEnterpriseHost => BuildGitHubCopilotEnterpriseHostView(),
                     ProviderManagerState.AddGitHubCopilotEnterpriseApiBase => BuildGitHubCopilotEnterpriseApiBaseView(),
                     ProviderManagerState.AddCredentials => BuildCredentialsView(),
+                    ProviderManagerState.AddCredentialsEndpoint => BuildCredentialsEndpointView(),
                     ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
                     ProviderManagerState.AddBrowserOAuthFlow => BuildBrowserOAuthFlowView(),
                     ProviderManagerState.AddValidating => BuildValidatingView(),
@@ -99,6 +100,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     ProviderManagerState.Details => BuildDetailsView(),
                     ProviderManagerState.RenameProvider => BuildRenameView(),
                     ProviderManagerState.FixCredentials => BuildFixCredentialsView(),
+                    ProviderManagerState.FixApiKey => BuildFixApiKeyView(),
                     ProviderManagerState.RemoveConfirm => BuildRemoveConfirmView(),
                     _ => Layouts.Empty()
                 };
@@ -559,6 +561,91 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             children.WithChild(new TextNode($"  {descriptor.DisplayName} runs locally. No authentication required.")
                 .WithForeground(Color.Gray));
         }
+        else if (descriptor.Auth is EndpointOrApiKeyAuth)
+        {
+            // Optional-auth endpoint. "No auth" entered the endpoint here directly;
+            // "API Key" renders the key input (endpoint was collected one stage earlier).
+            children.WithChild(new TextNode("").Height(1));
+
+            if (ViewModel.NewAuthMethod == AuthMethod.None)
+            {
+                children.WithChild(new TextNode($"  Endpoint (default: {descriptor.DefaultEndpoint}):")
+                    .WithForeground(Color.White));
+
+                _endpointInput = new TextInputNode()
+                    .WithPlaceholder(descriptor.DefaultEndpoint);
+                _endpointInput.OnFocused();
+                _lastFocusedInput = _endpointInput;
+
+                _endpointInput.Submitted
+                    .Subscribe(text =>
+                    {
+                        ViewModel.NewEndpoint = string.IsNullOrWhiteSpace(text) ? null : text;
+                        ViewModel.SubmitCredentials();
+                    })
+                    .DisposeWith(_stepSubs);
+
+                children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_endpointInput, "Endpoint"));
+
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  No auth selected. Your endpoint must be reachable without a key.")
+                    .WithForeground(Color.Gray));
+            }
+            else
+            {
+                children.WithChild(new TextNode("  API Key:").WithForeground(Color.White));
+
+                _apiKeyInput = new TextInputNode()
+                    .AsPassword()
+                    .WithPlaceholder($"Enter {providerType} API key...");
+                _apiKeyInput.OnFocused();
+                _lastFocusedInput = _apiKeyInput;
+
+                _apiKeyInput.Submitted
+                    .Subscribe(text =>
+                    {
+                        ViewModel.NewApiKey = text;
+                        ViewModel.SubmitCredentials();
+                    })
+                    .DisposeWith(_stepSubs);
+
+                children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_apiKeyInput, "API Key"));
+
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  The key is sent as a Bearer token and stored in secrets.json.")
+                    .WithForeground(Color.Gray));
+            }
+        }
+
+        return children;
+    }
+
+    private ILayoutNode BuildCredentialsEndpointView()
+    {
+        var children = Layouts.Vertical();
+        var providerType = ViewModel.NewProviderType ?? "unknown";
+        var descriptor = ViewModel.Registry.Get(providerType);
+
+        children.WithChild(new TextNode($"  Provider: {descriptor.DisplayName} (name: {ViewModel.NewProviderName})")
+            .WithForeground(Color.White));
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode($"  Endpoint (default: {descriptor.DefaultEndpoint}):")
+            .WithForeground(Color.White));
+
+        _endpointInput = new TextInputNode()
+            .WithPlaceholder(descriptor.DefaultEndpoint);
+        _endpointInput.OnFocused();
+        _lastFocusedInput = _endpointInput;
+
+        _endpointInput.Submitted
+            .Subscribe(text => ViewModel.SubmitEndpointCredential(text))
+            .DisposeWith(_stepSubs);
+
+        children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_endpointInput, "Endpoint"));
+
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode("  Next: enter the API key sent as a Bearer token to this endpoint.")
+            .WithForeground(Color.Gray));
 
         return children;
     }
@@ -834,7 +921,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(reAuthList);
         }
-        else if (descriptor.Auth is EndpointOnlyAuth)
+        else if (descriptor.Auth is EndpointOnlyAuth or EndpointOrApiKeyAuth)
         {
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  Endpoint:").WithForeground(Color.White));
@@ -845,16 +932,17 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             _lastFocusedInput = _endpointInput;
 
             _endpointInput.Submitted
-                .Subscribe(text =>
-                {
-                    ViewModel.FixEndpoint = string.IsNullOrWhiteSpace(text)
-                        ? item.Entry?.Endpoint
-                        : text;
-                    ViewModel.SubmitFixCredentials();
-                })
+                .Subscribe(text => ViewModel.SubmitFixEndpoint(text))
                 .DisposeWith(_stepSubs);
 
             children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_endpointInput, "Endpoint"));
+
+            if (descriptor.Auth is EndpointOrApiKeyAuth && item.Entry?.AuthMethod == AuthMethod.ApiKey)
+            {
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  Next: enter the replacement API key for this endpoint.")
+                    .WithForeground(Color.Gray));
+            }
         }
         else
         {
@@ -885,6 +973,36 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     .WithForeground(Color.Gray));
             }
         }
+
+        return children;
+    }
+
+    private ILayoutNode BuildFixApiKeyView()
+    {
+        var item = ViewModel.DetailProvider;
+        if (item is null)
+            return Layouts.Empty();
+
+        var children = Layouts.Vertical();
+        children.WithChild(new TextNode($"  New API key for: {item.ConfiguredName} ({item.DisplayName})")
+            .WithForeground(Color.White).Bold());
+        children.WithChild(new TextNode("").Height(1));
+
+        _apiKeyInput = new TextInputNode()
+            .AsPassword()
+            .WithPlaceholder($"Enter new {item.DisplayName} API key...");
+        _apiKeyInput.OnFocused();
+        _lastFocusedInput = _apiKeyInput;
+
+        _apiKeyInput.Submitted
+            .Subscribe(text =>
+            {
+                ViewModel.FixApiKey = text;
+                ViewModel.SubmitFixCredentials();
+            })
+            .DisposeWith(_stepSubs);
+
+        children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_apiKeyInput, "API Key"));
 
         return children;
     }

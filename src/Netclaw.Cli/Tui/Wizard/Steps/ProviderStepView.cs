@@ -67,6 +67,7 @@ public sealed class ProviderStepView : IWizardStepView
             7 => BuildGitHubCopilotAuthHost(vm, callbacks),
             8 => BuildGitHubCopilotEnterpriseHost(vm, callbacks),
             9 => BuildGitHubCopilotEnterpriseApiBase(vm, callbacks),
+            10 => BuildApiKeyInput(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -274,7 +275,8 @@ public sealed class ProviderStepView : IWizardStepView
 
         _lastFocusedList = null;
 
-        if (descriptor.Auth is EndpointOnlyAuth)
+        if (descriptor.Auth is EndpointOnlyAuth
+            || (descriptor.Auth is EndpointOrApiKeyAuth && vm.SelectedAuthMethod == AuthMethod.None))
         {
             var defaultEndpoint = descriptor.DefaultEndpoint;
             _endpointInput = new TextInputNode().WithPlaceholder(defaultEndpoint);
@@ -292,10 +294,50 @@ public sealed class ProviderStepView : IWizardStepView
                 })
                 .DisposeWith(callbacks.Subscriptions);
 
+            var hint = descriptor.Auth is EndpointOrApiKeyAuth
+                ? new TextNode("  No auth selected. Back up and choose API Key if your endpoint requires a key.")
+                    .WithForeground(Color.Gray)
+                : new TextNode("").Height(1);
+
+            return Layouts.Vertical()
+                .WithChild(new TextNode($"  {displayName} endpoint:").WithForeground(Color.White))
+                .WithChild(WizardStepHelpers.BuildTextInputPanel(_endpointInput, "Endpoint"))
+                .WithChild(hint);
+        }
+
+        if (descriptor.Auth is EndpointOrApiKeyAuth)
+        {
+            // API key selected for an optional-auth endpoint: endpoint first, then the key.
+            var defaultEndpoint = descriptor.DefaultEndpoint;
+            _endpointInput = new TextInputNode().WithPlaceholder(defaultEndpoint);
+            _endpointInput.Text = vm.EndpointInput ?? defaultEndpoint;
+            _endpointInput.OnFocused();
+            _lastFocusedInput = _endpointInput;
+
+            _endpointInput.Submitted
+                .Subscribe(text =>
+                {
+                    vm.EndpointInput = string.IsNullOrWhiteSpace(text) ? defaultEndpoint : text;
+                    vm.SetSubStep(10);
+                    callbacks.InvalidateAndRedraw();
+                })
+                .DisposeWith(callbacks.Subscriptions);
+
             return Layouts.Vertical()
                 .WithChild(new TextNode($"  {displayName} endpoint:").WithForeground(Color.White))
                 .WithChild(WizardStepHelpers.BuildTextInputPanel(_endpointInput, "Endpoint"));
         }
+
+        return BuildApiKeyInput(vm, callbacks);
+    }
+
+    private ILayoutNode BuildApiKeyInput(ProviderStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        var providerType = vm.SelectedProviderType ?? "unknown";
+        var descriptor = vm.Registry.Get(providerType);
+        var displayName = descriptor.DisplayName;
+
+        _lastFocusedList = null;
 
         _apiKeyInput = new TextInputNode()
             .AsPassword()

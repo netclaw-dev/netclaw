@@ -22,7 +22,7 @@ Enter
 # ─── Step 1 of 4: Provider ──────────────────────────────────────────
 Wait+Screen@10s /Choose your LLM provider:/
 # Provider list ordering is alphabetical by TypeKey:
-#   anthropic, deepseek, github-copilot, ollama, openai, openai-compatible, openrouter, veniceai
+#   anthropic, deepseek, github-copilot, ollama, openai, openai-compatible, openrouter, veniceai, zai
 # Three Downs from the Anthropic default land on Ollama.
 Down 3
 Enter

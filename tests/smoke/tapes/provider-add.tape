@@ -31,7 +31,7 @@ Wait+Screen@10s /Ollama/
 Sleep 300ms
 
 # Provider type list (alphabetical by TypeKey): anthropic, deepseek,
-# github-copilot, ollama, openai, openai-compatible, openrouter, veniceai. With
+# github-copilot, ollama, openai, openai-compatible, openrouter, veniceai, zai. With
 # Anthropic highlighted by default, three Downs land on Ollama.
 Down 3
 Enter

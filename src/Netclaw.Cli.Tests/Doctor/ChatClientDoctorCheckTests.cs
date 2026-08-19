@@ -351,6 +351,51 @@ public sealed class ChatClientDoctorCheckTests
         }
     }
 
+    [Fact]
+    public async Task ReturnsError_WhenOpenAiCompatibleDeclaresApiKeyWithoutStoredKey()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "my-vllm": { "Type": "openai-compatible", "AuthMethod": "ApiKey", "Endpoint": "http://gpu.lan:8000" }
+              },
+              "Models": {
+                "Main": { "Provider": "my-vllm", "ModelId": "qwen3:30b" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("declares AuthMethod ApiKey", result.Message);
+        Assert.Contains("no ApiKey in secrets.json", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsPass_WhenOpenAiCompatibleUsesNoAuth()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "my-vllm": { "Type": "openai-compatible", "Endpoint": "http://gpu.lan:8000" }
+              },
+              "Models": {
+                "Main": { "Provider": "my-vllm", "ModelId": "qwen3:30b" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Contains("Real chat client configured", result.Message);
+    }
+
     private static NetclawPaths CreatePathsWithConfig(string configJson)
     {
         var basePath = CreateTempBasePath();
