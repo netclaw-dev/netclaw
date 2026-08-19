@@ -54,15 +54,10 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     // with no fetcher there is no gap to hydrate, so both hydration paths no-op.
     private readonly ThreadGapHydrationEngine? _hydrationEngine;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
+    private readonly ApprovalResponseFlow<PendingApprovalRequest, DiscordMessageId> _approvalFlow;
 
-    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
-    // A binding that has never observed any ToolInteractionRequest treats an
-    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
-    // restarted out from under it. Once we've observed at least one prompt,
-    // subsequent ambiguous text from the user is ordinary conversation, not an
-    // approval reply, so the cold path stays off. This does NOT gate button
-    // clicks — those always route to the session, which is the authority on
-    // CallId staleness.
+    // Gates the text-approval cold path. The gate rule lives with the cold path
+    // in ApprovalResponseFlow.
     private bool _hasObservedApprovalRequest;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
@@ -158,6 +153,22 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 onBackfillEnqueued: AdvancePendingCursorForEnqueuedTurn,
                 setHydrationPending: pending => _hydrationPending = pending);
         }
+
+        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, DiscordMessageId>(
+            sessionId: _sessionId,
+            channelType: ChannelType.Discord,
+            channelName: "Discord",
+            pipeline: _dependencies.Pipeline,
+            operationTimeout: OperationTimeout,
+            pendingRequests: _pendingApprovalRequests,
+            matchOrder: ApprovalMatchOrder.Newest,
+            hasObservedApprovalRequest: () => _hasObservedApprovalRequest,
+            postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
+            persistPromptCleared: callId => Persist(
+                new PendingApprovalPromptCleared { CallId = callId.Value },
+                ApplyPendingApprovalPromptCleared),
+            renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
@@ -489,229 +500,17 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         => _dependencies.Options.AllowedUserIds.Length == 0
             || _dependencies.Options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
 
-    private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message)
-    {
-        var (result, pending) = ResolvePendingRequest(message.SenderId, callId: null);
+    private Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message)
+        => _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value);
 
-        if (result is ApprovalLookupResult.NotFound)
-        {
-            return !_hasObservedApprovalRequest
-                && await TryHandleColdTextApprovalResponseAsync(message);
-        }
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            return true;
-        }
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(
-                message.Text ?? string.Empty,
-                pending!.Options,
-                out var selectedKey)
-            || selectedKey is null)
-        {
-            return false;
-        }
-
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = pending!.CallId,
-                    SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(selectedKey),
-                    SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
-                }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Discord text approval response for call {CallId}", pending!.CallId);
-            return true;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                _log.Info(
-                    "Session rejected Discord text approval response for call {CallId} reason={Reason}; skipping redraw",
-                    pending!.CallId,
-                    nack.Reason ?? "<none>");
-                return true;
-
-            case not CommandAck:
-                _log.Warning(
-                    "Discord text approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    pending!.CallId,
-                    feedbackResult.GetType().Name);
-                return true;
-        }
-
-        _pendingApprovalRequests.Remove(pending!);
-        Persist(new PendingApprovalPromptCleared
-        {
-            CallId = pending.CallId.Value
-        }, ApplyPendingApprovalPromptCleared);
-
-        await TryResolveApprovalPromptAsync(
-            pending!.PromptMessageId,
-            pending!.Request,
-            pending!.CallId,
-            selectedKey,
+    // Discord gateway interactions are one-way telemetry from the websocket, so
+    // the flow gets no synchronous-reply hook here.
+    private Task HandleApprovalResponseAsync(DiscordApprovalResponse message)
+        => _approvalFlow.HandleApprovalResponseAsync(
+            message.CallId,
+            message.SelectedKey,
             message.SenderId.Value,
-            persistedToolName: pending.ToolName,
-            persistedDisplayText: pending.DisplayText);
-        return true;
-    }
-
-    private async Task<bool> TryHandleColdTextApprovalResponseAsync(DiscordThreadInbound message)
-    {
-        if (!ToolInteractionResponseParser.LooksLikeApprovalResponse(message.Text ?? string.Empty))
-            return false;
-
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionTextResponse
-            {
-                SessionId = _sessionId,
-                Text = message.Text ?? string.Empty,
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-
-            if (reply is CommandAck)
-            {
-                _log.Info(
-                    "Forwarded cold Discord text approval response from sender={SenderId} without local pending prompt state",
-                    message.SenderId);
-                return true;
-            }
-
-            // approval_no_history means the session has never had an approval request.
-            // The message was a false-positive from LooksLikeApprovalResponse.
-            // Don't consume — let it fall through to normal LLM ingress. See #1164.
-            if (reply is CommandNack { Reason: ApprovalNackReasons.NoHistory })
-                return false;
-
-            return reply is CommandNack;
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route cold Discord text approval response from sender {SenderId}", message.SenderId);
-            return false;
-        }
-    }
-
-    private async Task HandleApprovalResponseAsync(DiscordApprovalResponse message)
-    {
-        var (result, pending) = ResolvePendingRequest(message.SenderId, message.CallId);
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            return;
-        }
-
-        // Wait for the session before redrawing. This is the security gate that
-        // prevents (a) a non-requester click destroying the prompt UI on the
-        // cold-spawn path, and (b) a stale re-click overwriting an already-resolved
-        // banner — both surfaced by the #939 code review. The session is the
-        // authority on whether the call is still pending and whether the sender is
-        // allowed. Only redraw on CommandAck.
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = message.CallId,
-                    SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
-                    SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
-                }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Discord approval response for call {CallId}", message.CallId);
-            return;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                _log.Info(
-                    "Session rejected Discord approval response for call {CallId} reason={Reason}; skipping redraw",
-                    message.CallId,
-                    nack.Reason ?? "<none>");
-                return;
-
-            case CommandAck:
-                break;
-
-            default:
-                _log.Warning(
-                    "Discord approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    message.CallId,
-                    feedbackResult.GetType().Name);
-                return;
-        }
-
-        if (pending is not null)
-        {
-            _pendingApprovalRequests.Remove(pending);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-            // Prefer captured message ID; fall back to payload ID when capture failed.
-            var promptMessageId = pending.PromptMessageId ?? message.PromptMessageId;
-            await TryResolveApprovalPromptAsync(
-                promptMessageId,
-                pending.Request,
-                pending.CallId,
-                message.SelectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-        }
-        else if (message.PromptMessageId is { } payloadPromptMessageId)
-        {
-            // Cold-spawn redraw — no local pending entry for this CallId (no
-            // PendingApprovalPromptTracked replayed, or the entry was already
-            // cleared). The click payload still carries the prompt's message id
-            // and the session has accepted the response; render the generic
-            // banner so the buttons clear. Pre-0.21 journals that DO replay take
-            // the upper `pending is not null` branch — they render generically
-            // via the !IsNullOrEmpty fallback inside the builder, not here.
-            await TryResolveApprovalPromptAsync(
-                payloadPromptMessageId,
-                request: null,
-                message.CallId,
-                message.SelectedKey,
-                message.SenderId.Value);
-
-            _log.Info(
-                "Forwarded Discord approval response for call {0} to session without local pending entry; redrew prompt via payload messageId={1}",
-                message.CallId,
-                payloadPromptMessageId.Value);
-        }
-        else
-        {
-            // Text-reply on a cold-spawned binding. Remaining #939 gap.
-            _log.Info(
-                "Forwarded Discord approval response for call {0} to session without local pending entry; redraw skipped",
-                message.CallId);
-            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
-        }
-    }
+            message.PromptMessageId);
 
     private async Task TryResolveApprovalPromptAsync(
         DiscordMessageId? promptMessageId,
@@ -838,11 +637,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _channelId.Value,
             _channelId.Value,
             _threadOrMessageId.Value);
-
-    private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
-        DiscordUserId senderId, Netclaw.Tools.ToolCallId? callId)
-        => PendingApprovalLookup.Resolve<PendingApprovalRequest, DiscordMessageId>(
-            _pendingApprovalRequests, senderId.Value, callId);
 
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {

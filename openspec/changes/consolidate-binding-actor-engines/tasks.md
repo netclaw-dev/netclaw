@@ -16,9 +16,9 @@ Working branch: `refactor/binding-engine`, stacked on `refactor/delivery-failure
 
 ## 3. Approval-response flow
 
-- [ ] 3.1 Extract `ApprovalResponseFlow` (text approval parsing, cold-spawn forwarding, prompt resolution via `PendingApprovalLookup`) with required render hook and optional Mattermost synchronous-reply hook
-- [ ] 3.2 Delegate Discord and Mattermost; verify Slack's lookup shape — if semantically identical, delegate Slack too, otherwise Slack shares the outer flow only and the difference is documented in the parity spec
-- [ ] 3.3 Approval contract tests green per channel, including wrong-requester rejection, cold text approval, pruned option order, and post-turn approval forwarding
+- [x] 3.1 Extract `ApprovalResponseFlow` (text approval parsing, cold-spawn forwarding, prompt resolution via `PendingApprovalLookup`) with required render hook and optional Mattermost synchronous-reply hook
+- [x] 3.2 Delegate Discord and Mattermost; verify Slack's lookup shape — if semantically identical, delegate Slack too, otherwise Slack shares the outer flow only and the difference is documented in the parity spec
+- [x] 3.3 Approval contract tests green per channel, including wrong-requester rejection, cold text approval, pruned option order, and post-turn approval forwarding
 
 ## 4. Output template and safe transport calls
 

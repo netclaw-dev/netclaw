@@ -53,15 +53,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     // with no fetcher there is no gap to hydrate, so both hydration paths no-op.
     private readonly ThreadGapHydrationEngine? _hydrationEngine;
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
+    private readonly ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId> _approvalFlow;
 
-    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
-    // A binding that has never observed any ToolInteractionRequest treats an
-    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
-    // restarted out from under it. Once we've observed at least one prompt,
-    // subsequent ambiguous text from the user is ordinary conversation, not an
-    // approval reply, so the cold path stays off. This does NOT gate button
-    // clicks — those always route to the session, which is the authority on
-    // CallId staleness.
+    // Gates the text-approval cold path. The gate rule lives with the cold path
+    // in ApprovalResponseFlow.
     private bool _hasObservedApprovalRequest;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
@@ -149,6 +144,22 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 onBackfillEnqueued: AdvancePendingCursorForEnqueuedTurn,
                 setHydrationPending: pending => _hydrationPending = pending);
         }
+
+        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId>(
+            sessionId: _sessionId,
+            channelType: ChannelType.Mattermost,
+            channelName: "Mattermost",
+            pipeline: _dependencies.Pipeline,
+            operationTimeout: OperationTimeout,
+            pendingRequests: _pendingApprovalRequests,
+            matchOrder: ApprovalMatchOrder.Newest,
+            hasObservedApprovalRequest: () => _hasObservedApprovalRequest,
+            postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
+            persistPromptCleared: callId => Persist(
+                new PendingApprovalPromptCleared { CallId = callId.Value },
+                ApplyPendingApprovalPromptCleared),
+            renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
@@ -456,232 +467,21 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         => _dependencies.Options.AllowedUserIds.Length == 0
             || _dependencies.Options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
 
-    private async Task<bool> TryHandleTextApprovalResponseAsync(MattermostThreadInbound message)
-    {
-        var (result, pending) = ResolvePendingRequest(message.SenderId, callId: null);
+    private Task<bool> TryHandleTextApprovalResponseAsync(MattermostThreadInbound message)
+        => _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value);
 
-        if (result is ApprovalLookupResult.NotFound)
-        {
-            return !_hasObservedApprovalRequest
-                && await TryHandleColdTextApprovalResponseAsync(message);
-        }
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            return true;
-        }
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(
-                message.Text ?? string.Empty,
-                pending!.Options,
-                out var selectedKey)
-            || selectedKey is null)
-        {
-            return false;
-        }
-
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionResponse
-            {
-                SessionId = _sessionId,
-                CallId = pending!.CallId,
-                SelectedKey = new ApprovalOptionKey(selectedKey),
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Mattermost text approval response for call {CallId}", pending!.CallId);
-            return true;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                _log.Info(
-                    "Session rejected Mattermost text approval response for call {CallId} reason={Reason}; skipping redraw",
-                    pending!.CallId,
-                    nack.Reason ?? "<none>");
-                return true;
-
-            case not CommandAck:
-                _log.Warning(
-                    "Mattermost text approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    pending!.CallId,
-                    feedbackResult.GetType().Name);
-                return true;
-        }
-
-        _pendingApprovalRequests.Remove(pending!);
-        Persist(new PendingApprovalPromptCleared
-        {
-            CallId = pending.CallId.Value
-        }, ApplyPendingApprovalPromptCleared);
-
-        await TryResolveApprovalPromptAsync(
-            pending!.PromptPostId,
-            pending!.Request,
-            pending!.CallId,
-            selectedKey,
-            message.SenderId.Value,
-            persistedToolName: pending.ToolName,
-            persistedDisplayText: pending.DisplayText);
-        return true;
-    }
-
-    private async Task<bool> TryHandleColdTextApprovalResponseAsync(MattermostThreadInbound message)
-    {
-        if (!ToolInteractionResponseParser.LooksLikeApprovalResponse(message.Text ?? string.Empty))
-            return false;
-
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionTextResponse
-            {
-                SessionId = _sessionId,
-                Text = message.Text ?? string.Empty,
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-
-            if (reply is CommandAck)
-            {
-                _log.Info(
-                    "Forwarded cold Mattermost text approval response from sender={SenderId} without local pending prompt state",
-                    message.SenderId);
-                return true;
-            }
-
-            // approval_no_history means the session has never had an approval request.
-            // The message was a false-positive from LooksLikeApprovalResponse.
-            // Don't consume — let it fall through to normal LLM ingress. See #1164.
-            if (reply is CommandNack { Reason: ApprovalNackReasons.NoHistory })
-                return false;
-
-            return reply is CommandNack;
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route cold Mattermost text approval response from sender {SenderId}", message.SenderId);
-            return false;
-        }
-    }
-
-    private async Task HandleApprovalResponseAsync(MattermostApprovalResponse message)
+    // The Mattermost interactive-message webhook asks the binding over HTTP and
+    // waits for the session's verdict, so this is the one channel that registers
+    // the synchronous-reply hook.
+    private Task HandleApprovalResponseAsync(MattermostApprovalResponse message)
     {
         var replyTo = Sender;
-        var (result, pending) = ResolvePendingRequest(message.SenderId, message.CallId);
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            ReplyIfExpected(replyTo, CommandNack.For(_sessionId, ApprovalNackReasons.WrongRequester));
-            return;
-        }
-
-        ISessionResponse feedbackResult;
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionResponse
-            {
-                SessionId = _sessionId,
-                CallId = message.CallId,
-                SelectedKey = new ApprovalOptionKey(message.SelectedKey),
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Mattermost approval response for call {CallId}", message.CallId);
-            ReplyIfExpected(replyTo, CommandNack.For(_sessionId, ApprovalNackReasons.PersistFailed));
-            return;
-        }
-
-        CommandAck ack;
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                ReplyIfExpected(replyTo, nack);
-                return;
-
-            case CommandAck ok:
-                ack = ok;
-                break;
-
-            default:
-                // Unreachable: ISessionResponse is implemented only by CommandAck
-                // and CommandNack. Kept as a defensive guard so an unexpected
-                // future implementer surfaces a structured Nack instead of an
-                // unobservable null reference.
-                _log.Warning(
-                    "Mattermost approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    message.CallId,
-                    feedbackResult.GetType().Name);
-                ReplyIfExpected(replyTo, CommandNack.For(_sessionId, ApprovalNackReasons.PersistFailed));
-                return;
-        }
-
-        if (pending is not null)
-        {
-            _pendingApprovalRequests.Remove(pending);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-            // Prefer captured post ID; fall back to payload-provided ID when capture
-            // failed (very narrow race window — see binding's TryPostButtonPromptAsync).
-            var promptPostId = pending.PromptPostId ?? message.PromptPostId;
-            await TryResolveApprovalPromptAsync(
-                promptPostId,
-                pending.Request,
-                pending.CallId,
-                message.SelectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-        }
-        else if (message.PromptPostId is { } payloadPromptPostId)
-        {
-            // Cold-spawn path with no local pending entry for this CallId (no
-            // journal record replayed, or the entry was already cleared). The
-            // Mattermost action callback always carries the prompt's post_id;
-            // render the generic banner so the buttons clear. Pre-0.21 journals
-            // that DO replay take the upper `pending is not null` branch — they
-            // render generically via the !IsNullOrEmpty fallback inside the
-            // builder, not here. See issue #939.
-            await TryResolveApprovalPromptAsync(
-                payloadPromptPostId,
-                request: null,
-                message.CallId,
-                message.SelectedKey,
-                message.SenderId.Value);
-
-            _log.Info(
-                "Forwarded Mattermost approval response for call {0} to session without local pending entry; redrew prompt via payload postId={1}",
-                message.CallId,
-                payloadPromptPostId.Value);
-        }
-        else
-        {
-            // Cold-spawn path without payload context (e.g. text-reply A-E in a
-            // thread whose binding has been passivated). Approval still routes;
-            // redraw is not possible. Remaining gap tracked under #939.
-            _log.Info(
-                "Forwarded Mattermost approval response for call {0} to session without local pending entry; redraw skipped",
-                message.CallId);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
-        }
-
-        ReplyIfExpected(replyTo, ack);
+        return _approvalFlow.HandleApprovalResponseAsync(
+            message.CallId,
+            message.SelectedKey,
+            message.SenderId.Value,
+            message.PromptPostId,
+            respondSynchronously: response => ReplyIfExpected(replyTo, response));
     }
 
     private async Task TryResolveApprovalPromptAsync(
@@ -808,11 +608,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             _channelId.Value,
             _channelId.Value,
             _rootPostId.Value);
-
-    private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
-        MattermostUserId senderId, ToolCallId? callId)
-        => PendingApprovalLookup.Resolve<PendingApprovalRequest, MattermostPostId>(
-            _pendingApprovalRequests, senderId.Value, callId);
 
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {

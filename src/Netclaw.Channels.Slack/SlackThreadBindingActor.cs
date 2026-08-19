@@ -47,15 +47,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     // same session concurrently — a single field would be clobbered.
     private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
     private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
+    private readonly ApprovalResponseFlow<PendingApprovalRequest, SlackEventTs> _approvalFlow;
 
-    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
-    // A binding that has never observed any ToolInteractionRequest treats an
-    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
-    // restarted out from under it. Once we've observed at least one prompt,
-    // subsequent ambiguous text from the user is ordinary conversation, not an
-    // approval reply, so the cold path stays off. This does NOT gate button
-    // clicks — those always route to the session, which is the authority on
-    // CallId staleness.
+    // Gates the text-approval cold path. The gate rule lives with the cold path
+    // in ApprovalResponseFlow.
     private bool _hasObservedApprovalRequest;
 
     private readonly SessionPipelineHandle _handle;
@@ -94,6 +89,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private const string BackfillDetectorWarning = ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
     private const string LiveDetectorUnavailableWarning = ":warning: I couldn't safely analyze your message — please try again in a moment.";
     private const string LiveInjectionBlockedWarning = ":warning: Message blocked by prompt-injection policy.";
+    private const string WrongRequesterWarning = ":warning: Only the requesting user can approve this tool action.";
 
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -138,6 +134,25 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             warnBackfillDetectorUnavailableAsync: () => SafePostAsync(BackfillDetectorWarning),
             onBackfillEnqueued: AdvancePendingCursorForEnqueuedTurn,
             setHydrationPending: pending => _hydrationPending = pending);
+
+        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, SlackEventTs>(
+            sessionId: _sessionId,
+            channelType: ChannelType.Slack,
+            channelName: "Slack",
+            pipeline: _dependencies.Pipeline,
+            operationTimeout: OperationTimeout,
+            pendingRequests: _pendingApprovalRequests,
+            // Slack resolves the earliest matching prompt, which is the order its
+            // own lookup used before the extraction. Discord and Mattermost
+            // resolve the most recent one.
+            matchOrder: ApprovalMatchOrder.Oldest,
+            hasObservedApprovalRequest: () => _hasObservedApprovalRequest,
+            postWrongRequesterWarningAsync: () => SafePostAsync(WrongRequesterWarning),
+            persistPromptCleared: callId => Persist(
+                new PendingApprovalPromptCleared { CallId = callId.Value },
+                ApplyPendingApprovalPromptCleared),
+            renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
@@ -1038,265 +1053,17 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _threadTs.Value);
     }
 
-    private async Task<bool> TryHandleTextApprovalResponseAsync(SlackThreadInbound message)
-    {
-        if (_pendingApprovalRequests.Count == 0)
-        {
-            return !_hasObservedApprovalRequest
-                && await TryHandleColdTextApprovalResponseAsync(message);
-        }
+    private Task<bool> TryHandleTextApprovalResponseAsync(SlackThreadInbound message)
+        => _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value);
 
-        var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            ApprovalButtonValueCodec.CanApprove(request.RequesterPrincipal, request.RequesterSenderId, message.SenderId.Value));
-
-        if (pendingIndex < 0)
-        {
-            await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-            return true;
-        }
-
-        var pending = _pendingApprovalRequests[pendingIndex];
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(
-                message.Text ?? string.Empty,
-                pending.Options,
-                out var selectedKey)
-            || selectedKey is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            var feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = pending.CallId,
-                    SelectedKey = new Actors.Protocol.ApprovalOptionKey(selectedKey),
-                    SenderId = message.SenderId
-                }, feedbackCts.Token);
-
-            switch (feedbackResult)
-            {
-                case CommandNack nack:
-                    if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                        await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-                    _log.Info(
-                        "Session rejected Slack text approval response for call {CallId} reason={Reason}; skipping redraw",
-                        pending.CallId,
-                        nack.Reason ?? "<none>");
-                    return true;
-
-                case not CommandAck:
-                    _log.Warning(
-                        "Slack text approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                        pending.CallId,
-                        feedbackResult.GetType().Name);
-                    return true;
-            }
-
-            _pendingApprovalRequests.RemoveAt(pendingIndex);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-
-            await TryResolveApprovalPromptAsync(
-                pending.PromptMessageTs,
-                pending.Request,
-                pending.CallId,
-                selectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-
-            _log.Info(
-                "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
-                pending.CallId,
-                message.SenderId,
-                selectedKey);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Slack approval response for call {CallId}", pending.CallId);
-        }
-
-        return true;
-    }
-
-    private async Task<bool> TryHandleColdTextApprovalResponseAsync(SlackThreadInbound message)
-    {
-        if (!ToolInteractionResponseParser.LooksLikeApprovalResponse(message.Text ?? string.Empty))
-            return false;
-
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionTextResponse
-            {
-                SessionId = _sessionId,
-                Text = message.Text ?? string.Empty,
-                SenderId = message.SenderId
-            }, feedbackCts.Token);
-
-            if (reply is CommandAck)
-            {
-                _log.Info(
-                    "Forwarded cold Slack text approval response from sender={SenderId} without local pending prompt state",
-                    message.SenderId);
-                return true;
-            }
-
-            // approval_no_history means the session has never had an approval request.
-            // The message was a false-positive from LooksLikeApprovalResponse.
-            // Don't consume — let it fall through to normal LLM ingress. See #1164.
-            if (reply is CommandNack { Reason: ApprovalNackReasons.NoHistory })
-                return false;
-
-            return reply is CommandNack;
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route cold Slack text approval response from sender {SenderId}", message.SenderId);
-            return false;
-        }
-    }
-
-    private async Task HandleApprovalResponseAsync(SlackApprovalResponse message)
-    {
-        var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            request.CallId == message.CallId);
-        var pending = pendingIndex >= 0 ? _pendingApprovalRequests[pendingIndex] : null;
-
-        // CanApprove fast-path: if the binding still holds the original request we can
-        // post the wrong-requester warning locally without round-tripping through the
-        // session. When the binding has been cold-spawned (no local pending entry) the
-        // session re-runs CanApprove against its own pending-call state, and the wait
-        // below blocks the redraw until the session has actually accepted the click —
-        // see #939 + #979.
-        if (pending is not null && !ApprovalButtonValueCodec.CanApprove(
-                pending.RequesterPrincipal,
-                pending.RequesterSenderId,
-                message.SenderId.Value))
-        {
-            await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-            return;
-        }
-
-        // Wait for the session before redrawing. This is the security gate that
-        // prevents (a) a non-requester click destroying the prompt UI on the
-        // cold-spawn path, and (b) a stale re-click overwriting an
-        // already-resolved banner — both surfaced by the #939 code review. The
-        // session is the authority on whether the call is still pending and
-        // whether the sender is allowed. Only redraw on CommandAck.
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = message.CallId,
-                    SelectedKey = new Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
-                    SenderId = message.SenderId
-                }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Slack button approval response for call {CallId}", message.CallId);
-            return;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                // Session rejected (wrong requester, unknown call, stale resolution).
-                // For wrong-requester surface the warning; for any other reason just
-                // log and DO NOT redraw — the prompt UI must stay consistent with the
-                // session's authoritative state.
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-                _log.Info(
-                    "Session rejected Slack approval response for call {CallId} reason={Reason}; skipping redraw",
-                    message.CallId,
-                    nack.Reason ?? "<none>");
-                return;
-
-            case CommandAck:
-                break;
-
-            default:
-                // ISessionResponse is sealed-by-convention to Ack/Nack. Defensive guard.
-                _log.Warning(
-                    "Slack approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    message.CallId,
-                    feedbackResult.GetType().Name);
-                return;
-        }
-
-        if (pending is not null)
-        {
-            _pendingApprovalRequests.RemoveAt(pendingIndex);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-            // Prefer the captured TS, but fall back to the payload's TS when capture
-            // failed (post raced or returned an empty TS). The payload TS is reliable
-            // for a button click since Slack populates it in the envelope.
-            var promptTs = pending.PromptMessageTs ?? message.PromptMessageTs;
-            await TryResolveApprovalPromptAsync(
-                promptTs,
-                pending.Request,
-                pending.CallId,
-                message.SelectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-
-            _log.Info(
-                "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
-                pending.CallId,
-                message.SenderId,
-                message.SelectedKey);
-        }
-        else if (message.PromptMessageTs is { } payloadPromptTs)
-        {
-            // Cold-spawn redraw — no local pending entry exists for this CallId
-            // (the journal didn't replay a PendingApprovalPromptTracked event for
-            // it, typically because the binding was re-created without recovery
-            // or the entry was cleared before the click landed). The click
-            // payload still carries the prompt's message TS and the session has
-            // accepted the response; render the generic banner so the buttons
-            // clear. NOTE: pre-0.21 journals that DO replay (with no tool name /
-            // display text) take the upper `pending is not null` branch instead
-            // — they render the generic banner via the !IsNullOrEmpty fallback
-            // inside the builder, not via this branch.
-            await TryResolveApprovalPromptAsync(
-                payloadPromptTs,
-                request: null,
-                message.CallId,
-                message.SelectedKey,
-                message.SenderId.Value);
-
-            _log.Info(
-                "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redrew prompt via payload messageTs={MessageTs}",
-                message.CallId,
-                payloadPromptTs);
-        }
-        else
-        {
-            // Text-reply on a cold-spawned binding: approval routed but no message
-            // TS is available, so the redraw is impossible. Remaining #939 gap.
-            _log.Info(
-                "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redraw skipped",
-                message.CallId);
-            ChannelTelemetry.For(ChannelType.Slack).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
-        }
-    }
+    // Slack block actions reach the binding one way through the gateway, so the
+    // flow gets no synchronous-reply hook here.
+    private Task HandleApprovalResponseAsync(SlackApprovalResponse message)
+        => _approvalFlow.HandleApprovalResponseAsync(
+            message.CallId,
+            message.SelectedKey,
+            message.SenderId.Value,
+            message.PromptMessageTs);
 
     private async Task<PostResult> SafePostAsync(string text)
     {
