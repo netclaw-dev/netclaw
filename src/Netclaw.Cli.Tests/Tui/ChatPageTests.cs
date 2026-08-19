@@ -252,6 +252,94 @@ public sealed class ChatPageTests
     }
 
     [Fact]
+    public async Task TextStreamDiscarded_ClearsDeadCallTextBeforeResumedDeltasRender()
+    {
+        // Covers C1: a timed-out LLM call is discarded and re-issued
+        // (LlmSessionActor.TryResumeAfterTimeout). The dead call already streamed
+        // TextDeltaOutput events for this turn — TextStreamDiscarded must clear
+        // ChatPage's assistant text buffer before the resumed call's deltas
+        // render, or the two answers glue into one corrupted reply. Real
+        // multi-delta stall (two deltas) before the discard, matching a genuine
+        // half-open provider stream.
+        var testSessionId = new SessionId("chat-page/resume-test");
+        var outputSequence = new SessionOutput[]
+        {
+            new TextDeltaOutput("stalled chunk one ") { SessionId = testSessionId },
+            new TextDeltaOutput("STALLED_PARTIAL_MARKER") { SessionId = testSessionId },
+            new TextStreamDiscarded { SessionId = testSessionId },
+            new TextDeltaOutput("Resumed answer ") { SessionId = testSessionId },
+            new TextDeltaOutput("after timeout") { SessionId = testSessionId },
+        };
+
+        var (terminal, app, _) = CreateHeadlessApp(seed: null, out var input, outputSequence: outputSequence);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var screen = terminal.ToString();
+
+        // The resumed call's answer must render as its OWN clean segment.
+        Assert.True(screen.Contains("Resumed answer after timeout", StringComparison.Ordinal),
+            $"Expected the resumed call's text on screen. Screen:\n{terminal}");
+
+        // ChatPage finalizes the dead call's segment as "interrupted" (kept
+        // visible for the user's record) rather than deleting it outright, so
+        // the marker itself may still appear — what must NEVER happen is the
+        // dead call's text gluing directly onto the resumed answer as one
+        // continuous string (the exact corruption C1 found).
+        Assert.False(screen.Contains("STALLED_PARTIAL_MARKERResumed", StringComparison.Ordinal),
+            $"Expected the dead call's partial text to NOT be glued directly onto the resumed answer. Screen:\n{terminal}");
+
+        // The dead call's segment must be marked as interrupted, not presented
+        // as if it were itself a completed, trustworthy answer.
+        Assert.True(screen.Contains("interrupted", StringComparison.Ordinal),
+            $"Expected the dead call's segment to be marked as interrupted. Screen:\n{terminal}");
+    }
+
+    [Fact]
+    public async Task NoticeTextOutput_DuringLiveStream_DoesNotFinalizeOrCorruptTheLiveSegment()
+    {
+        // F2: EmitExpiredPromptNotice/EmitWrongRequesterApprovalNotice/
+        // EmitUnavailableApprovalOptionNotice send a mid-stream TextOutput
+        // (IsCallBoundary = false) while another call still streams.
+        // Before the fix, ANY TextOutput finalized the live assistant segment
+        // early — rendering the dead call's partial text as if it were the
+        // complete answer and untracking the segment, so the later discard
+        // found nothing to mark interrupted and the resumed call's deltas
+        // started a brand-new segment instead of replacing the corrupted one.
+        var testSessionId = new SessionId("chat-page/notice-mid-stream");
+        var outputSequence = new SessionOutput[]
+        {
+            new TextDeltaOutput("stalled chunk one ") { SessionId = testSessionId },
+            new TextDeltaOutput("STALLED_PARTIAL_MARKER") { SessionId = testSessionId },
+            new TextOutput("That approval prompt has expired.")
+            {
+                SessionId = testSessionId,
+                IsCallBoundary = false
+            },
+            new TextStreamDiscarded { SessionId = testSessionId },
+            new TextDeltaOutput("Resumed answer ") { SessionId = testSessionId },
+            new TextDeltaOutput("after timeout") { SessionId = testSessionId },
+        };
+
+        var (terminal, app, _) = CreateHeadlessApp(seed: null, out var input, outputSequence: outputSequence);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var screen = terminal.ToString();
+
+        Assert.True(screen.Contains("Resumed answer after timeout", StringComparison.Ordinal),
+            $"Expected the resumed call's text on screen. Screen:\n{terminal}");
+        Assert.False(screen.Contains("STALLED_PARTIAL_MARKERResumed", StringComparison.Ordinal),
+            $"Expected the dead call's partial text to NOT be glued directly onto the resumed answer. Screen:\n{terminal}");
+        Assert.True(screen.Contains("interrupted", StringComparison.Ordinal),
+            $"Expected the dead call's segment to still be marked as interrupted after the mid-stream notice. Screen:\n{terminal}");
+    }
+
+    [Fact]
     public async Task DenyPendingInteraction_NoDenyOption_DoesNotSubmit()
     {
         // If an approval interaction somehow lacks a deny option, denying must
@@ -579,7 +667,8 @@ public sealed class ChatPageTests
         CreateHeadlessApp(ToolInteractionRequest? seed, out VirtualInputSource input,
             int width = 120, int height = 40,
             IReadOnlyList<ToolInteractionOption>? options = null,
-            bool startGenerating = false)
+            bool startGenerating = false,
+            IReadOnlyList<SessionOutput>? outputSequence = null)
     {
         var terminal = new VirtualTerminal(width, height);
         var virtualInput = new VirtualInputSource();
@@ -602,7 +691,7 @@ public sealed class ChatPageTests
                         : options is null
                             ? seed
                             : seed with { Options = options };
-                    capturedVm = new TestChatViewModel(effectiveSeed, startGenerating);
+                    capturedVm = new TestChatViewModel(effectiveSeed, startGenerating, outputSequence);
                     return capturedVm;
                 });
         });
@@ -624,6 +713,7 @@ public sealed class ChatPageTests
     {
         private readonly ToolInteractionRequest? _seed;
         private readonly bool _startGenerating;
+        private readonly IReadOnlyList<SessionOutput>? _outputSequence;
 
         /// <summary>
         /// Set when the page routes Escape to app shutdown (the pre-#1757
@@ -647,7 +737,8 @@ public sealed class ChatPageTests
         /// </summary>
         public string? LastSubmittedInteractionKey { get; private set; }
 
-        public TestChatViewModel(ToolInteractionRequest? seed, bool startGenerating = false)
+        public TestChatViewModel(ToolInteractionRequest? seed, bool startGenerating = false,
+            IReadOnlyList<SessionOutput>? outputSequence = null)
             : base(
                 // 127.0.0.1:1 is never dialed: InitializeSessionAsync is
                 // overridden to no-op, so the underlying HubConnection stays
@@ -661,6 +752,7 @@ public sealed class ChatPageTests
         {
             _seed = seed;
             _startGenerating = startGenerating;
+            _outputSequence = outputSequence;
         }
 
         protected override Task InitializeSessionAsync() => Task.CompletedTask;
@@ -675,6 +767,14 @@ public sealed class ChatPageTests
             // clears it, but the UI thread can observe the pre-clear value).
             if (_startGenerating)
                 IsGenerating.Value = true;
+            // Replays a scripted SessionOutput sequence as if the daemon had
+            // emitted it live — lets tests drive ChatPage's streaming/text
+            // rendering (e.g. the timeout-resume discard signal) headlessly.
+            if (_outputSequence is not null)
+            {
+                foreach (var output in _outputSequence)
+                    EmitOutputForTesting(output);
+            }
         }
 
         public override void RequestAppShutdown()

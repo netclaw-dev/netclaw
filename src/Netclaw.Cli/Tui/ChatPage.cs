@@ -397,8 +397,17 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                 // final full snapshot for compatibility. Finalize without duplicating.
                 if (_assistantSegmentId.Value != 0)
                 {
-                    FinalizeAssistantSegmentIfNeeded();
-                    _chatHistory.ScrollToBottom();
+                    // Some notices (approval-expired etc.) reuse TextOutput to reach
+                    // the chat while an earlier call still streams. IsCallBoundary
+                    // is false for those. They must not finalize (and untrack) the
+                    // live segment — the call keeps streaming, and its own
+                    // boundary TextOutput closes the segment later (see
+                    // SessionProtocol.TextOutput.IsCallBoundary).
+                    if (msg.IsCallBoundary)
+                    {
+                        FinalizeAssistantSegmentIfNeeded();
+                        _chatHistory.ScrollToBottom();
+                    }
                     break;
                 }
 
@@ -415,6 +424,25 @@ public sealed class ChatPage : ReactivePage<ChatViewModel>
                     new StaticTextSegment($"Netclaw: {_assistantBuffer}", Color.White),
                     keepTracked: true);
                 _chatHistory.ScrollToBottom();
+                break;
+
+            case TextStreamDiscarded:
+                // A timed-out call was discarded. The actor re-issues it. Finalize
+                // the dead call's partial segment as interrupted (in place, so the
+                // history keeps a record of it) and untrack it — the next
+                // TextDeltaOutput from the resumed call starts a fresh segment, so
+                // the two answers never render as one (see
+                // SessionProtocol.TextStreamDiscarded).
+                if (_assistantSegmentId.Value != 0)
+                {
+                    _chatHistory.Replace(_assistantSegmentId,
+                        new StaticTextSegment($"Netclaw: {_assistantBuffer} [interrupted — retrying]", Color.BrightBlack),
+                        keepTracked: false);
+                    _assistantSegmentId = default;
+                    _assistantBuffer.Clear();
+                    _chatHistory.AppendLine("");
+                    _chatHistory.ScrollToBottom();
+                }
                 break;
 
             case ThinkingOutput:

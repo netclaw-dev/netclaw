@@ -36,11 +36,33 @@ public sealed class HeadlessChannel : IChannel
     private readonly ILogger<HeadlessChannel> _logger;
 
     private bool _isConnected;
+
+    // Whether the CURRENT (not-yet-completed) LLM call has streamed a delta.
+    // Reset at every call boundary — a TextOutput (call completed) or a
+    // TextStreamDiscarded (call died) — so it never leaks across calls in the
+    // same turn. Drives the buffer/commit logic in the TextOutput,
+    // TextDeltaOutput, and TextStreamDiscarded cases below.
+    private bool _receivedTextDeltaInCurrentCall;
+
+    // True when any call in this turn streamed a delta. The first delta sets
+    // it. Only TurnCompleted clears it — a call boundary (TextOutput) does
+    // NOT reset it, unlike the call-scoped flag above. The pre-[usage]
+    // newline guard uses this flag only. The actor always sends a call's
+    // final TextOutput before UsageOutput, and that TextOutput resets the
+    // call-scoped flag. So only the turn-scoped flag can still tell
+    // UsageOutput whether the console cursor sits mid-line.
     private bool _receivedTextDeltaInCurrentTurn;
     private bool _receivedThinkingDeltaInCurrentTurn;
 
     // JSON output accumulation
     private readonly StringBuilder _responseBuffer = new();
+
+    // Length of _responseBuffer already committed by an earlier call's
+    // TextOutput this turn. TextStreamDiscarded truncates back to this point
+    // instead of clearing the whole buffer, so a later call's discard cannot
+    // erase an earlier COMPLETED call's text (see the TextStreamDiscarded case
+    // in HandleOutput).
+    private int _responseBufferCommittedLength;
     private readonly List<JsonToolCall> _toolCalls = [];
     private JsonUsage? _usage;
     private string? _resolvedSessionId;
@@ -51,6 +73,13 @@ public sealed class HeadlessChannel : IChannel
 
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Headless;
     public string DisplayName => "Headless Prompt";
+
+    /// <summary>
+    /// Test seam: the accumulated JSON envelope response buffer. Lets
+    /// <c>Netclaw.Cli.Tests</c> assert on the delta-accumulated result of a
+    /// sequence of <see cref="HandleOutput"/> calls without parsing stdout.
+    /// </summary>
+    internal string ResponseBufferForTesting => _responseBuffer.ToString();
 
     public ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {
@@ -171,7 +200,12 @@ public sealed class HeadlessChannel : IChannel
         }
     }
 
-    private void HandleOutput(SessionOutput output, StreamWriter? log)
+    /// <summary>
+    /// Dispatches one <see cref="SessionOutput"/> from the live daemon subscription.
+    /// Internal (not private) so <c>Netclaw.Cli.Tests</c> can drive it directly
+    /// without standing up a daemon connection.
+    /// </summary>
+    internal void HandleOutput(SessionOutput output, StreamWriter? log)
     {
         switch (output)
         {
@@ -180,28 +214,67 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case TextOutput msg:
-                if (_receivedTextDeltaInCurrentTurn)
+                // TextOutput marks one LLM call's text as complete, whether that
+                // call ended in tool calls (a preamble) or the final answer. Commit
+                // everything accumulated for it — via deltas, or (when the call
+                // never streamed one, e.g. a single-chunk response) via msg.Text
+                // directly — so a LATER call's discard can never erase it. Some
+                // notices (approval-expired etc.) reuse TextOutput to reach the
+                // console while an earlier call still streams. IsCallBoundary
+                // is false for those. They must not move the commit marker or
+                // clear the live call's delta flag (see
+                // SessionProtocol.TextOutput.IsCallBoundary).
+                if (_receivedTextDeltaInCurrentCall)
                 {
                     Log(log, $"ASSISTANT_FINAL: {msg.Text}");
-                    break;
                 }
-
-                if (_jsonOutput)
-                    _responseBuffer.Append(msg.Text);
                 else
-                    Console.WriteLine(msg.Text);
-                Log(log, $"ASSISTANT: {msg.Text}");
+                {
+                    if (_jsonOutput)
+                        _responseBuffer.Append(msg.Text);
+                    else
+                        Console.WriteLine(msg.Text);
+                    Log(log, $"ASSISTANT: {msg.Text}");
+                }
+                if (msg.IsCallBoundary)
+                {
+                    _responseBufferCommittedLength = _responseBuffer.Length;
+                    _receivedTextDeltaInCurrentCall = false;
+                }
                 break;
 
             case TextDeltaOutput msg:
-                if (!_receivedTextDeltaInCurrentTurn && _promptSentTicks > 0)
+                if (!_receivedTextDeltaInCurrentCall && _promptSentTicks > 0)
                     Interlocked.CompareExchange(ref _firstDeltaTicks, Stopwatch.GetTimestamp(), 0);
+                _receivedTextDeltaInCurrentCall = true;
                 _receivedTextDeltaInCurrentTurn = true;
                 if (_jsonOutput)
                     _responseBuffer.Append(msg.Delta);
                 else
                     Console.Write(msg.Delta);
                 Log(log, $"ASSISTANT_DELTA: {msg.Delta}");
+                break;
+
+            case TextStreamDiscarded:
+                // A timed-out call was discarded. The actor re-issues it. Truncate
+                // the JSON envelope buffer back to the last committed call boundary
+                // — only the dead call's own, not-yet-committed text is removed.
+                // Text from an earlier call that already completed this turn (see
+                // the TextOutput case above) survives (see
+                // SessionProtocol.TextStreamDiscarded). A plain-text console stream
+                // cannot un-print what is already on screen, so mark the boundary
+                // instead — otherwise the two answers would read as one.
+                if (_jsonOutput)
+                {
+                    _responseBuffer.Remove(_responseBufferCommittedLength, _responseBuffer.Length - _responseBufferCommittedLength);
+                }
+                else if (_receivedTextDeltaInCurrentCall)
+                {
+                    Console.WriteLine();
+                    Console.WriteLine("[response interrupted by a provider stall — retrying]");
+                }
+                _receivedTextDeltaInCurrentCall = false;
+                Log(log, "ASSISTANT_STREAM_DISCARDED");
                 break;
 
             case ThinkingOutput msg:
@@ -244,6 +317,22 @@ public sealed class HeadlessChannel : IChannel
                 break;
 
             case UsageOutput msg:
+                // discarded_est_in=/discarded_attempts= are the previous completed
+                // call's real, provider-reported input count, used as an honest
+                // proxy for a call that timed out and was discarded this turn — the
+                // provider likely billed for this input but never reported usage
+                // for it, so it is NOT included in the in=/total= figures. The whole
+                // suffix is omitted entirely (not printed as empty) when no resume
+                // happened this turn. discarded_est_in= alone drops when a resume
+                // happens but no completed call in this session reports a real
+                // estimate yet (see D4 in LlmSessionActor). discarded_attempts=
+                // still prints — that count is always real.
+                var discardedSuffix = msg.DiscardedResumeAttempts is > 0
+                    ? msg.DiscardedResumeEstimatedInputTokens is { } estimatedInputTokens
+                        ? $" discarded_est_in={estimatedInputTokens} discarded_attempts={msg.DiscardedResumeAttempts}"
+                        : $" discarded_attempts={msg.DiscardedResumeAttempts}"
+                    : string.Empty;
+
                 if (_jsonOutput)
                 {
                     _usage = new JsonUsage
@@ -255,6 +344,8 @@ public sealed class HeadlessChannel : IChannel
                         ReasoningTokens = msg.ReasoningTokens,
                         PromptMs = msg.PromptMs,
                         PredictedPerSecond = msg.PredictedPerSecond,
+                        DiscardedResumeEstimatedInputTokens = msg.DiscardedResumeEstimatedInputTokens,
+                        DiscardedResumeAttempts = msg.DiscardedResumeAttempts,
                     };
                 }
                 else
@@ -262,11 +353,15 @@ public sealed class HeadlessChannel : IChannel
                     // If the turn streamed text deltas, they did NOT end with a newline
                     // (each delta is Console.Write). Force the usage line onto its own
                     // line so downstream parsers (evals, humans) can anchor on ^[usage].
+                    // Turn-scoped, not call-scoped: TextOutput (the call's completion
+                    // marker) always arrives before UsageOutput and resets the
+                    // call-scoped flag. Only the turn-scoped flag still shows
+                    // whether the console cursor sits mid-line.
                     if (_receivedTextDeltaInCurrentTurn)
                         Console.WriteLine();
-                    Console.WriteLine($"[usage] in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} prompt_ms={msg.PromptMs} tok_s={msg.PredictedPerSecond}");
+                    Console.WriteLine($"[usage] in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} prompt_ms={msg.PromptMs} tok_s={msg.PredictedPerSecond}{discardedSuffix}");
                 }
-                Log(log, $"USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens} prompt_ms={msg.PromptMs} predicted_tok_s={msg.PredictedPerSecond}");
+                Log(log, $"USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens} prompt_ms={msg.PromptMs} predicted_tok_s={msg.PredictedPerSecond}{discardedSuffix}");
                 break;
 
             case ErrorOutput msg:
@@ -287,8 +382,10 @@ public sealed class HeadlessChannel : IChannel
                 }
                 Log(log, $"TURN_COMPLETED: turn={msg.TurnNumber}");
                 Log(log, "SESSION_ENDED");
+                _receivedTextDeltaInCurrentCall = false;
                 _receivedTextDeltaInCurrentTurn = false;
                 _receivedThinkingDeltaInCurrentTurn = false;
+                _responseBufferCommittedLength = 0;
                 break;
 
             case FileOutput msg:
@@ -394,5 +491,7 @@ public sealed class HeadlessChannel : IChannel
         public long? ReasoningTokens { get; init; }
         public double? PromptMs { get; init; }
         public double? PredictedPerSecond { get; init; }
+        public long? DiscardedResumeEstimatedInputTokens { get; init; }
+        public int? DiscardedResumeAttempts { get; init; }
     }
 }

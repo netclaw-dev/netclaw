@@ -263,6 +263,12 @@
               "minimum": 0,
               "default": 2000,
               "description": "Character budget for memory content injected by automatic recall per turn. Items are admitted in rank order until the budget is exhausted; whole items are dropped, never truncated. Set to 0 to disable."
+            },
+            "TimeoutResumeRetryBudget": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 2,
+              "description": "Per-turn budget for LLM call resumes after a mid-stream timeout. On a timeout, the session actor discards the dead call's partial output and re-issues the same call, up to this many times per turn, then fails the turn. Applies to any call in the turn, including one after an earlier tool iteration completed. Set to 0 to disable resume."
             }
           },
           "additionalProperties": false

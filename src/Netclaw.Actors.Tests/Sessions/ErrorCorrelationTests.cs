@@ -42,6 +42,10 @@ public sealed class ErrorCorrelationTests(ITestOutputHelper output) : LlmSession
             {
                 SnapshotInterval = 5,
                 TitleGenerationInterval = 0,
+                // This suite targets ErrorOutput classification/correlation, not
+                // turn-level resume — disable resume so a timeout fails the turn on
+                // the first attempt. See LlmTurnResumeTests for resume coverage.
+                TimeoutResumeRetryBudget = 0,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));

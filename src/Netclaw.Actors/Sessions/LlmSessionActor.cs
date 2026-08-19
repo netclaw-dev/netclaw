@@ -97,7 +97,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Owns the exposed tool list (base + discovered) and lease-based eviction.
     private readonly DiscoveredToolCache _discoveredToolCache = new();
 
-    // Last observed input token count from LLM response (for compaction trigger)
+    // Last observed REAL input token count from a completed LLM response — drives
+    // the compaction trigger and, per TryResumeAfterTimeout, also doubles as the
+    // honest proxy for a discarded (never-completed) call's input size.
     private long _lastInputTokenCount;
 
     // When compaction triggers mid-tool-loop, the turn is still in-progress.
@@ -171,6 +173,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Startup context layers: injected on first LLM call, re-injected after compaction
     private bool _startupContextInjected;
+
+    // True when the in-flight call's own ContinueFireLlmCall() invocation was the
+    // one that flipped _startupContextInjected false→true. A timeout resume rolls
+    // this back before re-firing so the resumed call's message list is
+    // byte-identical to the one that just died — otherwise the OnceAtStart context
+    // layers would silently vanish from the retry (SessionMessageAssembler renders
+    // them only while StartupContextInjected is false). See TryResumeAfterTimeout.
+    private bool _startupContextPendingFirstDelivery;
+
+    // Set immediately before a FireLlmCall triggered by TryResumeAfterTimeout.
+    // FireLlmCall reads and clears it in the same synchronous step, before any
+    // async gap: when true, FireLlmCall skips its normal _anyContentStreamed
+    // reset, so the resumed call carries the dead call's own value forward
+    // instead of restarting the two-phase watchdog budget from scratch. A call
+    // that already streamed substantive content keeps the promoted (tighter)
+    // budget through the resumed call's keepalives; a call that died during
+    // prefill with zero content keeps the full prefill budget, so a genuinely
+    // slow failover prefill is not killed early. See TryResumeAfterTimeout,
+    // FireLlmCall, and ProcessingWatchdog.OnStreamProgress.
+    private bool _resumingAfterTimeout;
 
     // Guards against infinite compaction loops: if a post-compaction buffer drain
     // overflows again, fail the turn. Reset at the start of each new user turn.
@@ -662,6 +684,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            // A timeout that surfaced directly as a TimeoutException (not routed
+            // through the watchdog's own cancellation — e.g. a transport-level
+            // request timeout firing before our watchdog budget elapses) gets the
+            // same bounded resume as the watchdog path below.
+            if (msg.Cause is TimeoutException llmCallFailedTimeout
+                && TryResumeAfterTimeout(llmCallFailedTimeout, "llm_call_failed"))
+            {
+                return;
+            }
+
             // Transient-failure retry is owned entirely by the transport
             // (RetryingChatClient, pre-first-chunk) and is already exhausted by the time
             // the failure reaches here, so a failed turn is terminal.
@@ -711,6 +743,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _log.Error("Processing watchdog expired for operation {OperationName} (opId={OperationId}, noProgress={NoProgress})",
                 msg.OperationName, msg.OperationId, msg.NoProgress);
+
+            if (TryResumeAfterTimeout(timeoutCause, "watchdog"))
+                return;
+
             var errorMessage = ExtractLlmErrorMessage(timeoutCause);
             FailCurrentTurn(errorMessage, timeoutCause, ErrorCategory.Timeout);
         });
@@ -1274,6 +1310,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _state = _state.Apply(evt);
             _lastInputTokenCount = 0;
             _startupContextInjected = false;
+            _startupContextPendingFirstDelivery = false;
             _recallManager.ResetForCompaction();
             _discoveredToolCache.EvictAll();
 
@@ -2692,7 +2729,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // injects a volatile system notice. The session stays usable.
         }
 
-        _anyContentStreamed = false;
+        // A resumed call carries the dead call's _anyContentStreamed forward
+        // instead of resetting it — see _resumingAfterTimeout and
+        // TryResumeAfterTimeout for why. Consumed here, synchronously, before any
+        // async gap, so there is no window for a later unrelated FireLlmCall to
+        // see a stale true value.
+        if (_resumingAfterTimeout)
+            _resumingAfterTimeout = false;
+        else
+            _anyContentStreamed = false;
         CancelAndDisposeLlmCts();
         _activeLlmCts = new CancellationTokenSource();
         _activeCallId++;
@@ -2844,6 +2889,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // startup injection complete after the first call to preserve the
         // existing OnceAtStart semantics.
         var skillHint = BuildSkillHint();
+        _startupContextPendingFirstDelivery = !_startupContextInjected;
         var messages = SessionMessageAssembler.Assemble(new ContextAssemblyInput(
             State: _state,
             ContextLayers: _contextLayers,
@@ -2876,7 +2922,20 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!forceNoTools && exposedTools.Count > 0)
             options.Tools = [.. exposedTools];
 
-        _watchdog.Start(ProcessingWatchdog.LlmCall, _config.PrefillTimeout, Timers, _config.NoProgressTimeout);
+        // The initial arm follows the same _anyContentStreamed rule as the
+        // in-stream promotion in HandleLlmResponseDeltaReceived (via
+        // ProcessingWatchdog.OnStreamProgress) and the watchdog-expiry error
+        // message below — one flag, one rule, everywhere the actor picks between
+        // the prefill and promoted budgets. FireLlmCall carries _anyContentStreamed
+        // forward on a resume instead of resetting it (see _resumingAfterTimeout),
+        // so a call that already streamed substantive content before stalling
+        // stays on the tighter promoted budget here and through every keepalive
+        // that follows; a call that died during prefill with zero content stays on
+        // the full prefill budget instead of being cut short on unproven ground.
+        var initialWatchdogTimeout = _anyContentStreamed
+            ? _config.FirstTokenTimeout
+            : _config.PrefillTimeout;
+        _watchdog.Start(ProcessingWatchdog.LlmCall, initialWatchdogTimeout, Timers, _config.NoProgressTimeout);
 
         TurnLog().Info("turn_llm_call_start messages={MessageCount} toolsEnabled={ToolsEnabled} forceNoTools={ForceNoTools} callId={CallId}",
             messages.Count,
@@ -2885,6 +2944,88 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _activeCallId);
 
         _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId, _activeLlmCts!.Token);
+    }
+
+    /// <summary>
+    /// Bounded, turn-scoped resume after an LLM call times out mid-stream. The dead
+    /// call's partial output is discarded by construction: streamed deltas only ever
+    /// reach transient UI output (<see cref="HandleLlmResponseDeltaReceived"/>) and
+    /// the invoker's local buffer (<c>StreamingResponseReader</c>) — nothing from a
+    /// call that never reaches <see cref="HandleLlmResponseReceived"/> is written to
+    /// <see cref="_state"/>, so there is nothing to roll back there. Resuming means
+    /// re-issuing the exact same call: <see cref="FireLlmCall"/> reassembles the
+    /// message list from the unchanged <see cref="_state"/> and the same
+    /// <see cref="TurnStateTracker.ForceNoToolsActive"/> flag the dead call used.
+    /// <para>
+    /// Safety is structural, not gated on tool-iteration count. Tool dispatch only
+    /// happens in <see cref="HandleLlmResponseReceived"/>, on a fully completed
+    /// response, after the watchdog stops. A call that times out mid-stream never
+    /// reaches that handler, so it can never have dispatched a tool call this turn —
+    /// resume is safe to allow on any call, including one after an earlier tool
+    /// iteration completed. Netclaw runs all tools locally through
+    /// <see cref="Netclaw.Tools.IToolExecutor"/>; there is no provider-hosted tool
+    /// mechanism whose committed context a re-issued call could replay, so there is
+    /// no double-execution risk to guard against. Only the retry budget
+    /// (<see cref="Netclaw.Configuration.SessionTuning.TimeoutResumeRetryBudget"/>)
+    /// bounds resume.
+    /// </para>
+    /// </summary>
+    private bool TryResumeAfterTimeout(TimeoutException cause, string source)
+    {
+        // A coordinated daemon restart is draining this session so it can passivate
+        // cleanly. Resuming would keep the turn alive and block the drain — fail the
+        // turn immediately, exactly as every other mid-turn continuation does under
+        // restart drain (see the _restartDrainRequested checks in Processing/Compacting).
+        if (_restartDrainRequested)
+        {
+            TurnLog().Warning(cause,
+                "turn_llm_timeout_resume_blocked source={Source} reason=restart_drain_pending",
+                source);
+            return false;
+        }
+
+        if (_turnState.TimeoutResumeCount >= _config.Tuning.TimeoutResumeRetryBudget)
+        {
+            TurnLog().Warning(cause,
+                "turn_llm_timeout_resume_budget_exhausted source={Source} attempts={Attempts} budget={Budget}",
+                source, _turnState.TimeoutResumeCount, _config.Tuning.TimeoutResumeRetryBudget);
+            return false;
+        }
+
+        _turnState.RecordTimeoutResume();
+
+        // Honest proxy for the discarded call's real input size: the provider
+        // never reports usage for a call that times out before completion, but
+        // _lastInputTokenCount (the previous completed call's real, provider-
+        // reported count) already flows through this seam and approximates it far
+        // better than a fabricated guess. Null when no completed call has reported
+        // real usage yet this session (the discarded call was the first) — report
+        // that honestly instead of fabricating a number.
+        long? discardedEstimatedInputTokens = _lastInputTokenCount > 0 ? _lastInputTokenCount : null;
+        _turnState.RecordDiscardedResumeEstimatedInputTokens(discardedEstimatedInputTokens);
+        TurnLog().Warning(cause,
+            "turn_llm_timeout_resume source={Source} attempt={Attempt} budget={Budget} discardedEstimatedInputTokens={DiscardedEstimatedInputTokens}",
+            source, _turnState.TimeoutResumeCount, _config.Tuning.TimeoutResumeRetryBudget, discardedEstimatedInputTokens);
+
+        // Tell every delta-accumulating subscriber (headless JSON envelope, channel
+        // execution accumulators, the chat TUI) to clear the dead call's partial text
+        // before the resumed call streams its own deltas — otherwise the two answers
+        // concatenate into one corrupted reply. Lifecycle output, so it reaches every
+        // subscriber regardless of their OutputFilter. See TextStreamDiscarded.
+        EmitOutput(new TextStreamDiscarded { SessionId = _sessionId });
+
+        // Undo the dead call's speculative "startup context delivered" flip so the
+        // resumed call's message list matches the one that just died exactly — see
+        // _startupContextPendingFirstDelivery.
+        if (_startupContextPendingFirstDelivery)
+        {
+            _startupContextInjected = false;
+            _startupContextPendingFirstDelivery = false;
+        }
+
+        _resumingAfterTimeout = true;
+        FireLlmCall(forceNoTools: _turnState.ForceNoToolsActive);
+        return true;
     }
 
     private async Task<INoSerializationVerificationNeeded> CreateWorkingContextContinuationAsync(
@@ -3805,6 +3946,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             UsagePercent = usagePercent,
             PromptMs = promptMs,
             PredictedPerSecond = predictedPerSec,
+            DiscardedResumeEstimatedInputTokens = _turnState.TimeoutResumeCount > 0
+                ? _turnState.DiscardedResumeEstimatedInputTokens
+                : null,
+            DiscardedResumeAttempts = _turnState.TimeoutResumeCount > 0
+                ? _turnState.TimeoutResumeCount
+                : null,
         }, OutputFilter.Usage);
     }
 
@@ -3832,13 +3979,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// Emits the channel-visible "approval prompt expired" notice. Used when a
     /// tool interaction response cannot be honored — fail loud instead of
     /// silently dropping the click (constitution: no silent fallbacks).
+    /// IsCallBoundary is false. This notice can fire while an unrelated LLM
+    /// call still streams. It must not move a subscriber's call-boundary
+    /// marker (see SessionProtocol.TextOutput.IsCallBoundary).
     /// </summary>
     private void EmitExpiredPromptNotice()
         => EmitOutput(new TextOutput(
             "That approval prompt has expired — the session moved on or restarted. "
             + "Please re-issue the request and I'll ask again if approval is needed.")
         {
-            SessionId = _sessionId
+            SessionId = _sessionId,
+            IsCallBoundary = false
         }, OutputFilter.Text);
 
     /// <summary>
@@ -3938,18 +4089,24 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
     }
 
+    // IsCallBoundary is false. This notice can fire while an unrelated LLM
+    // call still streams. It must not move a subscriber's call-boundary
+    // marker (see SessionProtocol.TextOutput.IsCallBoundary).
     private void EmitWrongRequesterApprovalNotice()
         => EmitOutput(new TextOutput(
             "Approval response ignored: only the requesting user can approve this tool action.")
         {
-            SessionId = _sessionId
+            SessionId = _sessionId,
+            IsCallBoundary = false
         }, OutputFilter.Text);
 
+    // IsCallBoundary is false — see EmitWrongRequesterApprovalNotice above.
     private void EmitUnavailableApprovalOptionNotice()
         => EmitOutput(new TextOutput(
             "Approval response ignored: that option is not available for this tool action.")
         {
-            SessionId = _sessionId
+            SessionId = _sessionId,
+            IsCallBoundary = false
         }, OutputFilter.Text);
 
     private bool TryResolveTextApprovalResponse(

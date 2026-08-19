@@ -52,6 +52,11 @@ public sealed class LlmSessionStreamingTimeoutTests(ITestOutputHelper output) : 
             {
                 SnapshotInterval = 5,
                 TitleGenerationInterval = 0,
+                // These tests target the watchdog's own timeout-detection behavior
+                // (arm/promote/fire), not turn-level resume — disable resume so a
+                // single watchdog expiry fails the turn exactly as before that
+                // feature existed. See LlmTurnResumeTests for resume coverage.
+                TimeoutResumeRetryBudget = 0,
             }
         });
         services.AddSingleton<ISystemPromptProvider>(new StaticSystemPromptProvider("You are a test assistant."));

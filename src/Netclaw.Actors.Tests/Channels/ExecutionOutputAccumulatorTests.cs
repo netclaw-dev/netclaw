@@ -31,6 +31,102 @@ public sealed class ExecutionOutputAccumulatorTests
     }
 
     [Fact]
+    public void TextStreamDiscarded_clears_multi_delta_accumulated_text()
+    {
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
+
+        // A real multi-delta stall: two substantive deltas before the dead call
+        // is discarded — a single-delta fake would not exercise the accumulator's
+        // append path the way a real stalled provider stream does.
+        acc.ProcessOutput(new TextDeltaOutput("stalled chunk one ") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextDeltaOutput("STALLED_PARTIAL_MARKER") { SessionId = TestSessionId });
+
+        acc.ProcessOutput(new TextStreamDiscarded { SessionId = TestSessionId });
+
+        acc.ProcessOutput(new TextDeltaOutput("Resumed answer ") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextDeltaOutput("after timeout") { SessionId = TestSessionId });
+
+        // The delta-accumulated result must contain ONLY the resumed call's text —
+        // the dead call's partial content must not survive the discard.
+        Assert.Equal("Resumed answer after timeout", acc.GetAccumulatedText());
+        Assert.DoesNotContain("STALLED_PARTIAL_MARKER", acc.GetAccumulatedText(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TextStreamDiscarded_preserves_an_earlier_completed_calls_text_but_discards_only_the_dead_calls_partial()
+    {
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
+
+        // Call 1: streams a preamble, then completes (a tool round) — TextOutput
+        // marks the call boundary and commits the preamble (see D1 in the review).
+        acc.ProcessOutput(new TextDeltaOutput("Checking the files now. ") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextOutput("Checking the files now. ") { SessionId = TestSessionId });
+
+        // Call 2: streams two real deltas, then dies mid-stream and is discarded.
+        acc.ProcessOutput(new TextDeltaOutput("stalled chunk one ") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextDeltaOutput("STALLED_PARTIAL_MARKER") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextStreamDiscarded { SessionId = TestSessionId });
+
+        // Resumed call streams the real final answer.
+        acc.ProcessOutput(new TextDeltaOutput("Done: the answer is X.") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextOutput("Done: the answer is X.") { SessionId = TestSessionId });
+
+        // Before the fix, TextStreamDiscarded cleared the whole turn-scoped
+        // buffer, wiping call 1's already-completed preamble along with call 2's
+        // dead partial. The result must keep call 1's text AND the resumed
+        // answer, with none of the dead call's partial.
+        var result = acc.GetAccumulatedText();
+        Assert.Equal("Checking the files now. Done: the answer is X.", result);
+        Assert.DoesNotContain("STALLED_PARTIAL_MARKER", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void TextStreamDiscarded_lets_TextOutput_repopulate_after_discard()
+    {
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
+
+        acc.ProcessOutput(new TextDeltaOutput("stalled") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextStreamDiscarded { SessionId = TestSessionId });
+
+        // No further deltas — the resumed call's answer arrives as a single
+        // non-streamed TextOutput. Before the fix, _sawTextDelta stayed true from
+        // the dead call's delta, so this TextOutput would be silently ignored.
+        acc.ProcessOutput(new TextOutput("Resumed answer") { SessionId = TestSessionId });
+
+        Assert.Equal("Resumed answer", acc.GetAccumulatedText());
+    }
+
+    [Fact]
+    public void TextOutput_with_IsCallBoundary_false_does_not_move_the_commit_marker_past_a_live_calls_partial_text()
+    {
+        // F2: EmitExpiredPromptNotice/EmitWrongRequesterApprovalNotice/
+        // EmitUnavailableApprovalOptionNotice send a mid-stream TextOutput
+        // (IsCallBoundary = false) while another call still streams.
+        // Before the fix, ANY TextOutput advanced the commit marker over the
+        // live call's partial text; a subsequent stall+discard then found
+        // nothing left to remove, and the resumed call's answer glued onto
+        // the dead partial.
+        var acc = new ExecutionOutputAccumulator(TestNotifyTool);
+
+        acc.ProcessOutput(new TextDeltaOutput("stalled chunk one ") { SessionId = TestSessionId });
+        acc.ProcessOutput(new TextDeltaOutput("STALLED_PARTIAL_MARKER") { SessionId = TestSessionId });
+
+        acc.ProcessOutput(new TextOutput("That approval prompt has expired.")
+        {
+            SessionId = TestSessionId,
+            IsCallBoundary = false
+        });
+
+        acc.ProcessOutput(new TextStreamDiscarded { SessionId = TestSessionId });
+
+        acc.ProcessOutput(new TextDeltaOutput("Done: the answer is X.") { SessionId = TestSessionId });
+
+        var result = acc.GetAccumulatedText();
+        Assert.Equal("Done: the answer is X.", result);
+        Assert.DoesNotContain("STALLED_PARTIAL_MARKER", result, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void TextOutput_accumulates_when_no_prior_delta()
     {
         var acc = new ExecutionOutputAccumulator(TestNotifyTool);

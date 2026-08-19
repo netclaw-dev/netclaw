@@ -48,6 +48,27 @@ internal sealed class TurnStateTracker
     public int ToolIterationCount { get; private set; }
     public bool ForceNoToolsActive { get; set; }
 
+    /// <summary>
+    /// Number of timeout-triggered LLM call resumes used so far this turn. Compared
+    /// against <see cref="Netclaw.Configuration.SessionTuning.TimeoutResumeRetryBudget"/>
+    /// by the actor before resuming again.
+    /// </summary>
+    public int TimeoutResumeCount { get; private set; }
+
+    /// <summary>
+    /// Estimated input tokens sent to the provider by every LLM call discarded via
+    /// a timeout resume this turn. The provider billed for this input even though
+    /// the call never completed and reported no usage — see
+    /// <c>LlmSessionActor.TryResumeAfterTimeout</c> for the estimation method.
+    /// Null once any recorded resume had no real prior count to proxy from — the
+    /// running total then reports "unknown", not a silently incomplete sum.
+    /// </summary>
+    public long? DiscardedResumeEstimatedInputTokens =>
+        _discardedResumeEstimateHasUnknownContribution ? null : _discardedResumeEstimatedInputTokensSum;
+
+    private long _discardedResumeEstimatedInputTokensSum;
+    private bool _discardedResumeEstimateHasUnknownContribution;
+
     private bool _budgetNudgeSent;
     private int _postToolEmptyResponseCount;
     private int _preToolEmptyResponseCount;
@@ -66,6 +87,37 @@ internal sealed class TurnStateTracker
         ForceNoToolsActive = false;
         _toolCallCounts.Clear();
         _duplicateNudgeSent = false;
+        TimeoutResumeCount = 0;
+        _discardedResumeEstimatedInputTokensSum = 0;
+        _discardedResumeEstimateHasUnknownContribution = false;
+    }
+
+    /// <summary>
+    /// Record a timeout-triggered LLM call resume. Called by the actor after it
+    /// decides to re-issue a timed-out call.
+    /// </summary>
+    public void RecordTimeoutResume()
+    {
+        TimeoutResumeCount++;
+    }
+
+    /// <summary>
+    /// Add the discarded call's estimated input tokens to this turn's running
+    /// total. Called once per resume, right before the actor re-issues the call.
+    /// A null <paramref name="estimatedTokens"/> means the actor had no real
+    /// prior count to proxy from (the discarded call was the session's first) —
+    /// that poisons <see cref="DiscardedResumeEstimatedInputTokens"/> to null for
+    /// the rest of the turn rather than reporting a silently incomplete sum.
+    /// </summary>
+    public void RecordDiscardedResumeEstimatedInputTokens(long? estimatedTokens)
+    {
+        if (estimatedTokens is not { } value)
+        {
+            _discardedResumeEstimateHasUnknownContribution = true;
+            return;
+        }
+
+        _discardedResumeEstimatedInputTokensSum += value;
     }
 
     /// <summary>

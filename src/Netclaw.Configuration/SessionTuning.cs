@@ -135,4 +135,18 @@ public sealed record SessionTuning
     /// are not retried because the partial response cannot be reconstructed.
     /// </summary>
     public RetryPolicy StreamingRetryPolicy { get; init; } = new();
+
+    /// <summary>
+    /// Per-turn budget for LLM call resumes after a mid-stream timeout. A
+    /// timeout is the watchdog's inter-delta or no-progress deadline, or a
+    /// transport <see cref="TimeoutException"/>. On a timeout, the session
+    /// actor discards the dead call's partial output and re-issues the same
+    /// call. This can happen on any call in the turn, including a call after
+    /// an earlier tool iteration completed — resume never dispatches a tool
+    /// call, so it cannot double-execute one. The actor allows up to this
+    /// many resumes per turn, then it fails the turn. Set the budget to 0 to
+    /// disable resume: the actor then fails the turn on the first timeout,
+    /// the same as before this feature existed.
+    /// </summary>
+    public int TimeoutResumeRetryBudget { get; init; } = 2;
 }

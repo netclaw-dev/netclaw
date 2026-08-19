@@ -156,4 +156,29 @@ public sealed class TurnStateTrackerTests
         Assert.Equal(1, tracker.ToolIterationCount);
         Assert.Equal(100, tracker.ToolCallCount);
     }
+
+    [Fact]
+    public void TimeoutResumeCount_StartsAtZeroAndIncrementsPerResume()
+    {
+        var tracker = new TurnStateTracker();
+        Assert.Equal(0, tracker.TimeoutResumeCount);
+
+        tracker.RecordTimeoutResume();
+        Assert.Equal(1, tracker.TimeoutResumeCount);
+
+        tracker.RecordTimeoutResume();
+        Assert.Equal(2, tracker.TimeoutResumeCount);
+    }
+
+    [Fact]
+    public void TimeoutResumeCount_ResetsOnNewTurn()
+    {
+        var tracker = new TurnStateTracker();
+        tracker.RecordTimeoutResume();
+        tracker.RecordTimeoutResume();
+
+        tracker.ResetForNewTurn();
+
+        Assert.Equal(0, tracker.TimeoutResumeCount);
+    }
 }

@@ -397,6 +397,14 @@ public partial class ChatViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Test seam: push one <see cref="SessionOutput"/> as if the daemon had
+    /// emitted it, without staging any approval-interaction bookkeeping. Used by
+    /// <c>ChatPageTests</c> to exercise streaming/text rendering (e.g. the
+    /// timeout-resume discard signal) without a daemon connection.
+    /// </summary>
+    internal void EmitOutputForTesting(SessionOutput output) => _outputSubject.OnNext(output);
+
+    /// <summary>
     /// Opens the per-session USAGE log file if not already open. Matches
     /// HeadlessChannel's filename and append semantics so a single session
     /// driven by both -p (headless) and TUI clients accumulates USAGE
