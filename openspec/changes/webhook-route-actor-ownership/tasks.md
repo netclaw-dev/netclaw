@@ -24,11 +24,11 @@ Implementation branch: decided at apply time (standalone off `dev`, or stacked o
 
 ## 4. Test replacement and skew guard
 
-- [x] 4.1 Delete `Update_serializes_read_modify_write_operations_across_store_instances_and_path_aliases` and the same choreography pattern in `Update_lock_wait_honors_cancellation`; replace with ONE outcome-only store-level cross-process-guard test (no bounded event waits, no scheduling asserts) retained until the mutex follow-up
+- [x] 4.1 Delete `Update_serializes_read_modify_write_operations_across_store_instances_and_path_aliases` and the same choreography pattern in `Update_lock_wait_honors_cancellation`; remove the store's cross-process mutex so no store-level lock test remains
 - [x] 4.2 Verify no remaining test in the repo asserts on thread-pool scheduling for this capability (grep for the choreography pattern)
 
 ## 5. Finish
 
 - [x] 5.1 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md` for the new endpoints and the daemon-only CLI write path; bump `metadata.version`
 - [x] 5.2 Full solution build, full `Netclaw.Actors.Tests` + `Netclaw.Daemon.Tests` + `Netclaw.Cli.Tests` + `Netclaw.Configuration.Tests`, slopwatch, headers; native smoke tapes for the webhooks TUI surface if touched (Termina rule)
-- [x] 5.3 `/opsx-sync` the `webhook-route-authority` spec; file the follow-up issue for mutex removal after the skew window; PR with the back-compat story in the body
+- [x] 5.3 `/opsx-sync` the `webhook-route-authority` spec; PR with the back-compat story in the body

@@ -24,6 +24,13 @@ namespace Netclaw.Actors.Webhooks;
 /// next read with no reconciliation step, and a restart rebuilds nothing
 /// because there is nothing to rebuild.
 /// </para>
+/// <para>
+/// This actor is the only writer. An old CLI binary that writes a route file
+/// directly during a version skew risks one lost update, and only when it
+/// patches the same route at the same moment. Each write stays atomic on its
+/// own, so no reader sees a partial file. At webhook mutation rates that risk
+/// is accepted; it does not justify a cross-process lock.
+/// </para>
 /// </summary>
 public sealed class WebhookRouteActor : ReceiveActor
 {
@@ -58,7 +65,6 @@ public sealed class WebhookRouteActor : ReceiveActor
         {
             var outcome = _store.Update(
                 routeName,
-                CancellationToken.None,
                 existing => Merge(routeName, command, existing));
             Sender.Tell(outcome);
         }
@@ -85,7 +91,7 @@ public sealed class WebhookRouteActor : ReceiveActor
 
         try
         {
-            Sender.Tell(new RouteDeleted(routeName, _store.Delete(routeName, CancellationToken.None)));
+            Sender.Tell(new RouteDeleted(routeName, _store.Delete(routeName)));
         }
         catch (Exception ex)
         {

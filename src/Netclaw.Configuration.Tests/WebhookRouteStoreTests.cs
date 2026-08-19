@@ -74,7 +74,7 @@ public sealed class WebhookRouteStoreTests : IDisposable
     {
         var store = new WebhookRouteStore(_paths);
 
-        Assert.Throws<ArgumentException>(() => store.Delete("../secrets", CancellationToken.None));
+        Assert.Throws<ArgumentException>(() => store.Delete("../secrets"));
     }
 
     [Fact]
@@ -222,82 +222,6 @@ public sealed class WebhookRouteStoreTests : IDisposable
         var errors = WebhookRouteValidator.Validate("invalid-enum", route);
 
         Assert.Contains(errors, error => error.Contains("not supported", StringComparison.Ordinal));
-    }
-
-    /// <summary>
-    /// The cross-process guard for the version-skew window. The daemon actor now
-    /// serializes every in-process mutation, so this test covers only what the
-    /// actor cannot: an old CLI in another process writing the same route file.
-    /// <para>
-    /// It asserts one outcome — no lost update — and nothing about scheduling.
-    /// The mutex follow-up that closes the skew window removes the mutex and this
-    /// test together.
-    /// </para>
-    /// </summary>
-    [Fact]
-    public async Task Update_loses_no_field_when_two_store_instances_write_at_the_same_time()
-    {
-        const int rounds = 4;
-        var firstStore = new WebhookRouteStore(_paths);
-        string? aliasPath = null;
-        string? parentAliasPath = null;
-        var secondPaths = _paths;
-
-        // On POSIX a second process can reach the same file through a symlink, so
-        // the lock identity must survive the alias.
-        if (!OperatingSystem.IsWindows())
-        {
-            var parentPath = Path.GetDirectoryName(_dir.Path)
-                ?? throw new InvalidOperationException("Test directory has no parent directory.");
-            parentAliasPath = $"{_dir.Path}-parent-alias";
-            Directory.CreateSymbolicLink(parentAliasPath, parentPath);
-
-            var targetThroughParentAlias = Path.Combine(parentAliasPath, Path.GetFileName(_dir.Path));
-            aliasPath = $"{_dir.Path}-alias";
-            Directory.CreateSymbolicLink(aliasPath, targetThroughParentAlias);
-            secondPaths = new NetclawPaths(aliasPath);
-        }
-
-        try
-        {
-            var secondStore = new WebhookRouteStore(secondPaths);
-            var seed = CreateValidRoute();
-            var baselineRateLimit = seed.RateLimitPerMinute;
-            var baselineMaxBody = seed.MaxBodyBytes;
-            firstStore.Save("concurrent-route", seed);
-            var cancellationToken = TestContext.Current.CancellationToken;
-
-            var updates = new List<Task>();
-            for (var round = 0; round < rounds; round++)
-            {
-                updates.Add(Task.Run(() => firstStore.Update("concurrent-route", cancellationToken, existing =>
-                {
-                    existing!.RateLimitPerMinute++;
-                    return (existing, true);
-                }), cancellationToken));
-
-                updates.Add(Task.Run(() => secondStore.Update("concurrent-route", cancellationToken, existing =>
-                {
-                    existing!.MaxBodyBytes++;
-                    return (existing, true);
-                }), cancellationToken));
-            }
-
-            await Task.WhenAll(updates);
-
-            // Every increment read the value its predecessor wrote. A dropped
-            // read-modify-write shows up as a short count on either field.
-            Assert.True(firstStore.TryGet("concurrent-route", out var saved));
-            Assert.Equal(baselineRateLimit + rounds, saved.Definition!.RateLimitPerMinute);
-            Assert.Equal(baselineMaxBody + rounds, saved.Definition.MaxBodyBytes);
-        }
-        finally
-        {
-            if (aliasPath is not null)
-                Directory.Delete(aliasPath);
-            if (parentAliasPath is not null)
-                Directory.Delete(parentAliasPath);
-        }
     }
 
     [Fact]

@@ -78,15 +78,23 @@ The CLI SHALL send every webhook route mutation to the daemon API. The CLI SHALL
 - **THEN** it reports the result without a daemon call
 - **AND** writes no file
 
-### Requirement: Version-skew tolerance for one deprecation release
+### Requirement: Version-skew tolerance without a cross-process lock
 
-The route store SHALL keep its named cross-process mutex for one deprecation release. The actor SHALL hold no cache: every read and every read-modify-write SHALL go through the store to disk, so a direct file write by an old CLI is visible to the next actor operation without a reconciliation step. The per-route JSON file format SHALL NOT change.
+The route store SHALL hold no cross-process lock. Version-skew tolerance SHALL rest on two properties instead. First, the actor SHALL hold no cache: every read and every read-modify-write SHALL go through the store to disk, so a direct file write by an old CLI is visible to the next actor operation without a reconciliation step. Second, the store SHALL write each route file atomically through a temporary file and one replacing move, so no reader SHALL see a partial file. The per-route JSON file format SHALL NOT change.
+
+Accepted edge case: if an old CLI patches the same route at the same moment as the daemon actor, one of the two updates is lost. Webhook route mutations are rare, so the project accepts this risk rather than a lock.
 
 #### Scenario: Old CLI writes a file behind the actor
 
 - **GIVEN** a running new daemon and an old CLI that writes a route file directly
 - **WHEN** any subsequent read or update reaches the actor
 - **THEN** the actor serves the file's current content from disk
+
+#### Scenario: A write never exposes a partial file
+
+- **GIVEN** a reader that opens a route file while the store writes it
+- **WHEN** the store replaces the file
+- **THEN** the reader sees either the complete old content or the complete new content
 
 ### Requirement: Deterministic tests replace scheduling choreography
 
