@@ -37,37 +37,26 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     // Slack subscribes to OutputFilter.Text (final assembled text), not TextStreaming.
     private const string EmptyTurnFallbackText = ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
     // No streaming state needed — Slack receives TextOutput only, not TextDeltaOutput.
-    private bool _postedThisTurn;
-    private bool _uploadedFileThisTurn;
-    private PostResult? _lastFailedPost;
-    // Reply targets for in-flight reminder delivery confirmations, keyed by
-    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
-    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
-    // Keyed (not a single field) because multiple reminders can target the
-    // same session concurrently — a single field would be clobbered.
-    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
-    private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
-    // A binding that has never observed any ToolInteractionRequest treats an
-    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
-    // restarted out from under it. Once we've observed at least one prompt,
-    // subsequent ambiguous text from the user is ordinary conversation, not an
-    // approval reply, so the cold path stays off. This does NOT gate button
-    // clicks — those always route to the session, which is the authority on
-    // CallId staleness.
-    private bool _hasObservedApprovalRequest;
+    // Slack tells the session about a delivery failure at turn completion, not
+    // at post time, so it keeps the failure descriptor of the last failed post.
+    // The engine's per-turn failure flag gates every read of this field, and
+    // both turn-completion hooks clear it.
+    private PostResult? _lastFailedPost;
+    private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
+    private readonly ApprovalResponseFlow<PendingApprovalRequest, SlackEventTs> _approvalFlow;
+    private readonly ChannelOutputEngine<PendingApprovalRequest, SlackEventTs> _outputEngine;
 
     private readonly SessionPipelineHandle _handle;
+    private readonly ThreadGapHydrationEngine _hydrationEngine;
     private SlackEventTs? _cursorTs;
-    private SlackEventTs? _pendingCursorTs;
 
-    // Reliable in-flight-turn signal for the mention re-arm guard: set when ANY
-    // inbound is enqueued (unlike _pendingCursorTs, which is only set for inbounds
-    // with a parseable ts), cleared when the turn ends. Without it, a null-ts
-    // in-flight turn would leave _pendingCursorTs unset and let a following mention
-    // re-arm mid-turn — the PR #733 no-duplicate hazard.
-    private bool _turnInFlight;
+    // A Slack ts is decimal seconds, so two ts values order by numeric value,
+    // not by ordinal text. SlackEventTs.CompareTo owns that rule; the hydration
+    // engine and the output engine compare cursor keys through this wrapper.
+    private static readonly IComparer<string> CursorComparer =
+        Comparer<string>.Create((x, y) => new SlackEventTs(x).CompareTo(new SlackEventTs(y)));
+
     private volatile bool _processingIndicatorActive;
     private readonly object _processingIndicatorRenderLock = new();
     private Task _processingIndicatorRenderTail = Task.CompletedTask;
@@ -87,6 +76,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private const string BackfillDetectorWarning = ":warning: I couldn't safely analyze some earlier thread messages, so they were excluded from context.";
     private const string LiveDetectorUnavailableWarning = ":warning: I couldn't safely analyze your message — please try again in a moment.";
     private const string LiveInjectionBlockedWarning = ":warning: Message blocked by prompt-injection policy.";
+    private const string WrongRequesterWarning = ":warning: Only the requesting user can approve this tool action.";
 
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -113,6 +103,70 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             .WithContext(NetclawLogProperties.SessionId, _sessionId.Value)
             .WithContext("SlackChannelId", _channelId)
             .WithContext("SlackThreadTs", _threadTs);
+
+        _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, SlackEventTs>(
+            channelType: ChannelType.Slack,
+            channelName: "Slack",
+            cursorComparer: CursorComparer,
+            pendingRequests: _pendingApprovalRequests,
+            createPendingRequest: request => new PendingApprovalRequest(request),
+            // Slack renders every interaction request as an approval prompt.
+            // Discord and Mattermost render only Kind == "approval".
+            isApprovalRequest: _ => true,
+            renderTextOutput: textOutput =>
+            {
+                var fullText = textOutput.Text?.Trim();
+                return string.IsNullOrWhiteSpace(fullText) ? null : fullText;
+            },
+            renderErrorOutput: error => $":warning: {error.Message} (ref: {error.CorrelationId.ToString("N")[..8]})",
+            postTextAsync: PostOutputTextAsync,
+            uploadFileAsync: UploadOutputFileAsync,
+            postApprovalPromptAsync: HandleApprovalRequestAsync,
+            readPromptIdValue: promptMessageTs => promptMessageTs.Value,
+            onApprovalPromptFailedAsync: SendApprovalDenyOnFailureAsync,
+            persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
+            handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
+            advanceCursor: cursor => AdvanceCursor(new SlackEventTs(cursor)),
+            postEmptyTurnFallbackAsync: PostEmptyTurnFallbackAsync,
+            onEmptyTurnSuppressedAsync: NotifyFailedTurnAsync,
+            readObservedAtMs: _ => _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds());
+
+        _hydrationEngine = new ThreadGapHydrationEngine(
+            sessionId: _sessionId,
+            channelType: ChannelType.Slack,
+            historyFetcher: _dependencies.ThreadHistoryFetcher,
+            injectionDetector: _promptInjectionDetector,
+            classifierSourceContext: "slack-backfill",
+            cursorComparer: CursorComparer,
+            cursorKeySelector: messageId => new SlackEventId(messageId ?? string.Empty).TryGetEventTs()?.Value,
+            isAuthorizedSender: senderId =>
+                SlackAclPolicy.IsAllowedUser(new SlackUserId(senderId), _dependencies.Options),
+            log: _log,
+            readCursor: () => _cursorTs?.Value,
+            readInputQueue: () => _handle.InputQueue,
+            readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
+            warnBackfillDetectorUnavailableAsync: () => SafePostAsync(BackfillDetectorWarning),
+            onBackfillEnqueued: _outputEngine.AdvancePendingCursorForEnqueuedTurn,
+            setHydrationPending: pending => _hydrationPending = pending);
+
+        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, SlackEventTs>(
+            sessionId: _sessionId,
+            channelType: ChannelType.Slack,
+            channelName: "Slack",
+            pipeline: _dependencies.Pipeline,
+            operationTimeout: OperationTimeout,
+            pendingRequests: _pendingApprovalRequests,
+            // Slack resolves the earliest matching prompt, which is the order its
+            // own lookup used before the extraction. Discord and Mattermost
+            // resolve the most recent one.
+            matchOrder: ApprovalMatchOrder.Oldest,
+            hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
+            postWrongRequesterWarningAsync: () => SafePostAsync(WrongRequesterWarning),
+            persistPromptCleared: callId => Persist(
+                new PendingApprovalPromptCleared { CallId = callId.Value },
+                ApplyPendingApprovalPromptCleared),
+            renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
@@ -182,7 +236,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         {
             try
             {
-                await PerformOneShotHydrationAsync();
+                await _hydrationEngine.PerformOneShotHydrationAsync();
             }
             catch (Exception ex)
             {
@@ -299,7 +353,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (message.Source.DeliveryObserver is { } deliveryObserver
             && message.Source.ReminderId is { } reminderKey
             && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _reminderDeliveryObservers[reminderKey] = deliveryObserver;
+            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {
@@ -414,8 +468,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             // MentionRequiredInThread the conversation actor forwards only mentions here,
             // so every inbound is a deliberate re-entry. _turnInFlight guards against a
             // re-arm while a prior turn is still processing, preserving the PR #733
-            // no-duplicate invariant; BuildInputWithDeferredHydrationAsync no-ops on an
-            // empty gap.
+            // no-duplicate invariant; the deferred hydration no-ops on an empty gap.
             //
             // Two accepted trade-offs of reusing the existing backfill (vs. a new
             // drop-tracking side channel): (1) one thread-history fetch per mention on an
@@ -426,20 +479,19 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             // mention, not this one (and can be skipped if the cursor later advances past
             // it under rapid concurrent mentions).
             if (!_hydrationPending
-                && !_turnInFlight
+                && !_outputEngine.TurnInFlight
                 && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
             {
                 _hydrationPending = true;
             }
 
-            var buildResult = _hydrationPending
-                && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId.Value), _dependencies.Options)
-                ? await BuildInputWithDeferredHydrationAsync(message, contents, currentTs, inboundCts.Token)
-                : BuildInputForInbound(message, contents);
-            var input = buildResult.Input;
-
-            if (buildResult.BackfillDetectorUnavailable)
-                await SafePostAsync(BackfillDetectorWarning);
+            var input = BuildInputForInbound(message, contents);
+            if (_hydrationPending
+                && SlackAclPolicy.IsAllowedUser(new SlackUserId(message.SenderId.Value), _dependencies.Options))
+            {
+                input = await _hydrationEngine.ApplyDeferredHydrationAsync(
+                    input, message.EventId.Value, inboundCts.Token);
+            }
 
             try
             {
@@ -447,15 +499,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 queueWriteCts.CancelAfter(OperationTimeout);
 
                 await writer.WriteAsync(input, queueWriteCts.Token);
-                _turnInFlight = true;
 
                 // Defer cursor persistence until TurnCompleted confirms durable turn recording,
                 // otherwise a crash between cursor and turn persist loses messages.
-                if (currentTs is { } ts)
-                {
-                    if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
-                        _pendingCursorTs = ts;
-                }
+                _outputEngine.AdvancePendingCursorForEnqueuedTurn(currentTs?.Value);
 
                 QueueProcessingIndicatorRefreshIfActive();
             }
@@ -631,7 +678,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             initCts.Token);
     }
 
-    private InboundBuildResult BuildInputForInbound(
+    private ChannelInput BuildInputForInbound(
         SlackThreadInbound triggeringMessage,
         IReadOnlyList<AIContent> liveContents)
     {
@@ -660,7 +707,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
         };
 
-        return new InboundBuildResult(baseInput, false);
+        return baseInput;
     }
 
     private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
@@ -670,329 +717,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _channelId.Value,
             _channelId.Value,
             _threadTs.Value);
-
-    /// <summary>
-    /// One-shot thread history hydration. Runs once per actor lifetime, in the
-    /// Hydrating behavior immediately after pipeline initialization. Fetches
-    /// thread history, computes the gap relative to the recovered cursor, and
-    /// if there is an authorized message in the gap, synthesizes one backfill
-    /// <see cref="ChannelInput"/> using that message as the trigger and older
-    /// gap messages as adopted context. Hands the synthesized input to the
-    /// session pipeline through the normal input-queue path.
-    /// </summary>
-    private async Task PerformOneShotHydrationAsync()
-    {
-        using var cts = new CancellationTokenSource(InboundProcessingTimeout);
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await _dependencies.ThreadHistoryFetcher.FetchThreadHistoryAsync(_sessionId, cts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return;
-        }
-
-        if (history.Count == 0)
-        {
-            _log.Info("Thread history hydration: empty thread, no backfill cursor={Cursor}", _cursorTs?.Value ?? "none");
-            return;
-        }
-
-        var cursor = _cursorTs;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (new SlackEventId(item.MessageId ?? string.Empty).TryGetEventTs() is not { } itemTs)
-                continue;
-
-            // Strict: only include messages newer than the cursor. PR #733's
-            // "cursor advances only on TurnCompleted" guarantees that
-            // ts == cursor means the session already has that message persisted
-            // — re-including it here on a restart hydration would duplicate it.
-            // The in-flight-crash case is handled too: a turn that didn't
-            // complete leaves the cursor un-advanced, so the message has
-            // ts > cursor and is correctly included in the gap.
-            if (cursor is { } c && itemTs.CompareTo(c) <= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: cursor already at thread head fetched={FetchedCount} cursor={Cursor}",
-                history.Count, cursor?.Value ?? "none");
-            return;
-        }
-
-        var classified = await ClassifyGapAsync(candidates, cts.Token);
-        var gap = classified.Gap;
-
-        _log.Info(
-            "Thread history hydration fetched={FetchedCount} gapCount={GapCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor}",
-            history.Count, gap.Count, classified.BlockedForRisk, cursor?.Value ?? "none");
-
-        if (classified.DetectorUnavailable)
-            await SafePostAsync(BackfillDetectorWarning);
-
-        if (gap.Count == 0)
-            return;
-
-        // Locate the most recent authorized message in the gap — it plays the
-        // role of the "current authorized message" that adopted-context normally
-        // anchors around. Without one we have no authorized trigger to enqueue;
-        // we transition to Active and let the next live authorized inbound be
-        // the trigger (the cursor stays put, so staleness still drops anything
-        // already seen).
-        AdoptedContextMessage? trigger = null;
-        for (var i = gap.Count - 1; i >= 0; i--)
-        {
-            if (gap[i].AuthorityAtInclusion == AdoptedMessageAuthority.Authorized)
-            {
-                trigger = gap[i];
-                break;
-            }
-        }
-
-        if (trigger is null)
-        {
-            // Deferred: a non-empty gap with no authorized trigger. The
-            // proactive-thread case — the binding actor's lifetime began when
-            // the agent posted the thread root, so this hydration ran before
-            // any authorized human inbound existed. Re-arm so the first
-            // authorized inbound performs this hydration (adopting the gap,
-            // e.g. the bot-authored root) instead of taking the fetch-free path.
-            _hydrationPending = true;
-            _log.Info("Thread history hydration: no authorized message in gap; re-armed for next authorized inbound");
-            return;
-        }
-
-        var adoptedContext = new List<AdoptedContextMessage>();
-        foreach (var item in gap)
-        {
-            if (ReferenceEquals(item, trigger))
-                break;
-            adoptedContext.Add(item);
-        }
-
-        // Build the synthesized inbound. The trigger's ChannelInput already
-        // carries its own text+attachment contents (loaded by the history
-        // fetcher), so we treat those as the "live" contents for the merge.
-        var triggerInput = trigger.Input;
-        var triggerTs = new SlackEventId(triggerInput.MessageId ?? string.Empty).TryGetEventTs();
-        var backfillInput = MergeAdoptedContext(triggerInput, adoptedContext, cursor);
-
-        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
-        {
-            _log.Info("Skipping hydration backfill enqueue while restart drain is active: {Reason}", ingressClosedReason);
-            return;
-        }
-
-        var writer = _handle.InputQueue;
-        if (writer is null)
-        {
-            _log.Warning("Input queue is not initialized; skipping hydration backfill");
-            return;
-        }
-
-        try
-        {
-            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-            writeCts.CancelAfter(OperationTimeout);
-            await writer.WriteAsync(backfillInput, writeCts.Token);
-            // A hydration backfill is an in-flight turn too; mirror the live-inbound
-            // enqueue so a mention arriving before this turn completes does not re-arm.
-            _turnInFlight = true;
-
-            if (triggerTs is { } ts)
-            {
-                if (_pendingCursorTs is not { } pending || ts.CompareTo(pending) > 0)
-                    _pendingCursorTs = ts;
-            }
-
-            _log.Info(
-                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount}",
-                triggerInput.MessageId,
-                adoptedContext.Count);
-            ChannelTelemetry.For(ChannelType.Slack).RecordMessageEnqueued();
-        }
-        catch (OperationCanceledException ex)
-        {
-            _log.Warning(ex, "Timed out enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-        catch (ChannelClosedException ex)
-        {
-            _log.Warning(ex, "Input queue closed while enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-    }
-
-    private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
-    {
-        var text = string.Join("\n", input.Contents
-            .OfType<TextContent>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-
-        return PromptClassifier.ClassifyAsync(
-            _promptInjectionDetector, text, "slack-backfill", _log, cancellationToken);
-    }
-
-    private readonly record struct GapClassification(
-        List<AdoptedContextMessage> Gap,
-        int BlockedForRisk,
-        bool DetectorUnavailable);
-
-    /// <summary>
-    /// Runs prompt-injection classification over candidate gap messages and
-    /// captures each surviving message's authority-at-inclusion. Blocked
-    /// messages are dropped; detector-unavailable messages are also dropped
-    /// and surface a caller-visible flag.
-    /// </summary>
-    private async Task<GapClassification> ClassifyGapAsync(
-        IReadOnlyList<ChannelInput> candidates,
-        CancellationToken cancellationToken)
-    {
-        var classifications = await Task.WhenAll(
-            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
-
-        var gap = new List<AdoptedContextMessage>(candidates.Count);
-        var blockedForRisk = 0;
-        var detectorUnavailable = false;
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            var item = candidates[i];
-            switch (classifications[i].Outcome)
-            {
-                case ClassificationOutcome.Allow:
-                    var authority = SlackAclPolicy.IsAllowedUser(new SlackUserId(item.SenderId.Value), _dependencies.Options)
-                        ? AdoptedMessageAuthority.Authorized
-                        : AdoptedMessageAuthority.Pending;
-                    gap.Add(new AdoptedContextMessage(item, authority));
-                    break;
-
-                case ClassificationOutcome.Block:
-                    blockedForRisk++;
-                    _log.Warning(
-                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
-                        item.SenderId,
-                        item.MessageId ?? "none",
-                        classifications[i].Reason ?? "high-risk pattern detected");
-                    break;
-
-                case ClassificationOutcome.DetectorUnavailable:
-                    blockedForRisk++;
-                    detectorUnavailable = true;
-                    break;
-            }
-        }
-
-        return new GapClassification(gap, blockedForRisk, detectorUnavailable);
-    }
-
-    /// <summary>
-    /// Merges <paramref name="adoptedContext"/> as the adopted-context window
-    /// preceding <paramref name="triggerInput"/> (the executable message) and
-    /// returns the trigger input with adopted-context metadata populated.
-    /// </summary>
-    private static ChannelInput MergeAdoptedContext(
-        ChannelInput triggerInput,
-        List<AdoptedContextMessage> adoptedContext,
-        SlackEventTs? cursor)
-    {
-        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
-            adoptedContext,
-            triggerInput.Contents,
-            triggerInput.SenderId.Value,
-            triggerInput.ReceivedAt);
-
-        return triggerInput with
-        {
-            Contents = merged.Contents,
-            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
-                id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
-            AdoptedSpeakerIds = merged.SpeakerIds,
-            AdoptedContextProjection = merged.Projection,
-            AdoptedContextLowerBound = cursor?.Value,
-            AdoptedContextUpperBound = triggerInput.MessageId,
-            AdoptedContextEntries = merged.Entries
-        };
-    }
-
-    /// <summary>
-    /// Completes a thread-history hydration that <see cref="PerformOneShotHydrationAsync"/>
-    /// deferred for lack of an authorized trigger (<see cref="_hydrationPending"/>).
-    /// This authorized inbound is the executable trigger; the thread gap strictly
-    /// before it — most importantly a proactively-posted bot-authored root —
-    /// is fetched, classified, and merged as its adopted-context window. On
-    /// fetch failure the turn proceeds without an adopted window and hydration
-    /// stays re-armed so a later authorized inbound retries.
-    /// </summary>
-    private async Task<InboundBuildResult> BuildInputWithDeferredHydrationAsync(
-        SlackThreadInbound message,
-        IReadOnlyList<AIContent> liveContents,
-        SlackEventTs? liveTs,
-        CancellationToken cancellationToken)
-    {
-        var baseResult = BuildInputForInbound(message, liveContents);
-
-        // Without the live message's ordering key the gap below it cannot be
-        // bounded; leave hydration re-armed and take the fetch-free path.
-        if (liveTs is not { } liveEventTs)
-            return baseResult;
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await _dependencies.ThreadHistoryFetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            // Non-fatal: execute the turn without an adopted window and keep
-            // hydration re-armed so a later authorized inbound retries.
-            _log.Warning(ex, "Re-armed thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return baseResult;
-        }
-
-        // Fetch succeeded: hydration is complete. Only a fetch failure (caught
-        // above) keeps the flag armed — classify/merge outcomes never re-arm.
-        _hydrationPending = false;
-
-        var cursor = _cursorTs;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (new SlackEventId(item.MessageId ?? string.Empty).TryGetEventTs() is not { } itemTs)
-                continue;
-
-            // Strictly above the watermark and strictly below the live inbound:
-            // the live inbound is the executable message, not adopted context.
-            if (cursor is { } c && itemTs.CompareTo(c) <= 0)
-                continue;
-            if (itemTs.CompareTo(liveEventTs) >= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-            return baseResult;
-
-        var classified = await ClassifyGapAsync(candidates, cancellationToken);
-        if (classified.Gap.Count == 0)
-            return new InboundBuildResult(baseResult.Input, classified.DetectorUnavailable);
-
-        var mergedInput = MergeAdoptedContext(baseResult.Input, classified.Gap, cursor);
-        _log.Info(
-            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId}",
-            classified.Gap.Count,
-            baseResult.Input.MessageId);
-
-        return new InboundBuildResult(mergedInput, classified.DetectorUnavailable);
-    }
 
     private void AdvanceCursor(SlackEventTs candidateTs)
     {
@@ -1013,7 +737,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         if (_cursorTs is { } c && ts.CompareTo(c) <= 0)
             return true;
 
-        if (_pendingCursorTs is { } p && ts.CompareTo(p) <= 0)
+        if (_outputEngine.PendingCursor is { } p && ts.CompareTo(new SlackEventTs(p)) <= 0)
             return true;
 
         return false;
@@ -1031,45 +755,29 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
-        _hasObservedApprovalRequest = true;
-
-        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
-        if (existing is not null)
-        {
-            existing.PromptMessageTs = new SlackEventTs(tracked.PromptId);
-            return;
-        }
-
-        _pendingApprovalRequests.Add(new PendingApprovalRequest(
-            new ToolCallId(tracked.CallId),
-            tracked.RequesterSenderId,
-            tracked.RequesterPrincipal,
-            tracked.OptionKeys,
-            new SlackEventTs(tracked.PromptId),
-            toolName: tracked.ToolName,
-            displayText: tracked.DisplayText));
+        _outputEngine.MarkApprovalRequestObserved();
+        PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, SlackEventTs>(
+            _pendingApprovalRequests,
+            tracked,
+            wrapPromptId: value => new SlackEventTs(value),
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
-        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
-
-    private readonly record struct InboundBuildResult(ChannelInput Input, bool BackfillDetectorUnavailable);
+        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, SlackEventTs>(_pendingApprovalRequests, cleared);
 
     private async Task ReinitializePipelineAsync(string reason)
     {
         QueueProcessingIndicatorClearIfActive();
-        _pendingCursorTs = null;
-        _turnInFlight = false;
-        // Reset per-turn delivery flags: a reinit aborts the in-flight turn,
-        // and a stale _postedThisTurn=true would otherwise leak into the next
+        // Slack drops the cursor key of the abandoned turn; Discord and
+        // Mattermost keep theirs across a reinitialize.
+        _outputEngine.DiscardPendingCursor();
+        // Reset the per-turn delivery state: a reinit aborts the in-flight
+        // turn, and a stale delivered flag would otherwise leak into the next
         // turn and falsely report a later reminder as delivered.
-        _postedThisTurn = false;
-        _uploadedFileThisTurn = false;
         _lastFailedPost = null;
-        // Report any in-flight reminder turn as not-delivered now so the
-        // execution actor redelivers immediately rather than stalling until
-        // the backstop timeout.
-        FailPendingReminderDeliveries($"Slack pipeline reinitialized: {reason}");
+        _outputEngine.ResetForPipelineReinitialize(reason);
         await _handle.ReinitializeAsync(
             reason,
             () => Timers.StartSingleTimer(
@@ -1080,133 +788,76 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
 
     private async Task HandleOutputAsync(ThreadOutput threadOutput)
     {
-        switch (threadOutput.Output)
+        var clearedPrompts = await _outputEngine.HandleOutputAsync(threadOutput.Output);
+        if (clearedPrompts.Count > 0)
+            PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
+    }
+
+    /// <summary>
+    /// Handles the outputs the shared engine leaves to the channel. Slack
+    /// renders a processing indicator; other output types have no Slack effect.
+    /// BufferFlush and TextDeltaOutput never arrive, because Slack subscribes to
+    /// OutputFilter.Text (final assembled text), not TextStreaming.
+    /// </summary>
+    private async Task HandleChannelSpecificOutputAsync(SessionOutput output)
+    {
+        if (output is ProcessingStateOutput processing)
+            await RenderProcessingStateAsync(processing);
+    }
+
+    /// <summary>
+    /// Posts turn output text for the shared engine. Slack keeps the failure
+    /// descriptor instead of telling the session now, because it reports a
+    /// delivery failure once at turn completion.
+    /// </summary>
+    private async Task<bool> PostOutputTextAsync(string text)
+    {
+        var result = await SafePostAsync(text);
+        if (!result.Success)
+            _lastFailedPost = result;
+        return result.Success;
+    }
+
+    /// <summary>Uploads turn output for the shared engine. See <see cref="PostOutputTextAsync"/>.</summary>
+    private async Task<bool> UploadOutputFileAsync(FileOutput file)
+    {
+        var result = await SafeUploadFileAsync(file);
+        if (!result.Success)
+            _lastFailedPost = result;
+        return result.Success;
+    }
+
+    private async Task PostEmptyTurnFallbackAsync()
+    {
+        _lastFailedPost = null;
+        _log.Warning("Turn completed without visible Slack output; posting fallback reply");
+        await SafePostAsync(EmptyTurnFallbackText);
+    }
+
+    /// <summary>
+    /// Tells the session that the turn produced output the transport rejected.
+    /// Slack defers this report to turn completion and sends it once with the
+    /// completed turn's number. Discord and Mattermost report each failed post
+    /// inline instead, so their engine hook does nothing here.
+    /// </summary>
+    private async Task NotifyFailedTurnAsync(TurnCompleted completed)
+    {
+        var failedPost = _lastFailedPost;
+        _lastFailedPost = null;
+
+        if (failedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
         {
-            case TextOutput text:
-            {
-                var fullText = text.Text?.Trim();
-                if (!string.IsNullOrWhiteSpace(fullText))
-                {
-                    var result = await SafePostAsync(fullText);
-                    if (result.Success)
-                        _postedThisTurn = true;
-                    else
-                        _lastFailedPost = result;
-                }
-
-                break;
-            }
-
-            case FileOutput file:
-                var uploadResult = await SafeUploadFileAsync(file);
-                if (!uploadResult.Success)
-                    _lastFailedPost = uploadResult;
-                break;
-
-            case ProcessingStateOutput processing:
-                await RenderProcessingStateAsync(processing);
-                break;
-
-            // BufferFlush and TextDeltaOutput are not received — Slack subscribes
-            // to OutputFilter.Text (final assembled text), not TextStreaming.
-
-            case ToolInteractionRequest interaction:
-                _hasObservedApprovalRequest = true;
-                var pendingApproval = new PendingApprovalRequest(interaction);
-                _pendingApprovalRequests.Add(pendingApproval);
-                var promptMessageTs = await HandleApprovalRequestAsync(interaction);
-                if (promptMessageTs is not null)
-                {
-                    pendingApproval.PromptMessageTs = promptMessageTs;
-                    Persist(new PendingApprovalPromptTracked
-                    {
-                        CallId = pendingApproval.CallId.Value,
-                        RequesterSenderId = pendingApproval.RequesterSenderId,
-                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
-                        OptionKeys = pendingApproval.OptionKeys,
-                        PromptId = promptMessageTs.Value.Value,
-                        ToolName = pendingApproval.ToolName,
-                        // Preserve null-vs-set semantics on the wire: Truncate
-                        // returns string.Empty for null input, which would round-
-                        // trip as DisplayText="" with HasDisplayText=true.
-                        DisplayText = string.IsNullOrEmpty(pendingApproval.DisplayText)
-                            ? null
-                            : ApprovalDisplayTextFormatter.Truncate(
-                                pendingApproval.DisplayText,
-                                PendingApprovalPromptTracked.MaxPersistedDisplayTextChars)
-                    }, ApplyPendingApprovalPromptTracked);
-                }
-                else
-                {
-                    // Posting the approval prompt failed. Drop the pending entry and
-                    // route a deny back to the session so the blocked tool task can
-                    // unwind instead of waiting on the infinite-timeout TCS.
-                    _pendingApprovalRequests.Remove(pendingApproval);
-                    await SendApprovalDenyOnFailureAsync(interaction);
-                }
-                break;
-
-            case ErrorOutput err:
-                var refId = err.CorrelationId.ToString("N")[..8];
-                var errorResult = await SafePostAsync($":warning: {err.Message} (ref: {refId})");
-                if (errorResult.Success)
-                    _postedThisTurn = true;
-                else
-                    _lastFailedPost = errorResult;
-                break;
-
-            case TurnCompleted completed:
-                if (completed.Outcome == TurnOutcome.Completed && _pendingCursorTs is { } pendingTs)
-                    AdvanceCursor(pendingTs);
-                _pendingCursorTs = null;
-                _turnInFlight = false;
-
-                if (completed.SourceReminderId is { } sourceReminderKey
-                    && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
-                    && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
-                {
-                    var delivered = _postedThisTurn || _uploadedFileThisTurn;
-                    reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey,
-                        ChannelType.Slack,
-                        Delivered: delivered,
-                        FailureReason: delivered ? null : "Slack post did not succeed",
-                        ObservedAtMs: _dependencies.TimeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
-                }
-
-                if (!_postedThisTurn && !_uploadedFileThisTurn)
-                {
-                    if (_lastFailedPost is { ShouldNotifySession: true, FailureKind: { } failureKind, ErrorMessage: { } errorMessage })
-                    {
-                        _log.Warning(
-                            "Turn completed with Slack delivery failure kind={FailureKind}; notifying session",
-                            failureKind);
-                        await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
-                    }
-                    else
-                    {
-                        _log.Warning("Turn completed without visible Slack output; posting fallback reply");
-                        await SafePostAsync(EmptyTurnFallbackText);
-                    }
-                }
-
-                _postedThisTurn = false;
-                _uploadedFileThisTurn = false;
-                _lastFailedPost = null;
-                var clearedPrompts = _pendingApprovalRequests
-                    .Select(pending => new PendingApprovalPromptCleared
-                    {
-                        CallId = pending.CallId.Value
-                    })
-                    .ToArray();
-                if (clearedPrompts.Length > 0)
-                {
-                    PersistAll(
-                        clearedPrompts,
-                        cleared => ApplyPendingApprovalPromptCleared(cleared));
-                }
-                _pendingApprovalRequests.Clear();
-                break;
+            _log.Warning(
+                "Turn completed with Slack delivery failure kind={FailureKind}; notifying session",
+                failureKind);
+            await NotifyDeliveryFailedAsync(completed.TurnNumber, failureKind, errorMessage);
+        }
+        else
+        {
+            // Defensive: a failed post always carries a failure kind, so this
+            // branch is unreachable today. Keep the empty-turn reply as the
+            // safe outcome if that ever stops holding.
+            await PostEmptyTurnFallbackAsync();
         }
     }
 
@@ -1338,265 +989,17 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             _threadTs.Value);
     }
 
-    private async Task<bool> TryHandleTextApprovalResponseAsync(SlackThreadInbound message)
-    {
-        if (_pendingApprovalRequests.Count == 0)
-        {
-            return !_hasObservedApprovalRequest
-                && await TryHandleColdTextApprovalResponseAsync(message);
-        }
+    private Task<bool> TryHandleTextApprovalResponseAsync(SlackThreadInbound message)
+        => _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value);
 
-        var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            ApprovalButtonValueCodec.CanApprove(request.RequesterPrincipal, request.RequesterSenderId, message.SenderId.Value));
-
-        if (pendingIndex < 0)
-        {
-            await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-            return true;
-        }
-
-        var pending = _pendingApprovalRequests[pendingIndex];
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(
-                message.Text ?? string.Empty,
-                pending.Options,
-                out var selectedKey)
-            || selectedKey is null)
-        {
-            return false;
-        }
-
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            var feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = pending.CallId,
-                    SelectedKey = new Actors.Protocol.ApprovalOptionKey(selectedKey),
-                    SenderId = message.SenderId
-                }, feedbackCts.Token);
-
-            switch (feedbackResult)
-            {
-                case CommandNack nack:
-                    if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                        await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-                    _log.Info(
-                        "Session rejected Slack text approval response for call {CallId} reason={Reason}; skipping redraw",
-                        pending.CallId,
-                        nack.Reason ?? "<none>");
-                    return true;
-
-                case not CommandAck:
-                    _log.Warning(
-                        "Slack text approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                        pending.CallId,
-                        feedbackResult.GetType().Name);
-                    return true;
-            }
-
-            _pendingApprovalRequests.RemoveAt(pendingIndex);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-
-            await TryResolveApprovalPromptAsync(
-                pending.PromptMessageTs,
-                pending.Request,
-                pending.CallId,
-                selectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-
-            _log.Info(
-                "Recorded Slack approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
-                pending.CallId,
-                message.SenderId,
-                selectedKey);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Slack approval response for call {CallId}", pending.CallId);
-        }
-
-        return true;
-    }
-
-    private async Task<bool> TryHandleColdTextApprovalResponseAsync(SlackThreadInbound message)
-    {
-        if (!ToolInteractionResponseParser.LooksLikeApprovalResponse(message.Text ?? string.Empty))
-            return false;
-
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionTextResponse
-            {
-                SessionId = _sessionId,
-                Text = message.Text ?? string.Empty,
-                SenderId = message.SenderId
-            }, feedbackCts.Token);
-
-            if (reply is CommandAck)
-            {
-                _log.Info(
-                    "Forwarded cold Slack text approval response from sender={SenderId} without local pending prompt state",
-                    message.SenderId);
-                return true;
-            }
-
-            // approval_no_history means the session has never had an approval request.
-            // The message was a false-positive from LooksLikeApprovalResponse.
-            // Don't consume — let it fall through to normal LLM ingress. See #1164.
-            if (reply is CommandNack { Reason: ApprovalNackReasons.NoHistory })
-                return false;
-
-            return reply is CommandNack;
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route cold Slack text approval response from sender {SenderId}", message.SenderId);
-            return false;
-        }
-    }
-
-    private async Task HandleApprovalResponseAsync(SlackApprovalResponse message)
-    {
-        var pendingIndex = _pendingApprovalRequests.FindIndex(request =>
-            request.CallId == message.CallId);
-        var pending = pendingIndex >= 0 ? _pendingApprovalRequests[pendingIndex] : null;
-
-        // CanApprove fast-path: if the binding still holds the original request we can
-        // post the wrong-requester warning locally without round-tripping through the
-        // session. When the binding has been cold-spawned (no local pending entry) the
-        // session re-runs CanApprove against its own pending-call state, and the wait
-        // below blocks the redraw until the session has actually accepted the click —
-        // see #939 + #979.
-        if (pending is not null && !ApprovalButtonValueCodec.CanApprove(
-                pending.RequesterPrincipal,
-                pending.RequesterSenderId,
-                message.SenderId.Value))
-        {
-            await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-            return;
-        }
-
-        // Wait for the session before redrawing. This is the security gate that
-        // prevents (a) a non-requester click destroying the prompt UI on the
-        // cold-spawn path, and (b) a stale re-click overwriting an
-        // already-resolved banner — both surfaced by the #939 code review. The
-        // session is the authority on whether the call is still pending and
-        // whether the sender is allowed. Only redraw on CommandAck.
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = message.CallId,
-                    SelectedKey = new Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
-                    SenderId = message.SenderId
-                }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Slack button approval response for call {CallId}", message.CallId);
-            return;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                // Session rejected (wrong requester, unknown call, stale resolution).
-                // For wrong-requester surface the warning; for any other reason just
-                // log and DO NOT redraw — the prompt UI must stay consistent with the
-                // session's authoritative state.
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafePostAsync(":warning: Only the requesting user can approve this tool action.");
-                _log.Info(
-                    "Session rejected Slack approval response for call {CallId} reason={Reason}; skipping redraw",
-                    message.CallId,
-                    nack.Reason ?? "<none>");
-                return;
-
-            case CommandAck:
-                break;
-
-            default:
-                // ISessionResponse is sealed-by-convention to Ack/Nack. Defensive guard.
-                _log.Warning(
-                    "Slack approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    message.CallId,
-                    feedbackResult.GetType().Name);
-                return;
-        }
-
-        if (pending is not null)
-        {
-            _pendingApprovalRequests.RemoveAt(pendingIndex);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-            // Prefer the captured TS, but fall back to the payload's TS when capture
-            // failed (post raced or returned an empty TS). The payload TS is reliable
-            // for a button click since Slack populates it in the envelope.
-            var promptTs = pending.PromptMessageTs ?? message.PromptMessageTs;
-            await TryResolveApprovalPromptAsync(
-                promptTs,
-                pending.Request,
-                pending.CallId,
-                message.SelectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-
-            _log.Info(
-                "Recorded Slack button approval response for call {CallId} sender={SenderId} selection={SelectedKey}",
-                pending.CallId,
-                message.SenderId,
-                message.SelectedKey);
-        }
-        else if (message.PromptMessageTs is { } payloadPromptTs)
-        {
-            // Cold-spawn redraw — no local pending entry exists for this CallId
-            // (the journal didn't replay a PendingApprovalPromptTracked event for
-            // it, typically because the binding was re-created without recovery
-            // or the entry was cleared before the click landed). The click
-            // payload still carries the prompt's message TS and the session has
-            // accepted the response; render the generic banner so the buttons
-            // clear. NOTE: pre-0.21 journals that DO replay (with no tool name /
-            // display text) take the upper `pending is not null` branch instead
-            // — they render the generic banner via the !IsNullOrEmpty fallback
-            // inside the builder, not via this branch.
-            await TryResolveApprovalPromptAsync(
-                payloadPromptTs,
-                request: null,
-                message.CallId,
-                message.SelectedKey,
-                message.SenderId.Value);
-
-            _log.Info(
-                "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redrew prompt via payload messageTs={MessageTs}",
-                message.CallId,
-                payloadPromptTs);
-        }
-        else
-        {
-            // Text-reply on a cold-spawned binding: approval routed but no message
-            // TS is available, so the redraw is impossible. Remaining #939 gap.
-            _log.Info(
-                "Forwarded Slack button approval response for call {CallId} to session without local pending entry; redraw skipped",
-                message.CallId);
-            ChannelTelemetry.For(ChannelType.Slack).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
-        }
-    }
+    // Slack block actions reach the binding one way through the gateway, so the
+    // flow gets no synchronous-reply hook here.
+    private Task HandleApprovalResponseAsync(SlackApprovalResponse message)
+        => _approvalFlow.HandleApprovalResponseAsync(
+            message.CallId,
+            message.SelectedKey,
+            message.SenderId.Value,
+            message.PromptMessageTs);
 
     private async Task<PostResult> SafePostAsync(string text)
     {
@@ -1633,23 +1036,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             ChannelTelemetry.For(ChannelType.Slack).RecordReplyFailed(_dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds);
             return new PostResult(ex.Message, DeliveryFailureKind.Unknown);
         }
-    }
-
-    /// <summary>
-    /// Tells every in-flight reminder observer that delivery did not happen,
-    /// then clears them. Called when a turn can no longer reach TurnCompleted
-    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
-    /// rather than waiting out its backstop timeout.
-    /// </summary>
-    private void FailPendingReminderDeliveries(string reason)
-    {
-        if (_reminderDeliveryObservers.Count == 0)
-            return;
-
-        foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Slack, Delivered: false, FailureReason: reason));
-
-        _reminderDeliveryObservers.Clear();
     }
 
     private async Task NotifyDeliveryFailedAsync(Actors.Protocol.TurnNumber turnNumber, DeliveryFailureKind failureKind, string errorMessage)
@@ -1815,7 +1201,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
                 file.FileName,
                 cts.Token);
 
-            _uploadedFileThisTurn = true;
             _log.Info("Uploaded file to Slack thread: {FileName}", file.FileName);
             return PostResult.Ok;
         }
@@ -1843,18 +1228,10 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private sealed record ThreadOutput(SessionOutput Output) : INoSerializationVerificationNeeded;
     private sealed record OutputStreamTerminated(int Generation, Exception? Cause) : INoSerializationVerificationNeeded;
     private sealed record ReinitializePipeline(string Reason) : INoSerializationVerificationNeeded;
-    private sealed class PendingApprovalRequest
+    private sealed class PendingApprovalRequest : Netclaw.Channels.PendingApprovalRequest<SlackEventTs>
     {
-        public PendingApprovalRequest(ToolInteractionRequest request)
+        public PendingApprovalRequest(ToolInteractionRequest request) : base(request)
         {
-            Request = request;
-            CallId = request.CallId;
-            RequesterSenderId = request.RequesterSenderId?.Value;
-            RequesterPrincipal = request.RequesterPrincipal;
-            Options = request.Options;
-            OptionKeys = request.Options.Select(option => option.Key.Value).ToArray();
-            ToolName = request.ToolName.Value;
-            DisplayText = request.DisplayText;
         }
 
         public PendingApprovalRequest(
@@ -1865,46 +1242,9 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             SlackEventTs? promptMessageTs,
             string? toolName = null,
             string? displayText = null)
+            : base(callId, requesterSenderId, requesterPrincipal, optionKeys, promptMessageTs, toolName, displayText)
         {
-            Request = null;
-            CallId = callId;
-            RequesterSenderId = requesterSenderId;
-            RequesterPrincipal = requesterPrincipal;
-            OptionKeys = [.. optionKeys];
-            var isMcpTool = !string.IsNullOrEmpty(toolName) && new ToolName(toolName).IsMcp;
-            Options = OptionKeys
-                .Select(key => new ToolInteractionOption(
-                    new ApprovalOptionKey(key),
-                    ApprovalOptionKeys.LabelFor(key, isMcpTool)))
-                .ToArray();
-            PromptMessageTs = promptMessageTs;
-            ToolName = toolName;
-            DisplayText = displayText;
         }
-
-        public ToolInteractionRequest? Request { get; }
-        public ToolCallId CallId { get; }
-        public string? RequesterSenderId { get; }
-        public PrincipalClassification? RequesterPrincipal { get; }
-        public IReadOnlyList<ToolInteractionOption> Options { get; }
-        public IReadOnlyList<string> OptionKeys { get; }
-
-        /// <summary>
-        /// Tool name. Populated from <see cref="ToolInteractionRequest.ToolName"/>
-        /// on the hot path and from the persisted
-        /// <see cref="PendingApprovalPromptTracked.ToolName"/> on the cold-spawn
-        /// recovery path. Null only for journal entries written before the field
-        /// was added.
-        /// </summary>
-        public string? ToolName { get; }
-
-        /// <summary>
-        /// Display text (already truncated to the persisted ceiling on the
-        /// cold-spawn path). Null only for legacy journal entries.
-        /// </summary>
-        public string? DisplayText { get; }
-
-        public SlackEventTs? PromptMessageTs { get; set; }
     }
 
     private sealed record InitializePipeline : INoSerializationVerificationNeeded

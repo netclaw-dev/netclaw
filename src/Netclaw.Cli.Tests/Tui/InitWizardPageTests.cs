@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Wizard;
@@ -12,7 +11,6 @@ using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -288,37 +286,15 @@ public sealed class InitWizardPageTests : IDisposable
         Assert.Equal(stepId, vm.Orchestrator.CurrentStep?.StepId);
     }
 
+    // Resolving TerminaApplication triggers NavigateTo("/init"), which calls the
+    // factory below and wires the page to the ViewModel.
     private (VirtualTerminal Terminal, TerminaApplication App, InitWizardViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        InitWizardViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/init", builder =>
-        {
-            builder.RegisterRoute<InitWizardPage, InitWizardViewModel>(
-                "/init",
-                _ => new InitWizardPage(),
-                _ =>
-                {
-                    capturedVm = CreateViewModel();
-                    return capturedVm;
-                });
-        });
-
-        // Resolving TerminaApplication triggers NavigateTo("/init"), which
-        // calls the factory above and wires the page to the ViewModel.
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<InitWizardPage, InitWizardViewModel>(
+            "/init",
+            () => new InitWizardPage(),
+            CreateViewModel,
+            out input);
 
     private InitWizardViewModel CreateViewModel()
         => new(_paths, _registry, _fakeProbe, _fakeSlackProbe, _fakeDiscordProbe);

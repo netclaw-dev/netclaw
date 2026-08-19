@@ -3,13 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -253,31 +251,9 @@ public sealed class ApprovalsManagerPageTests : IDisposable
 
     private (VirtualTerminal Terminal, TerminaApplication App, ApprovalsManagerViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        ApprovalsManagerViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/approvals", builder =>
-        {
-            builder.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>(
-                "/approvals",
-                _ => new ApprovalsManagerPage(),
-                _ =>
-                {
-                    capturedVm = new ApprovalsManagerViewModel(_paths, _time);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<ApprovalsManagerPage, ApprovalsManagerViewModel>(
+            "/approvals",
+            () => new ApprovalsManagerPage(),
+            () => new ApprovalsManagerViewModel(_paths, _time),
+            out input);
 }

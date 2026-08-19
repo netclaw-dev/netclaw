@@ -65,36 +65,19 @@ public sealed class MemoryRulesFirstExtractorTests
     }
 
     [Theory]
-    [InlineData("Well I was going to has You do some Netclaw work for me if")]
-    [InlineData("Want to know if I needs To edit that or not")]
-    [InlineData("I was just thinking about maybe doing something")]
-    [InlineData("You can uses The GH command line utility")]
-    public void Rejects_conversational_fragments_from_project_statement_pattern(string input)
-    {
-        var result = _extractor.Extract(MakeTurnPayload(input), new HashSet<string>());
-
-        Assert.Empty(result);
-    }
-
-    [Theory]
+    [InlineData("This is just a short chat reply.")]
     [InlineData("Our deployment pipeline uses GitHub Actions for CI/CD and container builds")]
     [InlineData("Netclaw requires Akka.NET 1.5.62 or later for cluster sharding support")]
-    public void Accepts_genuine_project_statements(string input)
+    public void Retired_turn_complete_checkpoint_drains_to_zero_candidates(string input)
     {
-        var result = _extractor.Extract(MakeTurnPayload(input), new HashSet<string>());
-
-        Assert.NotEmpty(result);
-    }
-
-    [Fact]
-    public void Turn_complete_without_project_fact_reports_no_project_fact()
-    {
-        var payload = MakeTurnPayload("This is just a short chat reply.");
-
-        var result = _extractor.ExtractWithDiagnostics(payload, new HashSet<string>());
+        // Backward-compatibility guard for issue 666. No code enqueues a turn-complete
+        // checkpoint now, but an upgraded installation can still hold turn-complete rows
+        // in the SQLite checkpoint queue. The worker must drain such a row, and must not
+        // write the queued turn transcript to memory through the general path.
+        var result = _extractor.ExtractWithDiagnostics(MakeTurnPayload(input), new HashSet<string>());
 
         Assert.Empty(result.Candidates);
-        Assert.Equal(MemoryExtractionDropReason.TurnCompleteNoProjectFact, result.DropReason);
+        Assert.Equal(MemoryExtractionDropReason.TurnCompleteRetired, result.DropReason);
     }
 
     [Fact]
@@ -119,14 +102,4 @@ public sealed class MemoryRulesFirstExtractorTests
         Assert.Equal(MemoryExtractionDropReason.EphemeralContent, result.DropReason);
     }
 
-    [Fact]
-    public void Accepted_project_statement_reports_no_drop_reason()
-    {
-        var payload = MakeTurnPayload("Our deployment pipeline uses GitHub Actions for CI/CD");
-
-        var result = _extractor.ExtractWithDiagnostics(payload, new HashSet<string>());
-
-        Assert.NotEmpty(result.Candidates);
-        Assert.Equal(MemoryExtractionDropReason.None, result.DropReason);
-    }
 }
