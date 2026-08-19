@@ -11,8 +11,8 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Activates a deferred first-party or MCP tool by name so the LLM can call it.
 /// Tools must first be found via <see cref="SearchToolsTool"/> before loading.
-/// The session actor intercepts this tool by name and reads the tool call
-/// arguments to activate the requested tool — the output is LLM-facing only.
+/// The owning actor intercepts successful results and activates the requested
+/// tool in its private exposure set.
 /// </summary>
 [NetclawTool("load_tool",
     "Activate a tool by name so you can call it. Use search_tools first to find tool names, then load_tool to activate one.",

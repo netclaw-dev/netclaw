@@ -17,11 +17,11 @@
 
 ## 3. PR 3 - Subagent progressive disclosure
 
-- [ ] 3.1 Seed subagents from the policy-exposed Core set instead of every discoverable registration.
-- [ ] 3.2 Add an ephemeral child exposure cache and intercept successful load_tool results within the child actor.
-- [ ] 3.3 Preserve recursive-spawn denial across child catalog, search, suggestions, load, and dispatch paths.
-- [ ] 3.4 Emit PII-free child core/deferred/loaded counts without tool payloads, paths, schema bodies, or hidden names.
-- [ ] 3.5 Add parent/child parity tests, child-local lease isolation, model-failure eviction, and high-cardinality catalog regression coverage.
+- [x] 3.1 Seed subagents from the policy-exposed Core set instead of every discoverable registration.
+- [x] 3.2 Add an ephemeral child exposure cache and intercept successful load_tool results within the child actor.
+- [x] 3.3 Preserve recursive-spawn denial across child catalog, search, suggestions, load, and dispatch paths.
+- [x] 3.4 Emit PII-free child core/deferred/loaded counts without tool payloads, paths, schema bodies, or hidden names.
+- [x] 3.5 Add parent/child parity tests, child-local lease isolation, model-failure eviction, and high-cardinality catalog regression coverage.
 
 ## 4. PR 4 - Workspace path and outcome foundation
 

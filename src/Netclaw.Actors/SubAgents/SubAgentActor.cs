@@ -78,7 +78,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     // `netclaw stats` instead of vanishing.
     private readonly Telemetry.ISessionMetrics? _sessionMetrics;
     private readonly ToolRegistry _toolRegistry;
+    private readonly DiscoveredToolCache _toolExposure = new();
+    private readonly HashSet<string> _loadedDeferredToolNames = new(StringComparer.Ordinal);
     private IReadOnlyList<AITool> _aiTools = [];
+    private int _coreToolCount;
     private ILoggingAdapter _log;
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
     private readonly TurnStateTracker _turnState = new();
@@ -172,7 +175,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             NullSystemPromptProvider.Instance,
             approvalService,
             maxToolIterations,
-            sessionMetrics)
+            sessionMetrics,
+            coreToolNames: null)
     {
     }
 
@@ -183,7 +187,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ISystemPromptProvider promptProvider,
         IToolApprovalService? approvalService,
         int maxToolIterations,
-        Telemetry.ISessionMetrics? sessionMetrics)
+        Telemetry.ISessionMetrics? sessionMetrics,
+        IReadOnlySet<string>? coreToolNames)
     {
         if (maxToolIterations <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxToolIterations), maxToolIterations,
@@ -203,17 +208,48 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _projectInstructions = definition.ProjectInstructions;
         _log = Context.GetLogger();
 
-        // Build a private ToolRegistry for this subagent's tool subset
         _toolRegistry = new ToolRegistry();
+        var hasSearchTools = false;
+        var searchToolsIsCore = false;
+        var hasLoadTool = false;
+        var loadToolIsCore = false;
         foreach (var tool in definition.Tools)
         {
             if (!SubAgentToolPolicy.IsAllowedForSubAgent(tool.Name))
                 continue;
 
-            _toolRegistry.Register(tool);
+            var isCore = coreToolNames is null || coreToolNames.Contains(tool.Name);
+            if (tool is SearchToolsTool)
+            {
+                hasSearchTools = true;
+                searchToolsIsCore = isCore;
+                continue;
+            }
+
+            if (tool is LoadToolTool)
+            {
+                hasLoadTool = true;
+                loadToolIsCore = isCore;
+                continue;
+            }
+
+            RegisterTool(tool, isCore);
         }
 
+        if (hasSearchTools)
+            RegisterTool(new SearchToolsTool(_toolRegistry, _toolAccessPolicy), searchToolsIsCore);
+        if (hasLoadTool)
+            RegisterTool(new LoadToolTool(_toolRegistry, _toolAccessPolicy), loadToolIsCore);
+
         Become(Idle);
+
+        void RegisterTool(INetclawTool tool, bool isCore)
+        {
+            if (isCore)
+                _toolRegistry.RegisterCore(tool);
+            else
+                _toolRegistry.Register(tool);
+        }
     }
 
     public static Props CreateProps(
@@ -240,7 +276,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ISystemPromptProvider promptProvider,
         IToolApprovalService? approvalService = null,
         int maxToolIterations = DefaultMaxToolIterations,
-        Telemetry.ISessionMetrics? sessionMetrics = null)
+        Telemetry.ISessionMetrics? sessionMetrics = null,
+        IReadOnlySet<string>? coreToolNames = null)
     {
         ArgumentNullException.ThrowIfNull(promptProvider);
         return Props.CreateBy(new SubAgentActorProducer(
@@ -250,7 +287,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             promptProvider,
             approvalService,
             maxToolIterations,
-            sessionMetrics));
+            sessionMetrics,
+            coreToolNames));
     }
 
     private sealed class SubAgentActorProducer(
@@ -260,7 +298,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         ISystemPromptProvider promptProvider,
         IToolApprovalService? approvalService,
         int maxToolIterations,
-        Telemetry.ISessionMetrics? sessionMetrics) : IIndirectActorProducer
+        Telemetry.ISessionMetrics? sessionMetrics,
+        IReadOnlySet<string>? coreToolNames) : IIndirectActorProducer
     {
         public Type ActorType => typeof(SubAgentActor);
 
@@ -272,7 +311,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 promptProvider,
                 approvalService,
                 maxToolIterations,
-                sessionMetrics);
+                sessionMetrics,
+                coreToolNames);
 
         public void Release(ActorBase actor)
         {
@@ -305,6 +345,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _executionCts?.Dispose();
         _externalCts?.Dispose();
         _externalCancellationRegistration.Dispose();
+        _toolExposure.EvictAll();
+        _loadedDeferredToolNames.Clear();
         base.PostStop();
     }
 
@@ -323,7 +365,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 msg.Scope.Authority,
                 ToolExecutionTimeout.Default);
             _fileActivity = new ChildFileActivityTracker(msg.Scope.InitialWorkingSnapshot.WorkingContext);
-            _aiTools = ResolveExposedAiTools();
+            var coreTools = ResolveCoreAiTools();
+            _toolExposure.SeedBaseTools(coreTools);
+            _aiTools = _toolExposure.AvailableTools;
+            _coreToolCount = coreTools.Count;
             _executionCts = new CancellationTokenSource();
             _externalCts = new CancellationTokenSource();
             var self = Self; // Capture before callback — Self requires active actor context
@@ -382,6 +427,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _log.Info("SubAgent [{AgentName}] starting (tools={ToolCount}, prefill={Prefill}, interDelta={InterDelta}, noProgress={NoProgress})",
                 _definition.Name, _aiTools.Count, _prefillBudget, _interDeltaBudget,
                 _noProgressBudget?.ToString() ?? "unbounded");
+            LogToolExposure();
 
             FireLlmCall();
             Become(Processing);
@@ -519,6 +565,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 if (result.ToolCallId is { } callId)
                     _fileActivity.Complete(callId.Value, result.Content);
                 TryApplyProjectDirectory(result);
+                if (result.Name is "load_tool" && result.Content is not null)
+                    TryActivateDiscoveredTool(result.Content.Trim());
                 var preview = result.Content is { Length: > 200 }
                     ? result.Content[..200] + "..."
                     : result.Content ?? "(null)";
@@ -578,6 +626,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         Receive<LlmCallFailed>(msg =>
         {
+            _toolExposure.EvictAll();
+            _loadedDeferredToolNames.Clear();
             _log.Error(msg.Cause, "SubAgent [{AgentName}] LLM call failed callId={CallId}", _definition.Name, msg.CallId);
             Complete(false, $"LLM call failed: {msg.Cause.Message}", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.LlmCallFailed);
         });
@@ -827,13 +877,50 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _ = InvokeLlmAsync(client, messages, options, self, callId, _executionCts?.Token ?? CancellationToken.None);
     }
 
-    private IReadOnlyList<AITool> ResolveExposedAiTools()
+    private IReadOnlyList<AITool> ResolveCoreAiTools()
     {
-        var tools = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
+        var tools = _toolRegistry.GetCoreRegistrations().Select(static registration => registration.Tool);
         return _toolAccessPolicy
             .FilterDiscoverableTools(tools, ToolExecutionContext.Invocation)
             .Select(tool => tool.ToAITool())
             .ToList();
+    }
+
+    private bool TryActivateDiscoveredTool(string toolName)
+    {
+        var registration = _toolRegistry.GetRegistrationByToolName(toolName);
+        if (registration is null
+            || !SubAgentToolPolicy.IsAllowedForSubAgent(registration.Tool.Name)
+            || !_toolAccessPolicy.IsToolExposed(registration.Tool, ToolExecutionContext.Invocation))
+        {
+            return false;
+        }
+
+        var tool = registration.Tool;
+        if (_toolRegistry.IsCoreTool(tool.Name))
+            return true;
+
+        if (_toolExposure.AddIfMissing(tool.ToAITool()))
+        {
+            _loadedDeferredToolNames.Add(tool.Name);
+            _log.Info(
+                "SubAgent deferred tool activated loaded={LoadedCount}",
+                _loadedDeferredToolNames.Count);
+        }
+
+        return true;
+    }
+
+    private void LogToolExposure()
+    {
+        var visibleCount = _toolAccessPolicy.FilterDiscoverableTools(
+            _toolRegistry.GetAllRegistrations().Select(static registration => registration.Tool),
+            ToolExecutionContext.Invocation).Count;
+        _log.Info(
+            "SubAgent tool exposure core={CoreCount} deferredVisible={DeferredVisibleCount} loaded={LoadedCount}",
+            _coreToolCount,
+            Math.Max(0, visibleCount - _coreToolCount),
+            _loadedDeferredToolNames.Count);
     }
 
     private bool CanDeclareProjectScope() =>
@@ -1567,7 +1654,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences,
         SessionScratchCorrectionChange? ScratchCorrectionChange);
 
-    private static string BuildSystemPrompt(
+    private string BuildSystemPrompt(
         SubAgentDefinition definition,
         string? projectInstructions,
         bool canDeclareProjectScope)
@@ -1583,6 +1670,12 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var rolePrompt = string.IsNullOrWhiteSpace(basePrompt)
             ? definition.SystemPrompt
             : string.Concat(basePrompt.TrimEnd(), "\n\n", definition.SystemPrompt);
+        var toolIndex = _toolRegistry.GenerateCompressedIndex(
+            ToolExecutionContext.Audience,
+            _toolAccessPolicy);
+        var roleWithTools = string.IsNullOrWhiteSpace(toolIndex)
+            ? rolePrompt
+            : string.Concat(rolePrompt.TrimEnd(), "\n\n", toolIndex.TrimEnd());
 
         // Append the headless execution and precedence contract — always at the bottom,
         // after the specialized role prompt it protects from inherited mission conflicts.
@@ -1590,7 +1683,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             ? string.Concat(ProjectScopeDeclarationContract, "\n")
             : string.Empty;
         return string.Concat(
-            rolePrompt.TrimEnd(),
+            roleWithTools.TrimEnd(),
             "\n\n",
             HeadlessExecutionContractPrefix,
             projectScopeContract,

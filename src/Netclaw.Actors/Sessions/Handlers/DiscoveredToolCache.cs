@@ -137,13 +137,15 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
-    /// Add a tool to the exposed list when no <see cref="AIFunction"/> with the
+    /// Add a tool to the exposed list when no <see cref="AIFunctionDeclaration"/> with the
     /// same name is already present. Returns <c>true</c> if it was added.
     /// </summary>
     public bool AddIfMissing(AITool aiTool)
     {
         if (_availableTools.Any(existing =>
-            existing is AIFunction ef && aiTool is AIFunction nf && ef.Name == nf.Name))
+            existing is AIFunctionDeclaration current
+            && aiTool is AIFunctionDeclaration added
+            && current.Name == added.Name))
         {
             return false;
         }

@@ -40,7 +40,7 @@ public sealed class ToolRegistry
         public static RegistrySnapshot Empty { get; } = new([], []);
 
         public static RegistrySnapshot Create(RegistryEntry[] entries) =>
-            new(entries, [..entries.Select(static entry => entry.Registration)]);
+            new(entries, [.. entries.Select(static entry => entry.Registration)]);
     }
 
     // Copy-on-write. Registrations change at startup, at MCP reconnect, and at shutdown.
@@ -216,6 +216,20 @@ public sealed class ToolRegistry
             .Where(static entry => entry.ExposureTier == ToolExposureTier.Core)
             .Select(static entry => entry.Registration.Tool.ToAITool())
             .ToList();
+
+    internal IReadOnlyList<ToolRegistration> GetCoreRegistrations() =>
+        GetEntriesSnapshot()
+            .Where(static entry => entry.ExposureTier == ToolExposureTier.Core)
+            .Select(static entry => entry.Registration)
+            .ToList();
+
+    internal bool IsCoreTool(string canonicalName) =>
+        GetEntriesSnapshot().Any(entry =>
+            entry.ExposureTier == ToolExposureTier.Core
+            && string.Equals(
+                entry.Registration.Tool.Name,
+                canonicalName,
+                StringComparison.Ordinal));
 
     /// <summary>
     /// Returns tools that should always be loaded into the LLM context.

@@ -31,8 +31,8 @@ activate deferred tools only in that child actor's ephemeral exposure set.
 ### Requirement: Subagent tool exposure is observable without payloads
 
 Subagent diagnostics SHALL report core, deferred-visible, and dynamically loaded
-tool counts for each run. Logs SHALL NOT include tool argument values, command
-text, file paths, schema bodies, or hidden tool names.
+tool counts for each run. Exposure diagnostics SHALL NOT include tool argument
+values, command text, file paths, schema bodies, or hidden tool names.
 
 #### Scenario: Child startup logs bounded counts
 

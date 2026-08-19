@@ -99,6 +99,23 @@ public class DiscoveredToolCacheTests
         Assert.Empty(cache.AvailableTools);
     }
 
+    [Fact]
+    public void AddIfMissing_deduplicates_source_generated_tool_declarations()
+    {
+        var registry = new ToolRegistry();
+        var tool = new LoadToolTool(
+            registry,
+            TestToolAccessPolicy.Create(new Netclaw.Configuration.ToolConfig()))
+            .ToAITool();
+        var cache = new DiscoveredToolCache();
+        cache.SeedBaseTools([tool]);
+
+        var added = cache.AddIfMissing(tool);
+
+        Assert.False(added);
+        Assert.Single(cache.AvailableTools);
+    }
+
     private static McpToolAdapter RegisterAndRemember(
         ToolRegistry registry,
         DiscoveredToolCache cache,
