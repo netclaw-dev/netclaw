@@ -27,6 +27,9 @@
     <None Include="../../openspec/changes/reduce-fresh-session-approval-spam/evidence/*.json"
           Link="ApprovalEvidence/%(Filename)%(Extension)"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../openspec/changes/make-agent-tools-pit-of-success/evidence/tool-friction-fixtures.json"
+          Link="ToolFrictionEvidence/tool-friction-fixtures.json"
+          CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Akka.Hosting;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
@@ -18,6 +20,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Actors.Tests.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -30,8 +33,14 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     private const string MainIdentityMarker = "You are a test assistant with subagent support.";
     private const string OperatingRulesMarker = "[embedded agents] Sub-agents inherit operating rules.";
     private const string AgentsLayerMarker = "[agents] This marker should never appear in routed subagent calls.";
+    private const string ToolFootprintScenario = "personal-session-with-fixed-synthetic-mcp-catalog";
+    private const string ToolFootprintMetric =
+        "Compact UTF-8 JSON array of final function names, descriptions, and input schemas in ChatOptions.Tools order.";
+    private const string SyntheticMcpServerName = "synthetic_catalog";
+    private const int SyntheticMcpToolCount = 200;
 
     private readonly RecordingRoleChatClientProvider _clientProvider = new();
+    private readonly ToolRegistry _toolRegistry = new();
     private RecordingContextTool? _recordingFileReadTool;
     private RecordingContextTool? _recordingApprovalTool;
 
@@ -144,7 +153,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         });
         services.AddSingleton(skillRegistry);
 
-        var registry = new ToolRegistry();
+        var registry = _toolRegistry;
         var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
@@ -298,6 +307,61 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         Assert.Equal(sessionId.Value, mainOptions.SessionId);
         var subagentOptions = Assert.IsType<SessionScopedChatOptions>(_clientProvider.Compaction.ReceivedOptions[^1]);
         Assert.Equal(sessionId.Value, subagentOptions.SessionId);
+    }
+
+    [Fact]
+    public async Task Final_model_visible_tool_footprints_match_frozen_baseline()
+    {
+        RegisterSyntheticMcpCatalog();
+        _clientProvider.Main.ToolCallsOnFirstCall =
+        [
+            CreateToolCall(
+                "call-footprint-spawn",
+                "spawn_agent",
+                new Dictionary<string, object?>
+                {
+                    ["agent"] = "summarizer",
+                    ["task"] = "Summarize the fixed synthetic catalog."
+                })
+        ];
+
+        var sessionId = new SessionId("console/tool-footprint-baseline");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("tool-footprint-events");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use the summarizer.",
+            Source = BuildPersonalSource()
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await ExpectTurnCompletedAsync(
+            subscriber,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        var mainOptions = Assert.IsType<SessionScopedChatOptions>(_clientProvider.Main.ReceivedOptions[0]);
+        var mainTools = Assert.IsAssignableFrom<IEnumerable<AITool>>(mainOptions.Tools);
+        var subagentOptions = Assert.IsType<SessionScopedChatOptions>(_clientProvider.Compaction.ReceivedOptions[0]);
+        var subagentTools = Assert.IsAssignableFrom<IEnumerable<AITool>>(subagentOptions.Tools);
+
+        var actual = new ToolFootprintPair(
+            ModelVisibleToolFootprintCalculator.Measure(mainTools),
+            ModelVisibleToolFootprintCalculator.Measure(subagentTools));
+        var baseline = await ReadToolFootprintBaselineAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, baseline.SchemaVersion);
+        Assert.Equal(ToolFootprintScenario, baseline.Scenario);
+        Assert.Equal(ToolFootprintMetric, baseline.Metric);
+        Assert.Equal(SyntheticMcpToolCount, baseline.SyntheticMcpToolCount);
+        Assert.Equal(new ToolFootprintPair(baseline.MainCore, baseline.SubagentFull), actual);
     }
 
     [Fact]
@@ -835,6 +899,49 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             Assert.Equal(request.RequesterSenderId?.Value, requesterSenderId);
         }
     }
+
+    private void RegisterSyntheticMcpCatalog()
+    {
+        for (var i = 0; i < SyntheticMcpToolCount; i++)
+        {
+            var toolName = $"tool_{i:D3}";
+            var function = AIFunctionFactory.Create(
+                (string query, int maxResults) => $"unused:{query}:{maxResults}",
+                toolName,
+                "Find synthetic records by query with a bounded result count.");
+            _toolRegistry.Register(new McpToolAdapter(
+                function,
+                SyntheticMcpServerName,
+                toolName));
+        }
+    }
+
+    private static async Task<ToolFootprintBaseline> ReadToolFootprintBaselineAsync(CancellationToken cancellationToken)
+    {
+        var path = Path.Combine(
+            AppContext.BaseDirectory,
+            "ToolFootprintEvidence",
+            "tool-schema-footprint-baseline.json");
+        var json = await File.ReadAllTextAsync(path, cancellationToken);
+        var options = new JsonSerializerOptions(JsonSerializerDefaults.Web)
+        {
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow
+        };
+        return JsonSerializer.Deserialize<ToolFootprintBaseline>(json, options)
+               ?? throw new InvalidOperationException("Tool footprint baseline is empty.");
+    }
+
+    private sealed record ToolFootprintBaseline(
+        int SchemaVersion,
+        string Scenario,
+        string Metric,
+        int SyntheticMcpToolCount,
+        ModelVisibleToolFootprint MainCore,
+        ModelVisibleToolFootprint SubagentFull);
+
+    private sealed record ToolFootprintPair(
+        ModelVisibleToolFootprint MainCore,
+        ModelVisibleToolFootprint SubagentFull);
 
     private sealed class RecordingRoleChatClientProvider : IChatClientProvider
     {

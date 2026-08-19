@@ -1,0 +1,91 @@
+{
+  "schemaVersion": 1,
+  "sanitization": {
+    "sourceBoundary": "Raw transcripts remain local. Cases are semantic reconstructions with synthetic identifiers.",
+    "prohibitedRawIdentifierClasses": [
+      "session_id",
+      "tool_call_id",
+      "user_identity",
+      "repository_identity",
+      "host",
+      "url",
+      "exact_timestamp",
+      "credential",
+      "raw_prompt",
+      "raw_response",
+      "raw_log_line"
+    ]
+  },
+  "cases": [
+    {
+      "id": "TF01",
+      "scenario": "RecursiveSearch",
+      "observedFriction": "ApprovalGatedShellSearch",
+      "expectedToolSequence": ["file_search"],
+      "expectedOutcome": "success",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": true,
+      "expectedContextEffect": "NoContextChangeRequired"
+    },
+    {
+      "id": "TF02",
+      "scenario": "BatchRead",
+      "observedFriction": "ApprovalGatedShellBatch",
+      "expectedToolSequence": ["file_read_many"],
+      "expectedOutcome": "success",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": true,
+      "expectedContextEffect": "RecordTwoCanonicalFiles"
+    },
+    {
+      "id": "TF03",
+      "scenario": "JsonProjection",
+      "observedFriction": "ApprovalGatedInterpreterProjection",
+      "expectedToolSequence": ["json_read"],
+      "expectedOutcome": "success",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": true,
+      "expectedContextEffect": "RecordOneCanonicalFile"
+    },
+    {
+      "id": "TF04",
+      "scenario": "ImageMetadata",
+      "observedFriction": "ApprovalGatedInterpreterMetadata",
+      "expectedToolSequence": ["file_read"],
+      "expectedOutcome": "success",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": true,
+      "expectedContextEffect": "RecordOneCanonicalFile"
+    },
+    {
+      "id": "TF05",
+      "scenario": "SpillContinuation",
+      "observedFriction": "ApprovalGatedSpillParsing",
+      "expectedToolSequence": ["tool_output_read"],
+      "expectedOutcome": "success",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": true,
+      "expectedContextEffect": "NoContextChangeRequired"
+    },
+    {
+      "id": "TF06",
+      "scenario": "FailedFileActivity",
+      "observedFriction": "FailedCallPollutedRecentFiles",
+      "expectedToolSequence": ["file_write"],
+      "expectedOutcome": "access_denied",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": false,
+      "expectedContextEffect": "PreserveRecentFiles"
+    },
+    {
+      "id": "TF07",
+      "scenario": "SubagentCatalogExposure",
+      "observedFriction": "EagerSubagentSchemaCatalog",
+      "expectedToolSequence": ["search_tools", "load_tool"],
+      "expectedOutcome": "success",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": false,
+      "expectedContextEffect": "CoreOnlyChildCatalog"
+    }
+  ]
+}

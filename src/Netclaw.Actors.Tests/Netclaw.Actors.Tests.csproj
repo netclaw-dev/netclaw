@@ -42,6 +42,9 @@
     <None Include="../../openspec/changes/reduce-fresh-session-approval-spam/evidence/fresh-session-policy-fixtures.json"
           Link="ApprovalEvidence/fresh-session-policy-fixtures.json"
           CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../openspec/changes/make-agent-tools-pit-of-success/evidence/tool-schema-footprint-baseline.json"
+          Link="ToolFootprintEvidence/tool-schema-footprint-baseline.json"
+          CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.html" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
