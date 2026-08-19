@@ -746,6 +746,70 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
+    // Cross-channel match-order contract. Slack resolved the earliest pending
+    // approval; Discord and Mattermost resolved the most recent one. The
+    // consolidation found the divergence and the maintainer chose one rule for
+    // every channel: a text reply answers the earliest pending approval, which
+    // is the first prompt the channel shows.
+    [Fact]
+    public async Task Text_approval_response_resolves_earliest_pending_approval()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-text-approve-order");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            ApprovalRequest(sid, "call-order-1", "write_file"),
+            ApprovalRequest(sid, "call-order-2", "execute_shell")
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("write_file"));
+            Assert.Contains(texts, t => t.Contains("execute_shell"));
+        }, cancellationToken: ct);
+
+        // The same sender can approve both prompts, so only the order decides.
+        actor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-order-1", feedback[0].CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
+        }, cancellationToken: ct);
+
+        // The second prompt stays pending and the next reply resolves it.
+        actor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Equal(2, feedback.Count);
+            Assert.Equal("call-order-2", feedback[1].CallId.Value);
+        }, cancellationToken: ct);
+    }
+
+    private static ToolInteractionRequest ApprovalRequest(SessionId sessionId, string callId, string toolName)
+        => new()
+        {
+            SessionId = sessionId,
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            ToolName = new Netclaw.Tools.ToolName(toolName),
+            DisplayText = $"run {toolName}",
+            RequesterSenderId = new SenderId("user-1"),
+            Options =
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
     [Fact]
     public async Task Approval_response_after_turn_completed_forwards_to_session()
     {

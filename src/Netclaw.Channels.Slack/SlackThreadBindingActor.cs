@@ -156,10 +156,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             pipeline: _dependencies.Pipeline,
             operationTimeout: OperationTimeout,
             pendingRequests: _pendingApprovalRequests,
-            // Slack resolves the earliest matching prompt, which is the order its
-            // own lookup used before the extraction. Discord and Mattermost
-            // resolve the most recent one.
-            matchOrder: ApprovalMatchOrder.Oldest,
             hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
             postWrongRequesterWarningAsync: () => SafePostAsync(WrongRequesterWarning),
             persistPromptCleared: callId => Persist(

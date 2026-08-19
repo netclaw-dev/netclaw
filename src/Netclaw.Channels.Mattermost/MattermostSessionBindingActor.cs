@@ -157,7 +157,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             pipeline: _dependencies.Pipeline,
             operationTimeout: OperationTimeout,
             pendingRequests: _pendingApprovalRequests,
-            matchOrder: ApprovalMatchOrder.Newest,
             hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
             postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
             persistPromptCleared: callId => Persist(

@@ -165,7 +165,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             pipeline: _dependencies.Pipeline,
             operationTimeout: OperationTimeout,
             pendingRequests: _pendingApprovalRequests,
-            matchOrder: ApprovalMatchOrder.Newest,
             hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
             postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
             persistPromptCleared: callId => Persist(
