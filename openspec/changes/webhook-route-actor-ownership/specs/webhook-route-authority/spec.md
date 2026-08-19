@@ -20,6 +20,19 @@ The daemon SHALL route every webhook route mutation through one `WebhookRouteAct
 - **THEN** no file write occurs
 - **AND** the caller receives the validator's error
 
+### Requirement: The mutation message is a patch; the merged definition carries the required fields
+
+An upsert message SHALL be a field-level patch. A null field SHALL mean "keep the stored value", so a caller SHALL NOT need to resend a value it does not change. Two patches of different fields on the same route SHALL therefore compose instead of overwrite.
+
+The message SHALL require only the two fields a patch can never inherit from a file: the route name and the authority of the caller. The route name SHALL travel as a validated value object, so no unvalidated name SHALL reach a file path. Every other required field SHALL be enforced on the merged definition by `WebhookRouteValidator`, which SHALL reject a merged route without a prompt and a merged route without a verification secret.
+
+#### Scenario: A patch that blanks a required field is rejected
+
+- **GIVEN** a stored route with a prompt
+- **WHEN** an upsert patches the prompt to a blank value
+- **THEN** the actor rejects the merged definition with the validator's message
+- **AND** the stored route file is unchanged
+
 ### Requirement: HTTP resource fronts the actor
 
 The daemon SHALL expose `/api/webhooks` (list), `/api/webhooks/{name}` (get, upsert, delete) as thin handlers that ask the actor. The resource SHALL use the same authentication and exposure-mode rules as the other `/api` surfaces. The change SHALL be additive: no existing endpoint changes. Handlers SHALL map actor results to HTTP statuses: validation failure to 400, unknown route to 404, success to 200 or 204.

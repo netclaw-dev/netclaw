@@ -8,6 +8,12 @@ namespace Netclaw.Configuration;
 /// <summary>
 /// Shared validation logic for webhook route configurations.
 /// Used by both CLI commands and doctor checks.
+/// <para>
+/// This is also the one place that enforces required-ness for a route. The
+/// mutation message is a patch whose fields are nullable by design, so a route
+/// gets its required fields checked here, on the merged definition, after the
+/// patch is applied.
+/// </para>
 /// </summary>
 public static class WebhookRouteValidator
 {

@@ -156,6 +156,33 @@ public class WebhookRouteActorTests : TestKit
         Assert.Equal(before, after);
     }
 
+    /// <summary>
+    /// Required-ness lives on the merged definition, not on the patch. The
+    /// patch may leave the prompt out, but the merged route may not: a webhook
+    /// without a prompt has nothing to run.
+    /// </summary>
+    [Theory]
+    [InlineData("   ")]
+    [InlineData("")]
+    public async Task A_patch_that_blanks_the_prompt_is_rejected(string blankPrompt)
+    {
+        await CreateRouteAsync("prompted-route");
+
+        var response = await RouteActor.Ask<RouteSaved>(
+            new UpsertRoute
+            {
+                RouteName = WebhookRouteName.Create("prompted-route"),
+                CreatorAudience = TrustAudience.Personal,
+                Prompt = blankPrompt
+            },
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(RouteSaveOutcome.ValidationRejected, response.Outcome);
+        Assert.Equal("Prompt is required.", response.ErrorMessage);
+        Assert.True(_store.TryGet("prompted-route", out var stored));
+        Assert.Equal("Handle inbound delivery.", stored.Definition!.Prompt);
+    }
+
     [Fact]
     public async Task A_route_above_the_creator_authority_is_not_overwritten()
     {
