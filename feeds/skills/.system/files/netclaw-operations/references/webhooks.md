@@ -4,7 +4,7 @@
 ## Webhook Management
 
 
-Webhooks are gated on `Webhooks.Enabled` in `netclaw.json` (default `true`).
+Webhooks are gated on `Webhooks.Enabled` in `netclaw.json` (default `false` — enable it explicitly before routes serve).
 When disabled, the webhook HTTP endpoint returns 404 for all routes and
 webhook tools are hidden from discovery.
 
