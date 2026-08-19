@@ -61,6 +61,21 @@ existing values; provide an argument only when changing that setting.
 Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.
 
+Route mutations serialize through one daemon-side authority. The daemon also
+exposes an authenticated management resource, separate from the anonymous
+delivery endpoint:
+
+- `GET /api/webhooks` -> list routes (no secrets in responses)
+- `GET /api/webhooks/{route}` -> route detail (no secrets)
+- `PUT /api/webhooks/{route}` -> create or update; requires Operator authority
+- `DELETE /api/webhooks/{route}` -> remove the route
+
+The `netclaw webhooks` CLI writes through this resource when the daemon is
+reachable. When the daemon is down, or an older daemon lacks the resource, the
+CLI writes the route file directly and prints one stderr notice that names the
+direct-file mode. A daemon rejection (validation or authorization) fails the
+command and never falls back to a direct file write.
+
 **Approval gate:** Webhooks run without a human — they cannot prompt for
 approval. The same rules as reminders apply: shell commands must be pre-approved
 in `tool-approvals.json`, and path arguments are scoped by the route's audience

@@ -29,6 +29,6 @@ Implementation branch: decided at apply time (standalone off `dev`, or stacked o
 
 ## 5. Finish
 
-- [ ] 5.1 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md` for the new endpoints and the CLI mode notice; bump `metadata.version`
-- [ ] 5.2 Full solution build, full `Netclaw.Actors.Tests` + `Netclaw.Daemon.Tests` + `Netclaw.Cli.Tests` + `Netclaw.Configuration.Tests`, slopwatch, headers; native smoke tapes for the webhooks TUI surface if touched (Termina rule)
-- [ ] 5.3 `/opsx-sync` the `webhook-route-authority` spec; file the follow-up issue for mutex removal after the skew window; PR with the back-compat story in the body
+- [x] 5.1 Update `feeds/skills/.system/files/netclaw-operations/SKILL.md` for the new endpoints and the CLI mode notice; bump `metadata.version`
+- [x] 5.2 Full solution build, full `Netclaw.Actors.Tests` + `Netclaw.Daemon.Tests` + `Netclaw.Cli.Tests` + `Netclaw.Configuration.Tests`, slopwatch, headers; native smoke tapes for the webhooks TUI surface if touched (Termina rule)
+- [x] 5.3 `/opsx-sync` the `webhook-route-authority` spec; file the follow-up issue for mutex removal after the skew window; PR with the back-compat story in the body
