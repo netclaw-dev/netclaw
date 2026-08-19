@@ -30,12 +30,12 @@ public sealed class WebhookRouteStoreTests : IDisposable
     [InlineData("github-issues")]
     [InlineData("x")]
     [InlineData("route-2")]
-    public void TryNormalizeRouteName_AcceptsValidKebabCase(string value)
+    public void TryCreate_AcceptsValidKebabCase(string value)
     {
-        var ok = WebhookRouteStore.TryNormalizeRouteName(value, out var normalized, out var error);
+        var ok = WebhookRouteName.TryCreate(value, out var routeName, out var error);
 
         Assert.True(ok);
-        Assert.Equal(value, normalized);
+        Assert.Equal(value, routeName.Value);
         Assert.Null(error);
     }
 
@@ -52,9 +52,9 @@ public sealed class WebhookRouteStoreTests : IDisposable
     [InlineData("-foo")]
     [InlineData("foo-")]
     [InlineData("foo--bar")]
-    public void TryNormalizeRouteName_RejectsInvalidNames(string value)
+    public void TryCreate_RejectsInvalidNames(string value)
     {
-        var ok = WebhookRouteStore.TryNormalizeRouteName(value, out _, out var error);
+        var ok = WebhookRouteName.TryCreate(value, out _, out var error);
 
         Assert.False(ok);
         Assert.False(string.IsNullOrWhiteSpace(error));

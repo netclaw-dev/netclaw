@@ -52,8 +52,13 @@ public static class WebhookRouteEndpointRouteBuilderExtensions
             IRequiredActor<WebhookRouteActorKey> actor,
             CancellationToken ct) =>
         {
+            // A name the value object refuses can never name a stored file, so the
+            // caller gets the same answer as a missing route.
+            if (!WebhookRouteName.TryCreate(name, out var routeName, out _))
+                return TypedResults.NotFound(new WebhookRouteErrorResponse($"Webhook route '{name}' not found."));
+
             var routeActor = await actor.GetAsync(ct);
-            var response = await routeActor.Ask<RouteResponse>(new GetRoute(name), AskTimeout, ct);
+            var response = await routeActor.Ask<RouteResponse>(new GetRoute(routeName), AskTimeout, ct);
 
             if (!response.Found)
                 return TypedResults.NotFound(new WebhookRouteErrorResponse($"Webhook route '{name}' not found."));
@@ -63,10 +68,10 @@ public static class WebhookRouteEndpointRouteBuilderExtensions
             // delivery closed and the operator needs to see that.
             if (response.Route is null)
                 return TypedResults.Problem(
-                    detail: $"Webhook route '{response.RouteName}' exists but could not be parsed.",
+                    detail: $"Webhook route '{response.RouteName.Value}' exists but could not be parsed.",
                     statusCode: StatusCodes.Status500InternalServerError);
 
-            return TypedResults.Ok(ToDto(response.RouteName, response.Route));
+            return TypedResults.Ok(ToDto(response.RouteName.Value, response.Route));
         })
         .WithName("GetWebhookRoute")
         .WithSummary("Get one webhook route. The response never carries the route secret.");
@@ -87,24 +92,24 @@ public static class WebhookRouteEndpointRouteBuilderExtensions
                     detail: "Writing a webhook route requires Operator authority.",
                     statusCode: StatusCodes.Status403Forbidden);
 
-            if (WebhookRouteValidator.ValidateRouteName(name) is { } nameError)
-                return TypedResults.BadRequest(new WebhookRouteErrorResponse(nameError));
+            if (!WebhookRouteName.TryCreate(name, out var routeName, out var nameError))
+                return TypedResults.BadRequest(new WebhookRouteErrorResponse(nameError!));
 
-            if (!TryBuildUpsert(name, request, creatorAudience, out var command, out var requestError))
+            if (!TryBuildUpsert(routeName, request, creatorAudience, out var command, out var requestError))
                 return TypedResults.BadRequest(new WebhookRouteErrorResponse(requestError!));
 
             var routeActor = await actor.GetAsync(ct);
             var response = await routeActor.Ask<RouteSaved>(command!, AskTimeout, ct);
 
-            if (response.Success)
-                return TypedResults.Ok(ToDto(response.RouteName, response.Route!));
-
-            return response.Error switch
+            return response.Outcome switch
             {
-                WebhookRouteError.Authority => TypedResults.Problem(
+                RouteSaveOutcome.Created or RouteSaveOutcome.Updated =>
+                    TypedResults.Ok(ToDto(response.RouteName.Value, response.Route!)),
+                RouteSaveOutcome.AuthorityRejected => TypedResults.Problem(
                     detail: response.ErrorMessage,
                     statusCode: StatusCodes.Status403Forbidden),
-                _ => TypedResults.BadRequest(new WebhookRouteErrorResponse(response.ErrorMessage ?? "Webhook route rejected."))
+                _ => TypedResults.BadRequest(
+                    new WebhookRouteErrorResponse(response.ErrorMessage ?? "Webhook route rejected."))
             };
         })
         .WithName("UpsertWebhookRoute")
@@ -115,8 +120,11 @@ public static class WebhookRouteEndpointRouteBuilderExtensions
             IRequiredActor<WebhookRouteActorKey> actor,
             CancellationToken ct) =>
         {
+            if (!WebhookRouteName.TryCreate(name, out var routeName, out _))
+                return TypedResults.NotFound(new WebhookRouteErrorResponse($"Webhook route '{name}' not found."));
+
             var routeActor = await actor.GetAsync(ct);
-            var response = await routeActor.Ask<RouteDeleted>(new DeleteRoute(name), AskTimeout, ct);
+            var response = await routeActor.Ask<RouteDeleted>(new DeleteRoute(routeName), AskTimeout, ct);
 
             return response.Found
                 ? TypedResults.NoContent()
@@ -146,7 +154,7 @@ public static class WebhookRouteEndpointRouteBuilderExtensions
     /// unchanged", the same rule the agent tool and the CLI already use.
     /// </summary>
     private static bool TryBuildUpsert(
-        string routeName,
+        WebhookRouteName routeName,
         UpsertWebhookRouteRequest request,
         TrustAudience creatorAudience,
         out UpsertRoute? command,

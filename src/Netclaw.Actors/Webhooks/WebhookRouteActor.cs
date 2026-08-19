@@ -49,22 +49,11 @@ public sealed class WebhookRouteActor : ReceiveActor
 
     private void HandleUpsert(UpsertRoute command)
     {
-        if (!WebhookRouteStore.TryNormalizeRouteName(command.RouteName, out var routeName, out var routeError))
-        {
-            Sender.Tell(new RouteSaved(
-                command.RouteName,
-                Success: false,
-                Created: false,
-                Route: null,
-                WebhookRouteError.Validation,
-                routeError));
-            return;
-        }
-
+        var routeName = command.RouteName;
         try
         {
             var outcome = _store.Update(
-                routeName,
+                routeName.Value,
                 existing => Merge(routeName, command, existing));
             Sender.Tell(outcome);
         }
@@ -74,48 +63,36 @@ public sealed class WebhookRouteActor : ReceiveActor
             // original exception so the tool reports it and the HTTP handler
             // returns a server error. The actor keeps serving — its state lives
             // on disk, so one failed write leaves nothing to repair in memory.
-            _log.Warning(ex, "Webhook route {RouteName} could not be saved.", routeName);
+            _log.Warning(ex, "Webhook route {RouteName} could not be saved.", routeName.Value);
             Sender.Tell(new Status.Failure(ex));
         }
     }
 
     private void HandleDelete(DeleteRoute command)
     {
-        // A name that cannot be normalized can never name a stored file, so the
-        // caller gets the same "not found" answer as a missing route.
-        if (!WebhookRouteStore.TryNormalizeRouteName(command.RouteName, out var routeName, out _))
-        {
-            Sender.Tell(new RouteDeleted(command.RouteName, Found: false));
-            return;
-        }
-
+        var routeName = command.RouteName;
         try
         {
-            Sender.Tell(new RouteDeleted(routeName, _store.Delete(routeName)));
+            Sender.Tell(new RouteDeleted(routeName, _store.Delete(routeName.Value)));
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Webhook route {RouteName} could not be deleted.", routeName);
+            _log.Warning(ex, "Webhook route {RouteName} could not be deleted.", routeName.Value);
             Sender.Tell(new Status.Failure(ex));
         }
     }
 
     private void HandleGet(GetRoute query)
     {
-        if (!WebhookRouteStore.TryNormalizeRouteName(query.RouteName, out var routeName, out _))
-        {
-            Sender.Tell(new RouteResponse(query.RouteName, Found: false, Route: null));
-            return;
-        }
-
+        var routeName = query.RouteName;
         try
         {
-            var found = _store.TryGet(routeName, out var result);
+            var found = _store.TryGet(routeName.Value, out var result);
             Sender.Tell(new RouteResponse(routeName, found, found ? result.Definition : null));
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Webhook route {RouteName} could not be read.", routeName);
+            _log.Warning(ex, "Webhook route {RouteName} could not be read.", routeName.Value);
             Sender.Tell(new Status.Failure(ex));
         }
     }
@@ -142,7 +119,7 @@ public sealed class WebhookRouteActor : ReceiveActor
     /// <see cref="WebhookRouteStore.Update"/> to leave the file untouched.
     /// </summary>
     private (WebhookRouteConfig? Definition, RouteSaved Result) Merge(
-        string routeName,
+        WebhookRouteName routeName,
         UpsertRoute command,
         WebhookRouteConfig? existing)
     {
@@ -152,7 +129,7 @@ public sealed class WebhookRouteActor : ReceiveActor
                 routeName,
                 command,
                 existing,
-                WebhookRouteError.Authority,
+                RouteSaveOutcome.AuthorityRejected,
                 $"Existing route audience '{existing.Audience.ToWireValue()}' exceeds creator authority ({command.CreatorAudience.ToWireValue()}).");
         }
 
@@ -167,7 +144,7 @@ public sealed class WebhookRouteActor : ReceiveActor
                 routeName,
                 command,
                 existing,
-                WebhookRouteError.Authority,
+                RouteSaveOutcome.AuthorityRejected,
                 $"Requested audience '{requested.ToWireValue()}' exceeds creator authority ({command.CreatorAudience.ToWireValue()}).");
         }
         else
@@ -195,7 +172,7 @@ public sealed class WebhookRouteActor : ReceiveActor
                 routeName,
                 command,
                 existing,
-                WebhookRouteError.Validation,
+                RouteSaveOutcome.ValidationRejected,
                 "Timestamp verification settings require verification kind 'hmac-timestamped'.");
         }
 
@@ -255,22 +232,21 @@ public sealed class WebhookRouteActor : ReceiveActor
             };
         }
 
-        var validationErrors = WebhookRouteValidator.Validate(routeName, definition);
+        var validationErrors = WebhookRouteValidator.Validate(routeName.Value, definition);
         if (validationErrors.Count > 0)
         {
             return Reject(
                 routeName,
                 command,
                 existing,
-                WebhookRouteError.Validation,
+                RouteSaveOutcome.ValidationRejected,
                 validationErrors[0]);
         }
 
         return (definition, new RouteSaved(
             routeName,
-            Success: true,
-            Created: existing is null,
-            Route: definition));
+            existing is null ? RouteSaveOutcome.Created : RouteSaveOutcome.Updated,
+            definition));
     }
 
     /// <summary>
@@ -280,29 +256,23 @@ public sealed class WebhookRouteActor : ReceiveActor
     /// audiences, and the reason. It never names the route secret.
     /// </summary>
     private (WebhookRouteConfig? Definition, RouteSaved Result) Reject(
-        string routeName,
+        WebhookRouteName routeName,
         UpsertRoute command,
         WebhookRouteConfig? existing,
-        WebhookRouteError error,
+        RouteSaveOutcome outcome,
         string reason)
     {
         _log.Warning(
             "Webhook route {RouteName} rejected ({RejectionKind}). Creator audience {CreatorAudience}, "
             + "requested audience {RequestedAudience}, stored audience {StoredAudience}. Reason: {Reason}",
-            routeName,
-            error,
+            routeName.Value,
+            outcome,
             command.CreatorAudience.ToWireValue(),
             command.RequestedAudience?.ToWireValue() ?? "(inherited)",
             existing?.Audience.ToWireValue() ?? "(new route)",
             reason);
 
-        return (null, new RouteSaved(
-            routeName,
-            Success: false,
-            Created: false,
-            Route: null,
-            error,
-            reason));
+        return (null, new RouteSaved(routeName, outcome, Route: null, reason));
     }
 
     private static string? NormalizeOptional(string value, bool trim = true)

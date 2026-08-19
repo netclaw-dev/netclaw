@@ -925,12 +925,16 @@ internal static class WebhooksCommand
     {
         routeName = string.Empty;
 
-        if (!WebhookRouteStore.TryNormalizeRouteName(rawRouteName, out routeName, out var error))
+        // The CLI keeps the name as a string: it travels over HTTP as a path
+        // segment. The parse still runs here so an operator typo gets its
+        // message before any daemon call.
+        if (!WebhookRouteName.TryCreate(rawRouteName, out var parsed, out var error))
         {
             Console.Error.WriteLine($"[FAIL] {error}");
             return false;
         }
 
+        routeName = parsed.Value;
         return true;
     }
 

@@ -41,11 +41,27 @@ public static class WebhookRouteProtocol
     /// concurrent patches of different fields therefore compose instead of
     /// overwriting each other.
     /// </para>
+    /// <remarks>
+    /// Almost every field is nullable because this is a patch, not a full
+    /// definition. Null does not mean "absent"; it means "keep what the file
+    /// holds". A required field here would force every caller to resend values
+    /// it does not want to change, and the resend would overwrite a concurrent
+    /// patch of that same field.
+    /// <para>
+    /// Required-ness belongs to the merged definition instead, and
+    /// <see cref="WebhookRouteValidator"/> is the one place that enforces it.
+    /// A route needs a prompt and a verification secret, so the validator
+    /// rejects a merged definition without them, whatever the patch omitted.
+    /// The two fields that this message does require are the ones a patch can
+    /// never inherit from a file: the route to patch, and the authority of the
+    /// caller.
+    /// </para>
+    /// </remarks>
     /// </summary>
     public sealed record UpsertRoute : IWebhookRouteCommand, INoSerializationVerificationNeeded
     {
-        /// <summary>Route name. The actor normalizes it before any file access.</summary>
-        public required string RouteName { get; init; }
+        /// <summary>The route to create or to patch.</summary>
+        public required WebhookRouteName RouteName { get; init; }
 
         /// <summary>
         /// Authority of the caller that requested the mutation. A route may not
@@ -105,13 +121,13 @@ public static class WebhookRouteProtocol
     }
 
     /// <summary>Removes one route file.</summary>
-    public sealed record DeleteRoute(string RouteName)
+    public sealed record DeleteRoute(WebhookRouteName RouteName)
         : IWebhookRouteCommand, INoSerializationVerificationNeeded;
 
     // ===== Queries =====
 
     /// <summary>Reads one route from disk.</summary>
-    public sealed record GetRoute(string RouteName)
+    public sealed record GetRoute(WebhookRouteName RouteName)
         : IWebhookRouteQuery, INoSerializationVerificationNeeded;
 
     /// <summary>Reads every route file from disk.</summary>
@@ -122,33 +138,44 @@ public static class WebhookRouteProtocol
 
     // ===== Responses =====
 
-    /// <summary>Why a route mutation failed.</summary>
-    public enum WebhookRouteError
+    /// <summary>
+    /// What the actor did with an <see cref="UpsertRoute"/>. The four states are
+    /// exclusive, so one enum replaces the success flag, the created flag, and
+    /// the separate error code that could disagree with each other.
+    /// </summary>
+    public enum RouteSaveOutcome
     {
-        None = 0,
+        /// <summary>The actor wrote a route file that did not exist before.</summary>
+        Created = 0,
 
-        /// <summary>The route name or the merged definition failed validation.</summary>
-        Validation = 1,
+        /// <summary>The actor merged the patch into an existing route file.</summary>
+        Updated = 1,
 
-        /// <summary>The caller lacks the authority for the requested audience.</summary>
-        Authority = 2
+        /// <summary>The merged definition failed validation. No file changed.</summary>
+        ValidationRejected = 2,
+
+        /// <summary>The caller lacks the authority for the route. No file changed.</summary>
+        AuthorityRejected = 3
     }
 
     /// <summary>
     /// Outcome of an <see cref="UpsertRoute"/>. <paramref name="Route"/> carries
     /// the stored definition on success, including the secret, so callers that
-    /// project it to an external surface must strip the secret first.
+    /// project it to an external surface must strip the secret first. A
+    /// rejection carries a null route and the operator-facing reason.
     /// </summary>
     public sealed record RouteSaved(
-        string RouteName,
-        bool Success,
-        bool Created,
+        WebhookRouteName RouteName,
+        RouteSaveOutcome Outcome,
         WebhookRouteConfig? Route,
-        WebhookRouteError Error = WebhookRouteError.None,
-        string? ErrorMessage = null) : IWebhookRouteResponse, INoSerializationVerificationNeeded;
+        string? ErrorMessage = null) : IWebhookRouteResponse, INoSerializationVerificationNeeded
+    {
+        /// <summary>True when the actor wrote the route file.</summary>
+        public bool Success => Outcome is RouteSaveOutcome.Created or RouteSaveOutcome.Updated;
+    }
 
     /// <summary>Outcome of a <see cref="DeleteRoute"/>.</summary>
-    public sealed record RouteDeleted(string RouteName, bool Found)
+    public sealed record RouteDeleted(WebhookRouteName RouteName, bool Found)
         : IWebhookRouteResponse, INoSerializationVerificationNeeded;
 
     /// <summary>
@@ -156,12 +183,17 @@ public static class WebhookRouteProtocol
     /// whether the file exists; a found route with a null
     /// <paramref name="Route"/> is a file that exists but does not parse.
     /// </summary>
-    public sealed record RouteResponse(string RouteName, bool Found, WebhookRouteConfig? Route)
+    public sealed record RouteResponse(WebhookRouteName RouteName, bool Found, WebhookRouteConfig? Route)
         : IWebhookRouteResponse, INoSerializationVerificationNeeded;
 
     /// <summary>
     /// One entry of a <see cref="RouteListResponse"/>. A null
     /// <paramref name="Definition"/> is a route file that does not parse.
+    /// <para>
+    /// The name stays a string here. This entry reports what the webhooks
+    /// directory holds, and an operator can drop a file there whose name is not
+    /// a valid route name. The list must show that file, not hide it.
+    /// </para>
     /// </summary>
     public sealed record RouteEntry(string RouteName, WebhookRouteConfig? Definition);
 

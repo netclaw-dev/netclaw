@@ -51,7 +51,7 @@ public class WebhookRouteActorTests : TestKit
 
     private static UpsertRoute NewRoute(string routeName) => new()
     {
-        RouteName = routeName,
+        RouteName = WebhookRouteName.Create(routeName),
         CreatorAudience = TrustAudience.Personal,
         Prompt = "Handle inbound delivery.",
         Secret = "original-secret",
@@ -65,8 +65,7 @@ public class WebhookRouteActorTests : TestKit
     {
         var created = await RouteActor.Ask<RouteSaved>(
             NewRoute(routeName), TestContext.Current.CancellationToken);
-        Assert.True(created.Success, created.ErrorMessage);
-        Assert.True(created.Created);
+        Assert.Equal(RouteSaveOutcome.Created, created.Outcome);
     }
 
     /// <summary>
@@ -84,7 +83,7 @@ public class WebhookRouteActorTests : TestKit
         RouteActor.Tell(
             new UpsertRoute
             {
-                RouteName = "concurrent-route",
+                RouteName = WebhookRouteName.Create("concurrent-route"),
                 CreatorAudience = TrustAudience.Personal,
                 Prompt = "Patched by the first writer."
             },
@@ -92,7 +91,7 @@ public class WebhookRouteActorTests : TestKit
         RouteActor.Tell(
             new UpsertRoute
             {
-                RouteName = "concurrent-route",
+                RouteName = WebhookRouteName.Create("concurrent-route"),
                 CreatorAudience = TrustAudience.Personal,
                 RateLimitPerMinute = 99
             },
@@ -100,11 +99,12 @@ public class WebhookRouteActorTests : TestKit
 
         var first = await ExpectMsgAsync<RouteSaved>(cancellationToken: TestContext.Current.CancellationToken);
         var second = await ExpectMsgAsync<RouteSaved>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.True(first.Success, first.ErrorMessage);
-        Assert.True(second.Success, second.ErrorMessage);
+        // Both patches found the route on disk, so both report Updated.
+        Assert.Equal(RouteSaveOutcome.Updated, first.Outcome);
+        Assert.Equal(RouteSaveOutcome.Updated, second.Outcome);
 
         var response = await RouteActor.Ask<RouteResponse>(
-            new GetRoute("concurrent-route"), TestContext.Current.CancellationToken);
+            new GetRoute(WebhookRouteName.Create("concurrent-route")), TestContext.Current.CancellationToken);
 
         Assert.True(response.Found);
         var route = Assert.IsType<WebhookRouteConfig>(response.Route);
@@ -120,15 +120,14 @@ public class WebhookRouteActorTests : TestKit
         var response = await RouteActor.Ask<RouteSaved>(
             new UpsertRoute
             {
-                RouteName = "invalid-new-route",
+                RouteName = WebhookRouteName.Create("invalid-new-route"),
                 CreatorAudience = TrustAudience.Personal,
                 Prompt = "Handle inbound delivery."
                 // No secret: WebhookRouteValidator rejects the merged definition.
             },
             TestContext.Current.CancellationToken);
 
-        Assert.False(response.Success);
-        Assert.Equal(WebhookRouteError.Validation, response.Error);
+        Assert.Equal(RouteSaveOutcome.ValidationRejected, response.Outcome);
         Assert.Equal("Verification secret is required.", response.ErrorMessage);
         Assert.False(File.Exists(RouteFilePath("invalid-new-route")));
     }
@@ -143,14 +142,13 @@ public class WebhookRouteActorTests : TestKit
         var response = await RouteActor.Ask<RouteSaved>(
             new UpsertRoute
             {
-                RouteName = "guarded-route",
+                RouteName = WebhookRouteName.Create("guarded-route"),
                 CreatorAudience = TrustAudience.Personal,
                 MaxBodyBytes = 0
             },
             TestContext.Current.CancellationToken);
 
-        Assert.False(response.Success);
-        Assert.Equal(WebhookRouteError.Validation, response.Error);
+        Assert.Equal(RouteSaveOutcome.ValidationRejected, response.Outcome);
         Assert.Equal("MaxBodyBytes must be >= 1.", response.ErrorMessage);
 
         var after = await File.ReadAllTextAsync(
@@ -166,14 +164,13 @@ public class WebhookRouteActorTests : TestKit
         var response = await RouteActor.Ask<RouteSaved>(
             new UpsertRoute
             {
-                RouteName = "personal-route",
+                RouteName = WebhookRouteName.Create("personal-route"),
                 CreatorAudience = TrustAudience.Public,
                 Prompt = "Take over the route."
             },
             TestContext.Current.CancellationToken);
 
-        Assert.False(response.Success);
-        Assert.Equal(WebhookRouteError.Authority, response.Error);
+        Assert.Equal(RouteSaveOutcome.AuthorityRejected, response.Outcome);
         Assert.True(_store.TryGet("personal-route", out var stored));
         Assert.Equal("Handle inbound delivery.", stored.Definition!.Prompt);
     }
@@ -195,12 +192,12 @@ public class WebhookRouteActorTests : TestKit
                 var response = await RouteActor.Ask<RouteSaved>(
                     new UpsertRoute
                     {
-                        RouteName = "audited-route",
+                        RouteName = WebhookRouteName.Create("audited-route"),
                         CreatorAudience = TrustAudience.Public,
                         Prompt = "Take over the route."
                     },
                     TestContext.Current.CancellationToken);
-                Assert.False(response.Success);
+                Assert.Equal(RouteSaveOutcome.AuthorityRejected, response.Outcome);
             },
             TestContext.Current.CancellationToken);
     }
@@ -221,7 +218,7 @@ public class WebhookRouteActorTests : TestKit
 
         var replacement = Sys.ActorOf(WebhookRouteActor.CreateProps(_store));
         var response = await replacement.Ask<RouteResponse>(
-            new GetRoute("survivor-route"), TestContext.Current.CancellationToken);
+            new GetRoute(WebhookRouteName.Create("survivor-route")), TestContext.Current.CancellationToken);
 
         Assert.True(response.Found);
         Assert.Equal("Handle inbound delivery.", response.Route!.Prompt);
@@ -251,7 +248,7 @@ public class WebhookRouteActorTests : TestKit
         });
 
         var response = await RouteActor.Ask<RouteResponse>(
-            new GetRoute("skew-route"), TestContext.Current.CancellationToken);
+            new GetRoute(WebhookRouteName.Create("skew-route")), TestContext.Current.CancellationToken);
 
         Assert.True(response.Found);
         Assert.Equal("Written by an old CLI.", response.Route!.Prompt);
@@ -262,13 +259,13 @@ public class WebhookRouteActorTests : TestKit
         var patched = await RouteActor.Ask<RouteSaved>(
             new UpsertRoute
             {
-                RouteName = "skew-route",
+                RouteName = WebhookRouteName.Create("skew-route"),
                 CreatorAudience = TrustAudience.Personal,
                 MaxBodyBytes = 2048
             },
             TestContext.Current.CancellationToken);
 
-        Assert.True(patched.Success, patched.ErrorMessage);
+        Assert.Equal(RouteSaveOutcome.Updated, patched.Outcome);
         Assert.Equal("Written by an old CLI.", patched.Route!.Prompt);
         Assert.Equal(2048, patched.Route.MaxBodyBytes);
     }
@@ -279,12 +276,12 @@ public class WebhookRouteActorTests : TestKit
         await CreateRouteAsync("doomed-route");
 
         var deleted = await RouteActor.Ask<RouteDeleted>(
-            new DeleteRoute("doomed-route"), TestContext.Current.CancellationToken);
+            new DeleteRoute(WebhookRouteName.Create("doomed-route")), TestContext.Current.CancellationToken);
         Assert.True(deleted.Found);
         Assert.False(File.Exists(RouteFilePath("doomed-route")));
 
         var again = await RouteActor.Ask<RouteDeleted>(
-            new DeleteRoute("doomed-route"), TestContext.Current.CancellationToken);
+            new DeleteRoute(WebhookRouteName.Create("doomed-route")), TestContext.Current.CancellationToken);
         Assert.False(again.Found);
     }
 

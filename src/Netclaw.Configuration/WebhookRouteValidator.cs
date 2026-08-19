@@ -25,7 +25,7 @@ public static class WebhookRouteValidator
             return errors;
         }
 
-        if (!WebhookRouteStore.TryNormalizeRouteName(routeName, out _, out var routeNameError))
+        if (!WebhookRouteName.TryCreate(routeName, out _, out var routeNameError))
             errors.Add(routeNameError!);
 
         if (route.Verification is null)
@@ -99,7 +99,7 @@ public static class WebhookRouteValidator
     /// Validates a route name and returns a user-facing error if invalid.
     /// </summary>
     public static string? ValidateRouteName(string routeName)
-        => WebhookRouteStore.TryNormalizeRouteName(routeName, out _, out var error)
+        => WebhookRouteName.TryCreate(routeName, out _, out var error)
             ? null
             : error;
 

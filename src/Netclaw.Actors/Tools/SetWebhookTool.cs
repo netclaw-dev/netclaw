@@ -71,7 +71,10 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
-        if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
+        // The tool front parses the wire string once. Past this line the route
+        // name is a WebhookRouteName, so no later step can reach a file with an
+        // unvalidated name.
+        if (!WebhookRouteName.TryCreate(args.RouteName, out var routeName, out var routeError))
             return $"Error: {routeError}";
 
         if (string.IsNullOrWhiteSpace(args.Prompt))
@@ -102,7 +105,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
                 ct);
 
             return response.Success
-                ? $"Webhook route '{routeName}' saved at /api/webhooks/{routeName}. Secret stored in the route file; keep it aligned with the sender configuration."
+                ? $"Webhook route '{routeName.Value}' saved at /api/webhooks/{routeName.Value}. Secret stored in the route file; keep it aligned with the sender configuration."
                 : $"Error: {response.ErrorMessage}";
         }
         catch (InvalidDataException ex)
@@ -122,7 +125,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
     /// authority check, and validation.
     /// </summary>
     private static UpsertRoute BuildCommand(
-        string routeName,
+        WebhookRouteName routeName,
         Params args,
         TrustAudience creatorAudience,
         WebhookVerifierKind verificationKind,

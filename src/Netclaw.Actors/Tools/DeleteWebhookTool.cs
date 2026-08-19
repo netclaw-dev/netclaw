@@ -31,15 +31,15 @@ public sealed partial class DeleteWebhookTool : NetclawTool<DeleteWebhookTool.Pa
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
-        if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
+        if (!WebhookRouteName.TryCreate(args.RouteName, out var routeName, out var routeError))
             return $"Error: {routeError}";
 
         try
         {
             var response = await _routeActor.Ask<RouteDeleted>(new DeleteRoute(routeName), AskTimeout, ct);
             return response.Found
-                ? $"Webhook route '{routeName}' deleted."
-                : $"Webhook route '{routeName}' not found.";
+                ? $"Webhook route '{routeName.Value}' deleted."
+                : $"Webhook route '{routeName.Value}' not found.";
         }
         catch (TimeoutException ex)
         {
