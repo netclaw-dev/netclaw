@@ -766,9 +766,6 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
     private async Task ReinitializePipelineAsync(string reason)
     {
         QueueProcessingIndicatorClearIfActive();
-        // Slack drops the cursor key of the abandoned turn; Discord and
-        // Mattermost keep theirs across a reinitialize.
-        _outputEngine.DiscardPendingCursor();
         // Reset the per-turn delivery state: a reinit aborts the in-flight
         // turn, and a stale delivered flag would otherwise leak into the next
         // turn and falsely report a later reminder as delivered.

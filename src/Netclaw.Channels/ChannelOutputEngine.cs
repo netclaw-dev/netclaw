@@ -214,13 +214,6 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
     }
 
     /// <summary>
-    /// Drops the cursor key of an abandoned turn so a later turn cannot commit
-    /// it. Slack calls this on a pipeline reinitialize; Discord and Mattermost
-    /// keep their pending cursor across a reinitialize.
-    /// </summary>
-    public void DiscardPendingCursor() => PendingCursor = null;
-
-    /// <summary>
     /// Registers the reply target that waits for a delivery-gated reminder's
     /// outcome. Keyed by the per-fire reminder delivery id so a second
     /// concurrent reminder to this session cannot overwrite the first's
@@ -230,18 +223,26 @@ public sealed class ChannelOutputEngine<TRequest, TPromptId>
         => _reminderDeliveryObservers[reminderKey] = observer;
 
     /// <summary>
-    /// Clears the per-turn delivery state after a pipeline reinitialize. The
+    /// Clears the per-turn state after a pipeline reinitialize. The
     /// reinitialize abandons any in-flight turn before its
     /// <see cref="TurnCompleted"/>, so the mention re-arm guard is released and
     /// every waiting reminder observer is told the delivery did not happen. The
     /// execution actor then redelivers immediately instead of stalling until
     /// its backstop timeout.
+    /// <para>
+    /// The pending cursor of the abandoned turn goes too. A later turn must not
+    /// commit it: the cursor would move past messages that no session ever
+    /// processed, and gap hydration excludes every message at or before the
+    /// cursor. The abandoned turn's messages stay in the gap instead, so the
+    /// next hydration re-includes them.
+    /// </para>
     /// </summary>
     public void ResetForPipelineReinitialize(string reason)
     {
         _deliveredThisTurn = false;
         _postFailedThisTurn = false;
         TurnInFlight = false;
+        PendingCursor = null;
         FailPendingReminderDeliveries($"{_channelName} pipeline reinitialized: {reason}");
     }
 

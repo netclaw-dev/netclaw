@@ -24,6 +24,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     private readonly TaskCompletionSource<SessionPipelineOptions> _created = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private SessionPipelineOptions? _capturedOptions;
+    private SharedKillSwitch? _killSwitch;
 
     /// <summary>
     /// Creates a recording pipeline.
@@ -72,6 +73,20 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     /// </summary>
     public Exception? FeedbackException { get; set; }
 
+    /// <summary>
+    /// Completes the output stream of the most recent <see cref="CreateAsync"/>
+    /// call. The binding actor observes the completion as
+    /// <c>OutputStreamTerminated</c> and answers it with a pipeline
+    /// reinitialize, so a test drives the reinitialize path without a
+    /// channel-private message type.
+    /// </summary>
+    public void TerminateOutputStream()
+    {
+        var killSwitch = Volatile.Read(ref _killSwitch)
+            ?? throw new InvalidOperationException("The pipeline is not created yet.");
+        killSwitch.Shutdown();
+    }
+
     public Task<MaterializedSession> CreateAsync(
         SessionId sessionId,
         SessionPipelineOptions options,
@@ -83,6 +98,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
         _created.TrySetResult(options);
 
         var killSwitch = KillSwitches.Shared($"recording-{sessionId.Value}");
+        Volatile.Write(ref _killSwitch, killSwitch);
         var outputs = _outputFactory(sessionId).ToList();
 
         Source<SessionOutput, NotUsed> output;

@@ -68,7 +68,7 @@ The system SHALL implement text-approval parsing, cold-spawn approval forwarding
 
 ### Requirement: Shared output-completion bookkeeping
 
-The system SHALL implement turn-completion bookkeeping (cursor advance, turn-in-flight state, reminder delivery settlement, empty-turn fallback, pending-prompt clearing) in a single engine. Persistence calls SHALL remain in the actor: the engine SHALL return the events to persist and SHALL NOT invoke Akka persistence. A channel-specific output hook SHALL handle output types that only some channels support.
+The system SHALL implement turn-completion bookkeeping (cursor advance, turn-in-flight state, reminder delivery settlement, empty-turn fallback, pending-prompt clearing) in a single engine. Persistence calls SHALL remain in the actor: the engine SHALL return the events to persist and SHALL NOT invoke Akka persistence. A channel-specific output hook SHALL handle output types that only some channels support. A pipeline reinitialize abandons the turn in flight, so the engine SHALL discard the pending cursor on every reinitialize, on every channel.
 
 #### Scenario: Channel-specific outputs go through the hook
 
@@ -77,18 +77,12 @@ The system SHALL implement turn-completion bookkeeping (cursor advance, turn-in-
 - **THEN** the Discord hook renames the thread
 - **AND** a channel without that capability ignores the output in its hook
 
-#### Scenario: Pipeline reinitialize keeps each channel's cursor discipline
+#### Scenario: Pipeline reinitialize discards the abandoned turn's cursor
 
 - **GIVEN** a pipeline reinitialize while a turn is in flight
-- **WHEN** the binding actor resets the engine
-- **THEN** Slack discards the pending cursor
-- **AND** Discord and Mattermost keep it, which preserves their current behavior
-
-> Note: the consolidation surfaced this divergence. Slack clears the pending
-> cursor on reinitialize; Discord and Mattermost keep it, so a later
-> `TurnCompleted` can commit the cursor of a turn that the reinitialize
-> abandoned. That is a possible latent defect in the Discord and Mattermost
-> behavior, tracked as a product question outside the introducing change.
+- **WHEN** the binding actor resets the engine and a later turn completes
+- **THEN** Slack, Discord, and Mattermost each leave the persisted cursor unmoved
+- **AND** the abandoned turn's messages appear in the next gap hydration
 
 ### Requirement: Transport-failure escalation parity
 
