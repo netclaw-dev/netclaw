@@ -19,6 +19,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IMa
 
     private readonly ActorSystem _actorSystem;
     private readonly IActorRef _lifecycleActor;
+    private readonly ILogger<MattermostNetGatewayClient> _logger;
     private volatile MattermostGatewaySnapshot _latestSnapshot = new(
         IsConnected: false,
         IsReady: false,
@@ -42,6 +43,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IMa
         ILogger<MattermostNetGatewayClient> logger)
     {
         _actorSystem = actorSystem;
+        _logger = logger;
         _lifecycleActor = actorSystem.ActorOf(
             MattermostNetGatewayLifecycleActor.CreateProps(
                 new MattermostNetGatewayTransport(client, timeProvider, logger),
@@ -82,10 +84,11 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IMa
                 ConnectAskTimeout,
                 cancellationToken: cancellationToken));
         }
-        catch (AskTimeoutException) when (_actorSystem.WhenTerminated.IsCompleted)
+        catch (AskTimeoutException ex) when (_actorSystem.WhenTerminated.IsCompleted)
         {
             // The system terminated while the disconnect was in flight; the
             // drain result no longer matters.
+            _logger.LogDebug(ex, "Gateway disconnect interrupted by actor system termination during shutdown; drain result discarded.");
         }
     }
 

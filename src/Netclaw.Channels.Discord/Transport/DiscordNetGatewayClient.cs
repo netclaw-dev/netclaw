@@ -17,6 +17,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDiscordG
 
     private readonly ActorSystem _actorSystem;
     private readonly IActorRef _lifecycleActor;
+    private readonly ILogger<DiscordNetGatewayClient> _logger;
 
     public event Func<DiscordGatewayMessage, Task>? MessageReceived;
     public event Func<DiscordGatewayInteraction, Task>? InteractionReceived;
@@ -37,6 +38,7 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDiscordG
         ILogger<DiscordNetGatewayClient> logger)
     {
         _actorSystem = actorSystem;
+        _logger = logger;
         _lifecycleActor = actorSystem.ActorOf(
             DiscordNetGatewayLifecycleActor.CreateProps(
                 new DiscordSocketGatewayTransport(client),
@@ -74,10 +76,11 @@ internal sealed class DiscordNetGatewayClient : IDiscordGatewayClient, IDiscordG
                 ConnectAskTimeout,
                 cancellationToken: cancellationToken);
         }
-        catch (AskTimeoutException) when (_actorSystem.WhenTerminated.IsCompleted)
+        catch (AskTimeoutException ex) when (_actorSystem.WhenTerminated.IsCompleted)
         {
             // The system terminated while the disconnect was in flight; the
             // drain result no longer matters.
+            _logger.LogDebug(ex, "Gateway disconnect interrupted by actor system termination during shutdown; drain result discarded.");
         }
     }
 
