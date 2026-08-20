@@ -96,6 +96,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly TrustContextDeriver? _trustContextDeriver;
     // Owns the exposed tool list (base + discovered) and lease-based eviction.
     private readonly DiscoveredToolCache _discoveredToolCache = new();
+    private (int Core, int DeferredVisible, int Loaded)? _lastToolExposure;
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
@@ -262,13 +263,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 services.TimeProvider,
                 NoLogger.Instance);
 
-        // Load all non-MCP tools for initial LLM calls.
-        // MCP tools are loaded dynamically via search_tools and can be retained for a
-        // small number of future turns (configurable lease) to reduce rediscovery churn.
+        // Load only the explicit core for initial LLM calls. Deferred first-party and
+        // MCP tools use search_tools and share the configured discovery lease.
         _fullRegistry = tools?.ToolRegistry;
         if (_fullRegistry is not null)
         {
-            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetAlwaysLoadedTools());
+            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetCoreTools());
         }
 
         // ── Recovery handlers ──
@@ -933,13 +933,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         foreach (var change in msg.ScratchCorrectionChanges)
             _sessionScratchCorrections.Apply(change);
 
-        // Processes all results, including failed tool calls. RecentFiles tracks
-        // interaction intent, not successful reads only.
-        var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipts(
             _state.WorkingContext,
-            _state.History,
             msg.ToolResults,
-            _log);
+            msg.ToolReceipts);
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
 
@@ -954,12 +951,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var result in msg.ToolResults)
         {
-            if (result.Name is not "set_working_directory" || result.Content is null)
+            if (result.ToolCallId is not { } callId
+                || !msg.ToolReceipts.TryGetValue(callId.Value, out var receipt)
+                || receipt.Category != ToolInvocationOutcomeCategory.Success
+                || receipt.DeclaredProjectDirectory is not { } projectDir)
+            {
                 continue;
-
-            var projectDir = result.Content.Trim();
-            if (!Path.IsPathRooted(projectDir))
-                continue;
+            }
 
             var next = _state.WorkingContext.WithProjectDirectory(projectDir);
             if (ReferenceEquals(next, _state.WorkingContext))
@@ -2858,6 +2856,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var client = _chatClient;
 
         var exposedTools = ResolveExposedToolsForCurrentTurn();
+        LogToolExposure(exposedTools.Count);
         // Always carry the session id so the session-agnostic chat-client decorators
         // (logging/retry/routing) can correlate LLM diagnostics — including provider
         // failover/outage — back to this session in Seq. Tools are attached only when
@@ -2995,6 +2994,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return availableTools;
 
         return _toolAccessPolicy.FilterExposedTools(availableTools, _fullRegistry, _currentTrustContext);
+    }
+
+    private void LogToolExposure(int exposedCount)
+    {
+        if (_toolAccessPolicy is null || _fullRegistry is null)
+            return;
+
+        var coreCount = _fullRegistry.GetCoreRegistrations().Count(registration =>
+            _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext));
+        var visibleCount = _fullRegistry.GetAllRegistrations().Count(registration =>
+            _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext));
+        var exposure = (
+            Core: coreCount,
+            DeferredVisible: Math.Max(0, visibleCount - coreCount),
+            Loaded: Math.Max(0, exposedCount - coreCount));
+        if (_lastToolExposure == exposure)
+            return;
+
+        _lastToolExposure = exposure;
+        TurnLog().Info(
+            "Session tool exposure core={CoreCount} deferredVisible={DeferredVisibleCount} loaded={LoadedCount}",
+            exposure.Core,
+            exposure.DeferredVisible,
+            exposure.Loaded);
     }
 
     /// <summary>
@@ -3455,7 +3478,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount);
         if (_discoveredToolCache.AddIfMissing(tool.ToAITool()))
-            _log.Info("Dynamically loaded tool '{ToolName}' into session", canonicalName);
+            _log.Info(
+                "Session deferred tool activated loaded={LoadedCount}",
+                _discoveredToolCache.LoadedToolCount);
         return true;
     }
 
@@ -4720,29 +4745,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailureCode = result.FailureCode
         }, OutputFilter.ToolCalls);
 
-        var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipt(
             _state.WorkingContext,
-            _state.History,
-            [toolMessage],
-            _log);
+            result.Receipt);
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
 
         if (toolMessage.Name is "load_tool" && toolMessage.Content is not null)
             TryActivateDiscoveredTool(toolMessage.Content.Trim());
 
-        if (toolMessage.Name is "set_working_directory" && toolMessage.Content is not null)
-        {
-            var projectDir = toolMessage.Content.Trim();
-            if (Path.IsPathRooted(projectDir))
+        if (result.Receipt is
             {
-                var next = _state.WorkingContext.WithProjectDirectory(projectDir);
-                if (!ReferenceEquals(next, _state.WorkingContext))
-                {
-                    _state = _state with { WorkingContext = next };
-                    SetSystemPrompt();
-                    _log.Info("Project directory set to {ProjectDir}", projectDir);
-                }
+                Category: ToolInvocationOutcomeCategory.Success,
+                DeclaredProjectDirectory: { } projectDir
+            })
+        {
+            var next = _state.WorkingContext.WithProjectDirectory(projectDir);
+            if (!ReferenceEquals(next, _state.WorkingContext))
+            {
+                _state = _state with { WorkingContext = next };
+                SetSystemPrompt();
+                _log.Info("Project directory set to {ProjectDir}", projectDir);
             }
         }
 

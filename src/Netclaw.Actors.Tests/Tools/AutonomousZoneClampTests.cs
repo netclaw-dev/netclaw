@@ -22,6 +22,9 @@ namespace Netclaw.Actors.Tests.Tools;
 /// </summary>
 public sealed class AutonomousZoneClampTests : IDisposable
 {
+    public static bool IsWindows => OperatingSystem.IsWindows();
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     private readonly DisposableTempDir _dir = new();
     private readonly string _sessionDir;
     private readonly string _projectDir;
@@ -189,5 +192,179 @@ public sealed class AutonomousZoneClampTests : IDisposable
         });
 
         Assert.False(policy.TryResolveWritePath(Path.Join(_outsideDir, "x.txt"), ctx.Invocation, out _, out _));
+    }
+
+    [Fact]
+    public void Relative_path_uses_existing_project_directory()
+    {
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var context = Ctx(TrustAudience.Personal, autonomous: false);
+
+        Assert.True(policy.TryResolveReadPath(
+            Path.Join("src", "App.cs"),
+            context,
+            out var resolved,
+            out var error,
+            out var failure), error);
+        Assert.Equal(Path.GetFullPath(Path.Join(_projectDir, "src", "App.cs")), resolved);
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.None, failure);
+    }
+
+    [Fact]
+    public void Relative_path_falls_back_to_session_when_project_is_stale()
+    {
+        var missingProject = Path.Join(_dir.Path, "moved-project");
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/stale-project",
+            _sessionDir,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true),
+                ProjectDirectory = missingProject
+            });
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+
+        Assert.True(policy.TryResolveWritePath(
+            "notes/result.md",
+            context.Invocation,
+            out var resolved,
+            out var error,
+            out var failure), error);
+        Assert.Equal(Path.GetFullPath(Path.Join(_sessionDir, "notes", "result.md")), resolved);
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.None, failure);
+    }
+
+    [Fact]
+    public void Relative_path_without_project_or_session_returns_correction()
+    {
+        var context = TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+            InheritedCwd = _projectDir
+        });
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+
+        Assert.False(policy.TryResolveReadPath(
+            "src/App.cs",
+            context.Invocation,
+            out var resolved,
+            out var error,
+            out var failure));
+        Assert.Empty(resolved);
+        Assert.Contains("invalid_context", error, StringComparison.Ordinal);
+        Assert.Contains("set_working_directory", error, StringComparison.Ordinal);
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.MissingBase, failure);
+    }
+
+    [Fact]
+    public void Relative_traversal_is_canonicalized_before_scope_denial()
+    {
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var context = Ctx(TrustAudience.Public, autonomous: true, withProject: false);
+
+        Assert.False(policy.TryResolveReadPath(
+            Path.Join("..", "outside.txt"),
+            context,
+            out var resolved,
+            out _,
+            out var failure));
+        Assert.Equal(Path.GetFullPath(Path.Join(_sessionDir, "..", "outside.txt")), resolved);
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.AccessDenied, failure);
+    }
+
+    [Fact]
+    public void Absolute_path_retains_existing_resolution()
+    {
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var context = Ctx(TrustAudience.Personal, autonomous: false);
+        var absolute = Path.GetFullPath(Path.Join(_outsideDir, "file.txt"));
+
+        Assert.True(policy.TryResolveReadPath(
+            absolute,
+            context,
+            out var resolved,
+            out var error,
+            out var failure), error);
+        Assert.Equal(absolute, resolved);
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.None, failure);
+    }
+
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "Native drive-relative path semantics require Windows.")]
+    [SlopwatchSuppress("SW001", "This regression requires native Windows drive-relative and root-relative path semantics.")]
+    public void Windows_relative_paths_use_project_but_partial_paths_fail_closed()
+    {
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var context = Ctx(TrustAudience.Personal, autonomous: false);
+
+        Assert.True(policy.TryResolveReadPath(
+            @"src\App.cs",
+            context,
+            out var resolved,
+            out var error,
+            out var failure), error);
+        Assert.Equal(Path.GetFullPath(Path.Join(_projectDir, "src", "App.cs")), resolved);
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.None, failure);
+
+        var drive = Path.GetPathRoot(_projectDir)![..2];
+        Assert.False(policy.TryResolveReadPath(
+            $@"{drive}src\App.cs",
+            context,
+            out _,
+            out _,
+            out var driveRelativeFailure));
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.InvalidInput, driveRelativeFailure);
+
+        Assert.False(policy.TryResolveReadPath(
+            @"\src\App.cs",
+            context,
+            out _,
+            out _,
+            out var rootRelativeFailure));
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.InvalidInput, rootRelativeFailure);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Directory symlink creation is privilege-gated on Windows.")]
+    [SlopwatchSuppress("SW001", "This regression requires native POSIX symbolic-link traversal semantics.")]
+    public void Relative_path_through_project_symlink_is_denied()
+    {
+        var link = Path.Join(_projectDir, "escape");
+        Directory.CreateSymbolicLink(link, _outsideDir);
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var context = Ctx(TrustAudience.Personal, autonomous: true);
+
+        Assert.False(policy.TryResolveReadPath(
+            Path.Join("escape", "secret.txt"),
+            context,
+            out _,
+            out _,
+            out var failure));
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.AccessDenied, failure);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Directory symlink creation is privilege-gated on Windows.")]
+    [SlopwatchSuppress("SW001", "This regression requires native POSIX symbolic-link base semantics.")]
+    public void Symlinked_project_base_falls_back_to_session_directory()
+    {
+        var projectLink = Path.Join(_dir.Path, "project-link");
+        Directory.CreateSymbolicLink(projectLink, _outsideDir);
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), _paths);
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/symlink-project-base",
+            _sessionDir,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = projectLink
+            });
+
+        Assert.True(policy.TryResolveReadPath(
+            "secret.txt",
+            context.Invocation,
+            out var resolved,
+            out var error,
+            out var failure), error);
+        Assert.Equal(Path.GetFullPath(Path.Join(_sessionDir, "secret.txt")), resolved);
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.None, failure);
     }
 }

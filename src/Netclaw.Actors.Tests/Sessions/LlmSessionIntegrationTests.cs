@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Event;
 using Akka.Hosting;
 using Akka.Streams;
 using System.Text.Json;
@@ -17,6 +18,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -76,10 +78,18 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             AIFunctionFactory.Create((string url) => "ok", "navigate_page", "Navigate to URL"),
             "browser_chrome_devtools",
             "navigate_page"));
-        registry.Register(new SearchToolsTool(registry));
-        registry.Register(new LoadToolTool(registry));
+        var toolConfig = new ToolConfig();
+        toolConfig.AudienceProfiles.Public.AllowedMcpServers.Add("browser_chrome_devtools");
+        toolConfig.AudienceProfiles.Public.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["browser_chrome_devtools"] = ["navigate_page"]
+        };
+        var toolAccessPolicy = TestToolAccessPolicy.Create(toolConfig);
+        registry.RegisterCore(new SearchToolsTool(registry, toolAccessPolicy));
+        registry.RegisterCore(new LoadToolTool(registry, toolAccessPolicy));
 
         services.AddSingleton(registry);
+        services.AddSingleton(toolAccessPolicy);
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
@@ -117,6 +127,55 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Equal(sessionId, joined.SessionId);
         Assert.Equal(0, joined.TurnCount);
         Assert.Null(joined.Title);
+    }
+
+    [Fact]
+    public async Task Session_emits_one_payload_free_tool_exposure_diagnostic()
+    {
+        var sessionId = new SessionId("signalr/tool-exposure-test");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("tool-exposure-probe");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await EventFilter.Info(
+                message: "Session tool exposure core=2 deferredVisible=1 loaded=0")
+            .ExpectAsync(1, async () =>
+            {
+                await sessionManager.Ask<CommandAck>(new SendUserMessage
+                {
+                    SessionId = sessionId,
+                    Content = "private-payload-marker",
+                    Source = new MessageSource
+                    {
+                        ChannelType = ChannelType.SignalR,
+                        SenderId = new SenderId("synthetic-operator"),
+                        ChannelId = "synthetic-channel",
+                        MessageId = "synthetic-message",
+                        TurnId = new Netclaw.Actors.Protocol.TurnId("synthetic-turn"),
+                        Audience = TrustAudience.Personal,
+                        Boundary = TrustBoundary.Personal,
+                        Principal = PrincipalClassification.Operator,
+                        Provenance = new SourceProvenance(
+                            TransportAuthenticity.Verified,
+                            PayloadTaint.Trusted),
+                        ReceivedAt = _timeProvider.GetUtcNow()
+                    }
+                }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+                await subscriber.ExpectMsgAsync<TextOutput>(
+                    TimeSpan.FromSeconds(3),
+                    cancellationToken: TestContext.Current.CancellationToken);
+                await subscriber.ExpectMsgAsync<TurnCompleted>(
+                    TimeSpan.FromSeconds(3),
+                    cancellationToken: TestContext.Current.CancellationToken);
+            }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -754,6 +813,36 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Equal(2, _fakeChatClient.CallCount);
 
         await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Initial_model_call_contains_core_tools_but_not_deferred_tools()
+    {
+        var sessionId = new SessionId("channel-discovery/core-contract");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("core-contract-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use the initial tool set"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(_fakeChatClient.ReceivedToolNames);
+        Assert.Equal(
+            ["load_tool", "search_tools"],
+            _fakeChatClient.ReceivedToolNames[0].OrderBy(static name => name, StringComparer.Ordinal));
+        Assert.DoesNotContain("browser_chrome_devtools__navigate_page", _fakeChatClient.ReceivedToolNames[0]);
     }
 
     [Fact]
@@ -1888,7 +1977,7 @@ internal sealed class FakeChatClient : IChatClient
         // call and can be non-trivial to enumerate; only the shared-list appends need guarding.
         var messageList = messages.ToList();
         var toolNames = options?.Tools?
-            .Select(t => t is AIFunction f ? f.Name : t.GetType().Name)
+            .Select(t => t is AIFunctionDeclaration f ? f.Name : t.GetType().Name)
             .ToList()
             ?? [];
 

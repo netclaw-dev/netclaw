@@ -31,7 +31,7 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
     private readonly ToolPathPolicy _pathPolicy;
 
     public record Params(
-        [property: Description("Absolute path to the directory to list")] string Path);
+        [property: Description("Directory path to list. Relative paths use the current project, then session scratch.")] string Path);
 
     public FileListTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
     {
@@ -42,35 +42,46 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
-            return Task.FromResult("Error: 'path' parameter is required.");
+            return Task.FromResult(context.InvalidInput("Error: 'path' parameter is required."));
 
         // Authorize through the read-access policy: this confines the listable
         // directories to the audience's read roots and emits an
         // audience-sanitized error (no configured root paths leaked to Public).
-        if (!_fileAccessPolicy.TryResolveReadPath(args.Path, context, out var authorizedPath, out var accessError))
-            return Task.FromResult(accessError);
+        if (!_fileAccessPolicy.TryResolveReadPath(
+                args.Path,
+                context,
+                out var authorizedPath,
+                out var accessError,
+                out var resolutionFailure))
+        {
+            return Task.FromResult(context.PathResolutionFailure(accessError, resolutionFailure));
+        }
 
         if (_pathPolicy.IsReadDenied(authorizedPath))
-            return Task.FromResult(FileToolErrors.CredentialReadDenied(authorizedPath));
+            return Task.FromResult(context.AccessDenied(FileToolErrors.CredentialReadDenied(authorizedPath)));
 
         if (!Directory.Exists(authorizedPath))
         {
-            return Task.FromResult(File.Exists(authorizedPath)
+            return Task.FromResult(context.NotFound(File.Exists(authorizedPath)
                 ? $"Error: Not a directory (use file_read for files): {authorizedPath}"
-                : $"Error: Directory not found: {authorizedPath}");
+                : $"Error: Directory not found: {authorizedPath}"));
         }
 
         try
         {
-            return Task.FromResult(FormatListing(authorizedPath, _pathPolicy));
+            return Task.FromResult(context.Success(FormatListing(authorizedPath, _pathPolicy)));
         }
         catch (UnauthorizedAccessException)
         {
-            return Task.FromResult($"Error: Permission denied: {authorizedPath}");
+            return Task.FromResult(context.AccessDenied($"Error: Permission denied: {authorizedPath}"));
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return Task.FromResult(context.NotFound($"Error: Directory not found: {authorizedPath}"));
         }
         catch (IOException ex)
         {
-            return Task.FromResult($"Error listing directory: {ex.Message}");
+            return Task.FromResult(context.TransientFailure($"Error listing directory: {ex.Message}"));
         }
     }
 

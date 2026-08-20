@@ -47,6 +47,7 @@ internal sealed class SessionToolPipelineTestFixture(
     private IReadOnlyDictionary<string, ApprovalDecision> _decisionOverrides
         = new Dictionary<string, ApprovalDecision>();
     private IReadOnlyList<SessionScratchCorrectionKey> _scratchCorrectionKeys = [];
+    private ILoggingAdapter _logger = NoLogger.Instance;
 
     public SessionToolPipelineTestFixture From(MessageSource source)
     {
@@ -63,6 +64,12 @@ internal sealed class SessionToolPipelineTestFixture(
     public SessionToolPipelineTestFixture WithTimeProvider(TimeProvider timeProvider)
     {
         _timeProvider = timeProvider;
+        return this;
+    }
+
+    public SessionToolPipelineTestFixture WithLogger(ILoggingAdapter logger)
+    {
+        _logger = logger;
         return this;
     }
 
@@ -182,7 +189,7 @@ internal sealed class SessionToolPipelineTestFixture(
         var pipeline = new SessionToolExecutionPipeline(
             executor,
             _timeProvider,
-            NoLogger.Instance);
+            _logger);
         var batch = new SessionToolBatch(turnContext, runEnvironment)
         {
             ToolCalls = toolCalls,

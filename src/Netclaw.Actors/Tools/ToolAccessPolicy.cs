@@ -152,6 +152,12 @@ public sealed class ToolAccessPolicy
         if (!_profileResolver.IsToolAllowed(new ToolName(tool.Name), audience))
             return false;
 
+        if (_profileResolver.ResolveProfile(audience).ApprovalPolicy?.GetEffectiveMode(tool.Name)
+            == ToolApprovalMode.Deny)
+        {
+            return false;
+        }
+
         if (IsShellCoupledTool(tool))
             return ResolveShellMode() == ShellExecutionMode.HostAllowed && audience == TrustAudience.Personal;
 

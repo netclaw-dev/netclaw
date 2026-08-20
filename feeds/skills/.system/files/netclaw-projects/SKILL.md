@@ -3,7 +3,7 @@ name: netclaw-projects
 description: "How to create, find, and work with project workspaces. Load when the user references a project, asks to organize work, or you need a sustained workspace."
 metadata:
   author: netclaw
-  version: "1.3.0"
+  version: "1.4.0"
 license: MIT
 compatibility: "netclaw >= 0.10.0"
 disable-model-invocation: false
@@ -23,7 +23,7 @@ research initiative, or any sustained body of work.
 Before creating a new project, **always check what already exists**:
 
 ```
-shell_execute("find <workspaces_path> -name AGENTS.md -maxdepth 4 -type f")
+file_search(Root: "<workspaces_path>", Query: "AGENTS.md", Mode: "name")
 ```
 
 Read the `AGENTS.md` of any match to understand its purpose. If a project
@@ -38,12 +38,14 @@ Only create a project when:
 
 Steps:
 1. Choose a descriptive directory name (kebab-case)
-2. `shell_execute("mkdir -p <workspaces_path>/<name> && cd <workspaces_path>/<name> && git init")`
-3. Write an `AGENTS.md` with `file_write` describing:
+2. Create `<workspaces_path>/<name>` with one shell operation.
+3. Set that path with `set_working_directory`.
+4. Initialize version control with one shell operation.
+5. Write an `AGENTS.md` with `file_write` describing:
    - What this project is about
    - Goals and constraints
    - Relevant context (target audience, products, tools, etc.)
-4. `shell_execute("cd <workspaces_path>/<name> && git add -A && git commit -m 'Initial project setup'")`
+6. Stage and commit with separate shell operations.
 
 The `AGENTS.md` is the project's living context document. Update it as the
 project evolves.

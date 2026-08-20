@@ -44,9 +44,11 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
     /// <inheritdoc />
     public async Task<string> ExecuteAsync(IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct = default)
     {
-        return TryParse(arguments, out var error, out var args)
-            ? await ExecuteAsync(args, context, ct)
-            : error;
+        if (TryParse(arguments, out var error, out var args))
+            return await ExecuteAsync(args, context, ct);
+
+        context.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
+        return error;
     }
 
     /// <summary>

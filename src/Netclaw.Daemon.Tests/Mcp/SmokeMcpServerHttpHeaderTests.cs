@@ -29,6 +29,7 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// configured header → <c>HttpClientTransport.AdditionalHeaders</c> → wire →
 /// server-side capture.
 /// </summary>
+[Collection(McpSmokeChildProcessCollection.Name)]
 public sealed class SmokeMcpServerHttpHeaderTests
 {
     private readonly ITestOutputHelper _output;

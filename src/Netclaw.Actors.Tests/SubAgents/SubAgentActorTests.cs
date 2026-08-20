@@ -825,6 +825,9 @@ public class SubAgentActorTests : TestKit
             message => message.Text.Contains($"session_dir: {sessionDirectory}", StringComparison.Ordinal));
         Assert.Single(
             client.LastReceivedMessages!,
+            message => message.Text.Contains(ToolChoiceGuidance.StructuredWorkspaceSelection, StringComparison.Ordinal));
+        Assert.Single(
+            client.LastReceivedMessages!,
             message => message.Text.Contains(ToolChoiceGuidance.DirectorySelectionOrder, StringComparison.Ordinal));
         Assert.Single(
             client.LastReceivedMessages!,
@@ -1913,6 +1916,7 @@ public class SubAgentActorTests : TestKit
         var userMessage = fakeClient.LastReceivedMessages![1].Text;
         Assert.Contains("[session]", userMessage);
         Assert.Contains($"session_dir: {sessionDirectory}", userMessage);
+        Assert.Contains(ToolChoiceGuidance.StructuredWorkspaceSelection, userMessage, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, userMessage, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, userMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("always set WorkingDirectory to session_dir", userMessage, StringComparison.OrdinalIgnoreCase);
@@ -2030,7 +2034,13 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Successful_first_party_edit_is_returned_as_confirmed_child_activity()
     {
-        var editTool = new FakeNetclawTool("file_edit", "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)");
+        var changedPath = Path.GetFullPath(Path.Join(MissingProjectDirectory, "src", "Calculator.cs"));
+        var editTool = new FakeNetclawTool(
+            "file_edit",
+            "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)",
+            onExecute: context => context.TryComplete(new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.Success,
+                [new ToolFileActivity(changedPath, ToolFileActivityKind.Changed)])));
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =
@@ -2052,16 +2062,18 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.NotNull(result.WorkingContext);
-        Assert.Equal(
-            Path.GetFullPath(Path.Join(MissingProjectDirectory, "src", "Calculator.cs")),
-            Assert.Single(result.WorkingContext.ConfirmedChangedFiles));
+        Assert.Equal(changedPath, Assert.Single(result.WorkingContext.ConfirmedChangedFiles));
         Assert.Empty(result.WorkingContext.ObservedChangedFiles);
     }
 
     [Fact]
     public async Task Denied_first_party_edit_is_not_returned_as_confirmed_child_activity()
     {
-        var editTool = new FakeNetclawTool("file_edit", "Error: Permission denied: src/Calculator.cs");
+        var editTool = new FakeNetclawTool(
+            "file_edit",
+            "Error: Permission denied: src/Calculator.cs",
+            onExecute: context => context.TryComplete(
+                new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied)));
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =

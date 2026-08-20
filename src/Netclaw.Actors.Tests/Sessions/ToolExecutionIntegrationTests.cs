@@ -58,6 +58,9 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         registry.Register(
             AIFunctionFactory.Create((string path) => $"contents of {path}", "file_read"),
             "file_read");
+        registry.Register(
+            AIFunctionFactory.Create((string path) => path, "set_working_directory"),
+            "file");
         services.AddSingleton(registry);
     }
 
@@ -272,12 +275,16 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         // and the LLM emits `{"Path": "..."}`. A lowercase "path" here
         // would hide the real-world bug where WorkingContextUpdater's
         // field-name probe misses PascalCase arguments.
+        var canonicalPath = Path.GetFullPath(Path.Join(Path.GetTempPath(), "src", "Rect.cs"));
         _fakeChatClient.ToolCallsOnFirstCall =
         [
             new FunctionCallContent("call-1", "file_read",
                 new Dictionary<string, object?> { ["Path"] = "src/Rect.cs" })
         ];
         _fakeToolExecutor.Results["file_read"] = "public readonly record struct Rect { ... }";
+        _fakeToolExecutor.Receipts["file_read"] = new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.Success,
+            [new ToolFileActivity(canonicalPath, ToolFileActivityKind.Read)]);
 
         var sessionId = new SessionId("console/working-context-populated");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -325,10 +332,89 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
 
         var hasWorkingContextBlock = allContent.Any(s =>
             s.Contains("[working-context]", StringComparison.Ordinal)
-            && s.Contains("src/Rect.cs", StringComparison.Ordinal));
+            && s.Contains(canonicalPath, StringComparison.Ordinal));
 
         Assert.True(hasWorkingContextBlock,
-            $"Expected turn 2's first LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
+            $"Expected turn 2's first LLM call to include a [working-context] block mentioning the canonical file. All messages:\n{string.Join("\n---\n", allContent)}");
+    }
+
+    [Fact]
+    public async Task Failed_project_declaration_cannot_change_scope_from_successful_looking_text()
+    {
+        var deniedPath = Path.GetFullPath(Path.Join(Path.GetTempPath(), "denied-project"));
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-cwd",
+                "set_working_directory",
+                new Dictionary<string, object?> { ["Path"] = deniedPath })
+        ];
+        _fakeToolExecutor.Results["set_working_directory"] = deniedPath;
+        _fakeToolExecutor.Receipts["set_working_directory"] =
+            new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied);
+
+        var nextTurn = await RunToolTurnAndCaptureNextTurnAsync("failed-project-declaration");
+
+        Assert.DoesNotContain(deniedPath, nextTurn, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Successful_project_declaration_uses_receipt_not_presentation_text()
+    {
+        var declaredPath = Path.GetFullPath(Path.Join(Path.GetTempPath(), "declared-project"));
+        var misleadingPath = Path.GetFullPath(Path.Join(Path.GetTempPath(), "misleading-result"));
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-cwd",
+                "set_working_directory",
+                new Dictionary<string, object?> { ["Path"] = declaredPath })
+        ];
+        _fakeToolExecutor.Results["set_working_directory"] = misleadingPath;
+        _fakeToolExecutor.Receipts["set_working_directory"] = new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.Success,
+            declaredProjectDirectory: declaredPath);
+
+        var nextTurn = await RunToolTurnAndCaptureNextTurnAsync("successful-project-declaration");
+
+        Assert.Contains(declaredPath, nextTurn, StringComparison.Ordinal);
+        Assert.DoesNotContain(misleadingPath, nextTurn, StringComparison.Ordinal);
+    }
+
+    private async Task<string> RunToolTurnAndCaptureNextTurnAsync(string sessionSuffix)
+    {
+        var sessionId = new SessionId($"console/{sessionSuffix}");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe($"{sessionSuffix}-subscriber");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "select the project"
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var previousCalls = _fakeChatClient.ReceivedMessages.Count;
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "what is the project?"
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        return string.Join(
+            "\n",
+            _fakeChatClient.ReceivedMessages[previousCalls].Select(message => message.Text ?? string.Empty));
     }
 }
 
@@ -343,6 +429,8 @@ internal sealed class FakeToolExecutor : IToolExecutor
 
     /// <summary>Tool name → result string.</summary>
     public Dictionary<string, string> Results { get; } = [];
+
+    public Dictionary<string, ToolInvocationReceipt> Receipts { get; } = [];
 
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = [];
@@ -365,6 +453,8 @@ internal sealed class FakeToolExecutor : IToolExecutor
         }
 
         var result = Results.GetValueOrDefault(toolCall.Name, $"[fake result for {toolCall.Name}]");
+        if (Receipts.TryGetValue(toolCall.Name, out var receipt))
+            context.Outputs.TryComplete(receipt);
         // Mirror DispatchingToolExecutor's post-processing so integration tests see
         // the same redact + inline-bound + spill the real executor applies. The fake
         // has no tool instance, so it uses the session content budget (per-tool

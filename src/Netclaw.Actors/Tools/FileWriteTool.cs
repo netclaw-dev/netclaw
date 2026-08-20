@@ -29,7 +29,7 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
     private readonly FileEditTool _editTool;
 
     public record Params(
-        [property: Description("Absolute path to the file to write")] string Path,
+        [property: Description("File path to write. Relative paths use the current project, then session scratch.")] string Path,
         [property: Description("Content to write to the file")] string Content);
 
     public FileWriteTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
@@ -40,7 +40,7 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
-            return Task.FromResult("Error: 'Path' parameter is required.");
+            return Task.FromResult(context.InvalidInput("Error: 'Path' parameter is required."));
 
         return _editTool.WriteFileAsync(args.Path, args.Content, context, ct);
     }

@@ -53,7 +53,12 @@ public class DispatchingToolExecutorTests
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
         var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(baseConfig, new NetclawPaths(), pathPolicy, commandPolicy);
+        registry.WithFirstPartyTools(
+            baseConfig,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(baseConfig, commandPolicy, pathPolicy));
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -83,7 +88,11 @@ public class DispatchingToolExecutorTests
             restrictedConfig,
             new NetclawPaths(),
             restrictedPathPolicy,
-            restrictedCommandPolicy);
+            restrictedCommandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(
+                restrictedConfig,
+                restrictedCommandPolicy,
+                restrictedPathPolicy));
         _restrictedExecutor = new DispatchingToolExecutor(
             restrictedRegistry,
             new ToolAccessPolicy(
@@ -115,9 +124,10 @@ public class DispatchingToolExecutorTests
             var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
 
             Assert.True(result.Length < 3000);                 // windowed inline, not the full 3000
-            Assert.Contains("output saved to", result);
-            Assert.Contains("file_read", result);
-            var spill = Path.Combine(sessionDir, "tool-calls", "call-spill.log");
+            Assert.Contains("tool_output_read", result);
+            Assert.Contains("CallId='call-spill'", result);
+            Assert.True(ToolOutputSpillLocation.TryResolve(
+                sessionDir, "call-spill", out _, out var spill));
             Assert.True(File.Exists(spill));
             Assert.Contains(new string('x', 100), await File.ReadAllTextAsync(spill, CancellationToken.None));
         }
@@ -143,8 +153,9 @@ public class DispatchingToolExecutorTests
             });
 
             var result = await _executor.ExecuteAsync(toolCall, context, CancellationToken.None);
-            var onDisk = await File.ReadAllTextAsync(
-                Path.Combine(sessionDir, "tool-calls", "call-redact.log"), CancellationToken.None);
+            Assert.True(ToolOutputSpillLocation.TryResolve(
+                sessionDir, "call-redact", out _, out var spillPath));
+            var onDisk = await File.ReadAllTextAsync(spillPath, CancellationToken.None);
 
             Assert.DoesNotContain("supersecret123", result);
             Assert.DoesNotContain("supersecret123", onDisk); // redacted before the spill write
@@ -304,14 +315,33 @@ public class DispatchingToolExecutorTests
             // The inline result (model-facing) should NOT contain the redacted sentinel
             Assert.DoesNotContain("***REDACTED***", result);
             // But it should be truncated (spilled)
-            Assert.Contains("output saved to", result);
+            Assert.Contains("tool_output_read", result);
 
             // The spill file on disk SHOULD be redacted
-            var spillPath = Path.Combine(sessionDir, "tool-calls", "call-spill-secret.log");
+            Assert.True(ToolOutputSpillLocation.TryResolve(
+                sessionDir, "call-spill-secret", out _, out var spillPath));
             Assert.True(File.Exists(spillPath));
             var spillContent = await File.ReadAllTextAsync(spillPath, CancellationToken.None);
             Assert.Contains("***REDACTED***", spillContent);
             Assert.DoesNotContain("real-secret-value", spillContent);
+
+            var continuationContext = TestToolExecutionContext.CreateBound(
+                "slack/thread-1",
+                sessionDir,
+                new TestToolExecutionContextOptions { Audience = TrustAudience.Personal });
+            var continuation = await _executor.ExecuteAsync(
+                CreateToolCall(
+                    "call-continuation",
+                    "tool_output_read",
+                    ToolInput.Create("CallId", "call-spill-secret", "Limit", 256)),
+                continuationContext,
+                CancellationToken.None);
+            Assert.Contains("***REDACTED***", continuation);
+            Assert.DoesNotContain("real-secret-value", continuation);
+            Assert.Equal(
+                ToolInvocationOutcomeCategory.Success,
+                continuationContext.Invocation.Receipt?.Category);
+            Assert.Empty(continuationContext.Invocation.Receipt?.FileActivity ?? []);
         }
         finally
         {
@@ -372,9 +402,13 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task Routes_file_read_missing_file()
     {
+        var missingPath = Path.Combine(
+            Path.GetTempPath(),
+            "netclaw-missing-" + Guid.NewGuid().ToString("N"),
+            "file.txt");
         var toolCall = CreateToolCall(
             "call-2", "file_read",
-            ToolInput.Create("Path", "/nonexistent/file.txt"));
+            ToolInput.Create("Path", missingPath));
 
         var context = TestToolExecutionContext.CreateBound("signalr/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
@@ -416,7 +450,12 @@ public class DispatchingToolExecutorTests
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
         var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -455,7 +494,12 @@ public class DispatchingToolExecutorTests
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
         var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var executor = new DispatchingToolExecutor(
             registry,
@@ -604,7 +648,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvedMatch = new ToolApprovalMatch("git status", "session", "this chat");
         var approvalService = new FixedApprovalService(
             new ToolApprovalCheckResult(["git push"], [approvedMatch]));
@@ -660,7 +705,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvedMatch = new ToolApprovalMatch("git status", "session", "this chat");
         var approvedCandidate = BashCandidate("git status");
         var unapprovedCandidate = BashCandidate("git push");
@@ -725,7 +771,12 @@ public class DispatchingToolExecutorTests
             var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
             var pathPolicy = new ToolPathPolicy(ShellEnvironment, []);
             var registry = new ToolRegistry();
-            registry.WithFirstPartyTools(config, new NetclawPaths(), pathPolicy, commandPolicy);
+            registry.WithFirstPartyTools(
+                config,
+                new NetclawPaths(),
+                pathPolicy,
+                commandPolicy,
+                toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
             var approvalService = new FixedShellApprovalService(request =>
             {
                 var matches = request.Candidates.Select(candidate =>
@@ -2145,7 +2196,8 @@ public class DispatchingToolExecutorTests
                 config,
                 new NetclawPaths(),
                 new ToolPathPolicy([]),
-                new ShellCommandPolicy());
+                new ShellCommandPolicy(),
+                toolAccessPolicy: TestToolAccessPolicy.Create(config));
             var approvedScope = ApprovalEntry.CreateTokenPrefix(
                 ApprovalShell.Bash,
                 ["git", "push"],
@@ -2218,7 +2270,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvalService = new FixedApprovalService(
             new ToolApprovalCheckResult(
                 ["git push"],
@@ -2274,7 +2327,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var forgedCandidate = new ApprovalCandidate("git status", Directory: null)
         {
             Shell = ApprovalShell.Bash,
@@ -2334,7 +2388,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             new ToolPathPolicy([]),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
         var approvalService = new FixedApprovalService(
             new ToolApprovalCheckResult(
                 [],
@@ -2795,7 +2850,12 @@ public class DispatchingToolExecutorTests
             };
 
             var registry = new ToolRegistry();
-            registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+            registry.WithFirstPartyTools(
+                config,
+                new NetclawPaths(),
+                new ToolPathPolicy([]),
+                new ShellCommandPolicy(),
+                toolAccessPolicy: TestToolAccessPolicy.Create(config));
 
             var executor = new DispatchingToolExecutor(
                 registry,
@@ -2938,7 +2998,12 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            new ToolPathPolicy([]),
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
 
         var tempFile = Path.GetTempFileName();
         var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
@@ -3017,7 +3082,12 @@ public class DispatchingToolExecutorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(config, new NetclawPaths(), new ToolPathPolicy([]), new ShellCommandPolicy());
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            new ToolPathPolicy([]),
+            new ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(config));
 
         var system = ActorSystem.Create($"tool-approval-session-{Guid.NewGuid():N}");
         try
@@ -3564,7 +3634,8 @@ public class DispatchingToolExecutorTests
             config,
             new NetclawPaths(),
             pathPolicy,
-            commandPolicy);
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
         var policy = new ToolAccessPolicy(
             config,
             new EffectivePolicyDefaults(

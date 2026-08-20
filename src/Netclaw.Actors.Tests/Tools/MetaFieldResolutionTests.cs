@@ -61,8 +61,16 @@ public class MetaFieldResolutionTests
     [Fact]
     public void No_first_party_tool_parameter_collides_with_a_meta_field()
     {
+        var config = new ToolConfig();
+        var pathPolicy = new Netclaw.Security.ToolPathPolicy([]);
+        var commandPolicy = new Netclaw.Security.ShellCommandPolicy();
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(new ToolConfig(), new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var collisions = new List<string>();
         foreach (var registration in registry.GetAllRegistrations())

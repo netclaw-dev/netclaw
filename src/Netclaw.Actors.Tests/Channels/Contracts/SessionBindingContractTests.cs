@@ -1841,4 +1841,79 @@ public abstract class SessionBindingContractTests : TestKit
             cancellationToken: ct);
     }
 
+    /// <summary>
+    /// Regression test for issue #2013. A pipeline reinitialize abandons the
+    /// turn in flight. The pending cursor of that turn must not survive into a
+    /// later turn. If a later <c>TurnCompleted</c> commits it, the cursor moves
+    /// past messages that no session processed, and every later gap hydration
+    /// excludes them — silent message loss. Slack always discarded the cursor;
+    /// Discord and Mattermost kept it. Every channel now discards it.
+    /// </summary>
+    [Fact]
+    public async Task Pipeline_reinitialize_discards_the_abandoned_turn_cursor()
+    {
+        if (!SupportsThreadHydration) return;
+
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-reinit-discards-cursor");
+        var historyFetcher = new RecordingThreadHistoryFetcher();
+        historyFetcher.SetHistory(CreateHistoryItems(1));
+
+        // Generation 1 emits no output, so the hydration turn stays in flight
+        // and holds its pending cursor. Generation 2 — the pipeline that the
+        // reinitialize creates — completes a turn. That completion is the point
+        // where a surviving pending cursor would be committed.
+        var generation = 0;
+        var pipeline = new RecordingSessionPipeline(_ =>
+            Interlocked.Increment(ref generation) == 1
+                ? []
+                :
+                [
+                    new TextOutput("reply after reinitialize") { SessionId = sid },
+                    new TurnCompleted
+                    {
+                        SessionId = sid,
+                        TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1),
+                        Outcome = TurnOutcome.Completed
+                    }
+                ]);
+
+        var actor = CreateBindingActorWithHydration(sid, pipeline, detector, historyFetcher);
+        await pipeline.Created.WaitAsync(ct);
+
+        // The hydration backfill is the in-flight turn. Its trigger message
+        // supplies the pending cursor.
+        await AwaitAssertAsync(() => Assert.True(pipeline.CapturedInputs.Count >= 1),
+            cancellationToken: ct);
+
+        pipeline.TerminateOutputStream();
+
+        // A second pipeline creation proves the actor ran the reinitialize path.
+        await AwaitAssertAsync(() => Assert.Equal(2, pipeline.CreateCount), cancellationToken: ct);
+
+        // The posted reply proves the new generation's TurnCompleted ran.
+        await AwaitAssertAsync(
+            () => Assert.Contains(GetPostedTexts(), t => t.Contains("reply after reinitialize")),
+            cancellationToken: ct);
+
+        ClearPostedTexts();
+        await actor.GracefulStop(TimeSpan.FromSeconds(5));
+
+        // The next actor lifetime recovers the cursor from the journal. The
+        // abandoned turn's message must still be in the gap. A committed cursor
+        // would filter it out and hydration would enqueue nothing.
+        historyFetcher.ResetFetchCount();
+        var pipeline2 = new RecordingSessionPipeline(_ => []);
+        CreateBindingActorWithHydration(sid, pipeline2, detector, historyFetcher);
+        await pipeline2.Created.WaitAsync(ct);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(1, historyFetcher.FetchCount);
+            Assert.True(pipeline2.CapturedInputs.TryPeek(out var input));
+            var text = string.Join("\n", input.Contents.OfType<TextContent>().Select(t => t.Text));
+            Assert.Contains("history message 0", text);
+        }, cancellationToken: ct);
+    }
 }

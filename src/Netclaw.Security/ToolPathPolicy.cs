@@ -256,6 +256,12 @@ public sealed class ToolPathPolicy
         var command = analysis.Source;
         var workingDirectory = analysis.WorkingDirectory;
 
+        if (!string.IsNullOrWhiteSpace(workingDirectory)
+            && IsDeniedAgainst(workingDirectory, _shellDeniedPaths))
+        {
+            return true;
+        }
+
         var tokens = ShellTokenizer.Tokenize(command).ToList();
         var slashCommand = command.Replace('\\', '/');
         foreach (var indicator in _commandIndicators)

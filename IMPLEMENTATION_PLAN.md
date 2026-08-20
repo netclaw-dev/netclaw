@@ -318,6 +318,19 @@ Done when:
   only Once or Deny and creates no reusable temp authority. Headless behavior,
   Team/Public denial, hard-deny rules, dynamic syntax, protected paths, and
   native PowerShell causal scope stay strict.
+- [x] Seven sanitized tool-friction cases replay through registration, policy,
+  dispatch, typed outcomes, and success-owned working context. Structured
+  search, batch read, JSON selection, image metadata, and spill continuation
+  need no shell approval. Representative interpreter fallbacks still prompt.
+  Parent and child diagnostics report counts and outcome categories only.
+- [x] The hosted PR 7 comparison ran five trials per selected scenario. Search,
+  batch read, JSON selection, image metadata, and deferred discovery passed
+  25/25 with the intended structured tools and no shell fallback. Spill
+  continuation passed 0/5: all five runs used shell, none loaded or called
+  `tool_output_read`, and one run searched the catalog. Keep this failure as a
+  rollout finding; do not weaken its assertion.
+- [x] Complete native platform CI, stack merge, binary swap, and a new
+  sanitized live traffic harvest.
 - [ ] Define automated session-directory cleanup in a separate OpenSpec before
   adding retention or deletion behavior.
 - [ ] A constrained executable grammar proves any future safe `sed` form. The

@@ -27,6 +27,6 @@
 
 - [x] 4.1 Update working-context and consumer guidance to state that `{session_dir}` is private scratch and that cleanup is not yet automatic.
 - [x] 4.2 Run strict OpenSpec validation for this change and the parent structured-approval change.
-- [ ] 4.3 Run focused policy, actor, shell-environment, and eval assertion tests on Linux; run native Windows coverage for path and PowerShell behavior.
+- [x] 4.3 Run focused policy, actor, shell-environment, and eval assertion tests on Linux; run native Windows coverage for path and PowerShell behavior.
 - [ ] 4.4 Run the full required build, tests, headers, formatting, Slopwatch, and eval gates for every changed system-guidance artifact.
 - [x] 4.5 Record automated session-directory cleanup as explicit future scope without implementing deletion in this pull request.

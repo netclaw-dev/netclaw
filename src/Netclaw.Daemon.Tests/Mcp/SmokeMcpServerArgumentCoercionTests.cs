@@ -21,6 +21,7 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// this test proves the wire: that a reconstructed argument actually serializes
 /// over JSON-RPC and is accepted by a real MCP server.
 /// </summary>
+[Collection(McpSmokeChildProcessCollection.Name)]
 public sealed class SmokeMcpServerArgumentCoercionTests(ITestOutputHelper output)
 {
     [Fact]

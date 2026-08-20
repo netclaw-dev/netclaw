@@ -95,6 +95,30 @@ public sealed class SubAgentObservabilityTests : TestKit
     }
 
     [Fact]
+    public async Task Startup_emits_one_payload_free_tool_exposure_diagnostic()
+    {
+        var core = new FakeNetclawTool("core_marker", "core result");
+        var deferred = new FakeNetclawTool("deferred_marker", "deferred result");
+        var props = SubAgentActor.CreatePropsWithProjectInstructionProvider(
+            CreateDefinition([core, deferred]),
+            new FakeChatClient(),
+            PermissivePolicy(),
+            NullSystemPromptProvider.Instance,
+            coreToolNames: new HashSet<string>([core.Name], StringComparer.Ordinal));
+        var agent = Sys.ActorOf(props);
+
+        await EventFilter.Info(
+            message: "SubAgent tool exposure core=1 deferredVisible=1 loaded=0")
+            .ExpectAsync(1, async () =>
+            {
+                await agent.Ask<SubAgentResult>(
+                    NewRun("Inspect /private/payload-marker.txt"),
+                    TimeSpan.FromSeconds(5),
+                    TestContext.Current.CancellationToken);
+            }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Tool_dispatch_logs_a_tool_start_event_with_call_id()
     {
         var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
@@ -114,6 +138,36 @@ public sealed class SubAgentObservabilityTests : TestKit
         {
             await agent.Ask<SubAgentResult>(
                 NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Tool_dispatch_emits_only_the_bounded_outcome_category()
+    {
+        var fakeTool = new FakeNetclawTool("greet", "private-result-marker");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("private-call-marker", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "private-argument-marker",
+                        ["_rationale"] = "Exercise the bounded diagnostic."
+                    })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        await EventFilter.Info(message: "SubAgent tool outcome category=Success").ExpectAsync(1, async () =>
+        {
+            await agent.Ask<SubAgentResult>(
+                NewRun("Use the tool with a private payload marker."),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
 

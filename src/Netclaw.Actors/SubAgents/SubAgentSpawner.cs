@@ -99,8 +99,8 @@ public sealed class SubAgentSpawner
             };
         }
 
-        var tools = ResolveTools(profile, context);
-        if (tools.Count == 0)
+        var exposure = ResolveTools(context);
+        if (exposure.Tools.Count == 0)
         {
             SubAgentSpawnBreadcrumbs.NoToolsAvailable(_logger, context, profile.Name);
             activitySink?.TryComplete();
@@ -116,7 +116,7 @@ public sealed class SubAgentSpawner
         {
             Name = new AgentName(profile.Name),
             SystemPrompt = AppendSystemPromptOverlay(profile.SystemPrompt, systemPromptOverlay),
-            Tools = tools,
+            Tools = exposure.Tools,
             ModelRole = profile.ModelRole,
             EmitStructuredFindings = profile.EmitStructuredFindings,
             ProjectInstructions = ResolveProjectInstructions(context),
@@ -200,7 +200,7 @@ public sealed class SubAgentSpawner
             RunId = runId,
             AgentName = definition.Name.Value,
             IsStarted = true,
-            ToolCount = tools.Count
+            ToolCount = exposure.Tools.Count
         });
 
         // Spawn as child of the session actor via the context factory
@@ -211,7 +211,8 @@ public sealed class SubAgentSpawner
             _promptProvider,
             _approvalService,
             SubAgentMaxToolIterations,
-            _sessionMetrics);
+            _sessionMetrics,
+            exposure.CoreToolNames);
         var actorName = $"subagent-{definition.Name}-{runId}";
         IActorRef subAgent;
         try
@@ -455,27 +456,26 @@ public sealed class SubAgentSpawner
     private static GitWorkingContextSnapshot? AvailableSnapshot(GitWorkingContextInspection inspection)
         => inspection is GitWorkingContextInspection.Available available ? available.Snapshot : null;
 
-    private IReadOnlyList<INetclawTool> ResolveTools(SubAgentProfile profile, ToolInvocationContext context)
+    private ResolvedSubAgentTools ResolveTools(ToolInvocationContext context)
     {
         // Sub-agents inherit the parent session's runtime tool policy. Agent
         // definition tool metadata is advisory only; the only static
         // sub-agent-specific filter denies recursive spawn_agent delegation.
-        var candidates = _toolRegistry.GetAllRegistrations().Select(r => r.Tool);
-        var tools = new List<INetclawTool>();
-        foreach (var tool in candidates)
-        {
-            if (SubAgentToolPolicy.IsAllowedForSubAgent(tool.Name))
-            {
-                tools.Add(tool);
-            }
-            else
-            {
-                SubAgentSpawnBreadcrumbs.ToolDenied(_logger, context, profile.Name, tool.Name);
-            }
-        }
+        var tools = _toolRegistry.GetAllRegistrations()
+            .Select(static registration => registration.Tool)
+            .Where(static tool => SubAgentToolPolicy.IsAllowedForSubAgent(tool.Name));
 
-        return _toolAccessPolicy.FilterDiscoverableTools(tools, context);
+        var visible = _toolAccessPolicy.FilterDiscoverableTools(tools, context);
+        var coreToolNames = visible
+            .Where(tool => _toolRegistry.IsCoreTool(tool.Name))
+            .Select(static tool => tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        return new ResolvedSubAgentTools(visible, coreToolNames);
     }
+
+    private sealed record ResolvedSubAgentTools(
+        IReadOnlyList<INetclawTool> Tools,
+        IReadOnlySet<string> CoreToolNames);
 
     private static void TryStopSubAgent(IActorRef subAgent)
     {

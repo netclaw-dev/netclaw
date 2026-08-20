@@ -190,6 +190,7 @@ public static class SessionMessageAssembler
         {
             var sessionBlock = $"[session]\nid: {input.SessionId.Value}" +
                                $"\nsession_dir: {sessionDir}" +
+                               $"\n{ToolChoiceGuidance.StructuredWorkspaceSelection}" +
                                $"\n{ToolChoiceGuidance.DirectorySelectionOrder}" +
                                $"\n{ToolChoiceGuidance.ShellCompositionOrder}" +
                                "\nsession_dir is private scratch for disposable writable non-project artifacts. " +

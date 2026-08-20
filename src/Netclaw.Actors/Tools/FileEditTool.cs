@@ -31,7 +31,7 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(
-        [property: Description("Absolute path to the file")] string Path,
+        [property: Description("File path to edit. Relative paths use the current project, then session scratch.")] string Path,
         [property: Description("The exact text to find in the file (omit when using Content for a full write)")] string? OldString = null,
         [property: Description("The text to replace OldString with (must differ from OldString; use empty string to delete)")] string? NewString = null,
         [property: Description("Replace all occurrences instead of just the first (default: false)")] bool? ReplaceAll = null,
@@ -46,38 +46,46 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
-            return "Error: 'Path' parameter is required.";
+            return context.InvalidInput("Error: 'Path' parameter is required.");
 
         // Full-write mode: Content is supplied without OldString
         if (args.Content is not null)
         {
             if (args.OldString is not null || args.NewString is not null || args.ReplaceAll is not null)
-                return "Error: 'Content' and 'OldString'/'NewString'/'ReplaceAll' are mutually exclusive. " +
-                       "Use Content for a full file write, or OldString/NewString for targeted replacement.";
+                return context.InvalidInput(
+                    "Error: 'Content' and 'OldString'/'NewString'/'ReplaceAll' are mutually exclusive. " +
+                    "Use Content for a full file write, or OldString/NewString for targeted replacement.");
 
             return await WriteFileAsync(args.Path, args.Content, context, ct);
         }
 
         // Targeted edit mode: OldString → NewString
         if (string.IsNullOrEmpty(args.OldString))
-            return "Error: either 'OldString' (for targeted edit) or 'Content' (for full write) is required.";
+            return context.InvalidInput("Error: either 'OldString' (for targeted edit) or 'Content' (for full write) is required.");
 
         if (args.NewString is null)
-            return "Error: 'NewString' is required when using OldString for targeted replacement.";
+            return context.InvalidInput("Error: 'NewString' is required when using OldString for targeted replacement.");
 
         if (args.NewString == args.OldString)
-            return "Error: 'NewString' must be different from 'OldString'.";
+            return context.InvalidInput("Error: 'NewString' must be different from 'OldString'.");
 
         return await EditFileAsync(args.Path, args.OldString, args.NewString, args.ReplaceAll == true, context, ct);
     }
 
     internal async Task<string> WriteFileAsync(string path, string content, ToolInvocationContext context, CancellationToken ct)
     {
-        if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
-            return accessError;
+        if (!_fileAccessPolicy.TryResolveWritePath(
+                path,
+                context,
+                out var authorizedPath,
+                out var accessError,
+                out var resolutionFailure))
+        {
+            return context.PathResolutionFailure(accessError, resolutionFailure);
+        }
 
         if (_pathPolicy.IsDenied(authorizedPath))
-            return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
+            return context.AccessDenied(FileToolErrors.ControlPlaneWriteDenied(authorizedPath));
 
         try
         {
@@ -90,29 +98,43 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
             return await FileMutationGate.RunExclusiveAsync(authorizedPath, async () =>
             {
                 await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
-                return $"Successfully wrote {bytes.Length} bytes to {authorizedPath}";
+                return context.SuccessFile(
+                    $"Successfully wrote {bytes.Length} bytes to {authorizedPath}",
+                    authorizedPath,
+                    ToolFileActivityKind.Changed);
             }, ct);
         }
         catch (UnauthorizedAccessException)
         {
-            return $"Error: Permission denied: {authorizedPath}";
+            return context.AccessDenied($"Error: Permission denied: {authorizedPath}");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return context.NotFound($"Error: Directory not found: {authorizedPath}");
         }
         catch (IOException ex)
         {
-            return $"Error writing file: {ex.Message}";
+            return context.TransientFailure($"Error writing file: {ex.Message}");
         }
     }
 
     private async Task<string> EditFileAsync(string path, string oldString, string newString, bool replaceAll, ToolInvocationContext context, CancellationToken ct)
     {
-        if (!_fileAccessPolicy.TryResolveWritePath(path, context, out var authorizedPath, out var accessError))
-            return accessError;
+        if (!_fileAccessPolicy.TryResolveWritePath(
+                path,
+                context,
+                out var authorizedPath,
+                out var accessError,
+                out var resolutionFailure))
+        {
+            return context.PathResolutionFailure(accessError, resolutionFailure);
+        }
 
         if (_pathPolicy.IsDenied(authorizedPath))
-            return FileToolErrors.ControlPlaneWriteDenied(authorizedPath);
+            return context.AccessDenied(FileToolErrors.ControlPlaneWriteDenied(authorizedPath));
 
         if (!File.Exists(authorizedPath))
-            return $"Error: File not found: {authorizedPath}";
+            return context.NotFound($"Error: File not found: {authorizedPath}");
 
         try
         {
@@ -125,11 +147,15 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
                 var occurrences = CountOccurrences(content, oldString);
 
                 if (occurrences == 0)
-                    return $"Error: The specified text was not found in {authorizedPath}";
+                    return context.RecoverableCorrection(
+                        $"Error: The specified text was not found in {authorizedPath}",
+                        "provide_unique_old_string");
 
                 if (occurrences > 1 && !replaceAll)
-                    return $"Error: OldString matches {occurrences} locations in {authorizedPath}. " +
-                           "Provide more surrounding context to create a unique match, or set ReplaceAll=true.";
+                    return context.RecoverableCorrection(
+                        $"Error: OldString matches {occurrences} locations in {authorizedPath}. " +
+                        "Provide more surrounding context to create a unique match, or set ReplaceAll=true.",
+                        "provide_unique_old_string");
 
                 string newContent;
                 int replacementCount;
@@ -152,16 +178,27 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
                 var bytes = Encoding.UTF8.GetBytes(newContent);
                 await File.WriteAllBytesAsync(authorizedPath, bytes, ct);
 
-                return $"Successfully edited {authorizedPath}: replaced {replacementCount} occurrence(s)";
+                return context.SuccessFile(
+                    $"Successfully edited {authorizedPath}: replaced {replacementCount} occurrence(s)",
+                    authorizedPath,
+                    ToolFileActivityKind.Changed);
             }, ct);
         }
         catch (UnauthorizedAccessException)
         {
-            return $"Error: Permission denied: {authorizedPath}";
+            return context.AccessDenied($"Error: Permission denied: {authorizedPath}");
+        }
+        catch (FileNotFoundException)
+        {
+            return context.NotFound($"Error: File not found: {authorizedPath}");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return context.NotFound($"Error: File not found: {authorizedPath}");
         }
         catch (IOException ex)
         {
-            return $"Error editing file: {ex.Message}";
+            return context.TransientFailure($"Error editing file: {ex.Message}");
         }
     }
 

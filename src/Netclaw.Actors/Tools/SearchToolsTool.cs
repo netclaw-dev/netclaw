@@ -12,7 +12,7 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Meta-tool that searches the <see cref="ToolRegistry"/> for available tools.
 /// Returns compressed summaries of matching tools so the LLM can decide which
-/// to load dynamically. Used as part of the two-layer discovery architecture.
+/// deferred first-party or MCP tools to load dynamically.
 /// </summary>
 [NetclawTool("search_tools",
     "Search for available tools by keyword. Returns tool names and descriptions — tools are NOT loaded until you call load_tool. "
@@ -21,7 +21,7 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params>
 {
     private readonly ToolRegistry _registry;
-    private readonly ToolAccessPolicy? _policy;
+    private readonly ToolAccessPolicy _policy;
     private const int MaxSearchResults = 10;
     private const int MaxServerBrowseResults = 30;
 
@@ -31,8 +31,11 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         [property: Description("Optional MCP server name to filter results (e.g., 'memorizer')")]
         string? Server = null);
 
-    public SearchToolsTool(ToolRegistry registry, ToolAccessPolicy? policy = null)
+    public SearchToolsTool(ToolRegistry registry, ToolAccessPolicy policy)
     {
+        ArgumentNullException.ThrowIfNull(registry);
+        ArgumentNullException.ThrowIfNull(policy);
+
         _registry = registry;
         _policy = policy;
     }
@@ -54,7 +57,11 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
                     "To browse tools, call search_tools(query: \"all\", server: \"<server_name>\")."));
             }
 
-            var serverTools = FilterVisible(_registry.GetToolsForServer(serverFilter.Value, MaxServerBrowseResults), context);
+            var serverTools = FilterVisible(
+                    _registry.GetToolsForServer(serverFilter.Value, int.MaxValue),
+                    context)
+                .Take(MaxServerBrowseResults)
+                .ToList();
             if (serverTools.Count == 0)
             {
                 return Task.FromResult($"No tools found for server '{serverFilter.Value}' in the current trust context.");
@@ -65,11 +72,15 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
                 $"Found {serverTools.Count} tool(s) in server '{serverFilter.Value}':"));
         }
 
-        var results = FilterVisible(_registry.SearchTools(query, serverFilter, MaxSearchResults), context);
+        var results = FilterVisible(_registry.SearchTools(query, serverFilter, int.MaxValue), context)
+            .Take(MaxSearchResults)
+            .ToList();
 
         if (results.Count == 0)
         {
-            var suggestions = FilterVisible(_registry.SuggestTools(query, serverFilter, MaxSearchResults), context);
+            var suggestions = FilterVisible(_registry.SuggestTools(query, serverFilter, int.MaxValue), context)
+                .Take(MaxSearchResults)
+                .ToList();
             if (suggestions.Count == 0)
             {
                 if (serverFilter is null)
@@ -110,7 +121,16 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
     private string BuildServerCatalog(ToolInvocationContext context, string? trailingHint = null)
     {
         var summaries = _registry.GetMcpServerSummaries()
-            .Where(summary => FilterVisible(_registry.GetToolsForServer(new McpServerName(summary.ServerName), int.MaxValue), context).Count > 0)
+            .Select(summary =>
+            {
+                var visibleTools = FilterVisible(
+                    _registry.GetToolsForServer(new McpServerName(summary.ServerName), int.MaxValue),
+                    context);
+                return visibleTools.Count == 0
+                    ? null
+                    : ToolRegistry.SummarizeMcpServer(summary.ServerName, visibleTools);
+            })
+            .OfType<McpServerSummary>()
             .ToList();
         if (summaries.Count == 0)
             return "No MCP servers are currently registered.";
@@ -127,8 +147,6 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         sb.AppendLine();
         sb.AppendLine("To browse one server, call search_tools(query: \"all\", server: \"<server_name>\").");
         sb.AppendLine("To find tools, call search_tools(query: \"<intent>\", server: \"<server_name>\"), then load_tool(\"<name>\") to activate.");
-        sb.AppendLine("Detailed generated catalogs are on disk at identity/tooling/shadow/mcp/<server>.md.");
-
         if (!string.IsNullOrWhiteSpace(trailingHint))
         {
             sb.AppendLine();
@@ -139,7 +157,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
     }
 
     private IReadOnlyList<INetclawTool> FilterVisible(IReadOnlyList<INetclawTool> tools, ToolInvocationContext context)
-        => _policy?.FilterDiscoverableTools(tools, context) ?? tools;
+        => _policy.FilterDiscoverableTools(tools, context);
 
     private static string BuildToolList(IReadOnlyList<INetclawTool> tools, string heading)
     {

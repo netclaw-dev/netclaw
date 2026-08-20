@@ -141,6 +141,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (_registry.GetByName(toolCall.Name) is null)
         {
             _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
+            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.NotFound));
             return $"Unknown tool: {toolCall.Name}";
         }
 
@@ -152,6 +153,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             _logger.LogWarning(
                 "Rejected tool call ({Reason}): {ToolName} — {Error}",
                 rejection.DenyReason, toolCall.Name, rejection.Message);
+            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
             return rejection.Message;
         }
 
@@ -171,6 +173,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                     shellAnalysis,
                     ct)
                 : await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct);
+
+            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success));
 
             var redacted = SecretOutputRedactor.Redact(result);
 
@@ -197,6 +201,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         }
         catch (Exception ex)
         {
+            CompleteExceptionOutcome(context, ex, ct);
             sw.Stop();
             _logger.LogError(ex,
                 "Tool execution failed: {ToolName} ({Duration}ms)",
@@ -227,6 +232,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (_registry.GetByName(toolCall.Name) is null)
         {
             _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
+            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.NotFound));
             yield return new ToolCompletedUpdate($"Unknown tool: {toolCall.Name}");
             yield break;
         }
@@ -238,6 +244,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             _logger.LogWarning(
                 "Rejected tool call ({Reason}): {ToolName} — {Error}",
                 rejection.DenyReason, toolCall.Name, rejection.Message);
+            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
             yield return new ToolCompletedUpdate(rejection.Message);
             yield break;
         }
@@ -264,6 +271,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             {
                 case ToolCompletedUpdate completed:
                     sw.Stop();
+                    context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success));
                     var redacted = SecretOutputRedactor.Redact(completed.Result);
                     var modelResult = tool.SuppressOutputRedaction ? completed.Result : redacted;
                     modelResult = await ToolOutputSpill.BoundAndSpillAsync(
@@ -281,6 +289,24 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                     break;
             }
         }
+    }
+
+    private static void CompleteExceptionOutcome(
+        ToolExecutionContext context,
+        Exception exception,
+        CancellationToken callerToken)
+    {
+        if (exception is OperationCanceledException && callerToken.IsCancellationRequested)
+            return;
+
+        var category = exception switch
+        {
+            UnauthorizedAccessException => ToolInvocationOutcomeCategory.AccessDenied,
+            FileNotFoundException or DirectoryNotFoundException => ToolInvocationOutcomeCategory.NotFound,
+            IOException or TimeoutException => ToolInvocationOutcomeCategory.TransientFailure,
+            _ => ToolInvocationOutcomeCategory.TransientFailure
+        };
+        context.Outputs.TryComplete(new ToolInvocationReceipt(category));
     }
 
     /// <summary>

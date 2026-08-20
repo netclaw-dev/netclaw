@@ -47,19 +47,29 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (ContainsInvalidControlCharacter(args.Path))
-            return Task.FromResult("Error: path contains an invalid control character.");
+            return Task.FromResult(context.InvalidInput("Error: path contains an invalid control character."));
 
         var raw = args.Path?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(raw))
-            return Task.FromResult("Error: path is required.");
+            return Task.FromResult(context.InvalidInput("Error: path is required."));
 
-        if (!_fileAccessPolicy.TryResolveWorkingDirectory(raw, context, out var fullPath, out var accessError))
-            return Task.FromResult(accessError);
+        if (!Path.IsPathFullyQualified(raw))
+            return Task.FromResult(context.InvalidInput("Error: path must be absolute."));
+
+        if (!_fileAccessPolicy.TryResolveWorkingDirectory(
+                raw,
+                context,
+                out var fullPath,
+                out var accessError,
+                out var resolutionFailure))
+        {
+            return Task.FromResult(context.PathResolutionFailure(accessError, resolutionFailure));
+        }
 
         if (!Directory.Exists(fullPath))
-            return Task.FromResult($"Error: directory does not exist: {fullPath}");
+            return Task.FromResult(context.NotFound($"Error: directory does not exist: {fullPath}"));
 
-        return Task.FromResult(fullPath);
+        return Task.FromResult(context.SuccessProject(fullPath, fullPath));
     }
 
     internal bool CanDeclare(string path, ToolInvocationContext context)

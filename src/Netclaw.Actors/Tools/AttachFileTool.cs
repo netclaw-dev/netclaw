@@ -26,7 +26,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
     private readonly ToolPathPolicy _pathPolicy;
 
     public record Params(
-        [property: Description("Absolute path to the file to attach")] string Path,
+        [property: Description("File path to attach. Relative paths use the current project, then session scratch.")] string Path,
         [property: Description("Optional display name for the file")] string? DisplayName = null);
 
     public AttachFileTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
@@ -38,19 +38,28 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
-            return Task.FromResult("Error: 'path' parameter is required.");
+            return Task.FromResult(context.InvalidInput("Error: 'path' parameter is required."));
 
         if (string.IsNullOrWhiteSpace(context.SessionDirectory))
-            return Task.FromResult("Error: No session directory available.");
+            return Task.FromResult(context.RecoverableCorrection(
+                "Error: No session directory available.",
+                ToolOutcomeResults.SetWorkingDirectoryRemediation));
 
-        if (!_fileAccessPolicy.TryResolveAttachPath(args.Path, context, out var requestedPath, out var accessError))
-            return Task.FromResult(accessError);
+        if (!_fileAccessPolicy.TryResolveAttachPath(
+                args.Path,
+                context,
+                out var requestedPath,
+                out var accessError,
+                out var resolutionFailure))
+        {
+            return Task.FromResult(context.PathResolutionFailure(accessError, resolutionFailure));
+        }
 
         // Same hard-deny surface as file_read/file_list: attach must never ship
         // control-plane files (secrets, keys, webhooks, config, sqlite, pid,
         // lock, restart manifest) that shell cannot even reference (#1724).
         if (_pathPolicy.IsReadDenied(requestedPath))
-            return Task.FromResult(FileToolErrors.CredentialReadDenied(requestedPath));
+            return Task.FromResult(context.AccessDenied(FileToolErrors.CredentialReadDenied(requestedPath)));
 
         var sessionDir = PathUtility.Normalize(context.SessionDirectory);
         var sessionRoot = TryGetSessionRootDirectory(sessionDir);
@@ -68,12 +77,12 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 
         if (!interactivePersonalReach && !requestedInCurrentSession && !requestedInSessionRoot)
         {
-            return Task.FromResult(
-                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
+            return Task.FromResult(context.AccessDenied(
+                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}."));
         }
 
         if (!File.Exists(requestedPath))
-            return Task.FromResult($"Error: File not found: {requestedPath}");
+            return Task.FromResult(context.NotFound($"Error: File not found: {requestedPath}"));
 
         var resolvedPath = ResolveFinalPath(requestedPath);
 
@@ -81,15 +90,15 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         // target so any future divergence between requestedPath and resolvedPath
         // cannot widen attach's surface.
         if (_pathPolicy.IsReadDenied(resolvedPath))
-            return Task.FromResult(FileToolErrors.CredentialReadDenied(resolvedPath));
+            return Task.FromResult(context.AccessDenied(FileToolErrors.CredentialReadDenied(resolvedPath)));
 
         var resolvedInCurrentSession = PathUtility.IsWithinRoot(resolvedPath, sessionDir);
         var resolvedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(resolvedPath, sessionRoot);
 
         if (!interactivePersonalReach && !resolvedInCurrentSession && !resolvedInSessionRoot)
         {
-            return Task.FromResult(
-                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}.");
+            return Task.FromResult(context.AccessDenied(
+                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}."));
         }
 
         var attachPath = resolvedInCurrentSession
@@ -97,7 +106,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             : CopyIntoCurrentSession(resolvedPath, sessionDir);
 
         if (!PathUtility.IsWithinRoot(attachPath, sessionDir))
-            return Task.FromResult($"Error: Attach path escaped the session directory ({sessionDir}).");
+            return Task.FromResult(context.AccessDenied($"Error: Attach path escaped the session directory ({sessionDir})."));
 
         var rawFilename = args.DisplayName ?? Path.GetFileName(attachPath);
         var sanitizedFilename = FilenameSanitizer.Sanitize(rawFilename);
@@ -108,7 +117,10 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             ? string.Empty
             : " (copied into current session)";
 
-        return Task.FromResult($"File attached: {sanitizedFilename} ({mimeType}) at {attachPath}{copiedText}");
+        return Task.FromResult(context.SuccessFile(
+            $"File attached: {sanitizedFilename} ({mimeType}) at {attachPath}{copiedText}",
+            resolvedPath,
+            ToolFileActivityKind.Read));
     }
 
     private static string ResolveFinalPath(string path)

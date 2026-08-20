@@ -12,6 +12,7 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
+[Collection(McpSmokeChildProcessCollection.Name)]
 public sealed class McpProcessBoundStdioTests
 {
     [Fact]
