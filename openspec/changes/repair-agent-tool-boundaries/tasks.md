@@ -17,13 +17,13 @@
 
 ## 2. Remove bulk tools
 
-- [ ] 2.1 Remove `JsonReadTool`, `FileReadManyTool`, their schemas, and their registration paths.
-- [ ] 2.2 Remove both tool names from audience profiles, core snapshots, indexes, prompts, and system skills.
-- [ ] 2.3 Replace valid batch intent with parallel bounded `file_read` coverage.
-- [ ] 2.4 Remove JSON projection product fixtures and update all evidence digests.
-- [ ] 2.5 Update tool footprint evidence and schema snapshots for the reduced core.
-- [ ] 2.6 Remove or replace the two tool-specific eval scenarios.
-- [ ] 2.7 Run focused tool, actor, schema, fixture, header, and Slopwatch gates.
+- [x] 2.1 Remove `JsonReadTool`, `FileReadManyTool`, their schemas, and their registration paths.
+- [x] 2.2 Remove both tool names from audience profiles, core snapshots, indexes, prompts, and system skills.
+- [x] 2.3 Replace valid batch intent with parallel bounded `file_read` coverage.
+- [x] 2.4 Remove JSON projection product fixtures and update all evidence digests.
+- [x] 2.5 Update tool footprint evidence and schema snapshots for the reduced core.
+- [x] 2.6 Remove or replace the two tool-specific eval scenarios.
+- [x] 2.7 Run focused tool, actor, schema, fixture, header, and Slopwatch gates.
 
 ## 3. Repair rollout contracts
 

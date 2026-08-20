@@ -454,8 +454,6 @@ start_eval_daemon() {
     printf 'local-search-eval-token\n' > "$selection_root/search-target/nested/match.txt"
     printf 'batch-first-marker\n' > "$selection_root/batch-first.txt"
     printf 'batch-second-marker\n' > "$selection_root/batch-second.txt"
-    printf '{"status":"structured-json-ready","ignored":"not-requested"}\n' \
-        > "$selection_root/status.json"
     printf '\211PNG\r\n\032\n\000\000\000\rIHDR\000\000\000\003\000\000\000\002' \
         > "$selection_root/dimensions.png"
 
@@ -1469,18 +1467,13 @@ assert_tool_local_repository_search() {
         && stdout_response_contains 'match.txt'
 }
 
-assert_tool_known_batch_read() {
-    stdout_tool_called 'file_read_many' \
+assert_tool_known_composed_read() {
+    local read_count
+    read_count=$(grep -aoE '\[tool:call\] file_read\(' "$STDOUT_FILE" 2>/dev/null | wc -l | tr -d ' ' || true)
+    [[ "$read_count" -eq 2 ]] \
         && ! stdout_tool_called 'shell_execute' \
         && stdout_response_contains 'batch-first-marker' \
         && stdout_response_contains 'batch-second-marker'
-}
-
-assert_tool_known_json_projection() {
-    stdout_tool_called 'json_read' \
-        && ! stdout_tool_called 'shell_execute' \
-        && stdout_response_contains 'structured-json-ready' \
-        && ! stdout_response_contains 'not-requested'
 }
 
 assert_tool_known_image_metadata() {
@@ -2696,11 +2689,8 @@ run_all() {
     run_case tool_local_repository_search "recursive literal search uses file_search without shell" \
         "Search recursively under /home/netclaw/.netclaw/workspaces/file-tool-selection/search-target for the exact text local-search-eval-token and tell me which file contains it."
 
-    run_case tool_known_batch_read "known files use one bounded file_read_many call" \
+    run_case tool_known_composed_read "known files use two bounded file_read calls" \
         "Read /home/netclaw/.netclaw/workspaces/file-tool-selection/batch-first.txt and /home/netclaw/.netclaw/workspaces/file-tool-selection/batch-second.txt. Return both exact values."
-
-    run_case tool_known_json_projection "known JSON selection uses json_read without an interpreter" \
-        "Read only the /status value from /home/netclaw/.netclaw/workspaces/file-tool-selection/status.json. Do not return other properties."
 
     run_case tool_known_image_metadata "known image metadata uses file_read without an interpreter" \
         "Report the exact dimensions of /home/netclaw/.netclaw/workspaces/file-tool-selection/dimensions.png."

@@ -11,12 +11,11 @@ internal static class ToolChoiceGuidance
     public const string StructuredWorkspaceSelection = """
         Prefer structured workspace tools:
         1. Use file_search for bounded recursive name or literal text search.
-        2. Use file_read_many when the paths to read are already known.
-        3. Use json_read for bounded JSON pointer selection.
-        4. Use file_read for file content and image metadata.
-        5. Use tool_output_read to continue a spilled result by call id.
-        6. Use search_tools, then load_tool, before reporting that a specialty tool is unavailable.
-        7. Use shell or an interpreter only when no structured tool expresses the operation.
+        2. Use file_read for bounded file content and image metadata.
+        3. Issue independent file_read calls in parallel when several paths are known.
+        4. Use tool_output_read to continue a spilled result by call id.
+        5. Use search_tools, then load_tool, before reporting that a specialty tool is unavailable.
+        6. Use shell or an interpreter only when no structured tool expresses the operation.
         """;
 
     public const string DirectorySelectionOrder = """

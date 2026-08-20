@@ -90,29 +90,6 @@ public class GeneratedToolSchemaMetaTests
     }
 
     [Fact]
-    public void Generated_schema_describes_string_arrays_without_scalar_coercion()
-    {
-        var tool = new FileReadManyTool(
-            new ToolConfig(),
-            new NetclawPaths(),
-            new Netclaw.Security.ToolPathPolicy([]));
-
-        var paths = tool.ParameterSchema
-            .GetProperty("properties")
-            .GetProperty("Paths");
-
-        Assert.Equal("array", paths.GetProperty("type").GetString());
-        Assert.Equal("string", paths.GetProperty("items").GetProperty("type").GetString());
-        Assert.Contains(
-            "Relative paths use the current project",
-            paths.GetProperty("description").GetString(),
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "Paths",
-            tool.ParameterSchema.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
-    }
-
-    [Fact]
     public void GeneratedDictionaryBinderSupportsAllDeclaredMapShapes()
     {
         var tool = new DictionaryShapeTool();

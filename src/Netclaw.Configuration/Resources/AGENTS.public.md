@@ -24,9 +24,8 @@
 ## Structured Tool Selection
 
 - Use `file_search` for bounded recursive name or literal text search.
-- Use `file_read_many` when the paths to read are already known.
-- Use `json_read` for bounded JSON pointer selection.
 - Use `file_read` for file content and image metadata.
+- Issue independent `file_read` calls in parallel when several paths are known.
 - Use `tool_output_read` to continue a spilled result by call id.
 - Use `search_tools`, then `load_tool`, before reporting that a specialty tool is unavailable.
 

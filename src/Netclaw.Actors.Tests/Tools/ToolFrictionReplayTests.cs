@@ -36,7 +36,6 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
     [Theory]
     [InlineData("TF01")]
     [InlineData("TF02")]
-    [InlineData("TF03")]
     [InlineData("TF04")]
     [InlineData("TF05")]
     [InlineData("TF06")]
@@ -225,8 +224,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
         return policyCase.Id switch
         {
             "TF01" => await RecursiveSearchAsync(project, session, seed, denied, cancellationToken),
-            "TF02" => await BatchReadAsync(project, session, seed, denied, cancellationToken),
-            "TF03" => await JsonProjectionAsync(project, session, seed, denied, cancellationToken),
+            "TF02" => await ComposedReadAsync(project, session, seed, denied, cancellationToken),
             "TF04" => await ImageMetadataAsync(project, session, seed, denied, cancellationToken),
             "TF05" => await SpillContinuationAsync(project, session, seed, denied, cancellationToken),
             "TF06" => FailedFileActivity(project, session, seed, denied),
@@ -255,7 +253,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             PythonFallback("search-fallback", project, "print('recursive search')"));
     }
 
-    private static async Task<ScenarioSetup> BatchReadAsync(
+    private static async Task<ScenarioSetup> ComposedReadAsync(
         string project,
         string session,
         string seed,
@@ -271,28 +269,12 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             session,
             seed,
             denied,
-            [Call("batch", FileReadManyTool.ToolName, "Paths", new[] { "first.txt", "second.txt" })],
+            [
+                Call("read-first", FileReadTool.ToolName, "Path", "first.txt"),
+                Call("read-second", FileReadTool.ToolName, "Path", "second.txt")
+            ],
             PythonFallback("batch-fallback", project, "print(open('first.txt').read()); print(open('second.txt').read())"),
             [first, second]);
-    }
-
-    private static async Task<ScenarioSetup> JsonProjectionAsync(
-        string project,
-        string session,
-        string seed,
-        string denied,
-        CancellationToken cancellationToken)
-    {
-        var path = Path.Join(project, "data.json");
-        await File.WriteAllTextAsync(path, "{\"status\":\"ready\"}", cancellationToken);
-        return Setup(
-            project,
-            session,
-            seed,
-            denied,
-            [Call("json", JsonReadTool.ToolName, "Path", "data.json", "Pointers", new[] { "/status" })],
-            PythonFallback("json-fallback", project, "import json; print(json.load(open('data.json'))['status'])"),
-            [path]);
     }
 
     private static async Task<ScenarioSetup> ImageMetadataAsync(

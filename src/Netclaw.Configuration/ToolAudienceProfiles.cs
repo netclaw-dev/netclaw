@@ -133,8 +133,6 @@ public static class ToolAudienceProfileToolCatalog
     public const string FileRead = "file_read";
     public const string FileList = "file_list";
     public const string FileSearch = "file_search";
-    public const string FileReadMany = "file_read_many";
-    public const string JsonRead = "json_read";
     public const string ToolOutputRead = "tool_output_read";
     public const string AttachFile = "attach_file";
     public const string FileWrite = "file_write";
@@ -152,7 +150,7 @@ public static class ToolAudienceProfileToolCatalog
     public const string SetWorkingDirectory = "set_working_directory";
 
     public static IReadOnlyList<string> FileTools { get; } =
-        [FileRead, FileList, FileSearch, FileReadMany, JsonRead, ToolOutputRead, FileWrite, FileEdit, AttachFile];
+        [FileRead, FileList, FileSearch, ToolOutputRead, FileWrite, FileEdit, AttachFile];
     public static IReadOnlyList<string> WebTools { get; } = [WebSearch, WebFetch];
     public static IReadOnlyList<string> SkillTools { get; } = [SkillManage];
     public static IReadOnlyList<string> WebhookTools { get; } = [SetWebhook, ListWebhooks, DeleteWebhook];
@@ -160,7 +158,7 @@ public static class ToolAudienceProfileToolCatalog
     public static IReadOnlyList<string> WorkingDirectoryTools { get; } = [SetWorkingDirectory];
 
     public static IReadOnlyList<string> PublicDefaultAllowedTools { get; } =
-        [FileRead, FileList, FileSearch, FileReadMany, JsonRead, ToolOutputRead, AttachFile];
+        [FileRead, FileList, FileSearch, ToolOutputRead, AttachFile];
 
     public static IReadOnlyList<string> TeamDefaultAllowedTools { get; } =
     [

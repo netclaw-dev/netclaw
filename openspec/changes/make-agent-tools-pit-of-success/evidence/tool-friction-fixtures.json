@@ -29,23 +29,13 @@
     },
     {
       "id": "TF02",
-      "scenario": "BatchRead",
+      "scenario": "ComposedRead",
       "observedFriction": "ApprovalGatedShellBatch",
-      "expectedToolSequence": ["file_read_many"],
+      "expectedToolSequence": ["file_read", "file_read"],
       "expectedOutcome": "success",
       "expectedApprovalRequired": false,
       "fallbackApprovalRequired": true,
       "expectedContextEffect": "RecordTwoCanonicalFiles"
-    },
-    {
-      "id": "TF03",
-      "scenario": "JsonProjection",
-      "observedFriction": "ApprovalGatedInterpreterProjection",
-      "expectedToolSequence": ["json_read"],
-      "expectedOutcome": "success",
-      "expectedApprovalRequired": false,
-      "fallbackApprovalRequired": true,
-      "expectedContextEffect": "RecordOneCanonicalFile"
     },
     {
       "id": "TF04",
