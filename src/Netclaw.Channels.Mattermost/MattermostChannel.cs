@@ -298,7 +298,21 @@ public sealed class MattermostChannel : IChannel
             _gateway = null;
         }
 
-        await _gatewayClient.DisconnectAsync(cancellationToken);
+        // The disconnect is best-effort during shutdown. On SIGTERM, Akka's CLR
+        // shutdown hook can terminate the actor system before host shutdown
+        // reaches this channel, so the disconnect Ask dead-letters and times out
+        // after its full ask budget. That teardown race is normal — the process
+        // is going down either way — so log and continue rather than letting the
+        // failure surface as a false daemon-main crash (#2035).
+        try
+        {
+            await _gatewayClient.DisconnectAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Gateway disconnect failed during shutdown; the actor system is already terminating.");
+        }
+
         if (_gatewayClient is IDisposable disposable)
             disposable.Dispose();
     }

@@ -68,10 +68,25 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IMa
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
-        UpdateSnapshot(await _lifecycleActor.Ask<MattermostGatewaySnapshot>(
-            MattermostNetGatewayLifecycleActor.Disconnect.Instance,
-            ConnectAskTimeout,
-            cancellationToken: cancellationToken));
+        // The CLR shutdown hook can terminate the actor system before host
+        // shutdown reaches the channel. An Ask to a dead actor dead-letters and
+        // stalls for the full ConnectAskTimeout; with the system gone there is
+        // nothing left to disconnect (#2035).
+        if (_actorSystem.WhenTerminated.IsCompleted)
+            return;
+
+        try
+        {
+            UpdateSnapshot(await _lifecycleActor.Ask<MattermostGatewaySnapshot>(
+                MattermostNetGatewayLifecycleActor.Disconnect.Instance,
+                ConnectAskTimeout,
+                cancellationToken: cancellationToken));
+        }
+        catch (AskTimeoutException) when (_actorSystem.WhenTerminated.IsCompleted)
+        {
+            // The system terminated while the disconnect was in flight; the
+            // drain result no longer matters.
+        }
     }
 
     public void Dispose() => _actorSystem.Stop(_lifecycleActor);
