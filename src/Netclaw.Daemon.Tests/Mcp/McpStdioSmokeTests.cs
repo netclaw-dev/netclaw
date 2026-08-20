@@ -16,6 +16,7 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// End-to-end smoke tests that connect to a real MCP server over stdio.
 /// Uses the repository's deterministic MCP smoke server.
 /// </summary>
+[Collection(McpSmokeChildProcessCollection.Name)]
 public class McpStdioSmokeTests : IAsyncDisposable
 {
     private McpClient? _client;

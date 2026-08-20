@@ -11,6 +11,7 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
+[Collection(McpSmokeChildProcessCollection.Name)]
 public sealed class SmokeMcpPromptSkillTests(ITestOutputHelper output)
 {
     [Theory]

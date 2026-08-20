@@ -18,7 +18,21 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// </summary>
 internal static class SmokeMcpServerLocator
 {
-    public static string LocateDll()
+    /// <summary>
+    /// The result cannot change during a test run, so the recursive
+    /// <c>bin/</c> walk runs once per test process instead of once per spawn.
+    /// The walk is expensive on Windows CI, where every spawning test paid for
+    /// it again. <see cref="LazyThreadSafetyMode.ExecutionAndPublication"/>
+    /// also caches the failure: a build that produced no DLL is a permanent
+    /// miss, and every test must keep failing with the same assertion.
+    /// </summary>
+    private static readonly Lazy<string> CachedDll = new(
+        LocateDllCore,
+        LazyThreadSafetyMode.ExecutionAndPublication);
+
+    public static string LocateDll() => CachedDll.Value;
+
+    private static string LocateDllCore()
     {
         var projectDir = Path.Combine(LocateRepositoryRoot(), "tests", "Netclaw.SmokeMcpServer");
         var binMarker = $"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}";

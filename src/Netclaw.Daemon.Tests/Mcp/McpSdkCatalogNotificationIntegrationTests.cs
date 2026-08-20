@@ -10,6 +10,7 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
+[Collection(McpSmokeChildProcessCollection.Name)]
 public sealed class McpSdkCatalogNotificationIntegrationTests(ITestOutputHelper output)
 {
     private static readonly McpServerName ServerName = new("notifications");
