@@ -381,9 +381,13 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task Routes_file_read_missing_file()
     {
+        var missingPath = Path.Combine(
+            Path.GetTempPath(),
+            "netclaw-missing-" + Guid.NewGuid().ToString("N"),
+            "file.txt");
         var toolCall = CreateToolCall(
             "call-2", "file_read",
-            ToolInput.Create("Path", "/nonexistent/file.txt"));
+            ToolInput.Create("Path", missingPath));
 
         var context = TestToolExecutionContext.CreateBound("signalr/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
         {
