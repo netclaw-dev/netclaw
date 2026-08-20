@@ -186,16 +186,17 @@ public sealed class StructuredWorkspaceToolTests : IDisposable
         await File.WriteAllTextAsync(second, new string('b', 100), TestContext.Current.CancellationToken);
         var context = CreateContext();
         var tool = new FileReadManyTool(_config, new NetclawPaths(), _openPathPolicy);
+        var totalLimit = first.Length + second.Length + 80;
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create(
                 "Paths", new[] { "a.txt", "b.txt" },
                 "MaxCharsPerFile", 20,
-                "MaxTotalChars", 200),
+                "MaxTotalChars", totalLimit),
             context,
             TestContext.Current.CancellationToken);
 
-        Assert.True(result.Length <= 200);
+        Assert.True(result.Length <= totalLimit);
         Assert.Contains($"== {first} ==", result, StringComparison.Ordinal);
         Assert.Contains($"== {second} ==", result, StringComparison.Ordinal);
         Assert.Contains("[truncated]", result, StringComparison.Ordinal);
