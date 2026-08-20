@@ -58,4 +58,4 @@
 - [x] 7.4 Add operator diagnostics for core/deferred/loaded counts and outcome categories with PII and payload exclusion tests.
 - [x] 7.5 Run Release build, full tests, headers, formatting, strict OpenSpec, changed-file Slopwatch, PII audit, and API compatibility gates.
 - [x] 7.6 Run native Windows and Linux validation.
-- [ ] 7.7 Rebase the final stack on upstream/dev, merge in order, remove merged worktrees, produce a binary-swap build, and harvest a new sanitized live window.
+- [x] 7.7 Rebase the final stack on upstream/dev, merge in order, remove merged worktrees, produce a binary-swap build, and harvest a new sanitized live window.

@@ -329,7 +329,7 @@ Done when:
   continuation passed 0/5: all five runs used shell, none loaded or called
   `tool_output_read`, and one run searched the catalog. Keep this failure as a
   rollout finding; do not weaken its assertion.
-- [ ] Complete native platform CI, stack merge, binary swap, and a new
+- [x] Complete native platform CI, stack merge, binary swap, and a new
   sanitized live traffic harvest.
 - [ ] Define automated session-directory cleanup in a separate OpenSpec before
   adding retention or deletion behavior.
