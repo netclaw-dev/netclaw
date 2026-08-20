@@ -333,7 +333,11 @@ when listing tasks.
 ### Requirement: Failure handling and guardrails
 
 The reminder manager SHALL store consecutive failures in each reminder
-definition. A successful execution SHALL reset the count.
+definition. An execution failure and a scheduling failure SHALL increment the
+same count. A successful execution SHALL reset the count. A successful
+reschedule alone SHALL NOT reset the count. The post-fire reschedule of a cron
+reminder runs before that occurrence executes. A reset at that point erases a
+pending execution-failure count.
 
 The manager SHALL disable a reminder when the count reaches
 `FailurePauseThreshold`. The disabled definition SHALL remain available for
@@ -355,6 +359,28 @@ is acceptable.
 
 Each execution SHALL have a one-hour absolute limit. A known timeout SHALL
 count as a failed attempt.
+
+A scheduling failure is a failure to compute or install the next occurrence at
+an unattended reschedule site. The two unattended sites are the post-fire
+reschedule of a recurring reminder and the startup reconcile restore loop.
+Causes include an unresolvable `CRON_TZ` time zone, a cron expression with no
+future occurrence, and an uninitialized reminder client.
+
+At an unattended site, the manager SHALL do all of the following:
+
+- increment the reminder's `ConsecutiveFailures` count;
+- emit an `OperationalAlert.ReminderScheduleFailed` alert at Warning severity;
+- disable the reminder when the count reaches `FailurePauseThreshold`, emit an
+  `OperationalAlert.ReminderAutoDisabled` alert at Critical severity, and post a
+  channel notice.
+
+The manager SHALL NOT evaluate an unresolvable time zone in UTC. The manager
+SHALL NOT skip a failed reschedule without a report. A fire at the wrong time is
+worse than a missed fire.
+
+The create path and the update path (`set_reminder`) SHALL return a scheduling
+error to the caller. Those paths SHALL NOT emit a scheduling-failure alert,
+because the caller already sees the error.
 
 #### Scenario: Consecutive failures disable a reminder
 
@@ -383,6 +409,65 @@ count as a failed attempt.
 - **WHEN** the timeout fires
 - **THEN** the execution is cancelled and reported as a failure
 - **AND** the failure is counted toward `FailurePauseThreshold`
+
+#### Scenario: Post-fire reschedule failure is surfaced
+
+- **GIVEN** a recurring reminder fires
+- **AND** the manager cannot compute its next occurrence
+- **WHEN** the manager attempts the post-fire reschedule
+- **THEN** the manager increments the reminder's `ConsecutiveFailures` count
+- **AND** the manager emits an `OperationalAlert.ReminderScheduleFailed` alert
+- **AND** the current occurrence still executes
+
+#### Scenario: Reconcile schedule failure is surfaced
+
+- **GIVEN** an enabled reminder whose next occurrence is not computable at startup
+- **WHEN** the reconcile restore loop attempts to reschedule it
+- **THEN** the manager increments the reminder's `ConsecutiveFailures` count
+- **AND** the manager emits an `OperationalAlert.ReminderScheduleFailed` alert
+- **AND** the manager does not skip the reminder without a report
+
+#### Scenario: Consecutive scheduling failures disable a reminder
+
+- **GIVEN** a reminder has one fewer scheduling failure than `FailurePauseThreshold`
+- **WHEN** the manager reports the next scheduling failure
+- **THEN** the manager disables the reminder
+- **AND** the manager emits an `OperationalAlert.ReminderAutoDisabled` alert at
+  Critical severity
+- **AND** the manager posts a channel notice
+
+#### Scenario: A successful execution resets scheduling failures
+
+- **GIVEN** a reminder has two consecutive scheduling failures
+- **AND** its schedule recovers, so the reminder fires again
+- **WHEN** that occurrence executes successfully
+- **THEN** the manager saves a zero failure count
+
+#### Scenario: A successful reschedule alone does not reset the count
+
+- **GIVEN** a cron reminder has a failure count above zero
+- **WHEN** the post-fire reschedule of an occurrence succeeds
+- **THEN** the manager keeps the current failure count
+- **AND** only a later successful execution resets it
+
+#### Scenario: An unresolvable time zone never falls back to UTC
+
+- **GIVEN** a cron reminder with an unresolvable `CRON_TZ` time zone
+- **WHEN** the manager attempts a reschedule at an unattended site
+- **THEN** the manager schedules no occurrence
+- **AND** the manager does not evaluate the reminder in UTC
+- **AND** the manager reports the failure through the count and a
+  `ReminderScheduleFailed` alert
+
+#### Scenario: One bad startup does not disable many reminders
+
+- **GIVEN** many enabled reminders whose schedules all fail once at startup
+- **AND** `FailurePauseThreshold` is greater than one
+- **WHEN** the reconcile restore loop runs
+- **THEN** the manager increments each affected count by one
+- **AND** the manager disables no reminder because of one startup failure
+- **AND** the manager emits an `OperationalAlert.ReminderScheduleFailed` alert
+  for each affected reminder
 
 ### Requirement: Execution history CLI command
 
