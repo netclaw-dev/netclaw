@@ -190,9 +190,11 @@ public sealed partial class JsonReadTool : NetclawTool<JsonReadTool.Params>
         }
 
         var tokens = new List<string>();
+        var token = new StringBuilder();
         foreach (var encodedToken in source[1..].Split('/'))
         {
-            var token = new StringBuilder(encodedToken.Length);
+            token.Clear();
+            token.EnsureCapacity(encodedToken.Length);
             for (var index = 0; index < encodedToken.Length; index++)
             {
                 if (encodedToken[index] != '~')
