@@ -2030,7 +2030,13 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Successful_first_party_edit_is_returned_as_confirmed_child_activity()
     {
-        var editTool = new FakeNetclawTool("file_edit", "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)");
+        var changedPath = Path.GetFullPath(Path.Join(MissingProjectDirectory, "src", "Calculator.cs"));
+        var editTool = new FakeNetclawTool(
+            "file_edit",
+            "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)",
+            onExecute: context => context.TryComplete(new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.Success,
+                [new ToolFileActivity(changedPath, ToolFileActivityKind.Changed)])));
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =
@@ -2052,16 +2058,18 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.NotNull(result.WorkingContext);
-        Assert.Equal(
-            Path.GetFullPath(Path.Join(MissingProjectDirectory, "src", "Calculator.cs")),
-            Assert.Single(result.WorkingContext.ConfirmedChangedFiles));
+        Assert.Equal(changedPath, Assert.Single(result.WorkingContext.ConfirmedChangedFiles));
         Assert.Empty(result.WorkingContext.ObservedChangedFiles);
     }
 
     [Fact]
     public async Task Denied_first_party_edit_is_not_returned_as_confirmed_child_activity()
     {
-        var editTool = new FakeNetclawTool("file_edit", "Error: Permission denied: src/Calculator.cs");
+        var editTool = new FakeNetclawTool(
+            "file_edit",
+            "Error: Permission denied: src/Calculator.cs",
+            onExecute: context => context.TryComplete(
+                new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied)));
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =

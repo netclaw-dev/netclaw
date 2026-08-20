@@ -25,13 +25,13 @@
 
 ## 4. PR 4 - Workspace path and outcome foundation
 
-- [ ] 4.1 Add one shared relative-path resolver using valid project directory then immutable session directory, never process cwd.
-- [ ] 4.2 Route existing first-party read, list, write, edit, and attach paths through the shared resolver before their existing scoped policies.
-- [ ] 4.3 Add the call-local typed outcome receipt and central exception/policy classifications without changing public INetclawTool signatures.
-- [ ] 4.4 Convert first-party workspace tools to report exact success, invalid-input, denial, not-found, transient, or correction outcomes.
-- [ ] 4.5 Replace argument-based RecentFiles inference for workspace tools with canonical successful file activity from the receipt.
-- [ ] 4.6 Prove failed file operations and failed set_working_directory calls cannot change RecentFiles, project scope, or project instructions.
-- [ ] 4.7 Add POSIX and native-Windows tests for relative paths, traversal, missing bases, symlinks, protected paths, and absolute-path compatibility.
+- [x] 4.1 Add one shared relative-path resolver using valid project directory then immutable session directory, never process cwd.
+- [x] 4.2 Route existing first-party read, list, write, edit, and attach paths through the shared resolver before their existing scoped policies.
+- [x] 4.3 Add the call-local typed outcome receipt and central exception/policy classifications without changing public INetclawTool signatures.
+- [x] 4.4 Convert first-party workspace tools to report exact success, invalid-input, denial, not-found, transient, or correction outcomes.
+- [x] 4.5 Replace argument-based RecentFiles inference for workspace tools with canonical successful file activity from the receipt.
+- [x] 4.6 Prove failed file operations and failed set_working_directory calls cannot change RecentFiles, project scope, or project instructions.
+- [x] 4.7 Add POSIX and native-Windows tests for relative paths, traversal, missing bases, symlinks, protected paths, and absolute-path compatibility.
 
 ## 5. PR 5 - Structured workspace primitives
 

@@ -932,13 +932,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         foreach (var change in msg.ScratchCorrectionChanges)
             _sessionScratchCorrections.Apply(change);
 
-        // Processes all results, including failed tool calls. RecentFiles tracks
-        // interaction intent, not successful reads only.
-        var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipts(
             _state.WorkingContext,
-            _state.History,
             msg.ToolResults,
-            _log);
+            msg.ToolReceipts);
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
 
@@ -953,12 +950,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var result in msg.ToolResults)
         {
-            if (result.Name is not "set_working_directory" || result.Content is null)
+            if (result.ToolCallId is not { } callId
+                || !msg.ToolReceipts.TryGetValue(callId.Value, out var receipt)
+                || receipt.Category != ToolInvocationOutcomeCategory.Success
+                || receipt.DeclaredProjectDirectory is not { } projectDir)
+            {
                 continue;
-
-            var projectDir = result.Content.Trim();
-            if (!Path.IsPathRooted(projectDir))
-                continue;
+            }
 
             var next = _state.WorkingContext.WithProjectDirectory(projectDir);
             if (ReferenceEquals(next, _state.WorkingContext))
@@ -4719,29 +4717,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             FailureCode = result.FailureCode
         }, OutputFilter.ToolCalls);
 
-        var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipt(
             _state.WorkingContext,
-            _state.History,
-            [toolMessage],
-            _log);
+            result.Receipt);
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
 
         if (toolMessage.Name is "load_tool" && toolMessage.Content is not null)
             TryActivateDiscoveredTool(toolMessage.Content.Trim());
 
-        if (toolMessage.Name is "set_working_directory" && toolMessage.Content is not null)
-        {
-            var projectDir = toolMessage.Content.Trim();
-            if (Path.IsPathRooted(projectDir))
+        if (result.Receipt is
             {
-                var next = _state.WorkingContext.WithProjectDirectory(projectDir);
-                if (!ReferenceEquals(next, _state.WorkingContext))
-                {
-                    _state = _state with { WorkingContext = next };
-                    SetSystemPrompt();
-                    _log.Info("Project directory set to {ProjectDir}", projectDir);
-                }
+                Category: ToolInvocationOutcomeCategory.Success,
+                DeclaredProjectDirectory: { } projectDir
+            })
+        {
+            var next = _state.WorkingContext.WithProjectDirectory(projectDir);
+            if (!ReferenceEquals(next, _state.WorkingContext))
+            {
+                _state = _state with { WorkingContext = next };
+                SetSystemPrompt();
+                _log.Info("Project directory set to {ProjectDir}", projectDir);
             }
         }
 

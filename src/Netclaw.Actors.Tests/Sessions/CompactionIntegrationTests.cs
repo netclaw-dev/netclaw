@@ -764,6 +764,10 @@ public class CompactionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["Path"] = "src/Rect.cs" })
         ];
         _fakeToolExecutor.Results["file_read"] = "public readonly record struct Rect { ... }";
+        var canonicalPath = Path.GetFullPath(Path.Join(Path.GetTempPath(), "src", "Rect.cs"));
+        _fakeToolExecutor.Receipts["file_read"] = new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.Success,
+            [new ToolFileActivity(canonicalPath, ToolFileActivityKind.Read)]);
         _fakeChatClient.UsageOverride = new UsageDetails
         {
             InputTokenCount = 100,
@@ -856,10 +860,10 @@ public class CompactionIntegrationTests : LlmSessionTestBase
 
         var hasWorkingContextBlock = allContent.Any(s =>
             s.Contains("[working-context]", StringComparison.Ordinal)
-            && s.Contains("src/Rect.cs", StringComparison.Ordinal));
+            && s.Contains(canonicalPath, StringComparison.Ordinal));
 
         Assert.True(hasWorkingContextBlock,
-            $"Expected the post-compaction LLM call to include a [working-context] block mentioning src/Rect.cs. All messages:\n{string.Join("\n---\n", allContent)}");
+            $"Expected the post-compaction LLM call to include a [working-context] block mentioning the canonical file. All messages:\n{string.Join("\n---\n", allContent)}");
     }
 
     [Fact]

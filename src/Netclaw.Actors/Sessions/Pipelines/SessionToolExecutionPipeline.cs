@@ -38,7 +38,8 @@ internal sealed record ToolCallResult(
     IReadOnlyList<AcceptedSubAgentFinding> AcceptedSubAgentFindings,
     Jobs.ActiveJobInfo? StartedBackgroundJob = null,
     SessionScratchCorrectionChange? ScratchCorrectionChange = null,
-    string? FailureCode = null);
+    string? FailureCode = null,
+    ToolInvocationReceipt? Receipt = null);
 
 internal abstract record SessionScratchCorrectionChange
 {
@@ -402,6 +403,15 @@ internal sealed class SessionToolExecutionPipeline
                             : throw new InvalidOperationException("A failed tool result requires a call identity."),
                         result => result.FailureCode
                             ?? throw new InvalidOperationException("A failed tool result requires a failure code."),
+                        StringComparer.Ordinal),
+                ToolReceipts = results
+                    .Where(result => result.Receipt is not null)
+                    .ToDictionary<ToolCallResult, string, ToolInvocationReceipt>(
+                        result => result.Message.ToolCallId is { } callId
+                            ? callId.Value
+                            : throw new InvalidOperationException("A tool receipt requires a call identity."),
+                        result => result.Receipt
+                            ?? throw new InvalidOperationException("A selected tool result requires a receipt."),
                         StringComparer.Ordinal)
             });
         }
@@ -450,7 +460,8 @@ internal sealed class SessionToolExecutionPipeline
                 Content = rejection.Message,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
-            }, [], [], [], [], FailureCode: rejection.DenyReason);
+            }, [], [], [], [], FailureCode: rejection.DenyReason,
+                Receipt: new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
         }
 
         var meta = interpretation.Meta;
@@ -617,6 +628,7 @@ internal sealed class SessionToolExecutionPipeline
                     [],
                     [],
                     [],
+                    Receipt: new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied),
                     ScratchCorrectionChange: consumedScratchKey is { } deniedConsumed
                         ? new SessionScratchCorrectionChange.Consume(deniedConsumed)
                         : null);
@@ -684,6 +696,9 @@ internal sealed class SessionToolExecutionPipeline
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
                 }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+                    Receipt: new ToolInvocationReceipt(
+                        ToolInvocationOutcomeCategory.RecoverableCorrection,
+                        remediationCode: ToolOutcomeResults.UseSessionScratchRemediation),
                     ScratchCorrectionChange: new SessionScratchCorrectionChange.Arm(newCorrectionKey));
             }
 
@@ -703,7 +718,10 @@ internal sealed class SessionToolExecutionPipeline
                     Content = resultText,
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
-                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings);
+                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+                    Receipt: new ToolInvocationReceipt(
+                        ToolInvocationOutcomeCategory.RecoverableCorrection,
+                        remediationCode: ToolOutcomeResults.SetWorkingDirectoryRemediation));
             }
 
             if (!CanRequestInteractiveApproval(batch.TurnContext))
@@ -717,7 +735,8 @@ internal sealed class SessionToolExecutionPipeline
                     Content = resultText,
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
-                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings);
+                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+                    Receipt: new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
             }
 
             // Mid-turn approval pause: emit request to channel, block on TCS
@@ -827,6 +846,7 @@ internal sealed class SessionToolExecutionPipeline
                     invocation: context.Invocation,
                     canDeclare: batch.CanDeclareWorkingDirectory);
                 resultText = string.IsNullOrEmpty(hint) ? reason : $"{reason}\n{hint}";
+                context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
 
             }
         }
@@ -834,6 +854,7 @@ internal sealed class SessionToolExecutionPipeline
         {
             sw.Stop();
             resultText = $"Tool access denied: {ex.DenyReason}";
+            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
 
         }
         catch (OperationCanceledException) when (batch.CancellationToken.IsCancellationRequested)
@@ -848,6 +869,13 @@ internal sealed class SessionToolExecutionPipeline
         {
             sw.Stop();
             resultText = $"Error executing tool: {ex.Message}";
+            var category = ex switch
+            {
+                UnauthorizedAccessException => ToolInvocationOutcomeCategory.AccessDenied,
+                FileNotFoundException or DirectoryNotFoundException => ToolInvocationOutcomeCategory.NotFound,
+                _ => ToolInvocationOutcomeCategory.TransientFailure
+            };
+            context.Outputs.TryComplete(new ToolInvocationReceipt(category));
 
         }
 
@@ -876,6 +904,8 @@ internal sealed class SessionToolExecutionPipeline
             context.Outputs.FileAttachments,
             completedRuns,
             acceptedFindings,
+            Receipt: context.Receipt
+                ?? new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success),
             ScratchCorrectionChange: consumedScratchKey is { } consumed
                 ? new SessionScratchCorrectionChange.Consume(consumed)
                 : null);

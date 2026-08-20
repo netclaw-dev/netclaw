@@ -135,6 +135,76 @@ public class FileWriteToolTests : IDisposable
         Assert.False(File.Exists(filePath));
     }
 
+    [Fact]
+    public async Task Relative_write_uses_project_and_reports_canonical_change()
+    {
+        var projectDir = Path.Join(_dir.Path, "project");
+        Directory.CreateDirectory(projectDir);
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/relative-project",
+            _sessionDir,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = projectDir
+            });
+
+        var result = await _tool.ExecuteAsync(
+            ToolInput.Create("Path", Path.Join("notes", "result.md"), "Content", "done"),
+            context,
+            CancellationToken.None);
+
+        var expected = Path.GetFullPath(Path.Join(projectDir, "notes", "result.md"));
+        Assert.Contains("Successfully wrote", result, StringComparison.Ordinal);
+        Assert.Equal("done", await File.ReadAllTextAsync(expected, TestContext.Current.CancellationToken));
+        Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
+        var activity = Assert.Single(context.Receipt?.FileActivity ?? []);
+        Assert.Equal(expected, activity.CanonicalPath);
+        Assert.Equal(ToolFileActivityKind.Changed, activity.Kind);
+    }
+
+    [Fact]
+    public async Task Relative_write_falls_back_to_session_when_project_was_moved()
+    {
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/stale-project",
+            _sessionDir,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ProjectDirectory = Path.Join(_dir.Path, "missing-project")
+            });
+
+        var result = await _tool.ExecuteAsync(
+            ToolInput.Create("Path", "result.md", "Content", "session"),
+            context,
+            CancellationToken.None);
+
+        var expected = Path.GetFullPath(Path.Join(_sessionDir, "result.md"));
+        Assert.Contains(expected, result, StringComparison.Ordinal);
+        Assert.Equal("session", await File.ReadAllTextAsync(expected, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Denied_write_reports_no_file_activity()
+    {
+        var filePath = Path.Combine(_dir.Path, "denied.txt");
+        var tool = new FileWriteTool(
+            new ToolConfig(),
+            new NetclawPaths(),
+            new ToolPathPolicy([filePath]));
+        var context = CreatePersonalContext();
+
+        _ = await tool.ExecuteAsync(
+            ToolInput.Create("Path", filePath, "Content", "blocked"),
+            context,
+            CancellationToken.None);
+
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+        Assert.Empty(context.Receipt?.FileActivity ?? []);
+        Assert.False(File.Exists(filePath));
+    }
+
     private ToolExecutionContext CreatePersonalContext()
         => TestToolExecutionContext.CreateBound("signalr/thread-1", _sessionDir, new TestToolExecutionContextOptions
         {

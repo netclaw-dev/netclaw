@@ -16,6 +16,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <InternalsVisibleTo Include="Netclaw.Actors" />
     <InternalsVisibleTo Include="Netclaw.Actors.Tests" />
     <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
   </ItemGroup>

@@ -11,6 +11,14 @@ namespace Netclaw.Actors.Tools;
 
 internal sealed class ScopedFileAccessPolicy
 {
+    internal enum PathResolutionFailure
+    {
+        None,
+        InvalidInput,
+        AccessDenied,
+        MissingBase
+    }
+
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly Lazy<IReadOnlyList<string>> _cachedGlobalReadRoots;
     private readonly Lazy<string?> _cachedWorkspacesRoot;
@@ -36,6 +44,14 @@ internal sealed class ScopedFileAccessPolicy
     public bool TryResolveReadPath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error);
 
+    internal bool TryResolveReadPath(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error, out failure);
+
     /// <summary>
     /// Resolves a path for <c>set_working_directory</c>. Deliberately does NOT
     /// grant interactive Personal shell-equivalent reach: the working directory
@@ -46,6 +62,21 @@ internal sealed class ScopedFileAccessPolicy
     /// </summary>
     public bool TryResolveWorkingDirectory(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error, allowInteractivePersonalReach: false);
+
+    internal bool TryResolveWorkingDirectory(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(
+            rawPath,
+            context,
+            AccessKind.Read,
+            out fullPath,
+            out error,
+            out failure,
+            allowInteractivePersonalReach: false);
 
     /// <summary>
     /// True when an interactive Personal-audience session gets shell-equivalent
@@ -61,8 +92,24 @@ internal sealed class ScopedFileAccessPolicy
     public bool TryResolveWritePath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Write, out fullPath, out error);
 
+    internal bool TryResolveWritePath(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(rawPath, context, AccessKind.Write, out fullPath, out error, out failure);
+
     public bool TryResolveAttachPath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Attach, out fullPath, out error);
+
+    internal bool TryResolveAttachPath(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(rawPath, context, AccessKind.Attach, out fullPath, out error, out failure);
 
     public IReadOnlyList<string> GetRootsForContext(ToolInvocationContext context, AccessKind accessKind)
     {
@@ -78,15 +125,62 @@ internal sealed class ScopedFileAccessPolicy
         out string fullPath,
         out string error,
         bool allowInteractivePersonalReach = true)
+        => TryResolvePath(
+            rawPath,
+            context,
+            accessKind,
+            out fullPath,
+            out error,
+            out _,
+            allowInteractivePersonalReach);
+
+    private bool TryResolvePath(
+        string rawPath,
+        ToolInvocationContext context,
+        AccessKind accessKind,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure,
+        bool allowInteractivePersonalReach = true)
     {
         try
         {
-            fullPath = Path.GetFullPath(rawPath);
+            if (string.IsNullOrWhiteSpace(rawPath) || rawPath.Any(char.IsControl))
+            {
+                fullPath = string.Empty;
+                error = "Error: Invalid path.";
+                failure = PathResolutionFailure.InvalidInput;
+                return false;
+            }
+
+            if (Path.IsPathFullyQualified(rawPath))
+            {
+                fullPath = Path.GetFullPath(rawPath);
+            }
+            else if (Path.IsPathRooted(rawPath))
+            {
+                fullPath = string.Empty;
+                error = "Error: Invalid path: partially qualified paths are not supported.";
+                failure = PathResolutionFailure.InvalidInput;
+                return false;
+            }
+            else if (TryGetRelativePathBase(context, out var baseDirectory))
+            {
+                fullPath = Path.GetFullPath(rawPath, baseDirectory);
+            }
+            else
+            {
+                fullPath = string.Empty;
+                error = "Error: invalid_context: No project or session directory is available. Call set_working_directory with an absolute project path, then retry.";
+                failure = PathResolutionFailure.MissingBase;
+                return false;
+            }
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             fullPath = string.Empty;
             error = $"Error: Invalid path: {ex.Message}";
+            failure = PathResolutionFailure.InvalidInput;
             return false;
         }
 
@@ -109,10 +203,13 @@ internal sealed class ScopedFileAccessPolicy
             if (!allowInteractivePersonalReach
                 || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
             {
-                return TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
+                var allowed = TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
+                failure = allowed ? PathResolutionFailure.None : PathResolutionFailure.AccessDenied;
+                return allowed;
             }
 
             error = string.Empty;
+            failure = PathResolutionFailure.None;
             return true;
         }
 
@@ -121,6 +218,7 @@ internal sealed class ScopedFileAccessPolicy
         if (access.Mode == ToolFilesystemMode.None)
         {
             error = $"Error: {label} trust context does not allow {accessKind.ToString().ToLowerInvariant()} access to local files.";
+            failure = PathResolutionFailure.AccessDenied;
             return false;
         }
 
@@ -138,6 +236,7 @@ internal sealed class ScopedFileAccessPolicy
             && HasInteractivePersonalReach(context))
         {
             error = string.Empty;
+            failure = PathResolutionFailure.None;
             return true;
         }
 
@@ -146,6 +245,7 @@ internal sealed class ScopedFileAccessPolicy
         if (roots.Count == 0)
         {
             error = $"Error: {label} trust context does not have any configured local file roots for {accessKind.ToString().ToLowerInvariant()} access.";
+            failure = PathResolutionFailure.AccessDenied;
             return false;
         }
 
@@ -157,17 +257,65 @@ internal sealed class ScopedFileAccessPolicy
             if (PathUtility.ContainsSymlinkSegment(root, fullPath))
             {
                 error = $"Error: {label} trust context may not access files through symlinked paths inside the current session directory or configured roots.";
+                failure = PathResolutionFailure.AccessDenied;
                 return false;
             }
 
             error = string.Empty;
+            failure = PathResolutionFailure.None;
             return true;
         }
 
         error = audience == TrustAudience.Public
             ? $"Error: {label} trust context may only access files inside the current session directory."
             : $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
+        failure = PathResolutionFailure.AccessDenied;
         return false;
+    }
+
+    private static bool TryGetRelativePathBase(
+        ToolInvocationContext context,
+        out string baseDirectory)
+    {
+        if (TryNormalizeAbsoluteBase(context.ProjectDirectory, requireExistingDirectory: true, out baseDirectory))
+            return true;
+
+        return TryNormalizeAbsoluteBase(context.SessionDirectory, requireExistingDirectory: false, out baseDirectory);
+    }
+
+    private static bool TryNormalizeAbsoluteBase(
+        string? candidate,
+        bool requireExistingDirectory,
+        out string baseDirectory)
+    {
+        baseDirectory = string.Empty;
+        if (string.IsNullOrWhiteSpace(candidate)
+            || candidate.Any(char.IsControl)
+            || !Path.IsPathFullyQualified(candidate))
+            return false;
+
+        try
+        {
+            var normalized = Path.GetFullPath(candidate);
+            if (requireExistingDirectory && !Directory.Exists(normalized))
+                return false;
+            if (Directory.Exists(normalized)
+                && (File.GetAttributes(normalized) & FileAttributes.ReparsePoint) != 0)
+            {
+                return false;
+            }
+
+            baseDirectory = normalized;
+            return true;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or NotSupportedException
+                                   or PathTooLongException
+                                   or IOException
+                                   or UnauthorizedAccessException)
+        {
+            return false;
+        }
     }
 
     private static ToolFilesystemAccessProfile GetAccessProfile(ToolAudienceProfile profile, AccessKind accessKind) =>

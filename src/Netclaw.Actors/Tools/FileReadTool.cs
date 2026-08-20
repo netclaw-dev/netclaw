@@ -46,7 +46,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     private readonly ILogger? _logger;
 
     public record Params(
-        [property: Description("Absolute path to the file to read")] string Path,
+        [property: Description("File path to read. Relative paths use the current project, then session scratch.")] string Path,
         [property: Description("Line number to start reading at, 1-based: the first line is line 1, matching the line numbers shown in this tool's output and in editors/grep/sed. To read line N, pass StartLine=N. Use with Limit to read sections of large files and avoid context window truncation.")] int? StartLine = null,
         [property: Description("Maximum number of lines to read. Use with StartLine to paginate through large files instead of reading the whole file.")] int? Limit = null);
 
@@ -69,16 +69,23 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
-            return "Error: 'path' parameter is required.";
+            return context.InvalidInput("Error: 'path' parameter is required.");
 
-        if (!_fileAccessPolicy.TryResolveReadPath(args.Path, context, out var authorizedPath, out var accessError))
-            return accessError;
+        if (!_fileAccessPolicy.TryResolveReadPath(
+                args.Path,
+                context,
+                out var authorizedPath,
+                out var accessError,
+                out var resolutionFailure))
+        {
+            return context.PathResolutionFailure(accessError, resolutionFailure);
+        }
 
         if (_pathPolicy.IsReadDenied(authorizedPath))
-            return FileToolErrors.CredentialReadDenied(authorizedPath);
+            return context.AccessDenied(FileToolErrors.CredentialReadDenied(authorizedPath));
 
         if (!File.Exists(authorizedPath))
-            return $"Error: File not found: {authorizedPath}";
+            return context.NotFound($"Error: File not found: {authorizedPath}");
 
         // Treat 0 or negative as "not specified"
         int? startLine = args.StartLine > 0 ? args.StartLine : null;
@@ -88,14 +95,17 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         {
             var inspection = await InspectFileAsync(authorizedPath, ct);
             if (!inspection.IsTextLike)
-                return HandleNonTextFile(authorizedPath, inspection, context);
+                return context.SuccessFile(
+                    HandleNonTextFile(authorizedPath, inspection, context),
+                    authorizedPath,
+                    ToolFileActivityKind.Read);
 
             var encoding = inspection.TextEncoding ?? StrictUtf8;
             if (startLine.HasValue || limit.HasValue)
             {
                 var lines = await ReadLinesAsync(authorizedPath, encoding, startLine ?? 1, limit, _config.MaxOutputChars, ct);
                 RecordSkillReadIfApplicable(authorizedPath);
-                return lines; // redaction + inline bound + spill happen centrally in the dispatcher
+                return context.SuccessFile(lines, authorizedPath, ToolFileActivityKind.Read);
             }
 
             // Bounded head read (not ReadAllTextAsync): a multi-hundred-MB file must
@@ -105,25 +115,37 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             // memory safety and steers past the cap.
             var (content, truncated) = await ReadBoundedHeadAsync(authorizedPath, encoding, _config.MaxOutputChars, ct);
             RecordSkillReadIfApplicable(authorizedPath);
-            return truncated
+            var result = truncated
                 ? content + $"\n[output truncated at {_config.MaxOutputChars} chars — read a specific range with StartLine and Limit, or grep the file, for the rest]"
                 : content;
+            return context.SuccessFile(result, authorizedPath, ToolFileActivityKind.Read);
         }
         catch (DecoderFallbackException)
         {
             var sizeBytes = TryGetFileLength(authorizedPath);
-            return BuildMetadataResponse(
+            return context.SuccessFile(
+                BuildMetadataResponse(
+                    authorizedPath,
+                    new FileInspection(MimeType.Default, AttachmentCategory.Other, sizeBytes, false, null),
+                    "File is not valid in the detected text encoding. Raw binary output is not returned by file_read."),
                 authorizedPath,
-                new FileInspection(MimeType.Default, AttachmentCategory.Other, sizeBytes, false, null),
-                "File is not valid in the detected text encoding. Raw binary output is not returned by file_read.");
+                ToolFileActivityKind.Read);
         }
         catch (UnauthorizedAccessException)
         {
-            return $"Error: Permission denied: {authorizedPath}";
+            return context.AccessDenied($"Error: Permission denied: {authorizedPath}");
+        }
+        catch (FileNotFoundException)
+        {
+            return context.NotFound($"Error: File not found: {authorizedPath}");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return context.NotFound($"Error: File not found: {authorizedPath}");
         }
         catch (IOException ex)
         {
-            return $"Error reading file: {ex.Message}";
+            return context.TransientFailure($"Error reading file: {ex.Message}");
         }
     }
 

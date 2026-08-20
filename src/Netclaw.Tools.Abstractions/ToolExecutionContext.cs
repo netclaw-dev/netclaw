@@ -19,6 +19,97 @@ public sealed record ModelInputFileInfo(string FilePath, string FileName, MimeTy
 /// </summary>
 public sealed record FileAttachmentInfo(string FilePath, string FileName, MimeType MimeType);
 
+internal enum ToolInvocationOutcomeCategory
+{
+    Success,
+    InvalidInput,
+    AccessDenied,
+    NotFound,
+    TransientFailure,
+    RecoverableCorrection
+}
+
+internal enum ToolFileActivityKind
+{
+    Read,
+    Changed
+}
+
+internal sealed record ToolFileActivity
+{
+    public ToolFileActivity(string canonicalPath, ToolFileActivityKind kind)
+    {
+        if (!Enum.IsDefined(kind))
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        if (!IsCanonicalAbsolutePath(canonicalPath))
+            throw new ArgumentException("File activity requires a canonical absolute path.", nameof(canonicalPath));
+
+        CanonicalPath = canonicalPath;
+        Kind = kind;
+    }
+
+    public string CanonicalPath { get; }
+    public ToolFileActivityKind Kind { get; }
+
+    private static bool IsCanonicalAbsolutePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || path.Any(char.IsControl)
+            || !Path.IsPathFullyQualified(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(path, Path.GetFullPath(path), StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+}
+
+internal sealed record ToolInvocationReceipt
+{
+    public ToolInvocationReceipt(
+        ToolInvocationOutcomeCategory category,
+        IReadOnlyList<ToolFileActivity>? fileActivity = null,
+        string? remediationCode = null,
+        string? declaredProjectDirectory = null)
+    {
+        if (!Enum.IsDefined(category))
+            throw new ArgumentOutOfRangeException(nameof(category));
+
+        var activity = fileActivity?.ToArray() ?? [];
+        if (category != ToolInvocationOutcomeCategory.Success
+            && (activity.Length > 0 || declaredProjectDirectory is not null))
+        {
+            throw new ArgumentException("Only successful outcomes may report working-context activity.");
+        }
+
+        if (category != ToolInvocationOutcomeCategory.RecoverableCorrection
+            && remediationCode is not null)
+        {
+            throw new ArgumentException("Only a recoverable correction may report remediation.", nameof(remediationCode));
+        }
+
+        if (declaredProjectDirectory is not null)
+            _ = new ToolFileActivity(declaredProjectDirectory, ToolFileActivityKind.Read);
+
+        Category = category;
+        FileActivity = Array.AsReadOnly(activity);
+        RemediationCode = remediationCode;
+        DeclaredProjectDirectory = declaredProjectDirectory;
+    }
+
+    public ToolInvocationOutcomeCategory Category { get; }
+    public IReadOnlyList<ToolFileActivity> FileActivity { get; }
+    public string? RemediationCode { get; }
+    public string? DeclaredProjectDirectory { get; }
+}
+
 /// <summary>
 /// Machine-readable working-context handoff from an ephemeral subagent run.
 /// Confirmed changes have first-party tool provenance; observed changes are
@@ -240,6 +331,7 @@ public sealed class ToolExecutionOutputs
     private readonly Action<SubAgentNotificationInfo>? _subAgentActivitySink;
     private List<FileAttachmentInfo>? _fileAttachments;
     private List<ModelInputFileInfo>? _modelInputFiles;
+    private ToolInvocationReceipt? _receipt;
 
     public ToolExecutionOutputs()
     {
@@ -257,6 +349,8 @@ public sealed class ToolExecutionOutputs
     public IReadOnlyList<ModelInputFileInfo> ModelInputFiles
         => _modelInputFiles?.AsReadOnly() ?? (IReadOnlyList<ModelInputFileInfo>)[];
 
+    internal ToolInvocationReceipt? Receipt => Volatile.Read(ref _receipt);
+
     public void AddFileAttachment(string filePath, string fileName, MimeType mimeType)
     {
         _fileAttachments ??= [];
@@ -271,6 +365,12 @@ public sealed class ToolExecutionOutputs
 
     public void ReportSubAgentActivity(SubAgentNotificationInfo notification)
         => _subAgentActivitySink?.Invoke(notification);
+
+    internal bool TryComplete(ToolInvocationReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        return Interlocked.CompareExchange(ref _receipt, receipt, null) is null;
+    }
 
     public ToolExecutionOutputs Fork()
         => _subAgentActivitySink is null ? new ToolExecutionOutputs() : new ToolExecutionOutputs(_subAgentActivitySink);
@@ -532,6 +632,11 @@ public sealed class ToolInvocationContext
     internal void AddModelInputFile(string filePath, string fileName, MimeType mimeType)
         => Outputs.AddModelInputFile(filePath, fileName, mimeType);
 
+    internal ToolInvocationReceipt? Receipt => Outputs.Receipt;
+
+    internal bool TryComplete(ToolInvocationReceipt receipt)
+        => Outputs.TryComplete(receipt);
+
 }
 
 /// <summary>
@@ -576,6 +681,8 @@ public sealed class ToolExecutionContext
     public ModelModality ModelInputModalities => Invocation.ModelInputModalities;
 
     internal IReadOnlyList<FileAttachmentInfo> FileAttachments => Invocation.FileAttachments;
+
+    internal ToolInvocationReceipt? Receipt => Outputs.Receipt;
 
     internal void AddModelInputFile(string filePath, string fileName, string mimeType)
         => Invocation.AddModelInputFile(filePath, fileName, mimeType);

@@ -563,8 +563,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 _history.Add(ChatMessageConverter.ToAiMessage(result));
                 if (result.ToolCallId is { } callId)
-                    _fileActivity.Complete(callId.Value, result.Content);
-                TryApplyProjectDirectory(result);
+                {
+                    msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
+                    _fileActivity.Apply(receipt);
+                    TryApplyProjectDirectory(receipt);
+                }
                 if (result.Name is "load_tool" && result.Content is not null)
                     TryActivateDiscoveredTool(result.Content.Trim());
                 var preview = result.Content is { Length: > 200 }
@@ -801,10 +804,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ? JsonSerializer.Serialize(toolCall.Arguments)
                 : null;
             _turnState.TrackToolCall(toolCall.Name, argsJson);
-            if (toolCall.CallId is { Length: > 0 } callId
-                && WorkingContextUpdater.TryExtractFilePath(argsJson, out var path))
-                _fileActivity.Begin(callId, toolCall.Name, path);
-
             // Log tool START event so tool execution spans are visible in Seq
             // (previously only tool results were logged, making it impossible to
             // correlate tool start with tool end when tools take a long time).
@@ -1152,23 +1151,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return _fileActivity.BuildResult();
     }
 
-    private void TryApplyProjectDirectory(SerializableChatMessage result)
+    private void TryApplyProjectDirectory(ToolInvocationReceipt? receipt)
     {
-        if (result.Name is not SetWorkingDirectoryTool.ToolName
-            || result.Content is null
-            || _toolRegistry.GetByName(SetWorkingDirectoryTool.ToolName) is not SetWorkingDirectoryTool tool)
-        {
-            return;
-        }
-
-        var projectDirectory = result.Content.Trim();
-        var validatedWorkingContext = WorkingContext.Empty.WithProjectDirectory(projectDirectory);
-        if (!string.Equals(
-                validatedWorkingContext.ProjectDirectory,
-                projectDirectory,
-                StringComparison.Ordinal)
-            || !Path.IsPathRooted(projectDirectory)
-            || !tool.CanDeclare(projectDirectory, ToolExecutionContext.Invocation))
+        if (receipt is not
+            {
+                Category: ToolInvocationOutcomeCategory.Success,
+                DeclaredProjectDirectory: { } projectDirectory
+            })
         {
             return;
         }
@@ -1399,7 +1388,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 var interpretation = executor.InterpretToolCall(tc);
                 var toolContext = CreatePerToolExecutionContext(executionContext, interpretation.Meta);
                 if (interpretation.Rejection is { } rejection)
+                {
+                    toolContext.Outputs.TryComplete(
+                        new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
                     return BuildToolResult(tc, rejection.Message, toolContext, modelInputBudget);
+                }
 
                 var meta = interpretation.Meta;
                 var cleanedTc = interpretation.Cleaned;
@@ -1443,6 +1436,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         ToolAgentCorrection.SessionScratchSuggested scratchCorrection
                         && scratchCall is { } correctedCall)
                     {
+                        toolContext.Outputs.TryComplete(new ToolInvocationReceipt(
+                            ToolInvocationOutcomeCategory.RecoverableCorrection,
+                            remediationCode: ToolOutcomeResults.UseSessionScratchRemediation));
                         var correctionText = SessionToolExecutionPipeline.BuildSessionScratchCorrection(
                             scratchCorrection.SessionDirectory);
                         var newCorrectionKey = new SessionScratchCorrectionKey(
@@ -1465,6 +1461,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             canDeclareWorkingDirectory);
                     if (!string.IsNullOrEmpty(projectScopeCorrection))
                     {
+                        toolContext.Outputs.TryComplete(new ToolInvocationReceipt(
+                            ToolInvocationOutcomeCategory.RecoverableCorrection,
+                            remediationCode: ToolOutcomeResults.SetWorkingDirectoryRemediation));
                         return BuildToolResult(
                             cleanedTc,
                             projectScopeCorrection,
@@ -1544,6 +1543,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         reason = $"{reason}\n{SessionToolExecutionPipeline.BuildSessionScratchDenialHint(deniedScratchRetry.SessionDirectory)}";
                     }
 
+                    toolContext.Outputs.TryComplete(
+                        new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
+
                     return BuildToolResult(
                         tc,
                         reason,
@@ -1570,6 +1572,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 catch (Exception ex)
                 {
+                    var category = ex switch
+                    {
+                        UnauthorizedAccessException => ToolInvocationOutcomeCategory.AccessDenied,
+                        FileNotFoundException or DirectoryNotFoundException => ToolInvocationOutcomeCategory.NotFound,
+                        _ => ToolInvocationOutcomeCategory.TransientFailure
+                    };
+                    toolContext.Outputs.TryComplete(new ToolInvocationReceipt(category));
                     return BuildToolResult(
                         tc,
                         $"Error: {ex.Message}",
@@ -1586,7 +1595,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             {
                 ToolResults = [.. results.Select(r => r.Message)],
                 ModelInputMediaReferences = [.. results.SelectMany(r => r.ModelInputMediaReferences)],
-                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)]
+                ScratchCorrectionChanges = [.. results.Where(r => r.ScratchCorrectionChange is not null).Select(r => r.ScratchCorrectionChange!)],
+                ToolReceipts = results
+                    .Where(result => result.Receipt is not null)
+                    .ToDictionary<SubAgentToolCallResult, string, ToolInvocationReceipt>(
+                        result => result.Message.ToolCallId is { } callId
+                            ? callId.Value
+                            : throw new InvalidOperationException("A child tool receipt requires a call identity."),
+                        result => result.Receipt
+                            ?? throw new InvalidOperationException("A selected child tool result requires a receipt."),
+                        StringComparer.Ordinal)
             });
         }
         catch (Exception ex)
@@ -1629,7 +1647,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 Name = toolCall.Name
             },
             materialization.MediaReferences,
-            scratchCorrectionChange);
+            scratchCorrectionChange,
+            toolContext.Receipt ?? new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success));
     }
 
     private static ModelInputMaterializationResult MaterializeModelInputFiles(
@@ -1652,7 +1671,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private sealed record SubAgentToolCallResult(
         SerializableChatMessage Message,
         IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences,
-        SessionScratchCorrectionChange? ScratchCorrectionChange);
+        SessionScratchCorrectionChange? ScratchCorrectionChange,
+        ToolInvocationReceipt? Receipt);
 
     private string BuildSystemPrompt(
         SubAgentDefinition definition,
@@ -1694,7 +1714,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         private readonly HashSet<string> _readFiles = new(StringComparer.Ordinal);
         private readonly HashSet<string> _confirmedChangedFiles = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, PendingFileActivity> _pending = new(StringComparer.Ordinal);
         private WorkingContext _workingContext;
 
         public ChildFileActivityTracker(WorkingContext parentSnapshot)
@@ -1702,33 +1721,19 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _workingContext = parentSnapshot;
         }
 
-        public void Begin(string callId, string toolName, string path)
+        public void Apply(ToolInvocationReceipt? receipt)
         {
-            var kind = toolName switch
+            if (receipt?.Category != ToolInvocationOutcomeCategory.Success)
+                return;
+
+            foreach (var activity in receipt.FileActivity)
             {
-                "file_read" => FileActivityKind.Read,
-                "file_write" or "file_edit" => FileActivityKind.Changed,
-                _ => FileActivityKind.None
-            };
-            if (kind == FileActivityKind.None)
-                return;
-
-            var resolvedPath = Path.IsPathRooted(path) || string.IsNullOrWhiteSpace(_workingContext.ProjectDirectory)
-                ? path
-                : Path.GetFullPath(path, _workingContext.ProjectDirectory);
-            _pending[callId] = new PendingFileActivity(resolvedPath, kind);
-        }
-
-        public void Complete(string callId, string? result)
-        {
-            if (!_pending.Remove(callId, out var activity) || !Succeeded(activity.Kind, result))
-                return;
-
-            _workingContext = _workingContext.AddRecentFile(activity.Path);
-            if (activity.Kind == FileActivityKind.Read)
-                _readFiles.Add(activity.Path);
-            else
-                _confirmedChangedFiles.Add(activity.Path);
+                _workingContext = _workingContext.AddRecentFile(activity.CanonicalPath);
+                if (activity.Kind == ToolFileActivityKind.Read)
+                    _readFiles.Add(activity.CanonicalPath);
+                else
+                    _confirmedChangedFiles.Add(activity.CanonicalPath);
+            }
         }
 
         public void SetProjectDirectory(string projectDirectory)
@@ -1742,26 +1747,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             ObservedChangedFiles = []
         };
 
-        private static bool Succeeded(FileActivityKind kind, string? result)
-        {
-            if (string.IsNullOrWhiteSpace(result))
-                return false;
-
-            return kind == FileActivityKind.Changed
-                ? result.StartsWith("Successfully ", StringComparison.Ordinal)
-                : !result.StartsWith("Error:", StringComparison.Ordinal)
-                  && !result.StartsWith("Tool access denied:", StringComparison.Ordinal)
-                  && !result.Contains("requires approval", StringComparison.OrdinalIgnoreCase);
-        }
-
-        private sealed record PendingFileActivity(string Path, FileActivityKind Kind);
-
-        private enum FileActivityKind
-        {
-            None,
-            Read,
-            Changed
-        }
     }
 
     private sealed class SubAgentCancelled
