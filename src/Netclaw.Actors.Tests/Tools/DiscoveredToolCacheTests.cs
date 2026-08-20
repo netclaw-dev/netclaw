@@ -50,10 +50,14 @@ public class DiscoveredToolCacheTests
 
         RegisterAndRemember(registry, cache, "notion", "search", retentionTurns: 3, maxCount: 12);
 
+        Assert.Equal(2, cache.BaseToolCount);
+        Assert.Equal(1, cache.LoadedToolCount);
         Assert.Equal(3, cache.AvailableTools.Count);
 
         cache.EvictAll();
 
+        Assert.Equal(2, cache.BaseToolCount);
+        Assert.Equal(0, cache.LoadedToolCount);
         Assert.Equal(2, cache.AvailableTools.Count);
         Assert.Contains(baseTool1, cache.AvailableTools);
         Assert.Contains(baseTool2, cache.AvailableTools);

@@ -825,6 +825,9 @@ public class SubAgentActorTests : TestKit
             message => message.Text.Contains($"session_dir: {sessionDirectory}", StringComparison.Ordinal));
         Assert.Single(
             client.LastReceivedMessages!,
+            message => message.Text.Contains(ToolChoiceGuidance.StructuredWorkspaceSelection, StringComparison.Ordinal));
+        Assert.Single(
+            client.LastReceivedMessages!,
             message => message.Text.Contains(ToolChoiceGuidance.DirectorySelectionOrder, StringComparison.Ordinal));
         Assert.Single(
             client.LastReceivedMessages!,
@@ -1913,6 +1916,7 @@ public class SubAgentActorTests : TestKit
         var userMessage = fakeClient.LastReceivedMessages![1].Text;
         Assert.Contains("[session]", userMessage);
         Assert.Contains($"session_dir: {sessionDirectory}", userMessage);
+        Assert.Contains(ToolChoiceGuidance.StructuredWorkspaceSelection, userMessage, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, userMessage, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, userMessage, StringComparison.Ordinal);
         Assert.DoesNotContain("always set WorkingDirectory to session_dir", userMessage, StringComparison.OrdinalIgnoreCase);

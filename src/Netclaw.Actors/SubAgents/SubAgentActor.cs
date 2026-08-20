@@ -567,6 +567,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
                     _fileActivity.Apply(receipt);
                     TryApplyProjectDirectory(receipt);
+                    if (receipt is not null)
+                        _log.Info("SubAgent tool outcome category={OutcomeCategory}", receipt.Category);
                 }
                 if (result.Name is "load_tool" && result.Content is not null)
                     TryActivateDiscoveredTool(result.Content.Trim());
@@ -1134,6 +1136,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                              || sessionDirectory.Any(char.IsControl)
             ? string.Empty
             : $"[session]\nsession_dir: {sessionDirectory}\n"
+              + ToolChoiceGuidance.StructuredWorkspaceSelection + "\n"
               + ToolChoiceGuidance.DirectorySelectionOrder + "\n"
               + ToolChoiceGuidance.ShellCompositionOrder;
 

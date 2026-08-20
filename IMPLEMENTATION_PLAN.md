@@ -318,6 +318,13 @@ Done when:
   only Once or Deny and creates no reusable temp authority. Headless behavior,
   Team/Public denial, hard-deny rules, dynamic syntax, protected paths, and
   native PowerShell causal scope stay strict.
+- [x] Seven sanitized tool-friction cases replay through registration, policy,
+  dispatch, typed outcomes, and success-owned working context. Structured
+  search, batch read, JSON selection, image metadata, and spill continuation
+  need no shell approval. Representative interpreter fallbacks still prompt.
+  Parent and child diagnostics report counts and outcome categories only.
+- [ ] Complete the hosted structured-tool comparison, native platform CI, stack
+  merge, binary swap, and a new sanitized live traffic harvest.
 - [ ] Define automated session-directory cleanup in a separate OpenSpec before
   adding retention or deletion behavior.
 - [ ] A constrained executable grammar proves any future safe `sed` form. The

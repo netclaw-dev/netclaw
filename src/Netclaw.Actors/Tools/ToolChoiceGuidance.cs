@@ -8,6 +8,17 @@ namespace Netclaw.Actors.Tools;
 
 internal static class ToolChoiceGuidance
 {
+    public const string StructuredWorkspaceSelection = """
+        Prefer structured workspace tools:
+        1. Use file_search for bounded recursive name or literal text search.
+        2. Use file_read_many when the paths to read are already known.
+        3. Use json_read for bounded JSON pointer selection.
+        4. Use file_read for file content and image metadata.
+        5. Use tool_output_read to continue a spilled result by call id.
+        6. Use search_tools, then load_tool, before reporting that a specialty tool is unavailable.
+        7. Use shell or an interpreter only when no structured tool expresses the operation.
+        """;
+
     public const string DirectorySelectionOrder = """
         Choose directories in this order:
         1. For declared-project work, omit WorkingDirectory; the shell uses project_dir.

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.62.0"
+  version: "2.63.0"
 ---
 
 # Netclaw Operations
@@ -41,6 +41,11 @@ a reference file — load the one matching the user's intent with
 
 When available, use `file_read` for a known local file read.
 When available, use `file_list` for a known local directory listing.
+Use `file_search` for bounded recursive name or literal text search.
+Use `file_read_many` when the paths to read are already known.
+Use `json_read` for bounded JSON pointer selection.
+Use `file_read` for image metadata.
+Use `tool_output_read` to continue a spilled result by call id.
 When available, use `file_write` or `file_edit` for a known local file change.
 When available, use `web_search` for external discovery and `web_fetch` for a known external page.
 When available, use `shell_execute` for local search, VCS, builds, tests, processes, or requested shell behavior.
@@ -48,6 +53,7 @@ Do not substitute shell commands when a listed first-party tool satisfies the ta
 Do not delegate a known file operation that an available file tool can complete.
 After a successful file tool result, do not use shell only to verify it unless the user requests shell behavior.
 For disposable text, use `file_write` then `file_read`; do not attempt a shell redirect first.
+Use `search_tools`, then `load_tool`, before reporting that a specialty tool is unavailable.
 
 Keep shell approval friction bounded:
 

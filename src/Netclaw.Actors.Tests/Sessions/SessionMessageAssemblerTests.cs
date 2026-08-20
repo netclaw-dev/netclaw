@@ -376,6 +376,7 @@ public sealed class SessionMessageAssemblerTests
         var text = staticBlock.Text ?? string.Empty;
 
         Assert.Contains("session_dir:", text);
+        Assert.Contains(ToolChoiceGuidance.StructuredWorkspaceSelection, text, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, text, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, text, StringComparison.Ordinal);
         Assert.Contains("private scratch for disposable writable non-project artifacts", text);

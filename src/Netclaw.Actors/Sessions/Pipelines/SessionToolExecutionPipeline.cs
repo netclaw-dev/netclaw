@@ -377,6 +377,11 @@ internal sealed class SessionToolExecutionPipeline
                 return result;
             });
             var results = await Task.WhenAll(tasks);
+            foreach (var result in results)
+            {
+                if (result.Receipt is { } receipt)
+                    _logger.Info("Tool outcome category={OutcomeCategory}", receipt.Category);
+            }
 
             if (batch.StreamResults)
             {

@@ -21,6 +21,15 @@
 - Apply this rule to each parallel call and each later tool iteration.
 - If a correction reports a missing rationale, fix every call before the retry.
 
+## Structured Tool Selection
+
+- Use `file_search` for bounded recursive name or literal text search.
+- Use `file_read_many` when the paths to read are already known.
+- Use `json_read` for bounded JSON pointer selection.
+- Use `file_read` for file content and image metadata.
+- Use `tool_output_read` to continue a spilled result by call id.
+- Use `search_tools`, then `load_tool`, before reporting that a specialty tool is unavailable.
+
 ## Grounding Rules
 
 - Never state runtime facts (versions, status, availability) without checking with a tool.

@@ -36,6 +36,8 @@
   <ItemGroup>
     <Compile Include="../Netclaw.Security.Tests/ShellPolicyEvidenceModels.cs"
              Link="Tools/ApprovalEvidence/ShellPolicyEvidenceModels.cs" />
+    <Compile Include="../Netclaw.Security.Tests/ToolFrictionEvidenceModels.cs"
+             Link="Tools/ToolFrictionEvidenceModels.cs" />
     <None Include="../../openspec/changes/archive/2026-08-15-structure-shell-approval-policy/evidence/netclaw-policy-fixtures.json"
           Link="ApprovalEvidence/netclaw-policy-fixtures.json"
           CopyToOutputDirectory="PreserveNewest" />
@@ -44,6 +46,9 @@
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="../../openspec/changes/make-agent-tools-pit-of-success/evidence/tool-schema-footprint-baseline.json"
           Link="ToolFootprintEvidence/tool-schema-footprint-baseline.json"
+          CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../../openspec/changes/make-agent-tools-pit-of-success/evidence/tool-friction-fixtures.json"
+          Link="ToolFrictionEvidence/tool-friction-fixtures.json"
           CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.html" CopyToOutputDirectory="PreserveNewest" />
     <None Include="Tools/Fixtures/*.json" CopyToOutputDirectory="PreserveNewest" />

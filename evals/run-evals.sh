@@ -452,6 +452,12 @@ start_eval_daemon() {
         printf 'ordinary-%s\n' "$i" > "$selection_root/search-target/file-$i.txt"
     done
     printf 'local-search-eval-token\n' > "$selection_root/search-target/nested/match.txt"
+    printf 'batch-first-marker\n' > "$selection_root/batch-first.txt"
+    printf 'batch-second-marker\n' > "$selection_root/batch-second.txt"
+    printf '{"status":"structured-json-ready","ignored":"not-requested"}\n' \
+        > "$selection_root/status.json"
+    printf '\211PNG\r\n\032\n\000\000\000\rIHDR\000\000\000\003\000\000\000\002' \
+        > "$selection_root/dimensions.png"
 
     # Seed the project-root fixture for the set_working_directory evals. The
     # natural prompt requires Git semantics, a project marker, and a build file.
@@ -1457,9 +1463,30 @@ assert_tool_known_file_edit() {
 }
 
 assert_tool_local_repository_search() {
-    stdout_tool_called 'shell_execute' \
+    stdout_tool_called 'file_search' \
+        && ! stdout_tool_called 'shell_execute' \
         && ! stdout_tool_called 'web_search' \
         && stdout_response_contains 'match.txt'
+}
+
+assert_tool_known_batch_read() {
+    stdout_tool_called 'file_read_many' \
+        && ! stdout_tool_called 'shell_execute' \
+        && stdout_response_contains 'batch-first-marker' \
+        && stdout_response_contains 'batch-second-marker'
+}
+
+assert_tool_known_json_projection() {
+    stdout_tool_called 'json_read' \
+        && ! stdout_tool_called 'shell_execute' \
+        && stdout_response_contains 'structured-json-ready' \
+        && ! stdout_response_contains 'not-requested'
+}
+
+assert_tool_known_image_metadata() {
+    stdout_tool_called 'file_read' \
+        && ! stdout_tool_called 'shell_execute' \
+        && stdout_response_contains '3x2'
 }
 
 assert_tool_rationale_contract() {
@@ -2666,8 +2693,17 @@ run_all() {
     run_case tool_known_file_edit "known file edit uses a file tool without shell" \
         "Replace initial-content with edited-content in /home/netclaw/.netclaw/workspaces/file-tool-selection/edit-target.txt, then report completion."
 
-    run_case tool_local_repository_search "local repository search uses shell, not web_search" \
+    run_case tool_local_repository_search "recursive literal search uses file_search without shell" \
         "Search recursively under /home/netclaw/.netclaw/workspaces/file-tool-selection/search-target for the exact text local-search-eval-token and tell me which file contains it."
+
+    run_case tool_known_batch_read "known files use one bounded file_read_many call" \
+        "Read /home/netclaw/.netclaw/workspaces/file-tool-selection/batch-first.txt and /home/netclaw/.netclaw/workspaces/file-tool-selection/batch-second.txt. Return both exact values."
+
+    run_case tool_known_json_projection "known JSON selection uses json_read without an interpreter" \
+        "Read only the /status value from /home/netclaw/.netclaw/workspaces/file-tool-selection/status.json. Do not return other properties."
+
+    run_case tool_known_image_metadata "known image metadata uses file_read without an interpreter" \
+        "Report the exact dimensions of /home/netclaw/.netclaw/workspaces/file-tool-selection/dimensions.png."
 
     run_case --json tool_rationale_contract "all calls retain rationales across two parallel tool iterations" \
         "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and list_reminders in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."

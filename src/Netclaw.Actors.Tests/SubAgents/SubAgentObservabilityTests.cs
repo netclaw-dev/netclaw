@@ -141,6 +141,36 @@ public sealed class SubAgentObservabilityTests : TestKit
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
+    [Fact]
+    public async Task Tool_dispatch_emits_only_the_bounded_outcome_category()
+    {
+        var fakeTool = new FakeNetclawTool("greet", "private-result-marker");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("private-call-marker", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "private-argument-marker",
+                        ["_rationale"] = "Exercise the bounded diagnostic."
+                    })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        await EventFilter.Info(message: "SubAgent tool outcome category=Success").ExpectAsync(1, async () =>
+        {
+            await agent.Ask<SubAgentResult>(
+                NewRun("Use the tool with a private payload marker."),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     // Regression coverage for issue #1597: sub-agent LLM calls used to discard
     // ChatResponse.Usage entirely — the actor had no ISessionMetrics and never read
     // response.Usage — so every sub-agent's token consumption was invisible to

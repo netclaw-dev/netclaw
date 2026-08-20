@@ -30,6 +30,10 @@ internal sealed class DiscoveredToolCache
     /// </summary>
     public IReadOnlyList<AITool> AvailableTools => _availableTools;
 
+    public int BaseToolCount => _baseToolCount;
+
+    public int LoadedToolCount => Math.Max(0, _availableTools.Count - _baseToolCount);
+
     /// <summary>
     /// Seed the always-loaded base tools once at session start. Everything added
     /// beyond this set is a discovered tool subject to lease-based eviction.

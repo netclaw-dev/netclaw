@@ -52,10 +52,10 @@
 
 ## 7. PR 7 - Replay, documentation, and rollout proof
 
-- [ ] 7.1 Replay every sanitized friction fixture through real registration, policy, dispatch, outcome, and working-context paths.
-- [ ] 7.2 Prove representative structured workflows require no shell approval while equivalent shell/Python fallbacks remain approval-gated.
-- [ ] 7.3 Update embedded operating guidance and repo-owned skills to prefer structured workspace tools and progressive discovery without memorizing command syntax.
-- [ ] 7.4 Add operator diagnostics for core/deferred/loaded counts and outcome categories with PII and payload exclusion tests.
+- [x] 7.1 Replay every sanitized friction fixture through real registration, policy, dispatch, outcome, and working-context paths.
+- [x] 7.2 Prove representative structured workflows require no shell approval while equivalent shell/Python fallbacks remain approval-gated.
+- [x] 7.3 Update embedded operating guidance and repo-owned skills to prefer structured workspace tools and progressive discovery without memorizing command syntax.
+- [x] 7.4 Add operator diagnostics for core/deferred/loaded counts and outcome categories with PII and payload exclusion tests.
 - [ ] 7.5 Run Release build, full tests, headers, formatting, strict OpenSpec, changed-file Slopwatch, PII audit, and API compatibility gates.
 - [ ] 7.6 Run native Windows and Linux validation.
 - [ ] 7.7 Rebase the final stack on upstream/dev, merge in order, remove merged worktrees, produce a binary-swap build, and harvest a new sanitized live window.
