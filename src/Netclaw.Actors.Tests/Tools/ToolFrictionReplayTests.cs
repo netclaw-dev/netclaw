@@ -12,7 +12,9 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Sessions.Pipelines;
+using Netclaw.Actors.Tests.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -21,6 +23,7 @@ using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 using Xunit;
+using RecordingChatClient = Netclaw.Actors.Tests.Sessions.FakeChatClient;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -56,6 +59,13 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             ProjectDirectory = setup.ProjectDirectory,
             RecentFiles = ImmutableList.Create(setup.SeedRecentFile)
         };
+
+        if (policyCase.ExpectedContextEffect == "CoreOnlyChildCatalog")
+        {
+            await AssertChildCatalogAsync(runtime, setup);
+            AssertContextEffect(policyCase.ExpectedContextEffect, setup, current);
+            return;
+        }
 
         for (var index = 0; index < setup.Calls.Count; index++)
         {
@@ -104,12 +114,6 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
         }
 
         AssertContextEffect(policyCase.ExpectedContextEffect, setup, current);
-        if (policyCase.ExpectedContextEffect == "CoreOnlyChildCatalog")
-        {
-            Assert.True(runtime.Registry.IsCoreTool("search_tools"));
-            Assert.True(runtime.Registry.IsCoreTool("load_tool"));
-            Assert.False(runtime.Registry.IsCoreTool("attach_file"));
-        }
     }
 
     [Fact]
@@ -205,7 +209,71 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             toolPathPolicy,
             commandPolicy,
             toolAccessPolicy: accessPolicy);
-        return new RuntimeSetup(registry, new DispatchingToolExecutor(registry, accessPolicy));
+        return new RuntimeSetup(registry, new DispatchingToolExecutor(registry, accessPolicy), accessPolicy);
+    }
+
+    private async Task AssertChildCatalogAsync(RuntimeSetup runtime, ScenarioSetup setup)
+    {
+        const string attachToolName = "attach_file";
+        var client = new RecordingChatClient();
+        client.PlannedResponses.Enqueue([setup.Calls[0]]);
+        client.PlannedResponses.Enqueue([setup.Calls[1]]);
+        client.PlannedResponses.Enqueue([new TextContent("Catalog replay complete.")]);
+
+        var registrations = runtime.Registry.GetAllRegistrations();
+        var coreNames = runtime.Registry.GetCoreRegistrations()
+            .Select(static registration => registration.Tool.Name)
+            .ToHashSet(StringComparer.Ordinal);
+        var definition = new SubAgentDefinition
+        {
+            Name = new AgentName("fixture-agent"),
+            SystemPrompt = "Replay one sanitized catalog case.",
+            Tools = registrations.Select(static registration => registration.Tool).ToList()
+        };
+        var actor = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
+            definition,
+            client,
+            runtime.AccessPolicy,
+            NullSystemPromptProvider.Instance,
+            coreToolNames: coreNames));
+
+        var result = await actor.Ask<SubAgentProtocol.SubAgentResult>(
+            new SubAgentProtocol.RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(
+                    scopeId: "signalr/tool-friction/subagent/fixture-agent/run",
+                    sessionDirectory: setup.SessionDirectory,
+                    projectDirectory: setup.ProjectDirectory),
+                Task = "Find and load the deferred attachment tool.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(10),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(3, client.ReceivedToolNames.Count);
+        var expectedCore = coreNames.OrderBy(static name => name, StringComparer.Ordinal).ToList();
+        Assert.Equal(expectedCore, client.ReceivedToolNames[0].OrderBy(static name => name, StringComparer.Ordinal));
+        Assert.Equal(expectedCore, client.ReceivedToolNames[1].OrderBy(static name => name, StringComparer.Ordinal));
+        Assert.DoesNotContain(attachToolName, client.ReceivedToolNames[0]);
+        Assert.DoesNotContain(attachToolName, client.ReceivedToolNames[1]);
+        Assert.Contains(attachToolName, client.ReceivedToolNames[2]);
+        Assert.Contains(
+            attachToolName,
+            GetToolResult(client.ReceivedMessages[1], setup.Calls[0].CallId),
+            StringComparison.Ordinal);
+        Assert.Equal(
+            attachToolName,
+            GetToolResult(client.ReceivedMessages[2], setup.Calls[1].CallId));
+    }
+
+    private static string GetToolResult(IReadOnlyList<ChatMessage> messages, string callId)
+    {
+        var result = messages
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .Single(content => content.CallId == callId)
+            .Result;
+        return Assert.IsType<string>(result);
     }
 
     private static async Task<ScenarioSetup> CreateScenarioAsync(
@@ -432,7 +500,10 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
         (byte)(height >> 24), (byte)(height >> 16), (byte)(height >> 8), (byte)height
     ];
 
-    private sealed record RuntimeSetup(ToolRegistry Registry, DispatchingToolExecutor Executor);
+    private sealed record RuntimeSetup(
+        ToolRegistry Registry,
+        DispatchingToolExecutor Executor,
+        ToolAccessPolicy AccessPolicy);
 
     private sealed record ScenarioSetup(
         string ProjectDirectory,

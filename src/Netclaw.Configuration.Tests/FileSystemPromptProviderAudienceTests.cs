@@ -143,6 +143,8 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("After an approval-required result", prompt);
         Assert.Contains("A `Tool access denied:` result is terminal", prompt);
         Assert.Contains("Apply one `Tool execution deferred:` correction unchanged", prompt);
+        Assert.Contains("Use `load_tool` directly for a known exact tool name", prompt);
+        Assert.Contains("Use `search_tools` when the capability is known", prompt);
     }
 
     [Fact]

@@ -27,19 +27,19 @@
 
 ## 3. Repair rollout contracts
 
-- [ ] 3.1 Replace the canonical raw spill path and grep steer with opaque `tool_output_read` guidance.
-- [ ] 3.2 Update runtime and tests so no model-facing spill result reveals a raw path.
-- [ ] 3.3 Clarify that `load_tool` controls schema exposure and never grants execution authority.
-- [ ] 3.4 Tell agents to load a known exact tool name without a prior search.
-- [ ] 3.5 Make the subagent catalog replay create and inspect a real child actor.
-- [ ] 3.6 Keep public evidence aggregate and PII-free.
-- [ ] 3.7 Run focused spill, disclosure, subagent, skill, header, and Slopwatch gates.
+- [x] 3.1 Replace the canonical raw spill path and grep steer with opaque `tool_output_read` guidance.
+- [x] 3.2 Keep runtime and tests from revealing a raw spill path in model-facing results.
+- [x] 3.3 Clarify that `load_tool` controls schema exposure and never grants execution authority.
+- [x] 3.4 Tell agents to load a known exact tool name without a prior search.
+- [x] 3.5 Make the subagent catalog replay create and inspect a real child actor.
+- [x] 3.6 Keep public evidence aggregate and PII-free.
+- [x] 3.7 Run focused spill, disclosure, subagent, skill, header, and Slopwatch gates.
 
 ## 4. Stack and evaluation
 
-- [ ] 4.1 Rebase each branch on its intended parent and verify the stacked patch order.
-- [ ] 4.2 Create three stacked pull requests without auto-merge.
-- [ ] 4.3 Run the deterministic eval harness on the final stacked head.
-- [ ] 4.4 Run the hosted eval matrix on the final stacked head.
-- [ ] 4.5 Publish only PII-free aggregate eval results on the relevant pull request.
-- [ ] 4.6 Run the full build, tests, strict OpenSpec, headers, diff, and Slopwatch gates.
+- [x] 4.1 Rebase each branch on its intended parent and verify the stacked patch order.
+- [x] 4.2 Create three stacked pull requests without auto-merge.
+- [x] 4.3 Run the deterministic eval harness on the final stacked head.
+- [x] 4.4 Run the hosted eval matrix on the final stacked head.
+- [x] 4.5 Publish only PII-free aggregate eval results on the relevant pull request.
+- [x] 4.6 Run the full build, tests, strict OpenSpec, headers, diff, and Slopwatch gates.

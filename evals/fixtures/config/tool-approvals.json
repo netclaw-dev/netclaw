@@ -4,6 +4,10 @@
     "personal": {
       "shell_execute": [
         {
+          "verb": "awk",
+          "directory": null
+        },
+        {
           "verb": "git",
           "directory": null
         },

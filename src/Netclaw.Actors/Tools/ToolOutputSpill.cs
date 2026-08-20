@@ -62,8 +62,8 @@ internal static class ToolOutputSpill
             return modelFacingResult;
 
         var inline = BoundedOutputReader.Window(modelFacingResult, budget);
-        var spillPath = await TryWriteSpillAsync(spillContent, toolCallId, context, ct);
-        return Compose(inline, spillPath, modelFacingResult.Length, budget);
+        var spillCallId = await TryWriteSpillAsync(spillContent, toolCallId, context, ct);
+        return Compose(inline, spillCallId, modelFacingResult.Length, budget);
     }
 
     private static async Task<string?> TryWriteSpillAsync(

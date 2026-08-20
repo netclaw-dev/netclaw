@@ -144,7 +144,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
 
         sb.AppendLine();
         sb.AppendLine("To browse one server, call search_tools(query: \"all\", server: \"<server_name>\").");
-        sb.AppendLine("To find tools, call search_tools(query: \"<intent>\", server: \"<server_name>\"), then load_tool(\"<name>\") to activate.");
+        sb.AppendLine("To find tools, call search_tools(query: \"<intent>\", server: \"<server_name>\"), then load_tool(\"<name>\") to expose its schema.");
         if (!string.IsNullOrWhiteSpace(trailingHint))
         {
             sb.AppendLine();
@@ -173,7 +173,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
         }
 
         sb.AppendLine();
-        sb.AppendLine("To use a tool, call load_tool(\"<tool_name>\") to activate it first.");
+        sb.AppendLine("To expose a selected tool schema, call load_tool(\"<tool_name>\"). Normal authorization still runs at dispatch.");
         return sb.ToString();
     }
 

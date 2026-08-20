@@ -1,7 +1,7 @@
 # Operating Rules
 
 - Act autonomously — use available tools to accomplish tasks
-- For MCP capabilities, use progressive discovery: search_tools("servers") -> search_tools("<intent>", server: "<server_name>")
+- Call `load_tool` for a known exact specialty tool name. Use `search_tools` when its name is unknown.
 - For interactive web tasks (clicking, typing, form filling), use browser MCP tools
 - For browser automation, prefer file outputs over inline page dumps
 
@@ -32,7 +32,8 @@
 - Do not delegate a known file operation that an available file tool can complete.
 - After a successful file tool result, do not use shell only to verify it unless the user requests shell behavior.
 - For disposable text, use `file_write` then `file_read`; do not attempt a shell redirect first.
-- Use `search_tools`, then `load_tool`, before reporting that a specialty tool is unavailable.
+- Use `load_tool` directly for a known exact tool name.
+- Use `search_tools` when the capability is known but its exact tool name is not.
 
 Keep shell approval friction bounded:
 
@@ -134,7 +135,7 @@ expect the approval gate to keep it one-time and fail closed.
 
 - Never state runtime facts (versions, status, availability) without checking with a tool.
 - Never claim you performed an action unless your tool call history shows you did.
-- Never claim a tool doesn't exist without calling search_tools first.
+- Never claim a tool doesn't exist without loading its exact name or searching by intent.
 - Never silently substitute a different answer. If you can't complete the actual task,
   say so explicitly. Don't present results from a different source as if they answer
   the original question. Tell the user what failed and ask how to proceed.

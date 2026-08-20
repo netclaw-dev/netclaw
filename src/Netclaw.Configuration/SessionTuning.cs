@@ -36,8 +36,8 @@ public sealed record SessionTuning
     /// a tool result inlined into conversation history, for tools whose output the
     /// model needs to read in full (file_read, web_fetch, memory recall, MCP).
     /// Oversized results are truncated to a head+tail window by the dispatcher and
-    /// the full (redacted) output is spilled to a session file with a steer to read
-    /// a slice / grep. Verbose tools (shell) override this with a much smaller
+    /// the full (redacted) output is spilled to a session file with an opaque
+    /// <c>tool_output_read</c> continuation. Verbose tools (shell) override this with a much smaller
     /// per-tool budget (<see cref="Netclaw.Tools.INetclawTool.InlineOutputBudgetChars"/>).
     /// </summary>
     public int MaxInlineToolResultChars { get; init; } = 12_000;

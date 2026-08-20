@@ -77,6 +77,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Contains("Do not probe a named project path before declaring it", skill, StringComparison.Ordinal);
         Assert.Contains("user-provided fallback before other tools", skill, StringComparison.Ordinal);
         Assert.Contains("Use the task's first project path exactly", skill, StringComparison.Ordinal);
+        Assert.Contains("Use `load_tool` directly for a known exact tool name", skill, StringComparison.Ordinal);
+        Assert.Contains("Use `search_tools` when the capability is known", skill, StringComparison.Ordinal);
 
         var statements = new[]
         {

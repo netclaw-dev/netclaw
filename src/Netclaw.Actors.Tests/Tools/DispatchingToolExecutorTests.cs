@@ -126,8 +126,10 @@ public class DispatchingToolExecutorTests
             Assert.True(result.Length < 3000);                 // windowed inline, not the full 3000
             Assert.Contains("tool_output_read", result);
             Assert.Contains("CallId='call-spill'", result);
+            Assert.DoesNotContain(sessionDir, result, StringComparison.Ordinal);
             Assert.True(ToolOutputSpillLocation.TryResolve(
                 sessionDir, "call-spill", out _, out var spill));
+            Assert.DoesNotContain(spill, result, StringComparison.Ordinal);
             Assert.True(File.Exists(spill));
             Assert.Contains(new string('x', 100), await File.ReadAllTextAsync(spill, CancellationToken.None));
         }

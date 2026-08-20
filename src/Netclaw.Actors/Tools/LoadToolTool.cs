@@ -9,13 +9,12 @@ using Netclaw.Tools;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Activates a deferred first-party or MCP tool by name so the LLM can call it.
-/// Tools must first be found via <see cref="SearchToolsTool"/> before loading.
-/// The owning actor intercepts successful results and activates the requested
-/// tool in its private exposure set.
+/// Exposes one deferred first-party or MCP tool schema by exact name.
+/// The owning actor intercepts successful results and adds the requested tool
+/// to its private exposure set. Dispatch still runs normal authorization.
 /// </summary>
 [NetclawTool("load_tool",
-    "Activate a tool by name so you can call it. Use search_tools first to find tool names, then load_tool to activate one.",
+    "Expose a known tool schema by exact name. Use search_tools only when the exact name is unknown.",
     Grant = "builtin")]
 public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
 {
@@ -23,7 +22,7 @@ public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
     private readonly ToolAccessPolicy _policy;
 
     public record Params(
-        [property: Description("Full tool name to activate (e.g., 'notion/notion-search'). Use search_tools to find available tool names.")]
+        [property: Description("Exact tool name to expose (e.g., 'notion/notion-search'). Use search_tools only when the name is unknown.")]
         string Name);
 
     public LoadToolTool(ToolRegistry registry, ToolAccessPolicy policy)
@@ -49,9 +48,9 @@ public sealed partial class LoadToolTool : NetclawTool<LoadToolTool.Params>
         // Return the LLM-facing alias so the model sees the same form
         // it must emit in a subsequent tool_use call. The session actor
         // intercepts load_tool results and runs the content back through
-        // the registry's two-form lookup to activate the tool. Error
+        // the registry's two-form lookup to expose the schema. Error
         // messages above will not match any registry entry, so only
-        // successful loads trigger activation — no string parsing required.
+        // successful loads change exposure — no string parsing required.
         return Task.FromResult(registration.Tool.LlmFacingName.Value);
     }
 

@@ -4,7 +4,13 @@
 ## Tool Discovery
 
 
-MCP tools are not loaded by default. Use `search_tools` to discover them:
+Deferred tools are not loaded by default. Load a known exact name directly:
+
+```
+load_tool(name: "notion/search")
+```
+
+Use `search_tools` when the exact name is unknown:
 
 ```
 search_tools(query: "servers")                  # list all MCP servers
@@ -12,7 +18,8 @@ search_tools(query: "all", server: "notion")    # browse a server's tools
 search_tools(query: "email")                    # keyword search
 ```
 
-After discovery, matched tools become callable for the session.
+After discovery, call `load_tool` with the selected exact name. Loading exposes
+the schema for the current actor. Normal authorization still runs at dispatch.
 
 ### MCP server state and concurrent callers
 

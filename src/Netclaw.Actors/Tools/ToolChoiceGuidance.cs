@@ -14,8 +14,9 @@ internal static class ToolChoiceGuidance
         2. Use file_read for bounded file content and image metadata.
         3. Issue independent file_read calls in parallel when several paths are known.
         4. Use tool_output_read to continue a spilled result by call id.
-        5. Use search_tools, then load_tool, before reporting that a specialty tool is unavailable.
-        6. Use shell or an interpreter only when no structured tool expresses the operation.
+        5. Use load_tool directly when the exact specialty tool name is known.
+        6. Use search_tools when the capability is known but its exact tool name is not.
+        7. Use shell or an interpreter only when no structured tool expresses the operation.
         """;
 
     public const string DirectorySelectionOrder = """

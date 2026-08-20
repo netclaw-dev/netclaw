@@ -89,6 +89,7 @@ NATURALISTIC_PROJECT_ROOT="/home/netclaw/.netclaw/workspaces/netclaw"
 NATURALISTIC_CWD_ROOT="$NATURALISTIC_PROJECT_ROOT/netclaw-worktrees/fix-pwsh-probe-timeout"
 PROJECT_SCOPE_EVAL_ROOT="/home/netclaw/.netclaw/workspaces/eval-project"
 PROJECT_SCOPE_EVAL_MISSING_ROOT="$PROJECT_SCOPE_EVAL_ROOT/missing-project"
+LARGE_OUTPUT_EVAL_COMMAND="awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147483647;print x}}'"
 
 # Per-prompt state (set by run_prompt, read by assertion helpers)
 STDOUT_FILE=""
@@ -1897,9 +1898,18 @@ assert_complex_diagnose_self() {
 # This shell command produces about 210 KB of output.
 # Line 200 is outside the inline window.
 assert_complex_large_shell_output_spill() {
-    stdout_contains '\[tool:call\] shell_execute' && \
-        stdout_contains '\[tool:call\] tool_output_read' && \
-        stdout_response_contains '872671849'
+    local shell_call
+    local -a shell_calls
+    stdout_json_envelope_valid || return 1
+    mapfile -t shell_calls < <(stdout_json_tool_call_arguments 'shell_execute')
+    [[ "${#shell_calls[@]}" -eq 1 ]] || return 1
+    shell_call="${shell_calls[0]}"
+
+    jq -e --arg expected "$LARGE_OUTPUT_EVAL_COMMAND" \
+        '.Command == $expected and (.WorkingDirectory? == null)' \
+        <<<"$shell_call" >/dev/null \
+        && stdout_json_tool_called 'tool_output_read' \
+        && stdout_response_contains '872671849'
 }
 
 # Large FILE: a pre-seeded ~314 KB file (>256 KB, so file_read returns a bounded
@@ -2801,9 +2811,9 @@ run_all() {
 
     # The prompt gives the goal but does not name the continuation tool.
     # The assertion requires the structured tool and the exact line value.
-    run_case complex_large_shell_output_spill "retrieves a deep line from oversized shell output unaided" \
-        "Run this command with shell_execute and tell me the number it prints on line 200: awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147483647;print x}}'" \
-        "Using shell_execute, run: awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147483647;print x}}' — then tell me which number is printed on the 200th line of its output."
+    run_case --json complex_large_shell_output_spill "retrieves a deep line from oversized shell output unaided" \
+        "Run this exact command once with shell_execute, without modifying, piping, filtering, redirecting, or shortening it: $LARGE_OUTPUT_EVAL_COMMAND. Then tell me the number it prints on line 200." \
+        "Using one shell_execute call, run this command exactly as written, with no added pipe, filter, redirect, or argument: $LARGE_OUTPUT_EVAL_COMMAND. Then tell me which number is printed on the 200th line of its output."
 
     # bounded-tool-output: oversized FILE. The prompt states only the goal — read
     # a deep line of a named large file. How to cope with it being too large for
