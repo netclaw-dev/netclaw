@@ -1867,27 +1867,18 @@ assert_complex_diagnose_self() {
     stdout_contains '\[tool:call\] shell_execute' && stdout_contains 'netclaw.*doctor'
 }
 
-# bounded-tool-output coverage (bound-tool-output-with-file-spill change).
-# These two cases assert on OUTCOME, not mechanism: the prompts state only the
-# goal and give the agent NO instructions about spilling, redirecting, re-running,
-# file_read, StartLine/Limit, or grep. How the agent handles oversized output must
-# come entirely from AGENTS.md, the netclaw-operations skill, and the steer text
-# in the tool result — coaching it in the prompt would be testing instruction-
-# following, not whether the real guidance surfaces work.
+# These cases do not tell the agent how to continue bounded output.
+# The guidance and the tool result must supply that behavior.
 #
-# The data is a deterministic Lehmer PRNG (pure integer modular arithmetic,
-# identical across awk implementations and the host that computed the expected
-# values), so the value at a deep line is reproducible AND un-fabricatable by the
-# model. Because the tool bounds any single read to ~N=2000 inline chars, the
-# deep-line value is unreachable from one read — so a correct answer can ONLY
-# come from the agent paging/reading the oversized output the way the steer asks.
-# Outcome therefore implies correct handling; no mechanism assertion is needed.
+# A deterministic Lehmer generator supplies one reproducible value.
+# The value is outside the inline output window.
+# The assertion checks the continuation tool and the final value.
 
-# Large SHELL output: ~210 KB on stdout exceeds N, so the daemon spills it and
-# steers. Line 200 (value 872671849) sits past the inline window; reporting it
-# proves the agent retrieved it from the bounded/spilled output unaided.
+# This shell command produces about 210 KB of output.
+# Line 200 is outside the inline window.
 assert_complex_large_shell_output_spill() {
     stdout_contains '\[tool:call\] shell_execute' && \
+        stdout_contains '\[tool:call\] tool_output_read' && \
         stdout_response_contains '872671849'
 }
 
@@ -2782,12 +2773,8 @@ run_all() {
     run_case complex_diagnose_self "shell_execute with netclaw doctor" \
         "Run netclaw doctor and summarize any problems"
 
-    # bounded-tool-output: oversized SHELL output. The prompt states only the
-    # goal — run a command and report a deep line of its output. How to cope with
-    # the output being too large to return inline (read the spill the steer hands
-    # back, rather than re-running) must come from the agent's own guidance, not
-    # this prompt. The number is a deterministic-but-opaque Lehmer PRNG value; the
-    # assertion checks the agent reports the correct line-200 value (872671849).
+    # The prompt gives the goal but does not name the continuation tool.
+    # The assertion requires the structured tool and the exact line value.
     run_case complex_large_shell_output_spill "retrieves a deep line from oversized shell output unaided" \
         "Run this command with shell_execute and tell me the number it prints on line 200: awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147483647;print x}}'" \
         "Using shell_execute, run: awk 'BEGIN{x=1;for(i=1;i<=20000;i++){x=(x*48271)%2147483647;print x}}' — then tell me which number is printed on the 200th line of its output."

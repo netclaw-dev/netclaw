@@ -44,11 +44,11 @@
 
 ## 6. PR 6 - Spill continuation and conditional schemas
 
-- [ ] 6.1 Implement core tool_output_read by opaque call id with bounded windows and current-session-only spill resolution.
-- [ ] 6.2 Make spill creation and continuation share one call-id sanitizer and reject traversal, controls, missing ids, and cross-session access.
-- [ ] 6.3 Add source-generator support for explicit conditional tool variants and oneOf schemas without changing single-shape schemas.
-- [ ] 6.4 Convert the observed mode-dependent first-party tools and reject zero/multiple matching branches before execution.
-- [ ] 6.5 Add schema snapshots, generated-code tests, malformed-branch tests, spill-redaction tests, and public API compatibility checks.
+- [x] 6.1 Implement core tool_output_read by opaque call id with bounded windows and current-session-only spill resolution.
+- [x] 6.2 Make spill creation and continuation share one call-id sanitizer and reject traversal, controls, missing ids, and cross-session access.
+- [x] 6.3 Add source-generator support for explicit conditional tool variants and oneOf schemas without changing single-shape schemas.
+- [x] 6.4 Convert the observed mode-dependent first-party tools and reject zero/multiple matching branches before execution.
+- [x] 6.5 Add schema snapshots, generated-code tests, malformed-branch tests, spill-redaction tests, and public API compatibility checks.
 
 ## 7. PR 7 - Replay, documentation, and rollout proof
 

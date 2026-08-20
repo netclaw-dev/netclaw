@@ -12,9 +12,8 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Bounds a tool result to the inline budget <c>N</c>
 /// (<see cref="ToolExecutionContext.MaxInlineToolResultChars"/>) and, when it
-/// exceeds <c>N</c>, spills the full result to
-/// <c>{SessionDirectory}/tool-calls/{toolCallId}.log</c> and steers the model to
-/// read a slice (<c>file_read</c> offset/limit) or grep it instead of re-running.
+/// exceeds <c>N</c>, spills the full result to the current session and steers
+/// the model to continue through <c>tool_output_read</c> by opaque call id.
 /// </summary>
 /// <remarks>
 /// Called from <c>DispatchingToolExecutor</c> for <i>every</i> tool, right after
@@ -27,8 +26,6 @@ namespace Netclaw.Actors.Tools;
 /// </remarks>
 internal static class ToolOutputSpill
 {
-    private const string ToolCallsSubdirectory = "tool-calls";
-
     // Content budget used when neither the tool nor the context supplies one
     // (sub-agent / Empty / direct construction). Matches
     // SessionTuning.MaxInlineToolResultChars's default so un-plumbed paths bound the
@@ -87,13 +84,24 @@ internal static class ToolOutputSpill
         _ = ct;
         try
         {
-            var dir = Path.Combine(context.SessionDirectory, ToolCallsSubdirectory);
-            Directory.CreateDirectory(dir);
-            // Sanitize the (provider-supplied) call id so a spill can never escape
-            // the tool-calls directory.
-            var path = Path.Combine(dir, SafeFileName(toolCallId!) + ".log");
+            if (!ToolOutputSpillLocation.TryResolve(
+                    context.SessionDirectory,
+                    toolCallId,
+                    out var directory,
+                    out var path))
+            {
+                return null;
+            }
+
+            if (!ToolOutputSpillLocation.IsSafeForIo(context.SessionDirectory!, path))
+                return null;
+
+            Directory.CreateDirectory(directory);
+            if (!ToolOutputSpillLocation.IsSafeForIo(context.SessionDirectory!, path))
+                return null;
+
             await File.WriteAllTextAsync(path, redacted, CancellationToken.None);
-            return path;
+            return toolCallId;
         }
         catch (Exception ex) when (ex is IOException
                                    or UnauthorizedAccessException
@@ -105,23 +113,15 @@ internal static class ToolOutputSpill
         }
     }
 
-    private static string Compose(string inline, string? spillPath, int fullLength, int budget)
+    private static string Compose(string inline, string? spillCallId, int fullLength, int budget)
     {
         var sb = new StringBuilder(inline);
         sb.Append($"\n\n[output truncated to {budget} chars of {fullLength}");
-        if (spillPath is not null)
-            sb.Append($"; output saved to {spillPath} — read a slice with file_read (offset/limit) or grep it instead of re-running");
+        if (spillCallId is not null)
+        {
+            sb.Append($"; continue with tool_output_read using CallId='{spillCallId}' and a bounded Start/Limit window instead of re-running");
+        }
         sb.Append(']');
         return sb.ToString();
-    }
-
-    private static string SafeFileName(string id)
-    {
-        var invalid = Path.GetInvalidFileNameChars();
-        Span<char> buffer = id.Length is > 0 and <= 256 ? stackalloc char[id.Length] : new char[id.Length];
-        for (var i = 0; i < id.Length; i++)
-            buffer[i] = invalid.Contains(id[i]) ? '_' : id[i];
-        var safe = new string(buffer);
-        return string.IsNullOrWhiteSpace(safe) ? "tool-call" : safe;
     }
 }

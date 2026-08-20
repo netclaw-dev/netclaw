@@ -18,6 +18,7 @@ namespace Netclaw.Tools.Generators;
 public sealed class NetclawToolGenerator : IIncrementalGenerator
 {
     private const string AttributeFullName = "Netclaw.Tools.NetclawToolAttribute";
+    private const string VariantAttributeFullName = "Netclaw.Tools.ToolArgumentVariantAttribute";
     private const string BaseClassPrefix = "Netclaw.Tools.NetclawTool<";
 
     public void Initialize(IncrementalGeneratorInitializationContext context)
@@ -85,16 +86,14 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
         {
             ct.ThrowIfCancellationRequested();
 
-            var paramDescription = "";
-            foreach (var paramAttr in param.GetAttributes())
+            var paramDescription = ReadDescription(param.GetAttributes());
+            if (paramDescription.Length == 0)
             {
-                if (paramAttr.AttributeClass?.Name == "DescriptionAttribute" &&
-                    paramAttr.ConstructorArguments.Length > 0 &&
-                    paramAttr.ConstructorArguments[0].Value is string desc)
-                {
-                    paramDescription = desc;
-                    break;
-                }
+                var property = paramsType.GetMembers(param.Name)
+                    .OfType<IPropertySymbol>()
+                    .FirstOrDefault();
+                if (property is not null)
+                    paramDescription = ReadDescription(property.GetAttributes());
             }
 
             var isNullable = param.Type.NullableAnnotation == NullableAnnotation.Annotated;
@@ -116,6 +115,8 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             ? null
             : classSymbol.ContainingNamespace.ToDisplayString();
 
+        var variants = ExtractVariants(classSymbol, parameters, out var variantError);
+
         return new ToolModel(
             classNamespace,
             classSymbol.Name,
@@ -124,7 +125,141 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             grant,
             liveness,
             paramsType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-            [.. parameters]);
+            [.. parameters],
+            variants,
+            variantError);
+    }
+
+    private static string ReadDescription(ImmutableArray<AttributeData> attributes)
+    {
+        foreach (var attribute in attributes)
+        {
+            if (attribute.AttributeClass?.Name == "DescriptionAttribute"
+                && attribute.ConstructorArguments.Length > 0
+                && attribute.ConstructorArguments[0].Value is string description)
+            {
+                return description;
+            }
+        }
+
+        return string.Empty;
+    }
+
+    private static ImmutableArray<ToolVariant> ExtractVariants(
+        INamedTypeSymbol classSymbol,
+        IReadOnlyList<ToolParameter> parameters,
+        out string? error)
+    {
+        error = null;
+        var attributes = classSymbol.GetAttributes()
+            .Where(static attribute => attribute.AttributeClass?.ToDisplayString() == VariantAttributeFullName)
+            .ToArray();
+        if (attributes.Length == 0)
+            return [];
+
+        var parameterNames = new HashSet<string>(
+            parameters.Select(static parameter => parameter.Name),
+            System.StringComparer.Ordinal);
+        var variants = new List<ToolVariant>(attributes.Length);
+        string? sharedDiscriminator = null;
+        var values = new HashSet<string>(System.StringComparer.OrdinalIgnoreCase);
+
+        foreach (var attribute in attributes)
+        {
+            if (attribute.ConstructorArguments.Length != 2
+                || attribute.ConstructorArguments[0].Value is not string discriminator
+                || attribute.ConstructorArguments[1].Value is not string value
+                || string.IsNullOrWhiteSpace(discriminator)
+                || string.IsNullOrWhiteSpace(value))
+            {
+                error = "the discriminator parameter and value must be non-empty strings";
+                return [];
+            }
+
+            if (!parameterNames.Contains(discriminator))
+            {
+                error = $"the discriminator parameter '{discriminator}' does not exist";
+                return [];
+            }
+
+            var discriminatorParameter = parameters.First(parameter => parameter.Name == discriminator);
+            if (discriminatorParameter.JsonType != "string")
+            {
+                error = $"the discriminator parameter '{discriminator}' must be a string";
+                return [];
+            }
+
+            sharedDiscriminator ??= discriminator;
+            if (!string.Equals(sharedDiscriminator, discriminator, System.StringComparison.Ordinal))
+            {
+                error = "all variants must use the same discriminator parameter";
+                return [];
+            }
+
+            if (!values.Add(value))
+            {
+                error = $"the discriminator value '{value}' is duplicated";
+                return [];
+            }
+
+            if (!TryReadStringArray(attribute, "Required", out var required)
+                || !TryReadStringArray(attribute, "Forbidden", out var forbidden))
+            {
+                error = $"variant '{value}' contains a null parameter name";
+                return [];
+            }
+
+            if (required.Any(name => !parameterNames.Contains(name))
+                || forbidden.Any(name => !parameterNames.Contains(name)))
+            {
+                error = $"variant '{value}' references an unknown parameter";
+                return [];
+            }
+
+            if (required.Contains(discriminator, System.StringComparer.Ordinal)
+                || forbidden.Contains(discriminator, System.StringComparer.Ordinal)
+                || required.Distinct(System.StringComparer.Ordinal).Count() != required.Length
+                || forbidden.Distinct(System.StringComparer.Ordinal).Count() != forbidden.Length
+                || required.Intersect(forbidden, System.StringComparer.Ordinal).Any())
+            {
+                error = $"variant '{value}' has conflicting required or forbidden parameters";
+                return [];
+            }
+
+            variants.Add(new ToolVariant(discriminator, value, required, forbidden));
+        }
+
+        return [.. variants];
+    }
+
+    private static bool TryReadStringArray(
+        AttributeData attribute,
+        string name,
+        out ImmutableArray<string> values)
+    {
+        foreach (var argument in attribute.NamedArguments)
+        {
+            if (argument.Key != name || argument.Value.Kind != TypedConstantKind.Array)
+                continue;
+
+            var result = ImmutableArray.CreateBuilder<string>(argument.Value.Values.Length);
+            foreach (var value in argument.Value.Values)
+            {
+                if (value.Value is not string parameterName)
+                {
+                    values = [];
+                    return false;
+                }
+
+                result.Add(parameterName);
+            }
+
+            values = result.MoveToImmutable();
+            return true;
+        }
+
+        values = [];
+        return true;
     }
 
     private static string GetJsonType(ITypeSymbol type)
@@ -197,6 +332,15 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
 
     private static void GenerateSource(SourceProductionContext spc, ToolModel model)
     {
+        if (model.VariantError is not null)
+        {
+            var error = $"#error NETCLAWTOOL001 Tool '{model.ToolName}' has an invalid conditional variant: {model.VariantError}";
+            spc.AddSource(
+                $"{model.ClassName}.variant-error.g.cs",
+                SourceText.From(error, Encoding.UTF8));
+            return;
+        }
+
         var sb = new StringBuilder();
 
         sb.AppendLine("// <auto-generated/>");
@@ -256,7 +400,36 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
         var requiredNames = required.Select(p => $"\"{p.Name}\"").Append("\"_rationale\"");
         sb.Append("            \"required\": [");
         sb.Append(string.Join(", ", requiredNames));
-        sb.AppendLine("]");
+        sb.Append("]");
+
+        if (model.Variants.Length > 0)
+        {
+            sb.AppendLine(",");
+            sb.AppendLine("            \"additionalProperties\": false,");
+            sb.AppendLine("            \"oneOf\": [");
+            for (var index = 0; index < model.Variants.Length; index++)
+            {
+                var variant = model.Variants[index];
+                sb.AppendLine("                {");
+                sb.AppendLine($"                    \"properties\": {{ \"{variant.DiscriminatorParameter}\": {{ \"enum\": [\"{EscapeJson(variant.DiscriminatorValue)}\"] }} }},");
+                var branchRequired = variant.Required
+                    .Prepend(variant.DiscriminatorParameter)
+                    .Select(static name => $"\"{name}\"");
+                sb.AppendLine($"                    \"required\": [{string.Join(", ", branchRequired)}]{(variant.Forbidden.Length > 0 ? "," : string.Empty)}");
+                if (variant.Forbidden.Length > 0)
+                {
+                    var forbidden = variant.Forbidden
+                        .Select(static name => $"{{ \"required\": [\"{name}\"] }}");
+                    sb.AppendLine($"                    \"not\": {{ \"anyOf\": [{string.Join(", ", forbidden)}] }}");
+                }
+                sb.AppendLine(index == model.Variants.Length - 1 ? "                }" : "                },");
+            }
+            sb.AppendLine("            ]");
+        }
+        else
+        {
+            sb.AppendLine();
+        }
 
         sb.AppendLine("        }");
         sb.AppendLine("        \"\"\").RootElement.Clone();");
@@ -358,6 +531,39 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             }
         }
 
+        if (model.Variants.Length > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("        static int __ArgumentValueCount(System.Collections.Generic.IDictionary<string, object?> source, string parameter)");
+            sb.AppendLine("        {");
+            sb.AppendLine("            var normalized = Netclaw.Tools.ToolArgumentHelper.NormalizeKey(parameter);");
+            sb.AppendLine("            var count = 0;");
+            sb.AppendLine("            foreach (var pair in source)");
+            sb.AppendLine("            {");
+            sb.AppendLine("                if (!string.Equals(Netclaw.Tools.ToolArgumentHelper.NormalizeKey(pair.Key), normalized, System.StringComparison.OrdinalIgnoreCase))");
+            sb.AppendLine("                    continue;");
+            sb.AppendLine("                if (pair.Value is not null and not JsonElement { ValueKind: JsonValueKind.Null })");
+            sb.AppendLine("                    count++;");
+            sb.AppendLine("            }");
+            sb.AppendLine("            return count;");
+            sb.AppendLine("        }");
+            sb.AppendLine();
+            sb.AppendLine("        var __variantMatches = 0;");
+            foreach (var variant in model.Variants)
+            {
+                sb.AppendLine($"        if (__ArgumentValueCount(arguments, \"{variant.DiscriminatorParameter}\") == 1");
+                sb.AppendLine($"            && string.Equals(__{variant.DiscriminatorParameter}, \"{EscapeJson(variant.DiscriminatorValue)}\", System.StringComparison.OrdinalIgnoreCase)");
+                foreach (var requiredParameter in variant.Required)
+                    sb.AppendLine($"            && __ArgumentValueCount(arguments, \"{requiredParameter}\") == 1");
+                foreach (var forbiddenParameter in variant.Forbidden)
+                    sb.AppendLine($"            && __ArgumentValueCount(arguments, \"{forbiddenParameter}\") == 0");
+                sb.AppendLine("           )");
+                sb.AppendLine("            __variantMatches++;");
+            }
+            sb.AppendLine("        if (__variantMatches != 1)");
+            sb.AppendLine($"            throw new System.ArgumentException(\"Arguments for tool '{EscapeJson(model.ToolName)}' must match exactly one declared variant. The tool was NOT executed.\");");
+        }
+
         sb.AppendLine();
         sb.Append($"        return new {model.ParamsTypeName}(");
         sb.Append(string.Join(", ", model.Parameters.Select(p => $"__{p.Name}")));
@@ -376,7 +582,8 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
 internal sealed class ToolModel
 {
     public ToolModel(string? ns, string className, string toolName, string toolDescription,
-        string grant, string liveness, string paramsTypeName, ImmutableArray<ToolParameter> parameters)
+        string grant, string liveness, string paramsTypeName, ImmutableArray<ToolParameter> parameters,
+        ImmutableArray<ToolVariant> variants, string? variantError)
     {
         Namespace = ns;
         ClassName = className;
@@ -386,6 +593,8 @@ internal sealed class ToolModel
         Liveness = liveness;
         ParamsTypeName = paramsTypeName;
         Parameters = parameters;
+        Variants = variants;
+        VariantError = variantError;
     }
 
     public string? Namespace { get; }
@@ -396,6 +605,28 @@ internal sealed class ToolModel
     public string Liveness { get; }
     public string ParamsTypeName { get; }
     public ImmutableArray<ToolParameter> Parameters { get; }
+    public ImmutableArray<ToolVariant> Variants { get; }
+    public string? VariantError { get; }
+}
+
+internal sealed class ToolVariant
+{
+    public ToolVariant(
+        string discriminatorParameter,
+        string discriminatorValue,
+        ImmutableArray<string> required,
+        ImmutableArray<string> forbidden)
+    {
+        DiscriminatorParameter = discriminatorParameter;
+        DiscriminatorValue = discriminatorValue;
+        Required = required;
+        Forbidden = forbidden;
+    }
+
+    public string DiscriminatorParameter { get; }
+    public string DiscriminatorValue { get; }
+    public ImmutableArray<string> Required { get; }
+    public ImmutableArray<string> Forbidden { get; }
 }
 
 internal sealed class ToolParameter

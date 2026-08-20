@@ -12,10 +12,11 @@
     set_working_directory,
     shell_execute,
     skill_load,
-    skill_read_resource
+    skill_read_resource,
+    tool_output_read
   ],
   Footprint: {
-    Count: 13,
-    SerializedDefinitionBytes: 13466
+    Count: 14,
+    SerializedDefinitionBytes: 17407
   }
 }

@@ -24,6 +24,7 @@ public sealed class ToolAudienceProfileDefaultsTests
                 ToolAudienceProfileToolCatalog.FileSearch,
                 ToolAudienceProfileToolCatalog.FileReadMany,
                 ToolAudienceProfileToolCatalog.JsonRead,
+                ToolAudienceProfileToolCatalog.ToolOutputRead,
                 ToolAudienceProfileToolCatalog.AttachFile
             ]
         },
@@ -35,6 +36,7 @@ public sealed class ToolAudienceProfileDefaultsTests
                 ToolAudienceProfileToolCatalog.FileSearch,
                 ToolAudienceProfileToolCatalog.FileReadMany,
                 ToolAudienceProfileToolCatalog.JsonRead,
+                ToolAudienceProfileToolCatalog.ToolOutputRead,
                 ToolAudienceProfileToolCatalog.FileWrite,
                 ToolAudienceProfileToolCatalog.FileEdit,
                 ToolAudienceProfileToolCatalog.AttachFile,

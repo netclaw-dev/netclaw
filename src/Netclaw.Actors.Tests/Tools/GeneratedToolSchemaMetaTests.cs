@@ -6,6 +6,7 @@
 using Netclaw.Tests.Utilities;
 using System.Text.Json;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security.Skills;
@@ -103,6 +104,10 @@ public class GeneratedToolSchemaMetaTests
         Assert.Equal("array", paths.GetProperty("type").GetString());
         Assert.Equal("string", paths.GetProperty("items").GetProperty("type").GetString());
         Assert.Contains(
+            "Relative paths use the current project",
+            paths.GetProperty("description").GetString(),
+            StringComparison.Ordinal);
+        Assert.Contains(
             "Paths",
             tool.ParameterSchema.GetProperty("required").EnumerateArray().Select(item => item.GetString()));
     }
@@ -117,6 +122,132 @@ public class GeneratedToolSchemaMetaTests
         Assert.Equal("interface", parsed.InterfaceMap["kind"]);
         Assert.Equal("concrete", parsed.ConcreteMap["kind"]);
     }
+
+    [Fact]
+    public void Reminder_schema_exposes_closed_delivery_variants()
+    {
+        var schema = CreateReminderTool().ParameterSchema;
+
+        Assert.False(schema.GetProperty("additionalProperties").GetBoolean());
+        var variants = schema.GetProperty("oneOf").EnumerateArray().ToArray();
+        Assert.Equal(3, variants.Length);
+        Assert.Equal(
+            ["current_session", "channel", "none"],
+            variants.Select(static variant => variant
+                .GetProperty("properties")
+                .GetProperty("DeliveryKind")
+                .GetProperty("enum")[0]
+                .GetString()!));
+
+        var channelRequired = variants[1]
+            .GetProperty("required")
+            .EnumerateArray()
+            .Select(static value => value.GetString()!)
+            .ToArray();
+        Assert.Equal(["DeliveryKind", "DeliveryTransport", "DeliveryAddress"], channelRequired);
+    }
+
+    [Fact]
+    public Task Conditional_tool_schemas_match_snapshot()
+    {
+        var document = JsonSerializer.Serialize(new
+        {
+            Reminder = CreateReminderTool().ParameterSchema,
+            SkillManage = CreateSkillManageTool().ParameterSchema
+        });
+        return Verifier.VerifyJson(document);
+    }
+
+    [Fact]
+    public void Single_shape_schema_does_not_gain_conditional_keywords()
+    {
+        var schema = new FileListTool(
+            new ToolConfig(),
+            new NetclawPaths(),
+            new Netclaw.Security.ToolPathPolicy([])).ParameterSchema;
+
+        Assert.False(schema.TryGetProperty("oneOf", out _));
+        Assert.False(schema.TryGetProperty("additionalProperties", out _));
+    }
+
+    [Fact]
+    public void Conditional_schema_and_spill_resolver_seams_are_not_public_api()
+    {
+        var attributeType = typeof(NetclawToolAttribute).Assembly.GetType(
+            "Netclaw.Tools.ToolArgumentVariantAttribute",
+            throwOnError: true)!;
+
+        Assert.False(attributeType.IsPublic);
+        Assert.False(typeof(ToolOutputReadTool).IsPublic);
+        Assert.False(typeof(ToolOutputSpillLocation).IsPublic);
+    }
+
+    [Theory]
+    [MemberData(nameof(InvalidReminderArguments))]
+    public void Reminder_binder_rejects_invalid_delivery_branches(Dictionary<string, object?> arguments)
+    {
+        var error = Assert.Throws<ArgumentException>(() => CreateReminderTool().ParseArguments(arguments));
+
+        Assert.Contains("exactly one declared variant", error.Message, StringComparison.Ordinal);
+        Assert.Contains("NOT executed", error.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Reminder_binder_accepts_complete_channel_branch()
+    {
+        var parsed = CreateReminderTool().ParseArguments(CreateReminderArguments(
+            "channel",
+            deliveryTransport: "slack",
+            deliveryAddress: "channel-token"));
+
+        Assert.Equal("channel", parsed.DeliveryKind);
+        Assert.Equal("slack", parsed.DeliveryTransport);
+        Assert.Equal("channel-token", parsed.DeliveryAddress);
+    }
+
+    [Fact]
+    public void Reminder_binder_treats_internal_null_optional_fields_as_omitted()
+    {
+        var arguments = CreateReminderArguments("none");
+        arguments["DeliveryTransport"] = null;
+        arguments["DeliveryAddress"] = JsonDocument.Parse("null").RootElement.Clone();
+
+        var parsed = CreateReminderTool().ParseArguments(arguments);
+
+        Assert.Equal("none", parsed.DeliveryKind);
+        Assert.Null(parsed.DeliveryTransport);
+        Assert.True(string.IsNullOrEmpty(parsed.DeliveryAddress));
+    }
+
+    [Fact]
+    public void Skill_manage_schema_exposes_each_action_as_one_branch()
+    {
+        var tool = CreateSkillManageTool();
+        var values = tool.ParameterSchema
+            .GetProperty("oneOf")
+            .EnumerateArray()
+            .Select(static variant => variant
+                .GetProperty("properties")
+                .GetProperty("Action")
+                .GetProperty("enum")[0]
+                .GetString()!)
+            .ToArray();
+
+        Assert.Equal(["create", "edit", "patch", "delete", "write_file", "remove_file"], values);
+    }
+
+    public static TheoryData<Dictionary<string, object?>> InvalidReminderArguments => new()
+    {
+        CreateReminderArguments(null),
+        CreateReminderArguments("unsupported"),
+        CreateReminderArguments("channel", deliveryTransport: "slack"),
+        CreateReminderArguments("current_session", deliveryTransport: "slack"),
+        CreateReminderArguments("none", deliveryAddress: "channel-token"),
+        WithConflictingDiscriminator(CreateReminderArguments(
+            "channel",
+            deliveryTransport: "slack",
+            deliveryAddress: "channel-token"))
+    };
 
     [Theory]
     [InlineData("ReadOnlyMap")]
@@ -141,6 +272,45 @@ public class GeneratedToolSchemaMetaTests
             ["InterfaceMap"] = new Dictionary<string, string> { ["kind"] = "interface" },
             ["ConcreteMap"] = new Dictionary<string, string> { ["kind"] = "concrete" },
         };
+
+    private static SetReminderTool CreateReminderTool()
+        => new(null!, TimeProvider.System, new SchedulingConfig());
+
+    private static SkillManageTool CreateSkillManageTool()
+        => new(
+            new SkillRegistry(),
+            new NetclawPaths(),
+            new NoOpSkillContentScanner(),
+            null!);
+
+    private static Dictionary<string, object?> CreateReminderArguments(
+        string? deliveryKind,
+        string? deliveryTransport = null,
+        string? deliveryAddress = null)
+    {
+        var arguments = new Dictionary<string, object?>(StringComparer.Ordinal)
+        {
+            ["Id"] = "test-reminder",
+            ["Name"] = "Test reminder",
+            ["Prompt"] = "Check status.",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "15m"
+        };
+        if (deliveryKind is not null)
+            arguments["DeliveryKind"] = deliveryKind;
+        if (deliveryTransport is not null)
+            arguments["DeliveryTransport"] = deliveryTransport;
+        if (deliveryAddress is not null)
+            arguments["DeliveryAddress"] = deliveryAddress;
+        return arguments;
+    }
+
+    private static Dictionary<string, object?> WithConflictingDiscriminator(
+        Dictionary<string, object?> arguments)
+    {
+        arguments["delivery_kind"] = "none";
+        return arguments;
+    }
 
     private sealed class UnavailablePromptLoader : IMcpPromptSkillLoader
     {

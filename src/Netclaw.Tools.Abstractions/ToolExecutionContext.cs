@@ -533,7 +533,7 @@ public sealed class ToolInvocationContext
     /// The session <i>content</i> inline budget
     /// (<c>SessionTuning.MaxInlineToolResultChars</c>), surfaced here so
     /// <c>DispatchingToolExecutor</c> can bound a tool result and spill the
-    /// overflow to <c>{SessionDirectory}/tool-calls/{callId}.log</c>. The dispatcher
+    /// overflow inside the current session for opaque call-id continuation. The dispatcher
     /// uses a tool's own <c>InlineOutputBudgetChars</c> override when set (verbose
     /// tools), else this content budget. Zero when unset (the dispatcher falls back
     /// to its built-in content default).
