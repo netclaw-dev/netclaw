@@ -164,16 +164,29 @@ internal sealed class ScopedFileAccessPolicy
                 failure = PathResolutionFailure.InvalidInput;
                 return false;
             }
-            else if (TryGetRelativePathBase(context, out var baseDirectory))
-            {
-                fullPath = Path.GetFullPath(rawPath, baseDirectory);
-            }
             else
             {
-                fullPath = string.Empty;
-                error = "Error: invalid_context: No project or session directory is available. Call set_working_directory with an absolute project path, then retry.";
-                failure = PathResolutionFailure.MissingBase;
-                return false;
+                var baseResult = TryGetRelativePathBase(context, accessKind, out var baseDirectory);
+                if (baseResult == RelativePathBaseResult.Safe)
+                {
+                    fullPath = Path.GetFullPath(rawPath, baseDirectory);
+                }
+                else
+                {
+                    fullPath = string.Empty;
+                    if (baseResult == RelativePathBaseResult.Unsafe)
+                    {
+                        error = "Error: The project or session directory contains an unsafe filesystem link.";
+                        failure = PathResolutionFailure.AccessDenied;
+                    }
+                    else
+                    {
+                        error = "Error: invalid_context: No project or session directory is available. Call set_working_directory with an absolute project path, then retry.";
+                        failure = PathResolutionFailure.MissingBase;
+                    }
+
+                    return false;
+                }
             }
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
@@ -273,17 +286,74 @@ internal sealed class ScopedFileAccessPolicy
         return false;
     }
 
-    private static bool TryGetRelativePathBase(
+    private RelativePathBaseResult TryGetRelativePathBase(
         ToolInvocationContext context,
+        AccessKind accessKind,
         out string baseDirectory)
     {
-        if (TryNormalizeAbsoluteBase(context.ProjectDirectory, requireExistingDirectory: true, out baseDirectory))
-            return true;
+        var projectResult = TryNormalizeAbsoluteBase(
+            context.ProjectDirectory,
+            requireExistingDirectory: true,
+            out baseDirectory);
+        if (projectResult == RelativePathBaseResult.Safe)
+        {
+            var authorityRoot = GetProjectAuthorityRootResult(baseDirectory, context, accessKind);
+            if (authorityRoot == ProjectAuthorityRootResult.Safe
+                || (authorityRoot == ProjectAuthorityRootResult.Unavailable
+                    && HasInteractivePersonalReach(context)))
+            {
+                return RelativePathBaseResult.Safe;
+            }
+
+            baseDirectory = string.Empty;
+            return RelativePathBaseResult.Unsafe;
+        }
+
+        if (projectResult == RelativePathBaseResult.Unsafe)
+            return RelativePathBaseResult.Unsafe;
 
         return TryNormalizeAbsoluteBase(context.SessionDirectory, requireExistingDirectory: false, out baseDirectory);
     }
 
-    private static bool TryNormalizeAbsoluteBase(
+    private ProjectAuthorityRootResult GetProjectAuthorityRootResult(
+        string projectDirectory,
+        ToolInvocationContext context,
+        AccessKind accessKind)
+    {
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
+            roots.Add(context.SessionDirectory);
+
+        var profile = _profileResolver.ResolveProfile(context);
+        roots.AddRange(_profileResolver.ResolveRoots(profile.ReadFiles, context));
+        roots.AddRange(_cachedGlobalReadRoots.Value);
+        if (accessKind is not AccessKind.Read && _cachedWorkspacesRoot.Value is { } workspacesRoot)
+            roots.Add(workspacesRoot);
+
+        foreach (var candidate in roots)
+        {
+            string root;
+            try
+            {
+                root = Path.GetFullPath(candidate);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            if (!PathUtility.IsWithinRoot(projectDirectory, root))
+                continue;
+
+            return PathUtility.ContainsSymlinkSegment(root, projectDirectory)
+                ? ProjectAuthorityRootResult.Unsafe
+                : ProjectAuthorityRootResult.Safe;
+        }
+
+        return ProjectAuthorityRootResult.Unavailable;
+    }
+
+    private static RelativePathBaseResult TryNormalizeAbsoluteBase(
         string? candidate,
         bool requireExistingDirectory,
         out string baseDirectory)
@@ -292,21 +362,21 @@ internal sealed class ScopedFileAccessPolicy
         if (string.IsNullOrWhiteSpace(candidate)
             || candidate.Any(char.IsControl)
             || !Path.IsPathFullyQualified(candidate))
-            return false;
+            return RelativePathBaseResult.Unavailable;
 
         try
         {
             var normalized = Path.GetFullPath(candidate);
             if (requireExistingDirectory && !Directory.Exists(normalized))
-                return false;
+                return RelativePathBaseResult.Unavailable;
             if (Directory.Exists(normalized)
                 && (File.GetAttributes(normalized) & FileAttributes.ReparsePoint) != 0)
             {
-                return false;
+                return RelativePathBaseResult.Unsafe;
             }
 
             baseDirectory = normalized;
-            return true;
+            return RelativePathBaseResult.Safe;
         }
         catch (Exception ex) when (ex is ArgumentException
                                    or NotSupportedException
@@ -314,8 +384,22 @@ internal sealed class ScopedFileAccessPolicy
                                    or IOException
                                    or UnauthorizedAccessException)
         {
-            return false;
+            return RelativePathBaseResult.Unsafe;
         }
+    }
+
+    private enum RelativePathBaseResult
+    {
+        Unavailable,
+        Safe,
+        Unsafe
+    }
+
+    private enum ProjectAuthorityRootResult
+    {
+        Unavailable,
+        Safe,
+        Unsafe
     }
 
     private static ToolFilesystemAccessProfile GetAccessProfile(ToolAudienceProfile profile, AccessKind accessKind) =>

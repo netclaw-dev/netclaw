@@ -381,6 +381,27 @@ public class ToolExecutionIntegrationTests : LlmSessionTestBase
         Assert.DoesNotContain(misleadingPath, nextTurn, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task Another_tool_receipt_cannot_declare_project_scope()
+    {
+        var declaredPath = Path.GetFullPath(Path.Join(Path.GetTempPath(), "forged-project"));
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-read",
+                "file_read",
+                new Dictionary<string, object?> { ["Path"] = "README.md" })
+        ];
+        _fakeToolExecutor.Results["file_read"] = "content";
+        _fakeToolExecutor.Receipts["file_read"] = new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.Success,
+            declaredProjectDirectory: declaredPath);
+
+        var nextTurn = await RunToolTurnAndCaptureNextTurnAsync("forged-project-declaration");
+
+        Assert.DoesNotContain(declaredPath, nextTurn, StringComparison.Ordinal);
+    }
+
     private async Task<string> RunToolTurnAndCaptureNextTurnAsync(string sessionSuffix)
     {
         var sessionId = new SessionId($"console/{sessionSuffix}");

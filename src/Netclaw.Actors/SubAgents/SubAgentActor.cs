@@ -566,7 +566,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 {
                     msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
                     _fileActivity.Apply(receipt);
-                    TryApplyProjectDirectory(receipt);
+                    TryApplyProjectDirectory(result.Name, receipt);
                     if (receipt is not null)
                         _log.Info("SubAgent tool outcome category={OutcomeCategory}", receipt.Category);
                 }
@@ -1154,9 +1154,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         return _fileActivity.BuildResult();
     }
 
-    private void TryApplyProjectDirectory(ToolInvocationReceipt? receipt)
+    private void TryApplyProjectDirectory(string? toolName, ToolInvocationReceipt? receipt)
     {
-        if (receipt is not
+        if (!string.Equals(toolName, SetWorkingDirectoryTool.ToolName, StringComparison.Ordinal)
+            || receipt is not
             {
                 Category: ToolInvocationOutcomeCategory.Success,
                 DeclaredProjectDirectory: { } projectDirectory
@@ -1577,6 +1578,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 {
                     var category = ex switch
                     {
+                        ToolAccessDeniedException => ToolInvocationOutcomeCategory.AccessDenied,
                         UnauthorizedAccessException => ToolInvocationOutcomeCategory.AccessDenied,
                         FileNotFoundException or DirectoryNotFoundException => ToolInvocationOutcomeCategory.NotFound,
                         _ => ToolInvocationOutcomeCategory.TransientFailure

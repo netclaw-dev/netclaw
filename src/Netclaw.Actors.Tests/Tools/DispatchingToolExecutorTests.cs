@@ -438,6 +438,8 @@ public class DispatchingToolExecutorTests
 
         var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("shell_requires_personal_context", ex.DenyReason);
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+        Assert.Empty(context.Receipt?.FileActivity ?? []);
     }
 
     [Fact]
@@ -2728,6 +2730,7 @@ public class DispatchingToolExecutorTests
 
             var firstAttempt = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() =>
                 executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
+            Assert.Null(context.Receipt);
 
             context.OneTimeApprovedToolName = toolCall.Name;
             context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
@@ -2736,6 +2739,7 @@ public class DispatchingToolExecutorTests
             // Output text varies by test environment (git status); meaningful
             // assertion is that no ToolApprovalRequiredException is thrown.
             _ = await executor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken);
+            Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
 
             context.OneTimeApprovedToolName = null;
             context.SetOneTimeApprovedPatterns([]);

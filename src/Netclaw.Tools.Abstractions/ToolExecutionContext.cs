@@ -73,6 +73,8 @@ internal sealed record ToolFileActivity
 
 internal sealed record ToolInvocationReceipt
 {
+    private const int MaxRemediationCodeLength = 64;
+
     public ToolInvocationReceipt(
         ToolInvocationOutcomeCategory category,
         IReadOnlyList<ToolFileActivity>? fileActivity = null,
@@ -93,6 +95,14 @@ internal sealed record ToolInvocationReceipt
             && remediationCode is not null)
         {
             throw new ArgumentException("Only a recoverable correction may report remediation.", nameof(remediationCode));
+        }
+
+        if (remediationCode is not null
+            && (string.IsNullOrWhiteSpace(remediationCode)
+                || remediationCode.Length > MaxRemediationCodeLength
+                || remediationCode.Any(char.IsControl)))
+        {
+            throw new ArgumentException("The remediation code is invalid.", nameof(remediationCode));
         }
 
         if (declaredProjectDirectory is not null)

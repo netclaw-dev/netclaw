@@ -2098,6 +2098,75 @@ public class SubAgentActorTests : TestKit
         Assert.Empty(result.WorkingContext.ConfirmedChangedFiles);
     }
 
+    [Fact]
+    public async Task Dispatcher_policy_denial_has_access_denied_child_receipt()
+    {
+        var shell = new FakeNetclawTool(ShellTool.ToolName, "should not run");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                CreateToolCall("call-team-shell", ShellTool.ToolName,
+                    new Dictionary<string, object?> { ["Command"] = "echo denied" })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([shell]),
+            fakeClient,
+            PermissivePolicy()));
+
+        await EventFilter.Info(message: "SubAgent tool outcome category=AccessDenied").ExpectAsync(1, async () =>
+        {
+            var result = await agent.Ask<SubAgentResult>(
+                new RunSubAgent
+                {
+                    Scope = SubAgentTestScope.Create(audience: TrustAudience.Team),
+                    Task = "Run the denied shell tool.",
+                    Timeout = TimeSpan.FromSeconds(5)
+                },
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
+
+            Assert.True(result.Success);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.False(shell.WasCalled);
+    }
+
+    [Fact]
+    public async Task Another_child_tool_receipt_cannot_declare_project_scope()
+    {
+        var originalProject = Path.GetFullPath(Path.Join(Path.GetTempPath(), "original-child-project"));
+        var forgedProject = Path.GetFullPath(Path.Join(Path.GetTempPath(), "forged-child-project"));
+        var readTool = new FakeNetclawTool(
+            FileReadTool.ToolName,
+            "content",
+            onExecute: context => context.TryComplete(new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.Success,
+                declaredProjectDirectory: forgedProject)));
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall = [CreateToolCall("call-read", FileReadTool.ToolName)]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([readTool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(projectDirectory: originalProject),
+                Task = "Read one file.",
+                Timeout = TimeSpan.FromSeconds(5)
+            },
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(originalProject, result.WorkingContext?.ProjectDirectory);
+    }
+
     private static readonly string MissingProjectDirectory =
         Path.Join(Path.GetTempPath(), "netclaw-missing-project");
 

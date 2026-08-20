@@ -5,6 +5,56 @@ declares it via `set_working_directory`. The project directory is the
 load-bearing input to the approval gate's safe-space root set: declaring
 it expands the trust boundary for shell invocations under that tree.
 ## Requirements
+
+### Requirement: Relative first-party filesystem paths use session-owned bases
+
+First-party filesystem tools SHALL resolve a relative path against the declared
+project directory when one exists. Otherwise, they SHALL use the immutable
+session directory. If neither base exists, they SHALL return an
+`invalid_context` correction. They SHALL NOT use the daemon process current
+directory. The canonical path SHALL pass existing scope and protected-path
+policies.
+
+#### Scenario: Relative read uses declared project
+
+- **GIVEN** a project directory `/workspace/project` and session `/session/current`
+- **WHEN** `file_read` receives `src/App.cs`
+- **THEN** it authorizes and reads `/workspace/project/src/App.cs`
+- **AND** it does not use the daemon current directory
+
+#### Scenario: Relative write falls back to session scratch
+
+- **GIVEN** no declared project and session directory `/session/current`
+- **WHEN** `file_write` receives `notes/result.md`
+- **THEN** it resolves `/session/current/notes/result.md`
+- **AND** the existing session write policy decides authorization
+
+#### Scenario: Traversal receives no implicit authority
+
+- **GIVEN** project directory `/workspace/project`
+- **WHEN** a file tool receives `../../outside.txt`
+- **THEN** it canonicalizes the result before policy evaluation
+- **AND** it denies the call when the path is outside authorized roots
+
+#### Scenario: Missing base returns correction
+
+- **GIVEN** a tool context has no project or session directory
+- **WHEN** a first-party filesystem tool receives a relative path
+- **THEN** it returns `invalid_context`
+- **AND** it performs no filesystem access
+
+### Requirement: Failed filesystem operations do not change project context
+
+A denied or failed `set_working_directory` or filesystem call SHALL NOT change
+the project directory or recent-file context. Only a validated successful
+project declaration SHALL replace the project and reload its instructions.
+
+#### Scenario: Denied declaration leaves prior project intact
+
+- **GIVEN** a session declares `/workspace/old`
+- **WHEN** `set_working_directory` is denied for `/workspace/new`
+- **THEN** the project directory remains `/workspace/old`
+- **AND** project instructions are not loaded from the denied path
 ### Requirement: Session-scoped project directory
 
 Each session SHALL maintain a mutable `ProjectDirectory` in `WorkingContext`
@@ -396,4 +446,3 @@ The system SHALL identify the existing per-session directory as the private scra
 - **WHEN** the current session ends
 - **THEN** this capability does not delete or schedule deletion of that artifact
 - **AND** retention remains unchanged until a separate cleanup capability is specified
-

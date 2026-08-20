@@ -99,6 +99,17 @@ public class WorkingContextUpdaterTests
         Assert.Contains("successful", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData("bad\ncode")]
+    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
+    public void Recoverable_receipt_rejects_invalid_remediation_code(string code)
+    {
+        Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.RecoverableCorrection,
+            remediationCode: code));
+    }
+
     private static ToolInvocationReceipt Success(string path, ToolFileActivityKind kind)
         => new(
             ToolInvocationOutcomeCategory.Success,

@@ -951,7 +951,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var result in msg.ToolResults)
         {
-            if (result.ToolCallId is not { } callId
+            if (!string.Equals(result.Name, SetWorkingDirectoryTool.ToolName, StringComparison.Ordinal)
+                || result.ToolCallId is not { } callId
                 || !msg.ToolReceipts.TryGetValue(callId.Value, out var receipt)
                 || receipt.Category != ToolInvocationOutcomeCategory.Success
                 || receipt.DeclaredProjectDirectory is not { } projectDir)
@@ -4754,7 +4755,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (toolMessage.Name is "load_tool" && toolMessage.Content is not null)
             TryActivateDiscoveredTool(toolMessage.Content.Trim());
 
-        if (result.Receipt is
+        if (string.Equals(toolMessage.Name, SetWorkingDirectoryTool.ToolName, StringComparison.Ordinal)
+            && result.Receipt is
             {
                 Category: ToolInvocationOutcomeCategory.Success,
                 DeclaredProjectDirectory: { } projectDir

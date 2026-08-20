@@ -159,12 +159,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
 
         toolCall = interpretation.Cleaned;
 
-        var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
-        var tool = authorized.Tool;
-
         var sw = Stopwatch.StartNew();
         try
         {
+            var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
+            var tool = authorized.Tool;
             var result = tool is ShellTool shellTool
                          && authorized.AuthorizedAnalysis is { } shellAnalysis
                 ? await shellTool.ExecuteAuthorizedAsync(
@@ -251,10 +250,17 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
 
         toolCall = interpretation.Cleaned;
 
-        // Authorization throws (ToolApprovalRequiredException / ToolAccessDeniedException)
-        // before the first item is produced; the tool-execution pipeline handles
-        // those exactly as it does for the non-streaming path.
-        var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
+        (INetclawTool Tool, ShellCommandAnalysis? AuthorizedAnalysis) authorized;
+        try
+        {
+            authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
+        }
+        catch (Exception ex)
+        {
+            CompleteExceptionOutcome(context, ex, ct);
+            throw;
+        }
+
         var tool = authorized.Tool;
         var updates = tool is ShellTool shellTool
                       && authorized.AuthorizedAnalysis is { } shellAnalysis
@@ -299,8 +305,12 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (exception is OperationCanceledException && callerToken.IsCancellationRequested)
             return;
 
+        if (exception is ToolApprovalRequiredException)
+            return;
+
         var category = exception switch
         {
+            ToolAccessDeniedException => ToolInvocationOutcomeCategory.AccessDenied,
             UnauthorizedAccessException => ToolInvocationOutcomeCategory.AccessDenied,
             FileNotFoundException or DirectoryNotFoundException => ToolInvocationOutcomeCategory.NotFound,
             IOException or TimeoutException => ToolInvocationOutcomeCategory.TransientFailure,

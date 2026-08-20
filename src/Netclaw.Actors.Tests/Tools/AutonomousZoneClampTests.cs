@@ -342,9 +342,9 @@ public sealed class AutonomousZoneClampTests : IDisposable
         Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.AccessDenied, failure);
     }
 
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "Directory symlink creation is privilege-gated on Windows.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses native POSIX link semantics.")]
     [SlopwatchSuppress("SW001", "This regression requires native POSIX symbolic-link base semantics.")]
-    public void Symlinked_project_base_falls_back_to_session_directory()
+    public void Symlinked_project_base_is_denied()
     {
         var projectLink = Path.Join(_dir.Path, "project-link");
         Directory.CreateSymbolicLink(projectLink, _outsideDir);
@@ -358,13 +358,67 @@ public sealed class AutonomousZoneClampTests : IDisposable
                 ProjectDirectory = projectLink
             });
 
-        Assert.True(policy.TryResolveReadPath(
+        Assert.False(policy.TryResolveReadPath(
             "secret.txt",
             context.Invocation,
-            out var resolved,
-            out var error,
-            out var failure), error);
-        Assert.Equal(Path.GetFullPath(Path.Join(_sessionDir, "secret.txt")), resolved);
-        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.None, failure);
+            out _,
+            out _,
+            out var failure));
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.AccessDenied, failure);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses native POSIX link semantics.")]
+    [SlopwatchSuppress("SW001", "This regression requires native POSIX ancestor-link semantics.")]
+    public void Posix_project_base_with_link_ancestor_is_denied()
+    {
+        AssertProjectBaseWithLinkAncestorIsDenied(autonomous: true);
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses native POSIX ancestor-link semantics.")]
+    [SlopwatchSuppress("SW001", "This regression requires native POSIX ancestor-link semantics.")]
+    public void Interactive_project_base_with_link_ancestor_is_denied()
+    {
+        AssertProjectBaseWithLinkAncestorIsDenied(autonomous: false);
+    }
+
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "This case uses native Windows junction semantics.")]
+    [SlopwatchSuppress("SW001", "This regression requires native Windows ancestor-link semantics.")]
+    public void Windows_project_base_with_link_ancestor_is_denied()
+    {
+        AssertProjectBaseWithLinkAncestorIsDenied(autonomous: true);
+    }
+
+    private void AssertProjectBaseWithLinkAncestorIsDenied(bool autonomous)
+    {
+        var workspaces = Path.Join(_dir.Path, "owned-workspaces");
+        var target = Path.Join(_dir.Path, "linked-target");
+        var project = Path.Join(target, "project");
+        Directory.CreateDirectory(workspaces);
+        Directory.CreateDirectory(project);
+
+        var link = Path.Join(workspaces, "linked-parent");
+        Directory.CreateSymbolicLink(link, target);
+        var linkedProject = Path.Join(link, "project");
+        var paths = new NetclawPaths(_dir.Path, workspaces);
+        var policy = new ScopedFileAccessPolicy(new ToolConfig(), paths);
+        var context = TestToolExecutionContext.CreateBound(
+            "reminder/ancestor-link-project",
+            _sessionDir,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                InteractiveApproval = autonomous
+                    ? new InteractiveApprovalCapability.Unavailable()
+                    : new InteractiveApprovalCapability.Available(new TestParentApprovalBridge()),
+                ProjectDirectory = linkedProject
+            });
+
+        Assert.False(policy.TryResolveReadPath(
+            "secret.txt",
+            context.Invocation,
+            out _,
+            out _,
+            out var failure));
+        Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.AccessDenied, failure);
     }
 }
