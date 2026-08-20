@@ -23,6 +23,17 @@ internal static class ToolOutcomeResults
         => Complete(context, result, ToolInvocationOutcomeCategory.Success,
             [new ToolFileActivity(canonicalPath, kind)]);
 
+    public static string SuccessFiles(
+        this ToolInvocationContext context,
+        string result,
+        IEnumerable<string> canonicalPaths,
+        ToolFileActivityKind kind)
+        => Complete(
+            context,
+            result,
+            ToolInvocationOutcomeCategory.Success,
+            [.. canonicalPaths.Select(path => new ToolFileActivity(path, kind))]);
+
     public static string SuccessProject(
         this ToolInvocationContext context,
         string result,

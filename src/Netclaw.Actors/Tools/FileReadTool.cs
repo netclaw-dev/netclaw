@@ -29,6 +29,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 {
     public const string ToolName = "file_read";
     private const long MaxModelInputFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes;
+    private const int MaxInspectionBytes = 64 * 1024;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly Encoding StrictUtf16Le = new UnicodeEncoding(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true);
     private static readonly Encoding StrictUtf16Be = new UnicodeEncoding(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true);
@@ -95,10 +96,20 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         {
             var inspection = await InspectFileAsync(authorizedPath, ct);
             if (!inspection.IsTextLike)
+            {
+                if (inspection.ImageDimensionStatus == ImageDimensionStatus.Invalid)
+                {
+                    return context.InvalidInput(BuildMetadataResponse(
+                        authorizedPath,
+                        inspection,
+                        "Image header is malformed or its dimensions exceed supported bounds. Raw binary output is not returned by file_read."));
+                }
+
                 return context.SuccessFile(
                     HandleNonTextFile(authorizedPath, inspection, context),
                     authorizedPath,
                     ToolFileActivityKind.Read);
+            }
 
             var encoding = inspection.TextEncoding ?? StrictUtf8;
             if (startLine.HasValue || limit.HasValue)
@@ -126,7 +137,15 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             return context.SuccessFile(
                 BuildMetadataResponse(
                     authorizedPath,
-                    new FileInspection(MimeType.Default, AttachmentCategory.Other, sizeBytes, false, null),
+                    new FileInspection(
+                        MimeType.Default,
+                        AttachmentCategory.Other,
+                        sizeBytes,
+                        false,
+                        null,
+                        ImageDimensionStatus.NotSupported,
+                        null,
+                        null),
                     "File is not valid in the detected text encoding. Raw binary output is not returned by file_read."),
                 authorizedPath,
                 ToolFileActivityKind.Read);
@@ -153,9 +172,17 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     {
         var info = new FileInfo(path);
         if (info.Length == 0)
-            return new FileInspection(new MimeType(MimeTypeCatalog.TextPlain), AttachmentCategory.Document, 0, true, StrictUtf8);
+            return new FileInspection(
+                new MimeType(MimeTypeCatalog.TextPlain),
+                AttachmentCategory.Document,
+                0,
+                true,
+                StrictUtf8,
+                ImageDimensionStatus.NotSupported,
+                null,
+                null);
 
-        var sampleLength = (int)Math.Min(info.Length, 4096);
+        var sampleLength = (int)Math.Min(info.Length, MaxInspectionBytes);
         var buffer = new byte[sampleLength];
         await using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
         {
@@ -171,8 +198,17 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         var mimeType = ResolveMimeType(path, magicMime, extensionMime, textEncoding);
         var category = MimeTypeCatalog.GetCategory(mimeType);
         var isTextLike = looksText && MimeTypeCatalog.IsText(mimeType);
+        var dimensionStatus = ImageDimensionReader.Read(mimeType, buffer, out var dimensions);
 
-        return new FileInspection(mimeType, category, info.Length, isTextLike, isTextLike ? textEncoding : null);
+        return new FileInspection(
+            mimeType,
+            category,
+            info.Length,
+            isTextLike,
+            isTextLike ? textEncoding : null,
+            dimensionStatus,
+            dimensionStatus == ImageDimensionStatus.Valid ? dimensions.Width : null,
+            dimensionStatus == ImageDimensionStatus.Valid ? dimensions.Height : null);
     }
 
     private static MimeType ResolveMimeType(
@@ -259,10 +295,14 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         FileInspection inspection,
         string guidance)
     {
+        var dimensions = inspection is { Width: { } width, Height: { } height }
+            ? $"Dimensions: {width}x{height}\n"
+            : string.Empty;
         return $"File is not readable as plain text.\n" +
                $"Path: {path}\n" +
                $"Type: {inspection.MimeType} ({inspection.Category})\n" +
                $"Size: {ByteSizeFormatter.Format(inspection.SizeBytes)}\n" +
+               dimensions +
                guidance;
     }
 
@@ -516,7 +556,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         AttachmentCategory Category,
         long SizeBytes,
         bool IsTextLike,
-        Encoding? TextEncoding);
+        Encoding? TextEncoding,
+        ImageDimensionStatus ImageDimensionStatus,
+        int? Width,
+        int? Height);
 
     private static long TryGetFileLength(string path)
     {

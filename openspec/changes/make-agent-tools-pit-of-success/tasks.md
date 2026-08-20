@@ -35,12 +35,12 @@
 
 ## 5. PR 5 - Structured workspace primitives
 
-- [ ] 5.1 Implement bounded file_search with literal name/content modes, scoped root authorization, deterministic ordering, and no directory-symlink traversal.
-- [ ] 5.2 Implement atomic bounded file_read_many with complete prevalidation, per-file ceilings, total ceiling, and canonical successful activity.
-- [ ] 5.3 Implement bounded json_read using System.Text.Json and RFC 6901 pointers with atomic pointer validation.
-- [ ] 5.4 Extend file_read image inspection with bounded PNG/JPEG/GIF/WebP dimensions and malformed-header fail-closed behavior.
-- [ ] 5.5 Register only the small structured workspace schemas as Core and update compact capability hints.
-- [ ] 5.6 Add count/byte/result ceilings, cancellation, access-denial, symlink, binary, encoding, malformed JSON, and cross-platform tests.
+- [x] 5.1 Implement bounded file_search with literal name/content modes, scoped root authorization, deterministic ordering, and no directory-symlink traversal.
+- [x] 5.2 Implement atomic bounded file_read_many with complete prevalidation, per-file ceilings, total ceiling, and canonical successful activity.
+- [x] 5.3 Implement bounded json_read using System.Text.Json and RFC 6901 pointers with atomic pointer validation.
+- [x] 5.4 Extend file_read image inspection with bounded PNG/JPEG/GIF/WebP dimensions and malformed-header fail-closed behavior.
+- [x] 5.5 Register only the small structured workspace schemas as Core and update compact capability hints.
+- [x] 5.6 Add count/byte/result ceilings, cancellation, access-denial, symlink, binary, encoding, malformed JSON, and cross-platform tests.
 
 ## 6. PR 6 - Spill continuation and conditional schemas
 

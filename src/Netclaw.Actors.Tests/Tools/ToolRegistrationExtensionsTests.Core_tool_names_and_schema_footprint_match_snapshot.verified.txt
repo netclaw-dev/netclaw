@@ -3,7 +3,10 @@
     file_edit,
     file_list,
     file_read,
+    file_read_many,
+    file_search,
     file_write,
+    json_read,
     load_tool,
     search_tools,
     set_working_directory,
@@ -12,7 +15,7 @@
     skill_read_resource
   ],
   Footprint: {
-    Count: 10,
-    SerializedDefinitionBytes: 10879
+    Count: 13,
+    SerializedDefinitionBytes: 13466
   }
 }

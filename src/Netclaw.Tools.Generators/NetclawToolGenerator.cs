@@ -137,6 +137,9 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
         if (type.NullableAnnotation == NullableAnnotation.Annotated && type.OriginalDefinition is INamedTypeSymbol)
             type = type.WithNullableAnnotation(NullableAnnotation.NotAnnotated);
 
+        if (IsStringSequence(type))
+            return "array";
+
         return type.SpecialType switch
         {
             SpecialType.System_String => "string",
@@ -163,6 +166,16 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
         => type is INamedTypeSymbol { TypeArguments.Length: 2 } named
            && named.TypeArguments[0].SpecialType == SpecialType.System_String
            && named.TypeArguments[1].SpecialType == SpecialType.System_String;
+
+    private static bool IsStringSequence(ITypeSymbol type)
+    {
+        if (type is IArrayTypeSymbol array)
+            return array.ElementType.SpecialType == SpecialType.System_String;
+
+        return type is INamedTypeSymbol { TypeArguments.Length: 1 } named
+               && named.TypeArguments[0].SpecialType == SpecialType.System_String
+               && named.Name is "IEnumerable" or "IReadOnlyCollection" or "IReadOnlyList" or "ICollection" or "IList" or "List";
+    }
 
     private static string GetEnumMemberName(TypedConstant value, string defaultName)
     {
@@ -216,6 +229,8 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             sb.AppendLine($"                    \"type\": \"{p.JsonType}\",");
             if (p.JsonType == "object")
                 sb.AppendLine("                    \"additionalProperties\": { \"type\": \"string\" },");
+            if (p.JsonType == "array")
+                sb.AppendLine("                    \"items\": { \"type\": \"string\" },");
             sb.AppendLine($"                    \"description\": \"{EscapeJson(p.Description)}\"");
             sb.AppendLine("                },");
         }
@@ -326,6 +341,15 @@ public sealed class NetclawToolGenerator : IIncrementalGenerator
             else if (p.JsonType == "object")
             {
                 sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetStringDictionary(arguments, \"{p.Name}\");");
+                if (p.IsRequired)
+                {
+                    sb.AppendLine($"        if (__{p.Name} is null)");
+                    sb.AppendLine($"            throw new System.ArgumentException(\"Required parameter '{p.Name}' is missing.\");");
+                }
+            }
+            else if (p.JsonType == "array")
+            {
+                sb.AppendLine($"        var __{p.Name} = Netclaw.Tools.ToolArgumentHelper.GetStringArray(arguments, \"{p.Name}\");");
                 if (p.IsRequired)
                 {
                     sb.AppendLine($"        if (__{p.Name} is null)");
