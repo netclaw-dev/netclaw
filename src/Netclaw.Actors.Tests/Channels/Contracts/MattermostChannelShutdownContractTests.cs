@@ -1,60 +1,51 @@
 // -----------------------------------------------------------------------
-// <copyright file="MattermostChannelStopAsyncTests.cs" company="Petabridge, LLC">
+// <copyright file="MattermostChannelShutdownContractTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
+using Netclaw.Channels;
 using Netclaw.Channels.Mattermost;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
-namespace Netclaw.Actors.Tests.Channels;
+namespace Netclaw.Actors.Tests.Channels.Contracts;
 
-public sealed class MattermostChannelStopAsyncTests
+public sealed class MattermostChannelShutdownContractTests : ChannelShutdownContractTests
 {
-    /// <summary>
-    /// <see cref="MattermostChannel.StopAsync"/> runs as a hosted-service stop, so
-    /// any exception it throws reaches Host.StopAsync and is recorded as a
-    /// daemon-main crash. On SIGTERM, Akka's CLR shutdown hook runs
-    /// CoordinatedShutdown concurrently with host shutdown, so the gateway
-    /// lifecycle actor is often dead before the channel's stop runs. The
-    /// disconnect Ask then dead-letters and times out after 35 seconds. That
-    /// teardown race is normal, so the disconnect failure must be logged, not
-    /// thrown (same defect as Discord, see netclaw-dev/netclaw#2035).
-    /// </summary>
-    [Fact]
-    public async Task StopAsync_does_not_propagate_gateway_disconnect_failure()
+    protected override IChannel CreateStoppableChannel()
     {
-        var channel = CreateStoppableChannel(new TimingOutGatewayClient());
-
-        await channel.StopAsync(CancellationToken.None);
-    }
-
-    /// <summary>
-    /// Builds a channel with only the dependencies the stop path touches. The
-    /// gateway actor is never started, so StopAsync exercises the transport
-    /// disconnect and nothing else.
-    /// </summary>
-    private static MattermostChannel CreateStoppableChannel(IMattermostGatewayClient gatewayClient)
-        => new(
+        return new MattermostChannel(
             system: null!,
-            pipeline: null!,
-            ingressGate: null!,
-            gatewayClient: gatewayClient,
-            replyClient: null!,
-            contentScanner: null!,
+            pipeline: new FailingSessionPipeline(new InvalidOperationException("not used")),
+            ingressGate: new SessionIngressGate(),
+            gatewayClient: new TimingOutGatewayClient(),
+            replyClient: new RecordingMattermostReplyClient(),
+            contentScanner: new NullContentScanner(),
             promptInjectionDetector: SafePromptInjectionDetector.Instance,
-            httpClientFactory: null!,
+            httpClientFactory: new FakeHttpClientFactory(),
             threadHistoryFetcher: null,
-            notificationSink: null!,
+            notificationSink: NullNotificationSink.Instance,
             timeProvider: TimeProvider.System,
-            options: new MattermostChannelOptions(),
+            options: new MattermostChannelOptions
+            {
+                Enabled = true,
+                ServerUrl = "https://mattermost.example.com",
+                BotToken = new SensitiveString("test-token"),
+                AllowedChannelIds = ["ch-1"]
+            },
             logger: NullLogger<MattermostChannel>.Instance,
-            toolConfig: new ToolConfig(),
-            modelCapabilities: new ModelCapabilities(),
-            paths: null!);
+            toolConfig: new ToolConfig
+            {
+                AudienceProfiles = TestMattermostGatewayDeps.DefaultAudienceProfiles
+            },
+            modelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
+            paths: TestMattermostGatewayDeps.NewTestPaths());
+    }
 
     /// <summary>
     /// Reproduces the transport state during the SIGTERM race: the lifecycle

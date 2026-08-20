@@ -25,9 +25,10 @@ public sealed class GatewayClientDisconnectShutdownTests
     public async Task Discord_disconnect_returns_immediately_when_actor_system_has_terminated()
     {
         using var system = ActorSystem.Create("discord-disconnect-shutdown-test");
+        using var discordClient = new DiscordSocketClient(new DiscordSocketConfig());
         var client = new DiscordNetGatewayClient(
             system,
-            new DiscordSocketClient(new DiscordSocketConfig()),
+            discordClient,
             TimeProvider.System,
             NullLogger<DiscordNetGatewayClient>.Instance);
 
