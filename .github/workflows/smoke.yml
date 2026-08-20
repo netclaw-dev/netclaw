@@ -199,9 +199,6 @@ jobs:
           name: netclaw-native-binaries-linux-x64-${{ github.run_id }}-${{ github.run_attempt }}
           path: ./publish
 
-      - name: Install ImageMagick
-        run: sudo apt-get install -y --no-install-recommends imagemagick
-
       - name: Mark binaries executable
         run: |
           chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer

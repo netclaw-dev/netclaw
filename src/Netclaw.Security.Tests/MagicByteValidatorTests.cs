@@ -124,14 +124,18 @@ public sealed class MagicByteValidatorTests
         Assert.True(result.IsAllowed);
     }
 
-    [Fact]
-    public void Validate_DocxWithOleHeader_MimeTypeMismatch()
+    // Old .doc bytes declared as .docx (OOXML) -- mismatch. Both RIFF-based
+    // WAV/MP4 differ only at a later offset (WAVE vs ftyp), so the stricter
+    // check must still reject the cross-declaration.
+    [Theory]
+    [InlineData(nameof(OleHeader), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx")]
+    [InlineData(nameof(PngHeader), "application/rtf", "fake.rtf")]
+    [InlineData(nameof(ZipHeader), "application/x-7z-compressed", "fake.7z")]
+    [InlineData(nameof(WavHeader), "video/mp4", "fake.mp4")]
+    public void Validate_HeaderDeclaredAsMismatchedType_MimeTypeMismatch(string headerField, string mime, string filename)
     {
-        // Old .doc bytes declared as .docx (OOXML) -- mismatch
-        var result = MagicByteValidator.Validate(
-            OleHeader,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            "report.docx");
+        var header = ResolveHeader(headerField);
+        var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.False(result.IsAllowed);
         Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
@@ -237,15 +241,6 @@ public sealed class MagicByteValidatorTests
         Assert.True(result.IsAllowed);
     }
 
-    [Fact]
-    public void Validate_RtfWithBogusMagic_MimeTypeMismatch()
-    {
-        var result = MagicByteValidator.Validate(PngHeader, "application/rtf", "fake.rtf");
-
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
-    }
-
     // ── Archives ──────────────────────────────────────────────────────────
 
     [Theory]
@@ -260,15 +255,6 @@ public sealed class MagicByteValidatorTests
         var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_ZipDeclaredAs7z_MimeTypeMismatch()
-    {
-        var result = MagicByteValidator.Validate(ZipHeader, "application/x-7z-compressed", "fake.7z");
-
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
     }
 
     // ── Media ─────────────────────────────────────────────────────────────
@@ -289,17 +275,6 @@ public sealed class MagicByteValidatorTests
         var result = MagicByteValidator.Validate(header, mime, filename);
 
         Assert.True(result.IsAllowed);
-    }
-
-    [Fact]
-    public void Validate_WavDeclaredAsMp4_MimeTypeMismatch()
-    {
-        // Both are "RIFF" but differ at offset 8 — WAV at offset 8 is "WAVE",
-        // MP4 at offset 4 is "ftyp". Make sure the stricter MP4 check rejects.
-        var result = MagicByteValidator.Validate(WavHeader, "video/mp4", "fake.mp4");
-
-        Assert.False(result.IsAllowed);
-        Assert.Equal(ContentScanError.MimeTypeMismatch, result.Error);
     }
 
     // ── Cross-cutting ─────────────────────────────────────────────────────

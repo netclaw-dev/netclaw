@@ -87,6 +87,8 @@ RESULTS_DIR=""
 RESULTS_DB=""
 NATURALISTIC_PROJECT_ROOT="/home/netclaw/.netclaw/workspaces/netclaw"
 NATURALISTIC_CWD_ROOT="$NATURALISTIC_PROJECT_ROOT/netclaw-worktrees/fix-pwsh-probe-timeout"
+PROJECT_SCOPE_EVAL_ROOT="/home/netclaw/.netclaw/workspaces/eval-project"
+PROJECT_SCOPE_EVAL_MISSING_ROOT="$PROJECT_SCOPE_EVAL_ROOT/missing-project"
 
 # Per-prompt state (set by run_prompt, read by assertion helpers)
 STDOUT_FILE=""
@@ -451,6 +453,22 @@ start_eval_daemon() {
     done
     printf 'local-search-eval-token\n' > "$selection_root/search-target/nested/match.txt"
 
+    # Seed the project-root fixture for the set_working_directory evals. The
+    # natural prompt requires Git semantics, a project marker, and a build file.
+    # This makes a successful project shell call observable after declaration.
+    local project_scope_root="$EVAL_HOME/data/workspaces/eval-project"
+    mkdir -p "$project_scope_root/src"
+    printf 'project-scope-eval-marker-v1\n' > "$project_scope_root/README.md"
+    printf '%s\n' '<Project Sdk="Microsoft.NET.Sdk"></Project>' \
+        > "$project_scope_root/Project.csproj"
+    printf 'Console.WriteLine("seeded");\n' > "$project_scope_root/src/Program.cs"
+    git -C "$project_scope_root" init -q -b main
+    git -C "$project_scope_root" config user.name "Netclaw Eval"
+    git -C "$project_scope_root" config user.email "eval@netclaw.dev"
+    git -C "$project_scope_root" add README.md Project.csproj src/Program.cs
+    git -C "$project_scope_root" commit -q -m seed
+    printf '// pending eval change\n' >> "$project_scope_root/src/Program.cs"
+
     # Seed a worktree-like repository for natural directory-scope evals.
     local naturalistic_root="$EVAL_HOME/data/workspaces/netclaw/netclaw-worktrees/fix-pwsh-probe-timeout"
     mkdir -p "$naturalistic_root/src/Netclaw.Daemon" \
@@ -546,6 +564,16 @@ start_eval_daemon() {
     local deadline=$((SECONDS + 60))
     while (( SECONDS < deadline )); do
         if curl -fsS "http://127.0.0.1:$EVAL_PORT/api/health/ready" >/dev/null 2>&1; then
+            # The container runs with --network host, so any process on this
+            # port can answer the host-side readiness poll — including another
+            # eval run's daemon. Readiness must also prove THIS container's
+            # daemon is alive, or the whole run interrogates a stranger while
+            # every daemon-log assert reads its own dead container's empty log.
+            if ! docker exec "$EVAL_CONTAINER_NAME" pgrep -f netclawd >/dev/null 2>&1; then
+                echo "ERROR: port $EVAL_PORT answered but this container's daemon is not running — another daemon owns the port. Set NETCLAW_EVAL_PORT to a free port." >&2
+                docker logs "$EVAL_CONTAINER_NAME" >&2 2>&1 || true
+                exit 2
+            fi
             echo "Eval daemon ready at http://127.0.0.1:$EVAL_PORT"
             return 0
         fi
@@ -844,6 +872,7 @@ run_prompt() {
     # Record daemon log position before the prompt (the daemon writes to a
     # daily-rotating file at /root/.netclaw/logs/daemon-YYYY-MM-DD.log, and
     # the container bind-mounts that directory from $EVAL_HOME/logs).
+    resolve_daemon_log
     if [[ -f "$DAEMON_LOG" ]]; then
         DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
     else
@@ -864,7 +893,7 @@ run_prompt() {
     # stdout, producing a false eval failure rather than a real one.
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p "${output_args[@]}" "$prompt" \
+        timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p "${output_args[@]}" "$prompt" \
         > "$STDOUT_FILE" 2> "$STDERR_FILE" || true
 
     # Brief pause for daemon log flush
@@ -904,6 +933,7 @@ run_prompt_resume() {
     fi
     STDERR_FILE="$MULTI_TURN_STDERR_FILE"
 
+    resolve_daemon_log
     if [[ -f "$DAEMON_LOG" ]]; then
         DAEMON_LOG_LINES_BEFORE=$(wc -l < "$DAEMON_LOG")
     else
@@ -917,7 +947,7 @@ run_prompt_resume() {
 
     NETCLAW_DAEMON_ENDPOINT="http://127.0.0.1:$EVAL_PORT" \
     NETCLAW_HOME="$EVAL_HOME" \
-        timeout "$PROMPT_TIMEOUT" "$NETCLAW_BIN" chat -p --resume "$session_id" \
+        timeout "$PROMPT_TIMEOUT" stdbuf -oL -eL "$NETCLAW_BIN" chat -p --resume "$session_id" \
         "${output_args[@]}" "$prompt" \
         > "$turn_file" 2> "$turn_stderr_file" || true
 
@@ -1051,6 +1081,19 @@ stdout_response_not_contains() {
     return 0
 }
 
+## The daemon runs inside the container on its own clock (UTC), so a host
+## date computation can name a log file the daemon never writes — every
+## daemon_log_contains then fails silently for the whole run (observed when a
+## CDT-evening run crossed UTC midnight). Resolve the newest real log file
+## instead of trusting a computed date. Callers re-resolve before they take a
+## per-case line baseline; a midnight rollover inside a single case remains
+## unhandled and acceptable.
+resolve_daemon_log() {
+    local newest
+    newest=$(ls -1t "$EVAL_HOME"/logs/daemon-*.log 2>/dev/null | head -n 1)
+    [[ -n "$newest" ]] && DAEMON_LOG="$newest"
+}
+
 daemon_log_tail() {
     if [[ -f "$DAEMON_LOG" ]]; then
         tail -n +"$((DAEMON_LOG_LINES_BEFORE + 1))" "$DAEMON_LOG" 2>/dev/null
@@ -1110,6 +1153,26 @@ stdout_json_tool_call_arguments() {
     jq -ce --arg tool_name "$tool_name" \
         '.toolCalls[]? | select(.toolName == $tool_name) | .argumentsJson | fromjson' \
         "$STDOUT_FILE" 2>/dev/null
+}
+
+stdout_json_headless_log_path() {
+    local session_id log_name log_path
+    session_id=$(jq -r '.sessionId // empty' "$STDOUT_FILE")
+    [[ -n "$session_id" ]] || return 1
+
+    log_name="${session_id//\//-}.log"
+    log_path="$EVAL_HOME/logs/$log_name"
+    [[ -f "$log_path" ]] || return 1
+    printf '%s\n' "$log_path"
+}
+
+stdout_json_tool_result_equals() {
+    local tool_name="$1"
+    local call_id="$2"
+    local expected="$3"
+    local headless_log
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    grep -qaF "TOOL_RESULT: $tool_name call_id=$call_id result=$expected" "$headless_log"
 }
 
 stdout_json_all_tool_calls_have_rationale() {
@@ -1325,21 +1388,16 @@ assert_memory_explicit_store() {
     stdout_tool_called 'store_memory' || stdout_tool_called 'update_memory'
 }
 
-assert_memory_checkpoint_enqueue() {
-    # turn_memory_checkpoint_enqueued (TurnLog/Akka) no longer lands in the file logs after the
-    # log-stream partition (#1472). A turn-complete checkpoint that was enqueued is proven by the
-    # curation worker processing it (MEL, in daemon.log) — whether the fact is later kept or
-    # dropped. Combined with no explicit memory tool call, this verifies automatic enqueue.
-    daemon_log_contains 'Memory checkpoint curation completed.*trigger=turn-complete' \
-        && ! stdout_tool_called 'store_memory' \
-        && ! stdout_tool_called 'update_memory'
-}
-
 assert_memory_recall_filters() {
     # After overfetch fix: at least one candidate selection should reduce the set.
+    # POSIX awk only: mawk lacks gawk's 3-argument match(), which made this
+    # assert die on a syntax error and fail unconditionally on hosts without
+    # gawk. Extract the two counts with sub() instead of capture groups.
     daemon_log_tail | awk '
-        match($0, /rawCount=([0-9]+).*selectedCount=([0-9]+)/, m) {
-            if ((m[1] + 0) > (m[2] + 0)) {
+        /rawCount=[0-9]+.*selectedCount=[0-9]+/ {
+            raw = $0; sub(/.*rawCount=/, "", raw); sub(/[^0-9].*/, "", raw)
+            sel = $0; sub(/.*selectedCount=/, "", sel); sub(/[^0-9].*/, "", sel)
+            if ((raw + 0) > (sel + 0)) {
                 found = 1
             }
         }
@@ -1913,22 +1971,54 @@ assert_multi_turn_conflicting_speakers() {
 # because calling it after the first shell prompt has already burned the
 # user's attention is the regression we're guarding against.
 assert_approval_set_working_directory_positive() {
-    local set_call
+    local set_call set_call_id shell_call
+    local -a shell_calls
     stdout_json_envelope_valid || return 1
     set_call=$(stdout_json_tool_call_arguments 'set_working_directory' | head -1)
-    jq -e '.Path == "/home/netclaw/.netclaw/workspaces"' <<<"$set_call" >/dev/null || return 1
+    jq -e --arg expected "$PROJECT_SCOPE_EVAL_ROOT" \
+        '.Path == $expected' <<<"$set_call" >/dev/null || return 1
 
-    # If shell_execute also happened, ensure set_working_directory came first.
-    if stdout_json_tool_called 'shell_execute'; then
-        local shell_call command
-        shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
-        command=$(jq -r '.Command // empty' <<<"$shell_call")
+    jq -e '
+        (.toolCalls // []) as $calls
+        | [$calls | to_entries[]
+            | select(.value.toolName == "set_working_directory")
+            | .key] as $declarations
+        | [$calls | to_entries[]
+            | select(.value.toolName
+                | test("^(shell_execute|file_(read|list|write|edit))$"))
+            | .key] as $project_calls
+        | ($declarations | length) == 1
+        and ($project_calls | length) >= 1
+        and $declarations[0] < ($project_calls | min)
+    ' "$STDOUT_FILE" >/dev/null || return 1
+
+    mapfile -t shell_calls < <(stdout_json_tool_call_arguments 'shell_execute')
+    [[ "${#shell_calls[@]}" -ge 1 ]] || return 1
+    for shell_call in "${shell_calls[@]}"; do
         jq -e '
-            [.toolCalls[]?.toolName] as $names
-            | ($names | index("set_working_directory")) < ($names | index("shell_execute"))
-        ' "$STDOUT_FILE" >/dev/null && \
-            [[ ! "$command" =~ ^[[:space:]]*cd[[:space:]] ]]
-    fi
+            (.Command | type == "string" and length > 0)
+            and (.WorkingDirectory? == null)
+            and ((.Command
+                | test("(^|[;&|])[[:space:]]*(cd|chdir)[[:space:]]"; "i")) | not)
+        ' <<<"$shell_call" >/dev/null || return 1
+    done
+
+    set_call_id=$(jq -r '
+        .toolCalls[]?
+        | select(.toolName == "set_working_directory")
+        | .callId // empty
+    ' "$STDOUT_FILE")
+    [[ -n "$set_call_id" ]] || return 1
+    stdout_json_tool_result_equals \
+        'set_working_directory' "$set_call_id" "$PROJECT_SCOPE_EVAL_ROOT" || return 1
+
+    stdout_json_shell_calls_keep_independent_operations_separate \
+        && stdout_json_shell_results_succeeded 1 \
+        && jq -e '
+            (.response | contains("project-scope-eval-marker-v1"))
+            and (.response | contains("Project.csproj"))
+            and (.response | contains("Program.cs"))
+        ' "$STDOUT_FILE" >/dev/null
 }
 
 # Negative: no project signal. Agent should NOT preemptively call
@@ -1988,8 +2078,9 @@ shell_calls_use_naturalistic_working_directory() {
 
 stdout_json_shell_results_accounted() {
     local minimum_successes="${1:-0}"
-    local call_id successes=0
+    local call_id successes=0 headless_log
     local -a call_ids
+    headless_log=$(stdout_json_headless_log_path) || return 1
     mapfile -t call_ids < <(jq -r '
         .toolCalls[]?
         | select(.toolName == "shell_execute")
@@ -1997,16 +2088,51 @@ stdout_json_shell_results_accounted() {
     ' "$STDOUT_FILE")
 
     for call_id in "${call_ids[@]}"; do
-        if daemon_log_tail | grep -qaF \
-            "TOOL_RESULT: shell_execute call_id=$call_id result=Exit code: 0"; then
+        if grep -qaF \
+            "TOOL_RESULT: shell_execute call_id=$call_id result=Exit code: 0" \
+            "$headless_log"; then
             successes=$((successes + 1))
-        elif ! daemon_log_tail | grep -qaF \
-            "TOOL_RESULT: shell_execute call_id=$call_id result=Tool requires approval but no interactive approval requester is available: shell_execute"; then
+        elif ! grep -qaF \
+            "TOOL_RESULT: shell_execute call_id=$call_id result=Tool requires approval but no interactive approval requester is available: shell_execute" \
+            "$headless_log"; then
             return 1
         fi
     done
 
     [[ "$successes" -ge "$minimum_successes" ]]
+}
+
+stdout_json_shell_results_succeeded() {
+    local minimum_successes="${1:-1}"
+    local call_id successes=0 headless_log
+    local -a call_ids
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    mapfile -t call_ids < <(jq -r '
+        .toolCalls[]?
+        | select(.toolName == "shell_execute")
+        | .callId // empty
+    ' "$STDOUT_FILE")
+
+    for call_id in "${call_ids[@]}"; do
+        grep -qaF \
+            "TOOL_RESULT: shell_execute call_id=$call_id result=Exit code: 0" \
+            "$headless_log" || return 1
+        successes=$((successes + 1))
+    done
+
+    [[ "$successes" -ge "$minimum_successes" ]]
+}
+
+stdout_json_shell_calls_keep_independent_operations_separate() {
+    jq -e '
+        all(.toolCalls[]? | select(.toolName == "shell_execute");
+            try (
+                (.argumentsJson | fromjson | .Command) as $command
+                | ($command | type) == "string"
+                  and ($command | length) > 0
+                  and (($command | test("(^|[^\\\\])(;|&&|\\|\\|)|[\\r\\n]")) | not)
+            ) catch false)
+    ' "$STDOUT_FILE" >/dev/null 2>&1
 }
 
 shell_calls_use_fresh_naturalistic_context() {
@@ -2147,22 +2273,63 @@ assert_approval_natural_directory_change() {
 
 # A failed project switch must be corrected before shell work continues.
 assert_approval_set_working_directory_retry() {
-    local shell_call
+    local first_call_id second_call_id shell_call
+    local -a declaration_ids
     local -a swd_calls
+    local -a shell_calls
     stdout_json_envelope_valid || return 1
     mapfile -t swd_calls < <(stdout_json_tool_call_arguments 'set_working_directory')
-    shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+    mapfile -t shell_calls < <(stdout_json_tool_call_arguments 'shell_execute')
 
-    [[ "${#swd_calls[@]}" -ge 2 ]] && \
-        jq -e '.Path == "/home/netclaw/.netclaw/workspaces/missing-project"' <<<"${swd_calls[0]}" >/dev/null && \
-        jq -e '.Path == "/home/netclaw/.netclaw/workspaces"' <<<"${swd_calls[1]}" >/dev/null && \
+    [[ "${#swd_calls[@]}" -eq 2 && "${#shell_calls[@]}" -ge 1 ]] || return 1
+    jq -e --arg expected "$PROJECT_SCOPE_EVAL_MISSING_ROOT" \
+        '.Path == $expected' <<<"${swd_calls[0]}" >/dev/null || return 1
+    jq -e --arg expected "$PROJECT_SCOPE_EVAL_ROOT" \
+        '.Path == $expected' <<<"${swd_calls[1]}" >/dev/null || return 1
+    jq -e '
+        (.toolCalls // []) as $calls
+        | [$calls | to_entries[]
+            | select(.value.toolName == "set_working_directory")
+            | .key] as $declarations
+        | [$calls | to_entries[]
+            | select(.value.toolName
+                | test("^(shell_execute|file_(read|list|write|edit))$"))
+            | .key] as $project_calls
+        | ($declarations | length) == 2
+        and ($project_calls | length) >= 1
+        and $declarations[0] < $declarations[1]
+        and $declarations[1] < ($project_calls | min)
+    ' "$STDOUT_FILE" >/dev/null || return 1
+
+    for shell_call in "${shell_calls[@]}"; do
         jq -e '
-            [.toolCalls[]?.toolName] as $names
-            | [$names[] | select(. == "set_working_directory")] | length >= 2
-            and ($names | index("shell_execute")) > ($names | index("set_working_directory"))
-            and ($names | index("shell_execute")) > ($names | rindex("set_working_directory"))
-        ' "$STDOUT_FILE" >/dev/null && \
-        jq -e '.Command == "pwd"' <<<"$shell_call" >/dev/null
+            (.Command | type == "string" and length > 0)
+            and (.WorkingDirectory? == null)
+            and ((.Command
+                | test("(^|[;&|])[[:space:]]*(cd|chdir)[[:space:]]"; "i")) | not)
+        ' <<<"$shell_call" >/dev/null || return 1
+    done
+
+    mapfile -t declaration_ids < <(jq -r '
+        .toolCalls[]?
+        | select(.toolName == "set_working_directory")
+        | .callId // empty
+    ' "$STDOUT_FILE")
+    [[ "${#declaration_ids[@]}" -eq 2 ]] || return 1
+    first_call_id="${declaration_ids[0]}"
+    second_call_id="${declaration_ids[1]}"
+    stdout_json_tool_result_equals \
+        'set_working_directory' "$first_call_id" \
+        "Error: directory does not exist: $PROJECT_SCOPE_EVAL_MISSING_ROOT" || return 1
+    stdout_json_tool_result_equals \
+        'set_working_directory' "$second_call_id" "$PROJECT_SCOPE_EVAL_ROOT" || return 1
+
+    stdout_json_shell_results_accounted 1 \
+        && jq -e '
+            (.response | contains("project-scope-eval-marker-v1"))
+            and (.response | contains("Project.csproj"))
+            and (.response | contains("Program.cs"))
+        ' "$STDOUT_FILE" >/dev/null
 }
 
 # Disposable output should go directly through file tools in private session
@@ -2467,8 +2634,11 @@ run_all() {
     run_case memory_explicit_store "explicit remember request uses store_memory" \
         "Please save this to your cross-session memory for later reference using store_memory: my preferred airline is United. Just acknowledge once you've saved it."
 
-    run_case memory_checkpoint_enqueue "checkpoint enqueued for non-identity fact" \
-        "During my commute I prefer aisle seats on flights because I like to stand up easily. Just acknowledge and do not save anything explicitly."
+    # memory_checkpoint_enqueue was retired with the Path A turn-complete lane
+    # (issue #666): a plain turn no longer enqueues a curation checkpoint, so
+    # the case's asserted log line can no longer occur. Automatic formation now
+    # flows through the observer/distillation lane; add a case for it when that
+    # lane exposes a stable log contract.
 
     run_case memory_recall_filters "candidate selection with score filtering" \
         "Tell me about my travel preferences"
@@ -2687,8 +2857,8 @@ run_all() {
     print_category "Approval Policy v2"
 
     run_case --json approval_set_working_directory_positive "calls set_working_directory before shell tool when project mentioned" \
-        "I'm starting a debugging session on the project at /home/netclaw/.netclaw/workspaces. Inspect its layout and build files. We will run several shell commands across the tree." \
-        "I want to work on the checkout at /home/netclaw/.netclaw/workspaces. Plan several commands across that tree and start by inspecting it."
+        "Review the project at $PROJECT_SCOPE_EVAL_ROOT. Return its exact pending Git status entry, project marker text, and build filename. Do not include other repository details." \
+        "Use $PROJECT_SCOPE_EVAL_ROOT as the current project. Report only its pending Git status line, project marker text, and build file."
 
     run_case --json approval_set_working_directory_negative "does NOT call set_working_directory for unrelated prompts" \
         "What's two plus two? Just give me the number." \
@@ -2724,7 +2894,8 @@ run_all() {
         "In one Bash process, verify that changing its directory to /tmp affects the directory reported immediately afterward. Report the observed directory."
 
     run_case --json approval_set_working_directory_retry "corrects a failed project switch before shell work" \
-        "Test project recovery: first call set_working_directory with /home/netclaw/.netclaw/workspaces/missing-project. Then use /home/netclaw/.netclaw/workspaces, and only after that run pwd."
+        "Start at $PROJECT_SCOPE_EVAL_MISSING_ROOT. If unavailable, continue at $PROJECT_SCOPE_EVAL_ROOT. Return the exact pending Git status entry, project marker, and build file." \
+        "Review $PROJECT_SCOPE_EVAL_MISSING_ROOT first. If it does not exist, use $PROJECT_SCOPE_EVAL_ROOT. Report its pending Git status line, project marker text, and build filename."
 
     run_case --json approval_session_scratch_disposable "uses session scratch for ordinary disposable output" \
         "Create a disposable result.log file with exactly these two lines: diagnostic-ok v1 and line2: all systems nominal. Read the file back and return its exact contents."

@@ -217,8 +217,16 @@ public sealed class MattermostAddressResolverTests
 /// </summary>
 public sealed class MattermostProactiveThreadActorTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    // akka.test.single-expect-default raises the parameterless
+    // ExpectMsgAsync<MattermostProactiveThreadAck> wait below. The stock 3s
+    // value measures scheduler load on a starved CI runner, not correctness.
+    // Production allows 30s for the same ack — see
+    // ProactiveSendFormatting.ProactiveThreadAckTimeout.
     protected override Config? Config =>
-        ConfigurationFactory.ParseString("akka.test.default-timeout = 5s");
+        ConfigurationFactory.ParseString("""
+            akka.test.default-timeout = 5s
+            akka.test.single-expect-default = 15s
+            """);
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {

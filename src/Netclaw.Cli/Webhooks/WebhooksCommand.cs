@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 
@@ -11,29 +12,48 @@ namespace Netclaw.Cli.Webhooks;
 
 /// <summary>
 /// Handles <c>netclaw webhooks &lt;subcommand&gt;</c> CLI subcommands.
-/// All commands are offline — no daemon required.
+/// <para>
+/// Reads (<c>list</c>, <c>show</c>, <c>validate</c>) are always local: disk is
+/// the canonical route store and the daemon actor holds no cache, so a file read
+/// is always current, and <c>show</c> needs the secret that the API never
+/// returns. Writes (<c>set</c>, <c>delete</c>) require the daemon — see
+/// <see cref="WebhookRouteDaemonClient"/>. There is no local write path.
+/// </para>
 /// </summary>
 internal static class WebhooksCommand
 {
-    public static Task<int> RunAsync(string[] args, NetclawPaths paths, TextWriter? output = null)
+    /// <summary>
+    /// Runs one <c>netclaw webhooks</c> invocation.
+    /// </summary>
+    /// <param name="daemonApi">
+    /// The daemon client for route mutations. The read subcommands never use it,
+    /// so they accept null. A null on <c>set</c> or <c>delete</c> fails the
+    /// command exactly as an unreachable daemon does.
+    /// </param>
+    public static async Task<int> RunAsync(
+        string[] args,
+        NetclawPaths paths,
+        TextWriter? output = null,
+        DaemonApi? daemonApi = null)
     {
         output ??= Console.Out;
         var subcommand = args.Length > 1 ? args[1] : "list";
 
         if (subcommand is "help" or "-h" or "--help")
-            return Task.FromResult(WriteHelp(output));
+            return WriteHelp(output);
 
         var store = new WebhookRouteStore(paths);
+        var daemon = new WebhookRouteDaemonClient(daemonApi);
 
-        return Task.FromResult(subcommand switch
+        return subcommand switch
         {
             "list" => RunList(args, store, paths, output),
             "show" => RunShow(args, store, paths, output),
-            "set" => RunSet(args, store, paths, output),
-            "delete" => RunDelete(args, store, output),
+            "set" => await RunSetAsync(args, store, paths, output, daemon),
+            "delete" => await RunDeleteAsync(args, output, daemon),
             "validate" => RunValidate(args, paths, output),
             _ => WriteHelp(output)
-        });
+        };
     }
 
     // ── list ──
@@ -265,7 +285,12 @@ internal static class WebhooksCommand
 
     // ── set ──
 
-    private static int RunSet(string[] args, WebhookRouteStore store, NetclawPaths paths, TextWriter output)
+    private static async Task<int> RunSetAsync(
+        string[] args,
+        WebhookRouteStore store,
+        NetclawPaths paths,
+        TextWriter output,
+        WebhookRouteDaemonClient daemon)
     {
         if (args.Length < 3 || HasFlag(args, "--help") || HasFlag(args, "-h"))
         {
@@ -295,255 +320,329 @@ internal static class WebhooksCommand
         if (!TryResolveTextInput(args, "--notify-instructions", "--notify-instructions-file", out var notifyInstructions, out var hasNotifyInstructions))
             return 1;
 
-        var routeSaved = false;
+        // Argument grammar stays local: these checks read only the command line,
+        // so they answer the same way with or without a daemon.
+        if (!TryGetFlagValue(args, "--verification-kind", out var verificationKindText, out var hasVerificationKind))
+            return 1;
+
+        var verificationKind = WebhookVerifierKind.Hmac;
+        if (hasVerificationKind && !WebhookRouteValidator.TryParseVerifierKind(verificationKindText, out verificationKind))
+        {
+            Console.Error.WriteLine($"[FAIL] Invalid verification kind: '{verificationKindText}'. Use 'hmac', 'hmac-timestamped', or 'header-secret'.");
+            return 1;
+        }
+
+        if (!TryGetFlagValue(args, "--signature-header", out var signatureHeader, out var hasSignatureHeader))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--signature-prefix", out var signaturePrefix, out var hasSignaturePrefix))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--secret-header", out var secretHeader, out var hasSecretHeader))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--event-header", out var eventHeader, out var hasEventHeader))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--delivery-header", out var deliveryHeader, out var hasDeliveryHeader))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--timestamp-field", out var timestampField, out var hasTimestampField))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--signature-field", out var signatureField, out var hasSignatureField))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--signed-payload-separator", out var payloadSeparator, out var hasPayloadSeparator))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--signature-tolerance-seconds", out var toleranceText, out var hasTolerance))
+            return 1;
+
+        var toleranceSeconds = 0;
+        if (hasTolerance && !int.TryParse(toleranceText, out toleranceSeconds))
+        {
+            Console.Error.WriteLine($"[FAIL] Invalid signature tolerance: '{toleranceText}'. Must be a whole number from 1 to 3600.");
+            return 1;
+        }
+
+        if (!TryGetFlagValue(args, "--events", out var eventsText, out var hasEvents))
+            return 1;
+
+        string[] events = hasEvents
+            ? [.. eventsText.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)]
+            : [];
+
+        if (!TryGetFlagValue(args, "--audience", out var audienceText, out var hasAudience))
+            return 1;
+
+        var audience = TrustAudience.Public;
+        if (hasAudience && !Enum.TryParse(audienceText, ignoreCase: true, out audience))
+        {
+            Console.Error.WriteLine($"[FAIL] Invalid audience: '{audienceText}'. Use 'public', 'team', or 'personal'.");
+            return 1;
+        }
+
+        var deliveryRequired = HasFlag(args, "--delivery-required");
+        var noDeliveryRequired = HasFlag(args, "--no-delivery-required");
+        if (deliveryRequired && noDeliveryRequired)
+        {
+            Console.Error.WriteLine("[FAIL] --delivery-required and --no-delivery-required cannot be used together.");
+            return 1;
+        }
+
+        if (!TryGetFlagValue(args, "--notification-channel", out var notificationChannel, out var hasNotificationChannel))
+            return 1;
+
+        if (!TryGetFlagValue(args, "--max-body", out var maxBodyText, out var hasMaxBody))
+            return 1;
+
+        var maxBodyBytes = 0;
+        if (hasMaxBody && (!int.TryParse(maxBodyText, out maxBodyBytes) || maxBodyBytes < 1))
+        {
+            Console.Error.WriteLine($"[FAIL] Invalid max body size: '{maxBodyText}'. Must be a positive integer.");
+            return 1;
+        }
+
+        if (!TryGetFlagValue(args, "--rate-limit", out var rateLimitText, out var hasRateLimit))
+            return 1;
+
+        var rateLimit = 0;
+        if (hasRateLimit && (!int.TryParse(rateLimitText, out rateLimit) || rateLimit < 1))
+        {
+            Console.Error.WriteLine($"[FAIL] Invalid rate limit: '{rateLimitText}'. Must be a positive integer.");
+            return 1;
+        }
+
+        var enabled = HasFlag(args, "--enabled");
+        var disabled = HasFlag(args, "--disabled");
+        if (enabled && disabled)
+        {
+            Console.Error.WriteLine("[FAIL] --enabled and --disabled cannot be used together.");
+            return 1;
+        }
+
         var updatedExistingRoute = false;
+
+        // Merges the parsed flags onto the stored route and validates the result.
+        // It is a local preview: it answers --create-only / --update-only, the
+        // Created-or-Updated wording, and --dry-run before the command contacts
+        // the daemon. A null definition means the command sends nothing. The
+        // daemon re-reads and re-validates the patch, so it stays the one
+        // enforcement point.
+        (WebhookRouteConfig? Definition, int Result) Merge(WebhookRouteConfig? existing)
+        {
+            var exists = existing is not null;
+
+            if (createOnly && exists)
+            {
+                Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' already exists (--create-only specified).");
+                return (null, 1);
+            }
+
+            if (updateOnly && !exists)
+            {
+                Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' does not exist (--update-only specified).");
+                return (null, 1);
+            }
+
+            var route = existing ?? new WebhookRouteConfig();
+            route.Verification ??= new WebhookVerificationConfig();
+            route.Events ??= [];
+
+            if (hasPrompt)
+                route.Prompt = prompt;
+
+            if (hasSecret)
+                route.Verification.Secret = new SensitiveString(secret);
+
+            if (hasVerificationKind)
+                route.Verification.Kind = verificationKind;
+
+            if (hasSignatureHeader)
+                route.Verification.SignatureHeaderName = signatureHeader;
+
+            if (hasSignaturePrefix)
+                route.Verification.SignaturePrefix = signaturePrefix;
+
+            if (hasSecretHeader)
+                route.Verification.SecretHeaderName = secretHeader;
+
+            if (hasEventHeader)
+                route.Verification.EventHeaderName = eventHeader;
+
+            if (hasDeliveryHeader)
+                route.Verification.DeliveryIdHeaderName = deliveryHeader;
+
+            if (hasTimestampField)
+                route.Verification.TimestampField = timestampField;
+
+            if (hasSignatureField)
+                route.Verification.SignatureField = signatureField;
+
+            if (hasPayloadSeparator)
+                route.Verification.SignedPayloadSeparator = payloadSeparator;
+
+            if (hasTolerance)
+                route.Verification.ToleranceSeconds = toleranceSeconds;
+
+            // The merged kind decides this, because an omitted --verification-kind
+            // keeps the stored kind.
+            if ((hasTimestampField || hasSignatureField || hasPayloadSeparator || hasTolerance)
+                && route.Verification.Kind != WebhookVerifierKind.HmacTimestamped)
+            {
+                Console.Error.WriteLine("[FAIL] Timestamp signature options require '--verification-kind hmac-timestamped'.");
+                return (null, 1);
+            }
+
+            if (hasEvents)
+                route.Events = [.. events];
+
+            if (hasAudience)
+                route.Audience = audience;
+
+            if (hasNotifyInstructions)
+                route.NotifyInstructions = notifyInstructions;
+
+            if (deliveryRequired)
+                route.DeliveryRequired = true;
+            if (noDeliveryRequired)
+                route.DeliveryRequired = false;
+
+            if (hasNotificationChannel)
+            {
+                route.NotificationTarget ??= new NotificationTargetConfig();
+                route.NotificationTarget.ChannelId = notificationChannel;
+            }
+
+            if (hasMaxBody)
+                route.MaxBodyBytes = maxBodyBytes;
+
+            if (hasRateLimit)
+                route.RateLimitPerMinute = rateLimit;
+
+            if (enabled)
+                route.Enabled = true;
+            if (disabled)
+                route.Enabled = false;
+
+            var errors = WebhookRouteValidator.Validate(routeName, route);
+            if (errors.Count > 0)
+            {
+                Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' has validation errors:");
+                foreach (var error in errors)
+                {
+                    Console.Error.WriteLine($"  - {error}");
+                }
+                return (null, 1);
+            }
+
+            if (dryRun)
+            {
+                output.WriteLine($"[OK] Webhook route '{routeName}' is valid (dry run, not saved).");
+                output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
+                return (null, 0);
+            }
+
+            updatedExistingRoute = exists;
+            return (route, 0);
+        }
+
+        WebhookRouteConfig? existing;
+        WebhookRouteConfig? merged;
         int result;
         try
         {
-            result = store.Update(routeName, CancellationToken.None, existing =>
-            {
-                var exists = existing is not null;
-
-                if (createOnly && exists)
-                {
-                    Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' already exists (--create-only specified).");
-                    return (null, 1);
-                }
-
-                if (updateOnly && !exists)
-                {
-                    Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' does not exist (--update-only specified).");
-                    return (null, 1);
-                }
-
-                // Start with existing config or defaults
-                var route = existing ?? new WebhookRouteConfig();
-                route.Verification ??= new WebhookVerificationConfig();
-                route.Events ??= [];
-
-                if (hasPrompt)
-                    route.Prompt = prompt;
-
-                if (hasSecret)
-                    route.Verification.Secret = new SensitiveString(secret);
-
-                // Parse verification kind
-                if (!TryGetFlagValue(args, "--verification-kind", out var verificationKind, out var hasVerificationKind))
-                    return (null, 1);
-
-                if (hasVerificationKind)
-                {
-                    if (!WebhookRouteValidator.TryParseVerifierKind(verificationKind, out var kind))
-                    {
-                        Console.Error.WriteLine($"[FAIL] Invalid verification kind: '{verificationKind}'. Use 'hmac', 'hmac-timestamped', or 'header-secret'.");
-                        return (null, 1);
-                    }
-                    route.Verification.Kind = kind;
-                }
-
-                // Parse verification headers
-                if (!TryGetFlagValue(args, "--signature-header", out var signatureHeader, out var hasSignatureHeader))
-                    return (null, 1);
-
-                if (hasSignatureHeader)
-                    route.Verification.SignatureHeaderName = signatureHeader;
-
-                if (!TryGetFlagValue(args, "--signature-prefix", out var signaturePrefix, out var hasSignaturePrefix))
-                    return (null, 1);
-
-                if (hasSignaturePrefix)
-                    route.Verification.SignaturePrefix = signaturePrefix;
-
-                if (!TryGetFlagValue(args, "--secret-header", out var secretHeader, out var hasSecretHeader))
-                    return (null, 1);
-
-                if (hasSecretHeader)
-                    route.Verification.SecretHeaderName = secretHeader;
-
-                if (!TryGetFlagValue(args, "--event-header", out var eventHeader, out var hasEventHeader))
-                    return (null, 1);
-
-                if (hasEventHeader)
-                    route.Verification.EventHeaderName = eventHeader;
-
-                if (!TryGetFlagValue(args, "--delivery-header", out var deliveryHeader, out var hasDeliveryHeader))
-                    return (null, 1);
-
-                if (hasDeliveryHeader)
-                    route.Verification.DeliveryIdHeaderName = deliveryHeader;
-
-                if (!TryGetFlagValue(args, "--timestamp-field", out var timestampField, out var hasTimestampField))
-                    return (null, 1);
-
-                if (hasTimestampField)
-                    route.Verification.TimestampField = timestampField;
-
-                if (!TryGetFlagValue(args, "--signature-field", out var signatureField, out var hasSignatureField))
-                    return (null, 1);
-
-                if (hasSignatureField)
-                    route.Verification.SignatureField = signatureField;
-
-                if (!TryGetFlagValue(args, "--signed-payload-separator", out var payloadSeparator, out var hasPayloadSeparator))
-                    return (null, 1);
-
-                if (hasPayloadSeparator)
-                    route.Verification.SignedPayloadSeparator = payloadSeparator;
-
-                if (!TryGetFlagValue(args, "--signature-tolerance-seconds", out var tolerance, out var hasTolerance))
-                    return (null, 1);
-
-                if (hasTolerance)
-                {
-                    if (!int.TryParse(tolerance, out var toleranceSeconds))
-                    {
-                        Console.Error.WriteLine($"[FAIL] Invalid signature tolerance: '{tolerance}'. Must be a whole number from 1 to 3600.");
-                        return (null, 1);
-                    }
-
-                    route.Verification.ToleranceSeconds = toleranceSeconds;
-                }
-
-                if ((hasTimestampField || hasSignatureField || hasPayloadSeparator || hasTolerance)
-                    && route.Verification.Kind != WebhookVerifierKind.HmacTimestamped)
-                {
-                    Console.Error.WriteLine("[FAIL] Timestamp signature options require '--verification-kind hmac-timestamped'.");
-                    return (null, 1);
-                }
-
-                // Parse events
-                if (!TryGetFlagValue(args, "--events", out var events, out var hasEvents))
-                    return (null, 1);
-
-                if (hasEvents)
-                {
-                    route.Events = [.. events.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
-                }
-
-                // Parse audience
-                if (!TryGetFlagValue(args, "--audience", out var audience, out var hasAudience))
-                    return (null, 1);
-
-                if (hasAudience)
-                {
-                    if (!Enum.TryParse<TrustAudience>(audience, ignoreCase: true, out var aud))
-                    {
-                        Console.Error.WriteLine($"[FAIL] Invalid audience: '{audience}'. Use 'public', 'team', or 'personal'.");
-                        return (null, 1);
-                    }
-                    route.Audience = aud;
-                }
-
-                if (hasNotifyInstructions)
-                    route.NotifyInstructions = notifyInstructions;
-
-                var deliveryRequired = HasFlag(args, "--delivery-required");
-                var noDeliveryRequired = HasFlag(args, "--no-delivery-required");
-                if (deliveryRequired && noDeliveryRequired)
-                {
-                    Console.Error.WriteLine("[FAIL] --delivery-required and --no-delivery-required cannot be used together.");
-                    return (null, 1);
-                }
-
-                if (deliveryRequired)
-                    route.DeliveryRequired = true;
-                if (noDeliveryRequired)
-                    route.DeliveryRequired = false;
-
-                if (!TryGetFlagValue(args, "--notification-channel", out var notificationChannel, out var hasNotificationChannel))
-                    return (null, 1);
-
-                if (hasNotificationChannel)
-                {
-                    route.NotificationTarget ??= new NotificationTargetConfig();
-                    route.NotificationTarget.ChannelId = notificationChannel;
-                }
-
-                // Parse limits
-                if (!TryGetFlagValue(args, "--max-body", out var maxBody, out var hasMaxBody))
-                    return (null, 1);
-
-                if (hasMaxBody)
-                {
-                    if (!int.TryParse(maxBody, out var bytes) || bytes < 1)
-                    {
-                        Console.Error.WriteLine($"[FAIL] Invalid max body size: '{maxBody}'. Must be a positive integer.");
-                        return (null, 1);
-                    }
-                    route.MaxBodyBytes = bytes;
-                }
-
-                if (!TryGetFlagValue(args, "--rate-limit", out var rateLimit, out var hasRateLimit))
-                    return (null, 1);
-
-                if (hasRateLimit)
-                {
-                    if (!int.TryParse(rateLimit, out var limit) || limit < 1)
-                    {
-                        Console.Error.WriteLine($"[FAIL] Invalid rate limit: '{rateLimit}'. Must be a positive integer.");
-                        return (null, 1);
-                    }
-                    route.RateLimitPerMinute = limit;
-                }
-
-                // Parse enabled/disabled
-                var enabled = HasFlag(args, "--enabled");
-                var disabled = HasFlag(args, "--disabled");
-                if (enabled && disabled)
-                {
-                    Console.Error.WriteLine("[FAIL] --enabled and --disabled cannot be used together.");
-                    return (null, 1);
-                }
-
-                if (enabled)
-                    route.Enabled = true;
-                if (disabled)
-                    route.Enabled = false;
-
-                // Validate
-                var errors = WebhookRouteValidator.Validate(routeName, route);
-                if (errors.Count > 0)
-                {
-                    Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' has validation errors:");
-                    foreach (var error in errors)
-                    {
-                        Console.Error.WriteLine($"  - {error}");
-                    }
-                    return (null, 1);
-                }
-
-                if (dryRun)
-                {
-                    output.WriteLine($"[OK] Webhook route '{routeName}' is valid (dry run, not saved).");
-                    output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
-                    return (null, 0);
-                }
-
-                routeSaved = true;
-                updatedExistingRoute = exists;
-                return (route, 0);
-            });
+            existing = ReadExistingRoute(store, routeName);
+            (merged, result) = Merge(existing);
         }
-        catch (Exception ex) when (ex is InvalidDataException or TimeoutException)
+        catch (InvalidDataException ex)
         {
             Console.Error.WriteLine($"[FAIL] {ex.Message}");
             return 1;
         }
 
-        if (routeSaved)
+        // A dry run and a rejected merge both send nothing, so neither needs the
+        // daemon. Merge already reported the reason.
+        if (merged is null)
+            return result;
+
+        var available = await daemon.EnsureAvailableAsync(CancellationToken.None);
+        if (!available.Success)
         {
-            var action = updatedExistingRoute ? "Updated" : "Created";
-            output.WriteLine($"[OK] {action} webhook route '{routeName}'.");
-            output.WriteLine($"     File: {Path.Combine(paths.WebhooksDirectory, $"{routeName}.json")}");
-            output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
+            Console.Error.WriteLine($"[FAIL] {available.Error}");
+            return 1;
         }
 
+        var saved = await daemon.UpsertAsync(routeName, BuildPatch(existing is null), CancellationToken.None);
+        if (!saved.Success)
+        {
+            Console.Error.WriteLine($"[FAIL] {saved.Error}");
+            return 1;
+        }
+
+        var action = updatedExistingRoute ? "Updated" : "Created";
+        output.WriteLine($"[OK] {action} webhook route '{routeName}'.");
+        output.WriteLine($"     File: {Path.Combine(paths.WebhooksDirectory, $"{routeName}.json")}");
+        output.WriteLine($"     Endpoint: /api/webhooks/{routeName}");
+
         return result;
+
+        // Projects the parsed flags into the daemon's field-level patch. An
+        // unspecified flag stays null so the daemon keeps the stored value.
+        WebhookRoutePatch BuildPatch(bool isNewRoute) => new()
+        {
+            Prompt = hasPrompt ? prompt : null,
+            Secret = hasSecret ? secret : null,
+            VerificationKind = hasVerificationKind ? verificationKind.ToString() : null,
+            // A new route keeps the CLI's documented 'public' default. Left null,
+            // the daemon would mint the route at the caller's own authority, which
+            // is higher than the flag default and would raise the route's audience.
+            Audience = hasAudience
+                ? audience.ToWireValue()
+                : isNewRoute ? TrustAudience.Public.ToWireValue() : null,
+            Events = hasEvents ? events : null,
+            NotifyInstructions = hasNotifyInstructions ? notifyInstructions : null,
+            DeliveryRequired = ResolveToggle(deliveryRequired, noDeliveryRequired),
+            NotificationChannelId = hasNotificationChannel ? notificationChannel : null,
+            MaxBodyBytes = hasMaxBody ? maxBodyBytes : null,
+            RateLimitPerMinute = hasRateLimit ? rateLimit : null,
+            Enabled = ResolveToggle(enabled, disabled),
+            SignatureHeaderName = hasSignatureHeader ? signatureHeader : null,
+            SignaturePrefix = hasSignaturePrefix ? signaturePrefix : null,
+            SecretHeaderName = hasSecretHeader ? secretHeader : null,
+            EventHeaderName = hasEventHeader ? eventHeader : null,
+            DeliveryIdHeaderName = hasDeliveryHeader ? deliveryHeader : null,
+            TimestampField = hasTimestampField ? timestampField : null,
+            SignatureField = hasSignatureField ? signatureField : null,
+            SignedPayloadSeparator = hasPayloadSeparator ? payloadSeparator : null,
+            ToleranceSeconds = hasTolerance ? toleranceSeconds : null
+        };
+    }
+
+    private static bool? ResolveToggle(bool onFlag, bool offFlag)
+        => onFlag ? true : offFlag ? false : null;
+
+    /// <summary>
+    /// Reads the stored route for the merge preview. An unparseable file stops
+    /// the command: the CLI must not send a patch built on a route it could not
+    /// read.
+    /// </summary>
+    private static WebhookRouteConfig? ReadExistingRoute(WebhookRouteStore store, string routeName)
+    {
+        if (!store.TryGet(routeName, out var match))
+            return null;
+
+        return match.Definition
+            ?? throw new InvalidDataException($"Existing webhook route '{routeName}' could not be parsed.");
     }
 
     // ── delete ──
 
-    private static int RunDelete(string[] args, WebhookRouteStore store, TextWriter output)
+    private static async Task<int> RunDeleteAsync(
+        string[] args,
+        TextWriter output,
+        WebhookRouteDaemonClient daemon)
     {
         if (args.Length < 3)
         {
@@ -567,18 +666,23 @@ internal static class WebhooksCommand
             }
         }
 
-        bool deleted;
-        try
+        var available = await daemon.EnsureAvailableAsync(CancellationToken.None);
+        if (!available.Success)
         {
-            deleted = store.Delete(routeName, CancellationToken.None);
-        }
-        catch (TimeoutException ex)
-        {
-            Console.Error.WriteLine($"[FAIL] {ex.Message}");
+            Console.Error.WriteLine($"[FAIL] {available.Error}");
             return 1;
         }
 
-        if (!deleted)
+        // The probe already ran, so a 404 here is a missing route, not an old
+        // daemon without the resource.
+        var removed = await daemon.DeleteAsync(routeName, CancellationToken.None);
+        if (!removed.Success && !removed.NotFound)
+        {
+            Console.Error.WriteLine($"[FAIL] {removed.Error}");
+            return 1;
+        }
+
+        if (!removed.Success)
         {
             Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' not found.");
             return 1;
@@ -821,12 +925,16 @@ internal static class WebhooksCommand
     {
         routeName = string.Empty;
 
-        if (!WebhookRouteStore.TryNormalizeRouteName(rawRouteName, out routeName, out var error))
+        // The CLI keeps the name as a string: it travels over HTTP as a path
+        // segment. The parse still runs here so an operator typo gets its
+        // message before any daemon call.
+        if (!WebhookRouteName.TryCreate(rawRouteName, out var parsed, out var error))
         {
             Console.Error.WriteLine($"[FAIL] {error}");
             return false;
         }
 
+        routeName = parsed.Value;
         return true;
     }
 
@@ -862,6 +970,9 @@ internal static class WebhooksCommand
         output.WriteLine("Routes are stored in ~/.netclaw/config/webhooks/<route>.json");
         output.WriteLine("and served at /api/webhooks/<route> by the daemon.");
         output.WriteLine();
+        output.WriteLine("'set' and 'delete' need a running daemon: the daemon owns route");
+        output.WriteLine("changes. 'list', 'show', and 'validate' read the files directly.");
+        output.WriteLine();
         output.WriteLine("Note: This command manages INBOUND webhook routes (external services");
         output.WriteLine("calling Netclaw). For OUTBOUND notifications (Netclaw posting to Slack),");
         output.WriteLine("see `netclaw secrets set Slack.BotToken` and notification target config.");
@@ -872,7 +983,8 @@ internal static class WebhooksCommand
     {
         output.WriteLine("Usage: netclaw webhooks set <route> [options]");
         output.WriteLine();
-        output.WriteLine("Create or update an inbound webhook route.");
+        output.WriteLine("Create or update an inbound webhook route. The daemon must be");
+        output.WriteLine("running: it owns every route change. --dry-run needs no daemon.");
         output.WriteLine();
         output.WriteLine("Required (for new routes):");
         output.WriteLine("  --prompt <text>              Prompt instructions for the agent");

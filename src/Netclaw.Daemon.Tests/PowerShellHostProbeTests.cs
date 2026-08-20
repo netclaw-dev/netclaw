@@ -145,7 +145,7 @@ public class PowerShellHostProbeTests
     [Fact]
     public async Task Timeout_terminates_process_tree_without_waiting_real_time()
     {
-        var timeProvider = new FakeTimeProvider();
+        var timeProvider = new RetrySignalingTimeProvider();
         var first = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
         var second = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
         var probe = new PowerShellHostProbe(
@@ -159,7 +159,7 @@ public class PowerShellHostProbeTests
 
         // ProbeAsync retries once on timeout, so drive the second attempt too.
         // The retry gets the escalated budget (ProbeRetryTimeout).
-        await DrainRetryDelayAsync(second, timeProvider);
+        await StartRetryAsync(second, timeProvider);
         timeProvider.Advance(PowerShellHostProbe.ProbeRetryTimeout);
         var result = await pending;
 
@@ -227,7 +227,7 @@ public class PowerShellHostProbeTests
     [Fact]
     public async Task Timeout_retries_once_and_recovers_when_second_attempt_succeeds()
     {
-        var timeProvider = new FakeTimeProvider();
+        var timeProvider = new RetrySignalingTimeProvider();
         var slow = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
         var healthy = new ControlledProbeProcess("7.6.4", string.Empty);
         var probe = new PowerShellHostProbe(
@@ -239,9 +239,7 @@ public class PowerShellHostProbeTests
         await slow.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
 
-        // Drain the retry delay in small steps so the loop can arm and fire it
-        // regardless of thread-pool scheduling between attempts.
-        await DrainRetryDelayAsync(healthy, timeProvider);
+        await StartRetryAsync(healthy, timeProvider);
 
         var result = await pending;
 
@@ -255,7 +253,7 @@ public class PowerShellHostProbeTests
     [Fact]
     public async Task Retry_attempt_gets_a_larger_budget_than_the_first_attempt()
     {
-        var timeProvider = new FakeTimeProvider();
+        var timeProvider = new RetrySignalingTimeProvider();
         var first = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
         var second = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
         var probe = new PowerShellHostProbe(
@@ -269,7 +267,7 @@ public class PowerShellHostProbeTests
 
         // Attempt 2 starts after the retry delay. It must still be running at the
         // first attempt's budget...
-        await DrainRetryDelayAsync(second, timeProvider);
+        await StartRetryAsync(second, timeProvider);
         timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
         Assert.False(pending.IsCompleted);
 
@@ -301,19 +299,14 @@ public class PowerShellHostProbeTests
         Assert.Equal(1, factory.StartCount);
     }
 
-    private static async Task DrainRetryDelayAsync(
+    private static async Task StartRetryAsync(
         ControlledProbeProcess nextAttempt,
-        FakeTimeProvider timeProvider)
+        RetrySignalingTimeProvider timeProvider)
     {
-        for (var i = 0; i < 50 && !nextAttempt.WaitStarted.Task.IsCompleted; i++)
-        {
-            timeProvider.Advance(TimeSpan.FromMilliseconds(50));
-            await Task.Delay(10, TestContext.Current.CancellationToken);
-        }
-
-        Assert.True(
-            nextAttempt.WaitStarted.Task.IsCompleted,
-            "retry attempt never started within the drain budget");
+        var ct = TestContext.Current.CancellationToken;
+        await timeProvider.RetryDelayCreated.Task.WaitAsync(ct);
+        timeProvider.Advance(PowerShellHostProbe.ProbeRetryDelay);
+        await nextAttempt.WaitStarted.Task.WaitAsync(ct);
     }
 
     private static PowerShellHostProbe CreateProbe(
@@ -357,6 +350,24 @@ public class PowerShellHostProbeTests
     {
         public PowerShellExecutableLookup Locate(string executableName) =>
             new PowerShellExecutableLookup.Found(ExecutablePath);
+    }
+
+    private sealed class RetrySignalingTimeProvider : FakeTimeProvider
+    {
+        public TaskCompletionSource RetryDelayCreated { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime == PowerShellHostProbe.ProbeRetryDelay)
+                RetryDelayCreated.TrySetResult();
+            return timer;
+        }
     }
 
     private sealed class FixedProcessFactory(IPowerShellProbeProcess process)

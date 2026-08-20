@@ -485,6 +485,23 @@ public static class ShellApprovalCases
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
 
         Case(
+            "post-334cb4c-independent-read-batch-remains-complex",
+            Bash(
+                "grep -n \"Alpha\" src/Alpha.cs | head -5; "
+                + "grep -rn \"Beta\" src/*.cs tests/*.cs docs/*.md 2>/dev/null | head"),
+            Approvals.None,
+            ExpectedApproval.Require(["grep"])),
+
+        Case(
+            "post-334cb4c-inline-cd-read-batch-remains-complex",
+            Bash(
+                "cd /work/project && git log --oneline -5 -- src/Alpha.cs "
+                + "&& grep -n \"Timeout\" src/Alpha.cs tests/AlphaTests.cs 2>/dev/null | head -5; "
+                + "cat Project.csproj"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+
+        Case(
             "live-typed-cwd-mixed-read-chain-prompts-for-sed-and-pattern",
             Bash(
                 "sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; "

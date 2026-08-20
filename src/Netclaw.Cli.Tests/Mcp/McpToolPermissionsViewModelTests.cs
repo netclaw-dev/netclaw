@@ -3,7 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
@@ -11,6 +13,7 @@ using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using R3;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Mcp;
@@ -71,6 +74,72 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
 
         Assert.Empty(vm.Servers);
         Assert.Contains("Could not read MCP server statuses", vm.StatusMessage.Value);
+    }
+
+    [Fact]
+    public async Task SelectServer_EntersLoadingStateAndIgnoresReentrantSelection()
+    {
+        var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseResponse = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var configuration = new ConfigurationBuilder().Build();
+        var httpClientFactory = new GatedToolsHttpClientFactory(requestStarted, releaseResponse.Task);
+        var daemonApi = new DaemonApi(
+            httpClientFactory,
+            configuration,
+            _paths);
+        using var vm = new McpToolPermissionsViewModel(_paths, daemonApi);
+        var toolGridReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = vm.CurrentState.Subscribe(state =>
+        {
+            if (state == ToolPermissionsState.ToolGrid)
+                toolGridReached.TrySetResult();
+        });
+
+        vm.CurrentState.Value = ToolPermissionsState.ServerList;
+        vm.SelectServer(new McpServerName("notion"));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await requestStarted.Task.WaitAsync(cts.Token);
+        Assert.Equal(ToolPermissionsState.Loading, vm.CurrentState.Value);
+        Assert.Equal("Loading tools for notion...", vm.StatusMessage.Value);
+
+        vm.SelectServer(new McpServerName("notion"));
+        Assert.Equal(1, httpClientFactory.RequestCount);
+
+        releaseResponse.TrySetResult();
+        await toolGridReached.Task.WaitAsync(cts.Token);
+
+        Assert.Equal(ToolPermissionsState.ToolGrid, vm.CurrentState.Value);
+        Assert.Equal(["record-tasks"], vm.DiscoveredTools);
+
+        vm.SelectServer(new McpServerName("notion"));
+        Assert.Equal(1, httpClientFactory.RequestCount);
+        Assert.Equal(ToolPermissionsState.ToolGrid, vm.CurrentState.Value);
+    }
+
+    [Fact]
+    public async Task SelectServer_ToolRequestThrows_ReturnsToServerListWithError()
+    {
+        // A failed tool request must not strand the user on the Loading screen: the state
+        // must fall back to the server list so Esc / GoBack has somewhere to go.
+        var configuration = new ConfigurationBuilder().Build();
+        var daemonApi = new DaemonApi(new ThrowingToolsHttpClientFactory(), configuration, _paths);
+        using var vm = new McpToolPermissionsViewModel(_paths, daemonApi);
+        var serverListReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = vm.CurrentState.Subscribe(state =>
+        {
+            if (state == ToolPermissionsState.ServerList)
+                serverListReached.TrySetResult();
+        });
+
+        vm.CurrentState.Value = ToolPermissionsState.ServerList;
+        vm.SelectServer(new McpServerName("notion"));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await serverListReached.Task.WaitAsync(cts.Token);
+
+        Assert.Equal(ToolPermissionsState.ServerList, vm.CurrentState.Value);
+        Assert.Contains("Error loading tools", vm.StatusMessage.Value);
     }
 
     public static TheoryData<bool, ToolApprovalMode[]> ServerDefaultCycles => new()
@@ -568,6 +637,59 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request, CancellationToken cancellationToken)
                 => Task.FromResult(new HttpResponseMessage { Content = new StringContent(body) });
+        }
+    }
+
+    // Fails every request so GetMcpToolNamesAsync throws, exercising the catch path in
+    // LoadToolsForServerAsync.
+    private sealed class ThrowingToolsHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new ThrowingHandler());
+
+        private sealed class ThrowingHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request, CancellationToken cancellationToken)
+                => throw new HttpRequestException("connection refused");
+        }
+    }
+
+    private sealed class GatedToolsHttpClientFactory : IHttpClientFactory
+    {
+        private readonly TaskCompletionSource _requestStarted;
+        private readonly Task _releaseResponse;
+        private int _requestCount;
+
+        public GatedToolsHttpClientFactory(TaskCompletionSource requestStarted, Task releaseResponse)
+        {
+            _requestStarted = requestStarted;
+            _releaseResponse = releaseResponse;
+        }
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
+        public HttpClient CreateClient(string name) => new(new GatedToolsHttpHandler(
+            _requestStarted,
+            _releaseResponse,
+            () => Interlocked.Increment(ref _requestCount)));
+
+        private sealed class GatedToolsHttpHandler(
+            TaskCompletionSource requestStarted,
+            Task releaseResponse,
+            Action onRequest) : HttpMessageHandler
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                onRequest();
+                requestStarted.TrySetResult();
+                await releaseResponse.WaitAsync(cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("[\"record-tasks\"]", Encoding.UTF8, "application/json")
+                };
+            }
         }
     }
 }

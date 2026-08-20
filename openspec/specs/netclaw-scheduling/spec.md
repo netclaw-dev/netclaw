@@ -332,51 +332,49 @@ when listing tasks.
 
 ### Requirement: Failure handling and guardrails
 
-Netclaw's reminder manager SHALL track consecutive execution failures per
-reminder via `_failureCounts` and SHALL auto-pause a reminder when the
-count reaches an internal `FailurePauseThreshold` constant. A successful
-execution SHALL reset the failure count to zero. Paused reminders SHALL
-remain persisted with `status: "paused"` and SHALL be visible via
-`netclaw reminders list`.
+The reminder manager SHALL store consecutive failures in each reminder
+definition. A successful execution SHALL reset the count.
+
+The manager SHALL disable a reminder when the count reaches
+`FailurePauseThreshold`. The disabled definition SHALL remain available for
+status and diagnosis.
 
 `FailurePauseThreshold` is not operator-configurable — it lives as an
 `internal const` on `ReminderManagerActor`. `Akka.Reminders` applies its
 own separate retry budget (`MaxDeliveryAttempts`, library default) to
-envelope delivery; Netclaw's auto-pause threshold is set strictly below
-the library's default so the Netclaw-side pause fires first in practice
-and operators see a `paused` reminder in `netclaw reminders list` before
-the library would mark an occurrence terminally failed. If either
-default changes in a way that breaks this ordering, add back a single
-operator knob.
+envelope delivery; Netclaw's threshold is set strictly below the library's
+default so the Netclaw-side pause fires first in practice and operators see a
+disabled reminder in `netclaw reminders list` before the library would mark an
+occurrence terminally failed. If either default changes in a way that breaks
+this ordering, add back a single operator knob.
 
-The reminder manager SHALL allow any number of reminder executions to run
-concurrently — there is no execution cap, because each execution already has a
-one-hour absolute timeout and Akka.Reminders owns failure retry. The manager
-SHALL enforce a per-execution timeout (`ExecutionTimeoutSeconds`, internal
-const on `ReminderExecutionActor`).
+The manager SHALL NOT cap the number of concurrent executions. Capacity was
+removed because every execution already has a one-hour absolute limit and
+Akka.Reminders owns failure retry, so unbounded scheduling pressure on the LLM
+is acceptable.
 
-#### Scenario: Consecutive failures auto-pause task
+Each execution SHALL have a one-hour absolute limit. A known timeout SHALL
+count as a failed attempt.
 
-- **GIVEN** a scheduled task has failed N times in a row where N equals
-  `FailurePauseThreshold`
-- **WHEN** the Nth failure is reported to `ReminderManagerActor`
-- **THEN** the task status is set to `paused`
-- **AND** the Akka timer for the task is cancelled
-- **AND** a log event is emitted naming the reminder and the failure count
-- **AND** the reminder remains in `tasks.json` with `status: "paused"`
+#### Scenario: Consecutive failures disable a reminder
 
-#### Scenario: Successful execution resets failure counter
+- **GIVEN** a reminder has one fewer failure than `FailurePauseThreshold`
+- **WHEN** its next execution fails
+- **THEN** the manager saves the threshold failure count
+- **AND** the manager disables the reminder
+- **AND** the definition remains available
 
-- **GIVEN** a scheduled task has failed twice
-- **WHEN** the next execution succeeds
-- **THEN** the internal failure count for that reminder is reset to zero
-- **AND** subsequent failures start counting from zero again
+#### Scenario: A successful execution resets the failure count
 
-#### Scenario: Reminders run concurrently without an execution cap
+- **GIVEN** a reminder has one or more consecutive failures
+- **WHEN** its next execution succeeds
+- **THEN** the manager saves a zero failure count
 
-- **GIVEN** several reminders are already executing
-- **WHEN** another reminder fires
-- **THEN** the new reminder starts executing immediately
+#### Scenario: Reminder fires while other reminders are executing
+
+- **GIVEN** several reminder attempts are active
+- **WHEN** another occurrence arrives
+- **THEN** the manager starts the new execution immediately
 - **AND** no occurrence is skipped or deferred for capacity reasons
 
 #### Scenario: Execution timeout enforced
@@ -449,285 +447,122 @@ inline. If no history exists, the tool SHALL return an empty list.
 - **THEN** the tool call is rejected by the ACL policy
 - **AND** the agent receives a permission-denied response
 
-### Requirement: Envelope-ack-gated at-least-once delivery for Mode B
+### Requirement: Envelope-ack-gated at-least-once delivery
 
-The `ReminderManagerActor` SHALL NOT eagerly ack the
-`Aaron.Akka.Reminders` envelope for reminders with
-`Delivery.Kind = CurrentSession` (the canonical term for what this
-requirement historically called "Mode B"). It SHALL spawn `ReminderExecutionActor` and pass the
-`ReminderEnvelope` to the child. The execution actor SHALL acquire
-`IReminderClient` via `ReminderClientExtension.Get(Context.System)`
-at startup.
+The reminder manager SHALL retain each Akka.Reminders envelope until the attempt
+has a known outcome. This rule SHALL apply to every delivery kind, so `Channel`
+and `None` reminders no longer get an eager acknowledgement.
 
-The execution actor SHALL dispatch
-`DeliverTrustedSessionTurn(SessionId, Content, MessageSource)` to the
-target channel gateway using `Ask<CommandAck>` (Slack via
-`SlackGatewayActor`, SignalR/TUI via `SignalRGatewayActor`, selected
-by `Delivery.OriginChannelType`) with a timeout of
-`ReminderSettings.DefaultAckTimeout`. The gateway's handler SHALL
-propagate the message down its existing routing hierarchy via
-`Forward` (preserving `Sender`) until it reaches the leaf binding /
-session actor, which reads `Sender`, places it on the outgoing
-`ChannelInput` as `MessageSource.AckTarget`, and populates
-`MessageSource.ReminderId` with the reminder delivery key.
-`ChannelPipeline.MapToCommand`'s stream sink SHALL use
-`cmd.Source?.AckTarget ?? ActorRefs.NoSender` as the `Tell` sender.
-`LlmSessionActor`'s `TryReplyAck()` fires `CommandAck` to that sender,
-completing the dispatcher's `Ask`.
+The execution actor SHALL report its outcome to the manager. It SHALL wait for
+`ReminderExecutionAccepted` before it stops.
 
-When `Delivery.DeliveryRequired = true`, the execution actor SHALL
-also wait for a `ReminderDeliveryObserved(reminderId, channelType)`
-signal emitted by `ChannelPipeline`'s outbound stage when the
-session's assistant reply whose source turn carries a matching
-`SourceReminderId` flows out through the channel's subscriber sink.
-The execution actor SHALL NOT call `AckAsync(envelope)` until both
-`CommandAck` and `ReminderDeliveryObserved` are received for the
-reminder. The outbound wait SHALL use a dedicated timeout
-(`DeliveryObservedTimeout`, internal const on
-`ReminderExecutionActor`) strictly greater than
-`DefaultAckTimeout`.
+The manager SHALL acknowledge only a successful execution with all required
+delivery evidence. It SHALL negatively acknowledge a known failure.
 
-When `Delivery.DeliveryRequired = false`, `CommandAck` alone SHALL
-satisfy the acknowledgment; the outbound signal wait SHALL be skipped.
+A `CurrentSession` reminder SHALL still use the origin gateway and
+`Ask<CommandAck>`. Required delivery SHALL also wait for
+`ReminderDeliveryResult`, which reports success and failure explicitly.
 
-On successful ack conditions, the execution actor SHALL call
-`await _client.AckAsync(envelope)`, inspect the
-`ReminderAckResponse.ResponseCode`, log on non-`Success`, and tell
-`Context.Parent` a `ReminderExecutionCompleted(success=true)`. On
-Ask-timeout, `CommandNack`, gateway/transport exception, OR
-delivery-observed timeout with `DeliveryRequired = true`, the
-execution actor SHALL NOT call `AckAsync`; it SHALL tell the parent a
-`ReminderExecutionCompleted(success=false)` with a descriptive error
-message. The un-acked envelope SHALL be redelivered by
-`Aaron.Akka.Reminders` per its built-in `AckTimeout` and
-`MaxDeliveryAttempts` defaults.
+The target session SHALL keep its best-effort reminder key check. The key SHALL
+use the stable occurrence due time.
 
-For `Delivery.Kind ∈ {Channel, None}`, the manager SHALL continue to
-call `_client.AckAsync(envelope)` eagerly after spawning the execution
-actor; delivery-success tracking for those kinds flows through
-`ExecutionOutputAccumulator` / `ReminderExecutionCompleted` /
-`FailurePauseThreshold` as today.
+#### Scenario: CurrentSession requires observed delivery
 
-Redelivery SHALL be best-effort deduped: the target session dedup
-pre-checks the reminder's `(reminderId, fireTimestampMs)` pair against
-its in-memory `ProcessedReminderIds` set and SHALL reply `CommandAck`
-without processing a duplicate when the dedup check hits.
+- **GIVEN** a `CurrentSession` reminder has `DeliveryRequired = true`
+- **WHEN** the target session returns `CommandAck`
+- **THEN** the execution remains incomplete
+- **WHEN** a matching successful `ReminderDeliveryResult` arrives
+- **THEN** the child reports success to the manager
+- **AND** the manager acknowledges the occurrence
 
-#### Scenario: CurrentSession envelope held until outbound delivery observed
+#### Scenario: CurrentSession delivery fails
 
-- **GIVEN** a `CurrentSession` reminder with `DeliveryRequired = true`
-  fires
-- **WHEN** the execution child `Ask<CommandAck>`s the target channel
-  gateway with a `DeliverTrustedSessionTurn` and the session's
-  `TryReplyAck()` replies `CommandAck`
-- **THEN** the execution child does NOT yet call
-  `_client.AckAsync(envelope)`
-- **WHEN** the session completes its turn and the assistant reply
-  carrying the matching `SourceReminderId` flows out through the
-  channel pipeline's outbound stage
-- **THEN** `ChannelPipeline` emits a
-  `ReminderDeliveryObserved(reminderId, channelType)` signal addressed
-  to the execution actor
-- **AND** the execution actor calls `await _client.AckAsync(envelope)`
-  exactly once
-- **AND** the execution actor tells `Context.Parent` a
-  `ReminderExecutionCompleted(success=true)`
-
-#### Scenario: CurrentSession outbound delivery timeout fails loud
-
-- **GIVEN** a `CurrentSession` reminder with `DeliveryRequired = true`
-  fires and `CommandAck` was received from the session
-- **WHEN** `DeliveryObservedTimeout` elapses without a
-  `ReminderDeliveryObserved` signal
-- **THEN** the execution actor does NOT call `_client.AckAsync(envelope)`
-- **AND** the execution actor tells `Context.Parent` a
-  `ReminderExecutionCompleted(success=false)` with a
-  "delivery not observed" error
-- **AND** `OperationalAlert.ReminderExecutionFailed` is emitted
-- **AND** `Aaron.Akka.Reminders` redelivers the envelope on next fire
+- **GIVEN** a `CurrentSession` reminder awaits required delivery
+- **WHEN** the gateway rejects the turn or delivery fails
+- **THEN** the child reports a descriptive failure
+- **AND** the manager sends a negative acknowledgement
 
 #### Scenario: CurrentSession with DeliveryRequired=false acks on CommandAck alone
 
-- **GIVEN** a `CurrentSession` reminder with `DeliveryRequired = false`
-  fires
+- **GIVEN** a `CurrentSession` reminder with `DeliveryRequired = false` fires
 - **WHEN** `CommandAck` is received from the session
-- **THEN** the execution actor immediately calls
-  `await _client.AckAsync(envelope)`
-- **AND** tells `Context.Parent` a
-  `ReminderExecutionCompleted(success=true)`
-- **AND** no `ReminderDeliveryObserved` signal wait is attempted
+- **THEN** the child reports success to the manager
+- **AND** no `ReminderDeliveryResult` wait is attempted
 
-#### Scenario: Session Ask-timeout triggers Akka.Reminders redelivery
+#### Scenario: Channel execution fails
 
-- **GIVEN** a `CurrentSession` reminder fires and the target channel
-  gateway has been dispatched a `DeliverTrustedSessionTurn`
-- **AND** the pipeline or session fails to reply `CommandAck` within
-  `ReminderSettings.DefaultAckTimeout`
-- **WHEN** the execution actor's `Ask<CommandAck>` times out
-- **THEN** the execution actor does NOT call `_client.AckAsync(envelope)`
-- **AND** the execution actor tells `Context.Parent` a
-  `ReminderExecutionCompleted(success=false)` with a timeout error
-- **AND** `Aaron.Akka.Reminders` marks the envelope as ack-timed-out
-  and redelivers it per its built-in `MaxDeliveryAttempts` default
+- **GIVEN** a `Channel` reminder starts an isolated execution
+- **WHEN** the execution or notification fails
+- **THEN** the manager does not acknowledge success
+- **AND** the manager sends a negative acknowledgement
 
-#### Scenario: Channel kind keeps eager envelope ack
+#### Scenario: None delivery succeeds
 
-- **GIVEN** a reminder with `Delivery.Kind = Channel` fires
-- **WHEN** `ReminderManagerActor.HandleReminderFiredAsync` runs
-- **THEN** the manager calls `_client.AckAsync(envelope)` after
-  spawning the execution actor
-- **AND** execution-success/failure tracking flows through
-  `ReminderExecutionCompleted` and
-  `OperationalAlert.ReminderExecutionFailed`
+- **GIVEN** a reminder uses `Delivery.Kind = None`
+- **WHEN** its execution completes successfully
+- **THEN** the manager acknowledges the occurrence
+
+#### Scenario: The child reports success before it stops
+
+- **GIVEN** an execution child reports success
+- **WHEN** the manager saves local state and acknowledges the occurrence
+- **THEN** the manager sends `ReminderExecutionAccepted`
+- **AND** the child stops after that message
 
 #### Scenario: Redelivered CurrentSession reminder is deduped on the target session
 
-- **GIVEN** a `CurrentSession` reminder was previously processed by
-  the session (evidenced by a `TurnRecorded` event whose
-  `SourceReminderId` matches the reminder's
-  `{reminderId}:{fireTimestampMs}` and is present in
-  `ProcessedReminderIds`)
-- **WHEN** Akka.Reminders redelivers the same envelope after a
-  transient failure
-- **THEN** the session dedup pre-check fires in
-  `HandleIncomingUserMessage` and `TryReplyAck()` returns `CommandAck`
-  without re-processing the turn
-- **AND** `ReminderDeliveryObserved` fires because the prior turn's
-  outbound reply replay produces an observable delivery signal OR
-  the execution actor treats the dedup-ack path as observed for
-  acking purposes (implementation detail documented in design.md)
-- **AND** the execution actor calls `_client.AckAsync(envelope)` once,
-  closing out the redelivery loop
+- **GIVEN** a `CurrentSession` reminder was previously processed by the session,
+  evidenced by a `TurnRecorded` event whose `SourceReminderId` matches the
+  reminder's `{reminderId}:{fireTimestampMs}` key and is present in
+  `ProcessedReminderIds`
+- **WHEN** Akka.Reminders redelivers the same envelope after a transient failure
+- **THEN** the session dedup pre-check fires and `TryReplyAck()` returns
+  `CommandAck` without re-processing the turn
+- **AND** the manager settles the occurrence once, closing the redelivery loop
 
 ### Requirement: Reminder delivery guarantees
 
-The Mode B reminder delivery pipeline SHALL provide at-least-once
-guarantees from the Akka.Reminders envelope down to the target session's
-in-memory `CommandAck` boundary, with an explicitly accepted gap between
-session-ack and turn-persist that is subsumed by future work.
+The reminder pipeline SHALL provide at-least-once attempt delivery until the
+manager confirms execution and required delivery success.
 
-**Guaranteed windows** (at-least-once, dedup-safe or redelivery-safe):
+A crash before acknowledgement SHALL leave the occurrence eligible for retry. A
+crash after acknowledgement SHALL not lose successful work.
 
-1. Crash before the channel gateway receives
-   `DeliverTrustedSessionTurn`: envelope un-acked, Akka.Reminders
-   redelivers on next fire.
-2. Crash between the gateway's `OfferAsync` and the pipeline stream
-   stage processing the `ChannelInput`: the Ask temp actor never
-   receives a reply, execution actor's `Ask` times out without calling
-   `AckAsync`, envelope un-acked, Akka.Reminders redelivers.
-3. Crash after session received the message (in-memory state updated)
-   but before execution actor calls `_client.AckAsync(envelope)`: the
-   envelope is still un-acked, Akka.Reminders redelivers. On
-   redelivery, if `TurnRecorded` already persisted, the session's
-   `ProcessedReminderIds` dedup catches it (best-effort); if not, the
-   redelivery is processed as a fresh turn (desired retry).
-4. Ack message lost in flight between execution actor and the
-   Akka.Reminders scheduler proxy: Akka.Reminders redelivers on
-   `AckTimeout`, session dedup likely catches the duplicate.
+The stable occurrence identity and the session reminder key SHALL reduce
+duplicate work. Netclaw SHALL not claim exactly-once delivery.
 
-**Explicitly NOT guaranteed (accepted tradeoffs)**:
+#### Scenario: The daemon stops during execution
 
-- **Crash after `_client.AckAsync(envelope)` succeeds but before the
-  session's LLM turn completes and `TurnRecorded` is persisted.** In
-  this window the envelope has been acknowledged from Akka.Reminders'
-  perspective (the scheduler will not redeliver it) but the session
-  only reached in-memory state and did not write a durable record. On
-  restart, the reminder is lost. This window spans the entire LLM turn
-  execution, potentially minutes for tool-heavy reasoning. **This is
-  the identical failure mode every regular `SendUserMessage` has today**
-  — Mode B reminders do not introduce a new failure class. Closing
-  this gap requires a durable ingress queue on `LlmSessionActor`, which
-  is session-wide work deferred to the drain-on-shutdown follow-up
-  (issues #403, #419).
+- **GIVEN** a reminder attempt has not reached manager acknowledgement
+- **WHEN** the daemon stops
+- **THEN** the acknowledgement lease expires
+- **AND** Akka.Reminders can retry the occurrence
 
-- **Duplicate reminder processing across snapshot recovery boundaries.**
-  If `LlmSessionActor` is recovered from a snapshot rather than
-  replaying the full journal, the `ProcessedReminderIds` dedup set
-  starts empty. A redelivery of a pre-snapshot reminder would then be
-  processed as a fresh turn. In practice this requires the reminder to
-  still be within Akka.Reminders' `MaxDeliveryWindow` after a snapshot
-  has been taken — a narrow timing window. **Accepted tradeoff**: the
-  LLM itself typically recognizes a duplicate prompt in its recent
-  context and responds appropriately. Persisting the dedup set to
-  snapshot was not worth the complexity.
+#### Scenario: The daemon stops after acknowledgement
 
-Operators who need stronger guarantees should track the
-drain-on-shutdown follow-up.
-
-#### Scenario: Crash before gateway offer is safe
-
-- **GIVEN** a Mode B reminder fires
-- **WHEN** the daemon crashes before the channel gateway's
-  `DeliverTrustedSessionTurn` handler completes its `OfferAsync`
-- **THEN** the envelope is un-acked
-- **AND** on daemon restart, Akka.Reminders redelivers the envelope
-- **AND** the reminder is processed normally
-
-#### Scenario: Crash between gateway offer and stream stage is safe
-
-- **GIVEN** a Mode B reminder fires and the channel gateway has
-  successfully offered a `ChannelInput` to the pipeline queue
-- **WHEN** the daemon crashes before the pipeline stream stage processes
-  the `ChannelInput` and reaches the session actor
-- **THEN** the execution actor's `Ask<CommandAck>` times out
-- **AND** `_client.AckAsync(envelope)` is not called
-- **AND** the envelope is un-acked
-- **AND** on daemon restart, Akka.Reminders redelivers and the reminder
-  is processed normally
-
-#### Scenario: Crash between session in-memory receipt and AckAsync is safe
-
-- **GIVEN** the session's `HandleIncomingUserMessage` has updated
-  in-memory state and fired `TryReplyAck()`, but the `CommandAck` has
-  not yet been processed by the execution actor's Ask
-- **WHEN** the daemon crashes before `_client.AckAsync(envelope)` is
-  called
-- **THEN** the envelope is un-acked
-- **AND** on daemon restart, Akka.Reminders redelivers
-- **AND** if `TurnRecorded` was already persisted by the session before
-  the crash, the dedup pre-check catches the redelivery (best-effort)
-- **AND** if `TurnRecorded` was NOT yet persisted, the redelivered
-  reminder is processed as a fresh turn (desired retry)
-
-#### Scenario: Crash after AckAsync but before TurnRecorded loses the reminder (accepted gap)
-
-- **GIVEN** the execution actor has called
-  `_client.AckAsync(envelope)` successfully and received a
-  `ReminderAckResponse(Success)`
-- **AND** the session has begun processing the turn but has not yet
-  persisted `TurnRecorded`
-- **WHEN** the daemon crashes
-- **THEN** the envelope is acked from Akka.Reminders' perspective and
-  is NOT redelivered on restart
-- **AND** the session recovery replays its journal but finds no
-  `TurnRecorded` for this reminder
-- **AND** the reminder turn is lost
-- **AND** this outcome is documented as an explicit accepted tradeoff,
-  identical to the failure mode every regular `SendUserMessage` has
-  today, subsumed by the drain-on-shutdown follow-up (issues #403, #419)
+- **GIVEN** execution and required delivery succeeded
+- **AND** the manager acknowledged the occurrence
+- **WHEN** the daemon stops before one-shot terminal state is saved
+- **THEN** durable occurrence status remains `Delivered`
+- **AND** reconciliation repairs the one-shot terminal state
 
 #### Scenario: Duplicate across snapshot recovery is accepted
 
-- **GIVEN** a Mode B reminder was processed and `TurnRecorded`
-  persisted
+- **GIVEN** a `CurrentSession` reminder was processed and `TurnRecorded` persisted
 - **AND** a subsequent `SessionSnapshot` was taken
-- **AND** the session later recovers from that snapshot (journal
-  replay skips events before the snapshot)
-- **AND** a redelivery of the original reminder arrives via
-  Akka.Reminders (the envelope was within `MaxDeliveryWindow`)
+- **AND** the session later recovers from that snapshot, so journal replay skips
+  events before the snapshot
+- **AND** a redelivery of the original reminder arrives via Akka.Reminders
 - **WHEN** the dedup pre-check runs
-- **THEN** the set is empty (not populated from the snapshot) and the
-  redelivery is processed as a fresh turn
-- **AND** the LLM may observe the duplicate in its transcript context
-  and respond appropriately
-- **AND** this outcome is documented as an explicit accepted tradeoff
+- **THEN** the set is empty and the redelivery is processed as a fresh turn
+- **AND** this outcome is an explicit accepted tradeoff
 
 #### Scenario: Delivery guarantees documented in reminder-set confirmation
 
-- **GIVEN** a Mode B reminder is successfully set
+- **GIVEN** a `CurrentSession` reminder is successfully set
 - **WHEN** the tool returns its success message
-- **THEN** the message conveys that the reminder will fire and deliver
-  a new turn to the originating session
+- **THEN** the message conveys that the reminder will fire and deliver a new turn
+  to the originating session
 
 ### Requirement: Recurring reminder expiration
 
@@ -1022,3 +857,166 @@ error enumerating the registered transports.
 - **THEN** the tool returns an error naming `"discord"` as unknown and
   listing `["slack"]` as the registered transports
 - **AND** no reminder is persisted
+
+### Requirement: Execution outcome controls occurrence acknowledgement
+
+Netclaw SHALL pass the Akka.Reminders envelope to every reminder execution. Netclaw SHALL acknowledge an occurrence only after successful execution and required delivery.
+
+Netclaw SHALL send a negative acknowledgement after a known execution or delivery failure. The negative acknowledgement SHALL use the library retry budget.
+
+The reminder manager SHALL accept the execution result before the child stops. DeathWatch SHALL report failure only before result acceptance.
+
+#### Scenario: Channel execution fails before delivery
+
+- **GIVEN** an enabled channel reminder occurrence is awaiting acknowledgement
+- **WHEN** its session fails before required delivery succeeds
+- **THEN** Netclaw sends a negative acknowledgement with the failure reason
+- **AND** Netclaw does not send a successful acknowledgement
+- **AND** Akka.Reminders persists the next attempt or a terminal state
+
+#### Scenario: Execution and required delivery succeed
+
+- **GIVEN** an enabled reminder occurrence is awaiting acknowledgement
+- **WHEN** execution and required delivery succeed
+- **THEN** Netclaw acknowledges the exact occurrence
+- **AND** Akka.Reminders records `Delivered`
+
+### Requirement: Reminder-level poison state is durable
+
+Netclaw SHALL persist a consecutive execution failure count in the reminder definition. Each failed attempt SHALL increment the count, and a successful attempt SHALL reset it.
+
+Netclaw SHALL disable the complete reminder when the count reaches `FailurePauseThreshold`. This count SHALL remain separate from the Akka.Reminders per-occurrence attempt count.
+
+#### Scenario: Restart preserves the poison count
+
+- **GIVEN** a reminder has three consecutive failed attempts
+- **WHEN** the daemon restarts
+- **THEN** reminder status reports three consecutive failures
+- **AND** the next failed attempt increments the count to four
+
+#### Scenario: Success resets the poison count
+
+- **GIVEN** a reminder has one or more consecutive failed attempts
+- **WHEN** a later attempt succeeds
+- **THEN** Netclaw persists a zero consecutive failure count
+
+#### Scenario: Fifth failure disables the complete reminder
+
+- **GIVEN** a reminder has four consecutive failed attempts
+- **WHEN** the next attempt fails
+- **THEN** Netclaw disables the reminder
+- **AND** Netclaw records a failed terminal outcome
+- **AND** Netclaw cancels future occurrences for the complete reminder
+
+### Requirement: One-shot reminders have one terminal settlement
+
+Netclaw SHALL settle each one-shot reminder exactly once.
+
+After a successful execution, Netclaw SHALL remove the one-shot definition and its execution history.
+
+When a one-shot reaches `FailurePauseThreshold`, Netclaw SHALL retain the definition, disable it, and record the `Failed` terminal outcome. Only an explicit delete command SHALL remove that retained definition and its history.
+
+Below that threshold, Netclaw SHALL keep a failed one-shot enabled so Akka.Reminders can retry it.
+
+#### Scenario: Successful one-shot is removed
+
+- **GIVEN** a one-shot reminder succeeds
+- **WHEN** Netclaw completes its acknowledgement
+- **THEN** Netclaw deletes the definition and its history file
+- **AND** reconciliation removes any residual `Completed` one-shot
+
+#### Scenario: Failed one-shot remains enabled for retry
+
+- **GIVEN** a one-shot attempt fails below the poison threshold
+- **WHEN** Akka.Reminders schedules another attempt
+- **THEN** Netclaw keeps the definition enabled
+- **AND** reminder status shows the durable attempt state
+
+#### Scenario: Poisoned one-shot remains inspectable
+
+- **GIVEN** a one-shot reaches `FailurePauseThreshold`
+- **WHEN** Netclaw settles the final failed attempt
+- **THEN** Netclaw disables the definition with outcome `Failed`
+- **AND** an all-reminders query returns the definition
+
+#### Scenario: Reconciliation uses durable occurrence state
+
+- **GIVEN** a one-shot has a past fire time
+- **WHEN** reconciliation finds no active schedule
+- **THEN** reconciliation reads the durable occurrence state
+- **AND** reconciliation selects restoration, a terminal soft delete, or removal of a delivered one-shot
+
+### Requirement: Reminder attempts have bounded acknowledgement leases
+
+Netclaw SHALL use a one-hour absolute execution limit and a 70-minute Akka.Reminders acknowledgment timeout. It SHALL retain the 20-minute inactivity limit.
+
+#### Scenario: Valid long execution completes within the lease
+
+- **GIVEN** a reminder execution produces activity and completes within one hour
+- **WHEN** required delivery succeeds
+- **THEN** Netclaw acknowledges the occurrence before its 70-minute deadline
+
+#### Scenario: Execution reaches the absolute limit
+
+- **GIVEN** a reminder execution remains active for one hour
+- **WHEN** the absolute limit expires
+- **THEN** Netclaw stops the attempt
+- **AND** Netclaw sends a negative acknowledgement
+
+#### Scenario: The remaining lease cannot contain an attempt
+
+- **GIVEN** an occurrence has less than the maximum attempt duration plus the settlement margin remaining
+- **WHEN** Netclaw considers the occurrence for execution
+- **THEN** Netclaw does not start the execution
+- **AND** Netclaw settles the occurrence by its one-shot or reminder-series blocked-occurrence policy
+
+### Requirement: Blocked occurrence settlement remains bounded
+
+An occurrence SHALL be blocked when another execution is already active for the same reminder, or when its remaining acknowledgement lease is shorter than the absolute execution limit plus the settlement margin.
+
+Netclaw SHALL NOT retain a blocked Akka.Reminders envelope in an in-memory catch-up queue.
+
+Netclaw SHALL negatively acknowledge a blocked one-shot occurrence. Netclaw SHALL acknowledge and skip a blocked reminder-series occurrence.
+
+Netclaw SHALL ignore an exact duplicate of the active occurrence. The active execution SHALL remain the sole settlement owner.
+
+#### Scenario: One-shot occurrence is blocked
+
+- **GIVEN** a one-shot occurrence cannot start because another execution is active or its remaining lease is too short
+- **WHEN** the manager handles the occurrence
+- **THEN** the manager sends a negative acknowledgement
+- **AND** Akka.Reminders owns the retry delay
+
+#### Scenario: Reminder-series occurrence is blocked
+
+- **GIVEN** a reminder-series occurrence cannot start for the same reason
+- **WHEN** the manager handles the occurrence
+- **THEN** the manager acknowledges the occurrence without execution
+- **AND** Netclaw does not retain the occurrence for catch-up work
+
+#### Scenario: Exact active occurrence arrives again
+
+- **GIVEN** an occurrence already has an active execution
+- **WHEN** the same key, due time, and acknowledgement deadline arrive again
+- **THEN** Netclaw does not start or settle the duplicate envelope
+- **AND** the active execution remains the sole settlement owner
+
+### Requirement: Settlement write order supports recovery
+
+Netclaw SHALL save a failed run and its poison count before it sends a negative acknowledgement. Netclaw SHALL not advance Akka state after a local save failure.
+
+Netclaw SHALL save a successful run and reset the poison count before it sends an acknowledgement. Reconciliation SHALL repair one-shot terminal state after a post-acknowledgement process failure.
+
+#### Scenario: Local failure state cannot be saved
+
+- **GIVEN** an execution attempt fails
+- **WHEN** Netclaw cannot save its poison state
+- **THEN** Netclaw does not send a negative acknowledgement
+- **AND** the Akka.Reminders acknowledgement timeout remains the recovery path
+
+#### Scenario: Process stops after successful acknowledgement
+
+- **GIVEN** Netclaw acknowledges a successful one-shot
+- **WHEN** the process stops before it saves the terminal outcome
+- **THEN** reconciliation reads the durable delivered state
+- **AND** reconciliation records the completed removal

@@ -100,7 +100,7 @@ Parent and child guidance will use this order:
 
 1. Use `project_dir` for work that belongs to the declared project.
 2. Use typed `WorkingDirectory` for one call in a named child directory.
-3. Use `session_dir` only for disposable work outside a project.
+3. Use `session_dir` for disposable writable work outside a project.
 4. Keep an inline directory change only when that change is the task.
 
 A successful `set_working_directory` call already updates child project scope
@@ -131,11 +131,14 @@ tool is available. The shell description will retain its negative boundary.
 The same surfaces will state one shell-composition order:
 
 1. Start with the smallest shell operation that answers the request.
-2. Do not use shell only to verify a successful structured tool result.
-3. Do not retry or substitute shell variants after an approval-required result.
-4. Treat a `Tool access denied:` result as terminal. Do not change scope, retry,
+2. Keep independent searches and diagnostics in separate calls. Do not join
+   them with shell separators or presentation labels.
+3. Add a pipeline only when the requested result requires it.
+4. Do not use shell only to verify a successful structured tool result.
+5. Do not retry or substitute shell variants after an approval-required result.
+6. Treat a `Tool access denied:` result as terminal. Do not change scope, retry,
    or substitute another tool.
-5. Apply one `Tool execution deferred:` correction unchanged. Otherwise use an
+7. Apply one `Tool execution deferred:` correction unchanged. Otherwise use an
    available structured tool or report the blocked operation once.
 
 A successful `file_write` or `file_edit` result is the confirmation for that

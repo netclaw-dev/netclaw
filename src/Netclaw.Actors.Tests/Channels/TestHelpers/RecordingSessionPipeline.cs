@@ -59,12 +59,26 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     public ConcurrentQueue<ChannelInput> CapturedInputs { get; } = new();
     public Func<IWithSessionId, CancellationToken, Task<ISessionResponse>>? ResponseFactory { get; set; }
 
+    /// <summary>
+    /// Number of <see cref="CreateAsync"/> calls. A supervised actor restart
+    /// re-creates the pipeline, so tests observe a restart as a second call.
+    /// </summary>
+    public int CreateCount => Volatile.Read(ref _createCount);
+    private int _createCount;
+
+    /// <summary>
+    /// When set, <see cref="SendFeedbackAsync"/> throws this exception and
+    /// does not record the feedback. This models a dead session feedback pipe.
+    /// </summary>
+    public Exception? FeedbackException { get; set; }
+
     public Task<MaterializedSession> CreateAsync(
         SessionId sessionId,
         SessionPipelineOptions options,
         IMaterializer? materializer = null,
         CancellationToken cancellationToken = default)
     {
+        Interlocked.Increment(ref _createCount);
         Volatile.Write(ref _capturedOptions, options);
         _created.TrySetResult(options);
 
@@ -131,6 +145,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
 
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
+        if (FeedbackException is { } feedbackException)
+            throw feedbackException;
         lock (_feedbackLock) _recordedFeedback.Add(feedback);
         return Task.CompletedTask;
     }

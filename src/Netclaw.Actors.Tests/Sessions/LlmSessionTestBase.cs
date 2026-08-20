@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
@@ -11,10 +12,12 @@ using Microsoft.Extensions.Hosting;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
@@ -47,6 +50,27 @@ public abstract class LlmSessionTestBase : TestKit
     /// </summary>
     protected void AdvanceScheduler(TimeSpan offset) =>
         ((Akka.TestKit.TestScheduler)Sys.Scheduler).Advance(offset);
+
+    /// <summary>
+    /// Joins a cold session through its durable subscriber acknowledgement.
+    /// The timeout is a fault ceiling for recovery, not an orchestration delay.
+    /// </summary>
+    protected static async Task<SessionJoined> JoinSessionAsync(
+        IActorRef sessionManager,
+        Akka.TestKit.TestProbe subscriber,
+        SessionId sessionId,
+        OutputFilter filter = OutputFilter.TextOnly)
+    {
+        sessionManager.Tell(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = filter
+        });
+
+        return await subscriber.ExpectMsgAsync<SessionJoined>(
+            TimeSpan.FromSeconds(30),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
 
     protected sealed override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {

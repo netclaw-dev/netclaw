@@ -3,7 +3,7 @@ name: netclaw-projects
 description: "How to create, find, and work with project workspaces. Load when the user references a project, asks to organize work, or you need a sustained workspace."
 metadata:
   author: netclaw
-  version: "1.2.0"
+  version: "1.3.0"
 license: MIT
 compatibility: "netclaw >= 0.10.0"
 disable-model-invocation: false
@@ -50,12 +50,16 @@ project evolves.
 
 ## Working in a Project
 
-When you start working on a project, use `set_working_directory` to set the
-project directory:
+Before the first tool call for a different task-named project, use
+`set_working_directory` to set the project directory:
 
 ```
 set_working_directory(path: "/home/user/workspaces/my-project")
 ```
+
+Declare the named path before probing it. If rejected, declare the
+user-provided fallback before other tools.
+Use the task's first project path exactly; do not substitute its parent first.
 
 This automatically loads the project's identity file (`.netclaw/AGENTS.md`,
 `CLAUDE.md`, `AGENTS.md`, or `CONTEXT.md` — first match wins) into the system

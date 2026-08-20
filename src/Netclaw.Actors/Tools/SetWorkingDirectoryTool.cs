@@ -17,15 +17,16 @@ namespace Netclaw.Actors.Tools;
 /// re-assemble the system prompt with project-scoped identity files.
 /// </summary>
 [NetclawTool(ToolName,
-    "Call this once before multi-command work in a named project. Do not call it again when the current project already matches. " +
+    "Call this once before tool work in a named project. Do not call it again when the current project already matches. " +
+    "Declare the named path before probing it. If rejected, retry the user-provided fallback before other tool work. " +
+    "Use the task's first project path exactly; do not substitute its parent before this tool rejects it. " +
     "It declares the project root and expands your trusted scope. " +
     "Once set, read-only phrases (ls, grep, cat, git status, git ls-tree, ...) inside that tree " +
     "auto-run without prompting — the safe-verb short-circuit treats the directory as a safe space. " +
     "Mutating commands still prompt, but the prompt shows the right cwd so persisted approvals are " +
     "correctly scoped. Also loads the project's identity file (AGENTS.md / CLAUDE.md / etc.) into the " +
     "system prompt. Note: shell commands that pass a path argument (e.g. `find /repo`, `ls /var/log`) " +
-    "declare scope implicitly via that argument, so this tool is most useful for sessions where you'll " +
-    "run multiple commands without explicit paths (git status, git diff, make build, etc.). " +
+    "provide exact approval scope but do not declare the project root. " +
     "Use an absolute path to the project root.",
     Grant = "file")]
 public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDirectoryTool.Params>
@@ -35,7 +36,7 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
     private readonly ScopedFileAccessPolicy _fileAccessPolicy;
 
     public record Params(
-        [param: Description("Absolute path to the project root for the current multi-command task.")]
+        [param: Description("Absolute path to the project root for the current task.")]
         string Path);
 
     public SetWorkingDirectoryTool(ToolConfig config, NetclawPaths paths)

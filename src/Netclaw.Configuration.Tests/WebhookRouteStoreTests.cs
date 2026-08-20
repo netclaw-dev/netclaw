@@ -30,12 +30,12 @@ public sealed class WebhookRouteStoreTests : IDisposable
     [InlineData("github-issues")]
     [InlineData("x")]
     [InlineData("route-2")]
-    public void TryNormalizeRouteName_AcceptsValidKebabCase(string value)
+    public void TryCreate_AcceptsValidKebabCase(string value)
     {
-        var ok = WebhookRouteStore.TryNormalizeRouteName(value, out var normalized, out var error);
+        var ok = WebhookRouteName.TryCreate(value, out var routeName, out var error);
 
         Assert.True(ok);
-        Assert.Equal(value, normalized);
+        Assert.Equal(value, routeName.Value);
         Assert.Null(error);
     }
 
@@ -52,9 +52,9 @@ public sealed class WebhookRouteStoreTests : IDisposable
     [InlineData("-foo")]
     [InlineData("foo-")]
     [InlineData("foo--bar")]
-    public void TryNormalizeRouteName_RejectsInvalidNames(string value)
+    public void TryCreate_RejectsInvalidNames(string value)
     {
-        var ok = WebhookRouteStore.TryNormalizeRouteName(value, out _, out var error);
+        var ok = WebhookRouteName.TryCreate(value, out _, out var error);
 
         Assert.False(ok);
         Assert.False(string.IsNullOrWhiteSpace(error));
@@ -74,7 +74,7 @@ public sealed class WebhookRouteStoreTests : IDisposable
     {
         var store = new WebhookRouteStore(_paths);
 
-        Assert.Throws<ArgumentException>(() => store.Delete("../secrets", CancellationToken.None));
+        Assert.Throws<ArgumentException>(() => store.Delete("../secrets"));
     }
 
     [Fact]
@@ -222,111 +222,6 @@ public sealed class WebhookRouteStoreTests : IDisposable
         var errors = WebhookRouteValidator.Validate("invalid-enum", route);
 
         Assert.Contains(errors, error => error.Contains("not supported", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task Update_serializes_read_modify_write_operations_across_store_instances_and_path_aliases()
-    {
-        var firstStore = new WebhookRouteStore(_paths);
-        string? aliasPath = null;
-        string? parentAliasPath = null;
-        NetclawPaths secondPaths = _paths;
-        if (!OperatingSystem.IsWindows())
-        {
-            var parentPath = Path.GetDirectoryName(_dir.Path)
-                ?? throw new InvalidOperationException("Test directory has no parent directory.");
-            parentAliasPath = $"{_dir.Path}-parent-alias";
-            Directory.CreateSymbolicLink(parentAliasPath, parentPath);
-
-            var targetThroughParentAlias = Path.Combine(parentAliasPath, Path.GetFileName(_dir.Path));
-            aliasPath = $"{_dir.Path}-alias";
-            Directory.CreateSymbolicLink(aliasPath, targetThroughParentAlias);
-            secondPaths = new NetclawPaths(aliasPath);
-        }
-
-        var secondStore = new WebhookRouteStore(secondPaths);
-        firstStore.Save("concurrent-route", CreateValidRoute());
-        using var firstEntered = new ManualResetEventSlim();
-        using var secondStarted = new ManualResetEventSlim();
-        using var releaseFirst = new ManualResetEventSlim();
-        var cancellationToken = TestContext.Current.CancellationToken;
-
-        try
-        {
-            var first = Task.Run(() => firstStore.Update("concurrent-route", cancellationToken, existing =>
-            {
-                firstEntered.Set();
-                Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-                Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-                existing!.RateLimitPerMinute = 12;
-                return (existing, true);
-            }), cancellationToken);
-            Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-
-            var second = Task.Run(() =>
-            {
-                secondStarted.Set();
-                return secondStore.Update("concurrent-route", cancellationToken, existing =>
-                {
-                    existing!.MaxBodyBytes = 2048;
-                    return (existing, true);
-                });
-            }, cancellationToken);
-
-            Assert.True(secondStarted.Wait(TimeSpan.FromSeconds(10), cancellationToken));
-            releaseFirst.Set();
-            await Task.WhenAll(first, second);
-
-            Assert.True(firstStore.TryGet("concurrent-route", out var saved));
-            Assert.Equal(12, saved.Definition!.RateLimitPerMinute);
-            Assert.Equal(2048, saved.Definition.MaxBodyBytes);
-        }
-        finally
-        {
-            releaseFirst.Set();
-            if (aliasPath is not null)
-                Directory.Delete(aliasPath);
-            if (parentAliasPath is not null)
-                Directory.Delete(parentAliasPath);
-        }
-    }
-
-    [Fact]
-    public async Task Update_lock_wait_honors_cancellation()
-    {
-        var firstStore = new WebhookRouteStore(_paths);
-        firstStore.Save("cancelled-update", CreateValidRoute());
-        using var firstEntered = new ManualResetEventSlim();
-        using var releaseFirst = new ManualResetEventSlim();
-        using var cancellation = new CancellationTokenSource();
-        var testCancellation = TestContext.Current.CancellationToken;
-
-        var first = Task.Run(() => firstStore.Update(
-            "cancelled-update",
-            testCancellation,
-            existing =>
-            {
-                firstEntered.Set();
-                Assert.True(releaseFirst.Wait(TimeSpan.FromSeconds(10), testCancellation));
-                return (existing, true);
-            }), testCancellation);
-        Assert.True(firstEntered.Wait(TimeSpan.FromSeconds(10), testCancellation));
-
-        var second = Task.Run(() => firstStore.Update(
-            "cancelled-update",
-            cancellation.Token,
-            existing => (existing, true)), testCancellation);
-        cancellation.Cancel();
-
-        try
-        {
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => second);
-        }
-        finally
-        {
-            releaseFirst.Set();
-            await first;
-        }
     }
 
     [Fact]

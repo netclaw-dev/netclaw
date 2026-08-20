@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
@@ -25,6 +26,16 @@ namespace Netclaw.Actors.Tests.Channels.Contracts;
 public abstract class SessionBindingContractTests : TestKit
 {
     protected SessionBindingContractTests(ITestOutputHelper output) : base(output: output) { }
+
+    // The stock single-expect-default is 3 seconds. That value measures
+    // scheduler load on a starved CI runner. It does not measure the
+    // correctness of the ack path. The ack in these tests sits behind
+    // actor spawn, Akka.Persistence recovery, and two stream materializations.
+    // Production allows 30 seconds for the same ack-after-work handshake — see
+    // ProactiveSendFormatting.ProactiveThreadAckTimeout. This override applies
+    // to all three channel subclasses; none of them override Config.
+    protected override Config? Config =>
+        ConfigurationFactory.ParseString("akka.test.single-expect-default = 15s");
 
     protected abstract IActorRef CreateBindingActor(
         SessionId sessionId,
@@ -746,6 +757,70 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
     }
 
+    // Cross-channel match-order contract. Slack resolved the earliest pending
+    // approval; Discord and Mattermost resolved the most recent one. The
+    // consolidation found the divergence and the maintainer chose one rule for
+    // every channel: a text reply answers the earliest pending approval, which
+    // is the first prompt the channel shows.
+    [Fact]
+    public async Task Text_approval_response_resolves_earliest_pending_approval()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-text-approve-order");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            ApprovalRequest(sid, "call-order-1", "write_file"),
+            ApprovalRequest(sid, "call-order-2", "execute_shell")
+        ]);
+
+        var actor = CreateBindingActor(sid, pipeline, detector);
+
+        await AwaitAssertAsync(() =>
+        {
+            var texts = GetPostedTexts();
+            Assert.Contains(texts, t => t.Contains("write_file"));
+            Assert.Contains(texts, t => t.Contains("execute_shell"));
+        }, cancellationToken: ct);
+
+        // The same sender can approve both prompts, so only the order decides.
+        actor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Single(feedback);
+            Assert.Equal("call-order-1", feedback[0].CallId.Value);
+            Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
+        }, cancellationToken: ct);
+
+        // The second prompt stays pending and the next reply resolves it.
+        actor.Tell(CreateInboundMessage("A", "user-1"), TestActor);
+
+        await AwaitAssertAsync(() =>
+        {
+            var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
+            Assert.Equal(2, feedback.Count);
+            Assert.Equal("call-order-2", feedback[1].CallId.Value);
+        }, cancellationToken: ct);
+    }
+
+    private static ToolInteractionRequest ApprovalRequest(SessionId sessionId, string callId, string toolName)
+        => new()
+        {
+            SessionId = sessionId,
+            Kind = "approval",
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            ToolName = new Netclaw.Tools.ToolName(toolName),
+            DisplayText = $"run {toolName}",
+            RequesterSenderId = new SenderId("user-1"),
+            Options =
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]
+        };
+
     [Fact]
     public async Task Approval_response_after_turn_completed_forwards_to_session()
     {
@@ -821,6 +896,38 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.NotEqual(DeliveryFailureKind.ContentRejected, failures[0].FailureKind);
             Assert.Contains("channel API down", failures[0].ErrorMessage);
         }, cancellationToken: ct);
+
+        ClearReplyClientThrows();
+    }
+
+    [Fact]
+    public async Task Feedback_send_failure_faults_the_actor()
+    {
+        // Contract: when the session feedback pipe itself fails, the binding
+        // actor must fail loudly. A swallowed failure leaves a zombie session
+        // that waits on a delivery report that will never arrive. The loud
+        // path is a supervised restart, which re-creates the pipeline.
+        var ct = TestContext.Current.CancellationToken;
+        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
+        var sid = new SessionId("session-feedback-fail");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new TextOutput("this will fail to post") { SessionId = sid },
+            new TurnCompleted { SessionId = sid, TurnNumber = new Netclaw.Actors.Protocol.TurnNumber(1) }
+        ])
+        {
+            FeedbackException = new InvalidOperationException("feedback pipe down")
+        };
+
+        SetReplyClientThrows(new InvalidOperationException("channel API down"));
+        CreateBindingActor(sid, pipeline, detector);
+
+        // A supervised restart shows up as a second pipeline CreateAsync call.
+        await AwaitAssertAsync(
+            () => Assert.True(
+                pipeline.CreateCount >= 2,
+                $"expected a supervised restart to re-create the pipeline; CreateCount={pipeline.CreateCount}"),
+            cancellationToken: ct);
 
         ClearReplyClientThrows();
     }

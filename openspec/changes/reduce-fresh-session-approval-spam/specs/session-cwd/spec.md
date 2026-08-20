@@ -17,6 +17,26 @@ grant shell authority.
 - **AND** runtime cwd resolution selects `project_dir`
 - **AND** guidance does not select `session_dir` for that command
 
+#### Scenario: A named project is declared before project tool use
+
+- **GIVEN** a task names a project that differs from `project_dir`
+- **AND** `set_working_directory` is available
+- **WHEN** the task needs a shell or file tool in that project
+- **THEN** guidance tells the agent to declare the project once
+- **AND** the declaration precedes the first shell or file tool call
+- **AND** the declaration does not grant shell authority
+
+#### Scenario: A rejected named path is corrected before project work
+
+- **GIVEN** a task names a project path and a fallback project path
+- **AND** `set_working_directory` is available
+- **WHEN** the first declaration is rejected
+- **THEN** guidance declares the fallback before another project tool
+- **AND** the first declaration uses the task's first project path exactly
+- **AND** guidance does not substitute an enclosing directory before rejection
+- **AND** guidance does not probe either path before its declaration
+- **AND** neither declaration grants shell authority
+
 #### Scenario: Child declaration governs later child project commands
 
 - **GIVEN** a subagent successfully declares a different user-named project
@@ -38,8 +58,10 @@ grant shell authority.
 
 - **GIVEN** a task creates disposable artifacts that do not belong to a project
 - **AND** the audience can see its private session directory
+- **AND** the task does not require a platform temporary path
 - **WHEN** the agent selects a working directory
 - **THEN** guidance selects `session_dir`
+- **AND** writable artifacts do not use platform temporary storage
 - **AND** it does not declare session scratch as a project
 
 #### Scenario: Requested directory transition remains authored behavior

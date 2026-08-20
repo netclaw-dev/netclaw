@@ -17,6 +17,7 @@ using Netclaw.Actors.Routing;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Webhooks;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Hosting;
@@ -130,6 +131,28 @@ public static class NetclawAkkaHostingExtensions
                 resolver.Props<ToolApprovalActor>(),
                 "tool-approvals");
             registry.Register<ToolApprovalActorKey>(actor);
+        });
+    }
+
+    /// <summary>
+    /// Registers the webhook route actor as a singleton actor. The actor is the
+    /// single mutation authority for webhook route files. Requires
+    /// <see cref="Netclaw.Configuration.WebhookRouteStore"/> in DI.
+    /// <para>
+    /// Registration does not depend on <c>Webhooks.Enabled</c>: an operator
+    /// configures routes before enabling delivery, and the
+    /// <c>/api/webhooks</c> management resource resolves the actor either way.
+    /// </para>
+    /// </summary>
+    public static AkkaConfigurationBuilder WithWebhookRouteActor(
+        this AkkaConfigurationBuilder builder)
+    {
+        return builder.StartActors((system, registry, resolver) =>
+        {
+            var actor = system.ActorOf(
+                resolver.Props<WebhookRouteActor>(),
+                "webhook-routes");
+            registry.Register<WebhookRouteActorKey>(actor);
         });
     }
 

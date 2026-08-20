@@ -58,7 +58,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         Parent-mediated tool approval may occur only for concrete tool calls; it is a security gate, not a dialogue channel.
         """;
     private const string ProjectScopeDeclarationContract =
-        "Before repeated shell work in another task-named project, call set_working_directory once, even with absolute paths.";
+        "Before tool work in another task-named project, call set_working_directory once, even with absolute paths. " +
+        "Declare the task's first project path exactly before probing it.";
     private const string HeadlessExecutionContractSuffix =
         "Always end by emitting a final output for the parent session.";
     private static readonly TimeSpan StreamPingInterval = TimeSpan.FromSeconds(2);

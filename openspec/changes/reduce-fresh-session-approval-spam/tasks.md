@@ -89,8 +89,15 @@
 - [x] 10.9 Report the final behavior delta and retained legitimate prompts before the evaluator refactor begins.
 - [x] 10.10 Remove stale denied-shell recovery guidance that contradicted terminal access denials, and pin the boundary in prompt and OpenSpec tests.
 - [x] 10.11 Rerun the three affected cases five times on one primary-model image, retaining all five legitimate directory denials.
-- [ ] 10.12 Deliver the terminal-denial correction, swap the exact merged binary, and rerun five fresh live denial sessions.
-- [ ] 10.13 Report the post-correction live result before the evaluator refactor begins.
+- [x] 10.12 Deliver the terminal-denial correction, swap the exact merged binary, and rerun five fresh live denial sessions.
+- [x] 10.13 Report the post-correction live result before the evaluator refactor begins.
+- [x] 10.14 Add a seeded-project eval for declaration-before-tools, unrelated negative control, and rejected-path recovery.
+- [x] 10.15 Align always-loaded, subagent, tool-schema, and bundled-skill guidance without changing shell authority.
+- [x] 10.16 Run five final-image trials per case: project 5/5, negative 5/5, and rejected-path recovery 5/5.
+- [ ] 10.17 Deliver issue #1892, swap the exact merged binary, and validate new live project sessions.
+- [x] 10.18 Freeze sanitized post-#1990 batching evidence and a strict five-run 3/5 behavior baseline.
+- [x] 10.19 Strengthen generic independent-operation guidance and rerun the unchanged five-session eval.
+- [ ] 10.20 Deliver, swap the exact merged binary, and validate multiple new live sessions.
 
 ## 11. Completion Audit
 

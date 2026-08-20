@@ -378,7 +378,9 @@ public sealed class SessionMessageAssemblerTests
         Assert.Contains("session_dir:", text);
         Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, text, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, text, StringComparison.Ordinal);
-        Assert.Contains("private scratch for disposable non-project artifacts", text);
+        Assert.Contains("private scratch for disposable writable non-project artifacts", text);
+        Assert.Contains("Use one operation per call", text);
+        Assert.Contains("do not substitute platform temporary storage", text);
         Assert.Contains("explicitly required platform temporary path unchanged", text);
         Assert.Contains("does not automatically clean session scratch yet", text);
         Assert.DoesNotContain("media_dir:", text);

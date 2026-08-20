@@ -68,6 +68,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// </summary>
     internal static readonly TimeSpan CatalogRefreshTimeout = TimeSpan.FromSeconds(15);
 
+    /// <summary>
+    /// The <c>server/discover</c> probe budget for a stdio server. See the remarks on
+    /// <see cref="BuildClientOptions"/> for why this must stay finite and why 5 seconds
+    /// (the SDK default) is too short for a freshly spawned child process.
+    /// </summary>
+    internal static readonly TimeSpan StdioDiscoverProbeTimeout = TimeSpan.FromSeconds(30);
+
     public McpClientManager(
         Dictionary<string, McpServerEntry> serverEntries,
         ToolRegistry toolRegistry,
@@ -1173,7 +1180,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             var transport = CreateTransport(name, entry, oauthCache, authorizationFlow);
             var client = await _clientRuntime.CreateAsync(
                 transport,
-                BuildClientOptions(authorizationFlow, notificationLease),
+                BuildClientOptions(authorizationFlow, notificationLease, entry.Transport is "stdio"),
                 ct);
             return new McpClientCandidate(client, oauthCache);
         }
@@ -1187,7 +1194,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     /// <summary>
     /// Builds the client options, stretching both connect timeouts when an operator is
-    /// waiting at a browser.
+    /// waiting at a browser, and raising the separate discover-probe timeout for a
+    /// stdio server.
     /// <para>
     /// The SDK defaults are machine-scale: a 5 second <c>server/discover</c> probe and a
     /// 60 second initialization budget. A server that answers the probe with 401 sends the
@@ -1199,10 +1207,38 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// flow exists. A background reconnect keeps the defaults, because its handler returns
     /// immediately and nothing waits.
     /// </para>
+    /// <para>
+    /// A stdio server is a child process this call just spawned, not a warm peer. The
+    /// default 5 second probe budget races a cold process start on a loaded machine
+    /// (measured locally: a child that takes as little as 6 seconds to start answering
+    /// fails every time). When the probe gives up first, the SDK abandons it and sends a
+    /// separate <c>initialize</c> request on the same connection. A server pinned to a
+    /// protocol revision that only the <c>server/discover</c> handshake carries (the SDK's
+    /// 2026-07-28 revision) rejects every plain <c>initialize</c> request, so the fallback
+    /// fails on such a server -- a server-side rejection, not a client-side comparison. An
+    /// unpinned server recovers from the fallback; the race only strands pinned ones. The SDK
+    /// surfaces this as <c>UnsupportedProtocolVersionException</c>, which is neither
+    /// <see cref="TimeoutException"/> nor <see cref="TaskCanceledException"/>, so the
+    /// operator sees a bare "Failed to reach MCP server" with no timeout wording.
+    /// </para>
+    /// <para>
+    /// Raising <see cref="StdioDiscoverProbeTimeout"/> to 30 seconds gives every observed
+    /// cold start room to answer the probe before the fallback fires, which removes the
+    /// race. The timeout must stay finite, not <see cref="Timeout.InfiniteTimeSpan"/>: the
+    /// probe's own remarks name a real stdio server class that silently drops an unknown
+    /// <c>server/discover</c> method instead of answering it -- a hand-rolled script that
+    /// dispatches the methods it knows and ignores the rest. Netclaw's stdio config accepts
+    /// an arbitrary user command, so that class is reachable here. For it, the probe
+    /// timeout is the only signal that triggers the <c>initialize</c> fallback; an infinite
+    /// probe would wait forever and the server could never connect. A finite 30 second
+    /// probe keeps that server connectable -- slower than the SDK's 5 second default, but
+    /// never locked out -- while still giving a cold child enough room to answer directly.
+    /// </para>
     /// </summary>
     private static McpClientOptions BuildClientOptions(
         McpOAuthFlow? authorizationFlow,
-        McpCatalogNotificationLease notificationLease)
+        McpCatalogNotificationLease notificationLease,
+        bool isStdioTransport)
     {
         var options = new McpClientOptions
         {
@@ -1224,6 +1260,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             options.InitializationTimeout = McpOAuthFlowBroker.FlowLifetime;
             options.DiscoverProbeTimeout = McpOAuthFlowBroker.FlowLifetime;
+        }
+        else if (isStdioTransport)
+        {
+            options.DiscoverProbeTimeout = StdioDiscoverProbeTimeout;
         }
 
         return options;
@@ -1410,6 +1450,18 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         var status = isStdioTransport ? null : FindHttpStatus(ex);
         if (status is not null)
             return $"MCP server request failed (HTTP {(int)status.Value} {status.Value}).";
+        // The client and the server disagreed on the negotiated protocol version -- most
+        // often a probe/initialize race on a slow-to-answer server (see BuildClientOptions).
+        // Requested/Supported are protocol version identifiers only, safe to surface.
+        if (ex is UnsupportedProtocolVersionException versionMismatch)
+        {
+            var supported = versionMismatch.Supported.Count > 0
+                ? string.Join(", ", versionMismatch.Supported)
+                : "none listed";
+            return "MCP server protocol version negotiation failed "
+                + $"(requested {versionMismatch.Requested}; server supports {supported}).";
+        }
+
         if (ex is TimeoutException or TaskCanceledException)
             return "MCP server connection timed out.";
         return "Failed to reach MCP server. Check daemon logs for details.";

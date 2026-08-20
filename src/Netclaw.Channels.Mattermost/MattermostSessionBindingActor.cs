@@ -47,45 +47,21 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
-    private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
-    // A binding that has never observed any ToolInteractionRequest treats an
-    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
-    // restarted out from under it. Once we've observed at least one prompt,
-    // subsequent ambiguous text from the user is ordinary conversation, not an
-    // approval reply, so the cold path stays off. This does NOT gate button
-    // clicks — those always route to the session, which is the authority on
-    // CallId staleness.
-    private bool _hasObservedApprovalRequest;
+    // Null when the gateway supplies no thread-history fetcher. That is a real
+    // runtime state (an instance without history access), not a disabled check:
+    // with no fetcher there is no gap to hydrate, so both hydration paths no-op.
+    private readonly ThreadGapHydrationEngine? _hydrationEngine;
+    private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
+    private readonly ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId> _approvalFlow;
+    private readonly ChannelOutputEngine<PendingApprovalRequest, MattermostPostId> _outputEngine;
+    private readonly SafeTransportCall _safeCall;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
-    private bool _deliveredThisTurn;
-    // True when a content post/upload this turn was attempted but failed (the
-    // model produced output, the transport rejected it). Distinct from "nothing
-    // was produced" — it suppresses the empty-turn fallback so a failed post
-    // isn't followed by a misleading "I didn't manage to produce a reply".
-    private bool _postFailedThisTurn;
-    // Reply targets for in-flight reminder delivery confirmations, keyed by
-    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
-    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
-    // Keyed (not a single field) because multiple reminders can target the
-    // same session concurrently — a single field would be clobbered.
-    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
-    private TurnNumber _turnNumber;
     private string? _cursorPostId;
-    private string? _pendingCursorPostId;
-
-    // Reliable in-flight-turn signal for the mention re-arm guard: set when the
-    // main inbound is enqueued (unlike _pendingCursorPostId, which is only set for
-    // inbounds with a non-empty post id), cleared when the turn ends or the
-    // pipeline reinitializes. Without it, a null-id in-flight turn would leave
-    // _pendingCursorPostId unset and let a following mention re-arm mid-turn —
-    // the PR #733 no-duplicate hazard.
-    private bool _turnInFlight;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
@@ -123,6 +99,71 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             .WithContext("MattermostRootPostId", _rootPostId.Value);
 
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "mattermost-session");
+
+        _safeCall = new SafeTransportCall(
+            ChannelType.Mattermost,
+            _dependencies.TimeProvider,
+            NotifyDeliveryFailedAsync);
+
+        _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, MattermostPostId>(
+            channelType: ChannelType.Mattermost,
+            channelName: "Mattermost",
+            // Mattermost post IDs are lexicographically sortable strings.
+            cursorComparer: StringComparer.Ordinal,
+            pendingRequests: _pendingApprovalRequests,
+            createPendingRequest: request => new PendingApprovalRequest(request),
+            isApprovalRequest: request => string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase),
+            renderTextOutput: textOutput => textOutput.Text,
+            renderErrorOutput: error => $":warning: {error.Message}",
+            postTextAsync: SafeReplyAsync,
+            uploadFileAsync: SafeUploadFileAsync,
+            postApprovalPromptAsync: SafeReplyWithApprovalPromptAsync,
+            readPromptIdValue: promptPostId => promptPostId.Value,
+            onApprovalPromptFailedAsync: request => SendApprovalDenyOnFailureAsync(request.CallId),
+            persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
+            handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
+            advanceCursor: AdvanceCursor,
+            postEmptyTurnFallbackAsync: () => SafeReplyAsync(EmptyTurnFallbackText),
+            // Mattermost reports a delivery failure inline from SafeReplyAsync,
+            // so the session already knows by the time the turn completes.
+            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask,
+            readObservedAtMs: completed => completed.TimestampMs);
+
+        if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
+        {
+            _hydrationEngine = new ThreadGapHydrationEngine(
+                sessionId: _sessionId,
+                channelType: ChannelType.Mattermost,
+                historyFetcher: historyFetcher,
+                injectionDetector: _promptInjectionDetector,
+                classifierSourceContext: "mattermost-backfill",
+                // Mattermost post IDs are lexicographically sortable strings.
+                cursorComparer: StringComparer.Ordinal,
+                cursorKeySelector: messageId => string.IsNullOrEmpty(messageId) ? null : messageId,
+                isAuthorizedSender: IsAuthorizedSender,
+                log: _log,
+                readCursor: () => _cursorPostId,
+                readInputQueue: () => _handle.InputQueue,
+                readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
+                warnBackfillDetectorUnavailableAsync: () => SafeReplyAsync(BackfillDetectorWarning),
+                onBackfillEnqueued: _outputEngine.AdvancePendingCursorForEnqueuedTurn,
+                setHydrationPending: pending => _hydrationPending = pending);
+        }
+
+        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, MattermostPostId>(
+            sessionId: _sessionId,
+            channelType: ChannelType.Mattermost,
+            channelName: "Mattermost",
+            pipeline: _dependencies.Pipeline,
+            operationTimeout: OperationTimeout,
+            pendingRequests: _pendingApprovalRequests,
+            hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
+            postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
+            persistPromptCleared: callId => Persist(
+                new PendingApprovalPromptCleared { CallId = callId.Value },
+                ApplyPendingApprovalPromptCleared),
+            renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
@@ -201,7 +242,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         {
             try
             {
-                await PerformOneShotHydrationAsync();
+                if (_hydrationEngine is { } engine)
+                    await engine.PerformOneShotHydrationAsync();
             }
             catch (Exception ex)
             {
@@ -239,17 +281,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
-            _deliveredThisTurn = false;
-            _postFailedThisTurn = false;
-            // A reinit abandons any in-flight turn before its TurnCompleted; clear
-            // the mention re-arm guard so the next mention can re-hydrate instead of
-            // being blocked by a stuck flag.
-            _turnInFlight = false;
-            // A reinit aborts any in-flight reminder turn before its
-            // TurnCompleted. Report those as not-delivered now so the
-            // execution actor redelivers immediately instead of stalling
-            // until the backstop timeout.
-            FailPendingReminderDeliveries($"Mattermost pipeline reinitialized: {msg.Reason}");
+            _outputEngine.ResetForPipelineReinitialize(msg.Reason);
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -353,11 +385,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return;
 
         // Live inbound path is fetch-free. Thread history is hydrated once per
-        // actor lifetime in PerformOneShotHydrationAsync (driven by the
+        // actor lifetime by the hydration engine (driven by the
         // RecoveryCompleted handler); the only exception is a deferred
-        // hydration, which ApplyDeferredHydrationAsync completes on the first
-        // authorized inbound. By the time we get here the session already has
-        // the historical context it needs.
+        // hydration, which the engine completes on the first authorized
+        // inbound. By the time we get here the session already has the
+        // historical context it needs.
         var input = new ChannelInput
         {
             SenderId = new SenderId(message.SenderId.Value),
@@ -378,7 +410,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         // MentionRequiredInThread the conversation actor forwards only mentions here,
         // so every inbound is a deliberate re-entry. _turnInFlight guards against a
         // re-arm while a prior turn is still processing, preserving the PR #733
-        // no-duplicate invariant; ApplyDeferredHydrationAsync no-ops on an empty gap.
+        // no-duplicate invariant; the deferred hydration no-ops on an empty gap.
         //
         // Two accepted trade-offs of reusing the existing backfill (vs. a new
         // drop-tracking side channel): (1) one thread-history fetch per mention on an
@@ -389,29 +421,27 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         // mention, not this one (and can be skipped if the cursor later advances past
         // it under rapid concurrent mentions).
         if (!_hydrationPending
-            && !_turnInFlight
+            && !_outputEngine.TurnInFlight
             && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
         {
             _hydrationPending = true;
         }
 
-        if (_hydrationPending && IsAuthorizedSender(message.SenderId.Value))
-            input = await ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
+        if (_hydrationPending
+            && IsAuthorizedSender(message.SenderId.Value)
+            && _hydrationEngine is { } engine)
+        {
+            input = await engine.ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
+        }
 
         try
         {
             using var writeCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
             await writer.WriteAsync(input, writeCts.Token);
-            _turnInFlight = true;
             ChannelTelemetry.For(ChannelType.Mattermost).RecordMessageEnqueued();
 
             var eventId = message.EventId.Value;
-            if (!string.IsNullOrEmpty(eventId))
-            {
-                if (_pendingCursorPostId is null
-                    || string.CompareOrdinal(eventId, _pendingCursorPostId) > 0)
-                    _pendingCursorPostId = eventId;
-            }
+            _outputEngine.AdvancePendingCursorForEnqueuedTurn(string.IsNullOrEmpty(eventId) ? null : eventId);
         }
         catch (OperationCanceledException)
         {
@@ -425,567 +455,27 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    /// <summary>
-    /// One-shot thread history hydration. Runs once per actor lifetime, in the
-    /// Hydrating behavior immediately after pipeline initialization. Fetches
-    /// thread history, computes the gap relative to the recovered cursor, and
-    /// if there is an authorized message in the gap, synthesizes one backfill
-    /// <see cref="ChannelInput"/> using that message as the trigger and older
-    /// gap messages as adopted context. Hands the synthesized input to the
-    /// session pipeline through the normal input-queue path.
-    /// </summary>
-    private async Task PerformOneShotHydrationAsync()
-    {
-        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return;
-
-        using var cts = new CancellationTokenSource(InboundProcessingTimeout);
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return;
-        }
-
-        if (history.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: empty thread, no backfill cursor={Cursor} session={Session}",
-                _cursorPostId ?? "none", _sessionId.Value);
-            return;
-        }
-
-        var cursor = _cursorPostId;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            var itemId = item.MessageId ?? string.Empty;
-            if (string.IsNullOrEmpty(itemId))
-                continue;
-
-            // Strict: only include messages newer than the cursor. PR #733's
-            // "cursor advances only on TurnCompleted" guarantees that
-            // itemId == cursor means the session already has that message
-            // persisted — re-including it here on a restart hydration would
-            // duplicate it. The in-flight-crash case is handled too: a turn
-            // that didn't complete leaves the cursor un-advanced, so the
-            // message has itemId > cursor and is correctly included in the gap.
-            // Mattermost post IDs are lexicographically sortable strings.
-            if (cursor is not null && string.CompareOrdinal(itemId, cursor) <= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: cursor already at thread head fetched={FetchedCount} cursor={Cursor} session={Session}",
-                history.Count, cursor ?? "none", _sessionId.Value);
-            return;
-        }
-
-        var classified = await ClassifyGapAsync(candidates, cts.Token);
-        var gap = classified.Gap;
-
-        _log.Info(
-            "Thread history hydration fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
-            history.Count, candidates.Count, gap.Count, classified.BlockedForRisk, cursor ?? "none", _sessionId.Value);
-
-        if (classified.DetectorUnavailable)
-            await SafeReplyAsync(BackfillDetectorWarning);
-
-        if (gap.Count == 0)
-            return;
-
-        // Locate the most recent authorized message in the gap — it plays the
-        // role of the "current authorized message" that adopted-context normally
-        // anchors around. Without one we have no authorized trigger to enqueue;
-        // we transition to Active and let the next live authorized inbound be
-        // the trigger.
-        AdoptedContextMessage? trigger = null;
-        for (var i = gap.Count - 1; i >= 0; i--)
-        {
-            if (gap[i].AuthorityAtInclusion == AdoptedMessageAuthority.Authorized)
-            {
-                trigger = gap[i];
-                break;
-            }
-        }
-
-        if (trigger is null)
-        {
-            // Deferred: a non-empty gap with no authorized trigger. The
-            // proactive-thread case — the binding actor's lifetime began when
-            // the agent posted the thread root, so this hydration ran before
-            // any authorized human inbound existed. Re-arm so the first
-            // authorized inbound performs this hydration (adopting the gap,
-            // e.g. the bot-authored root) instead of taking the fetch-free path.
-            _hydrationPending = true;
-            _log.Info("Thread history hydration: no authorized message in gap; re-armed for next authorized inbound session={Session}", _sessionId.Value);
-            return;
-        }
-
-        var adoptedContext = new List<AdoptedContextMessage>();
-        foreach (var item in gap)
-        {
-            if (ReferenceEquals(item, trigger))
-                break;
-            adoptedContext.Add(item);
-        }
-
-        var triggerInput = trigger.Input;
-        var triggerPostId = triggerInput.MessageId;
-        var backfillInput = MergeAdoptedContext(triggerInput, adoptedContext, cursor);
-
-        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
-        {
-            _log.Info("Skipping hydration backfill enqueue while restart drain is active: {Reason}", ingressClosedReason);
-            return;
-        }
-
-        var writer = _handle.InputQueue;
-        if (writer is null)
-        {
-            _log.Warning("Input queue is not initialized; skipping hydration backfill");
-            return;
-        }
-
-        try
-        {
-            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-            writeCts.CancelAfter(TimeSpan.FromSeconds(10));
-            await writer.WriteAsync(backfillInput, writeCts.Token);
-            // A hydration backfill is an in-flight turn too; mirror the live-inbound
-            // enqueue so a mention arriving before this turn completes does not re-arm.
-            _turnInFlight = true;
-
-            if (!string.IsNullOrEmpty(triggerPostId))
-            {
-                if (_pendingCursorPostId is null
-                    || string.CompareOrdinal(triggerPostId, _pendingCursorPostId) > 0)
-                    _pendingCursorPostId = triggerPostId;
-            }
-
-            _log.Info(
-                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
-                triggerInput.MessageId, adoptedContext.Count, _sessionId.Value);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordMessageEnqueued();
-        }
-        catch (OperationCanceledException ex)
-        {
-            _log.Warning(ex, "Timed out enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-        catch (ChannelClosedException ex)
-        {
-            _log.Warning(ex, "Input queue closed while enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-    }
-
-    /// <summary>
-    /// Completes a thread-history hydration that <see cref="PerformOneShotHydrationAsync"/>
-    /// deferred for lack of an authorized trigger (<see cref="_hydrationPending"/>).
-    /// This authorized inbound is the executable trigger; the thread gap strictly
-    /// before it — most importantly a proactively-posted bot-authored root — is
-    /// fetched, classified, and merged as its adopted-context window. On fetch
-    /// failure the turn proceeds un-enriched and hydration stays re-armed so a
-    /// later authorized inbound retries.
-    /// </summary>
-    private async Task<ChannelInput> ApplyDeferredHydrationAsync(
-        ChannelInput baseInput,
-        string liveMessageId,
-        CancellationToken cancellationToken)
-    {
-        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return baseInput;
-
-        // Without the live message's ordering key the gap below it cannot be
-        // bounded; leave hydration re-armed and take the fetch-free path.
-        if (string.IsNullOrEmpty(liveMessageId))
-            return baseInput;
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            // Non-fatal: execute the turn without an adopted window and keep
-            // hydration re-armed so a later authorized inbound retries.
-            _log.Warning(ex, "Re-armed thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return baseInput;
-        }
-
-        // Fetch succeeded: hydration is complete. Only a fetch failure (caught
-        // above) keeps the flag armed — classify/merge outcomes never re-arm.
-        _hydrationPending = false;
-
-        var cursor = _cursorPostId;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            var itemId = item.MessageId ?? string.Empty;
-            if (string.IsNullOrEmpty(itemId))
-                continue;
-
-            // Strictly above the watermark and strictly below the live inbound:
-            // the live inbound is the executable message, not adopted context.
-            if (cursor is not null && string.CompareOrdinal(itemId, cursor) <= 0)
-                continue;
-            if (string.CompareOrdinal(itemId, liveMessageId) >= 0)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-            return baseInput;
-
-        var classified = await ClassifyGapAsync(candidates, cancellationToken);
-        if (classified.DetectorUnavailable)
-            await SafeReplyAsync(BackfillDetectorWarning);
-
-        if (classified.Gap.Count == 0)
-            return baseInput;
-
-        _log.Info(
-            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
-            classified.Gap.Count,
-            baseInput.MessageId,
-            _sessionId.Value);
-
-        return MergeAdoptedContext(baseInput, classified.Gap, cursor);
-    }
-
-    private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
-    {
-        var text = string.Join("\n", input.Contents
-            .OfType<TextContent>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-
-        return PromptClassifier.ClassifyAsync(
-            _promptInjectionDetector, text, "mattermost-backfill", _log, cancellationToken);
-    }
-
     // Mattermost authorization basis for adopted-context: an empty AllowedUserIds
     // list means the instance is unrestricted; otherwise the sender must be listed.
     private bool IsAuthorizedSender(string senderId)
         => _dependencies.Options.AllowedUserIds.Length == 0
             || _dependencies.Options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
 
-    private readonly record struct GapClassification(
-        List<AdoptedContextMessage> Gap,
-        int BlockedForRisk,
-        bool DetectorUnavailable);
+    private Task<bool> TryHandleTextApprovalResponseAsync(MattermostThreadInbound message)
+        => _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value);
 
-    /// <summary>
-    /// Runs prompt-injection classification over candidate gap messages and
-    /// captures each surviving message's authority-at-inclusion. Blocked
-    /// messages are dropped; detector-unavailable messages are also dropped
-    /// and surface a caller-visible flag.
-    /// </summary>
-    private async Task<GapClassification> ClassifyGapAsync(
-        IReadOnlyList<ChannelInput> candidates,
-        CancellationToken cancellationToken)
-    {
-        var classifications = await Task.WhenAll(
-            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
-
-        var gap = new List<AdoptedContextMessage>(candidates.Count);
-        var blockedForRisk = 0;
-        var detectorUnavailable = false;
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            switch (classifications[i].Outcome)
-            {
-                case ClassificationOutcome.Allow:
-                    var authority = IsAuthorizedSender(candidates[i].SenderId.Value)
-                        ? AdoptedMessageAuthority.Authorized
-                        : AdoptedMessageAuthority.Pending;
-                    gap.Add(new AdoptedContextMessage(candidates[i], authority));
-                    break;
-
-                case ClassificationOutcome.Block:
-                    blockedForRisk++;
-                    _log.Warning(
-                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
-                        candidates[i].SenderId,
-                        candidates[i].MessageId ?? "none",
-                        classifications[i].Reason ?? "high-risk pattern detected");
-                    break;
-
-                case ClassificationOutcome.DetectorUnavailable:
-                    blockedForRisk++;
-                    detectorUnavailable = true;
-                    break;
-            }
-        }
-
-        return new GapClassification(gap, blockedForRisk, detectorUnavailable);
-    }
-
-    /// <summary>
-    /// Merges <paramref name="adoptedContext"/> as the adopted-context window
-    /// preceding <paramref name="triggerInput"/> (the executable message) and
-    /// returns the trigger input with adopted-context metadata populated.
-    /// </summary>
-    private static ChannelInput MergeAdoptedContext(
-        ChannelInput triggerInput,
-        List<AdoptedContextMessage> adoptedContext,
-        string? cursor)
-    {
-        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
-            adoptedContext,
-            triggerInput.Contents,
-            triggerInput.SenderId.Value,
-            triggerInput.ReceivedAt);
-
-        return triggerInput with
-        {
-            Contents = merged.Contents,
-            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
-                id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
-            AdoptedSpeakerIds = merged.SpeakerIds,
-            AdoptedContextProjection = merged.Projection,
-            AdoptedContextLowerBound = cursor,
-            AdoptedContextUpperBound = triggerInput.MessageId,
-            AdoptedContextEntries = merged.Entries
-        };
-    }
-
-    private async Task<bool> TryHandleTextApprovalResponseAsync(MattermostThreadInbound message)
-    {
-        var (result, pending) = ResolvePendingRequest(message.SenderId, callId: null);
-
-        if (result is ApprovalLookupResult.NotFound)
-        {
-            return !_hasObservedApprovalRequest
-                && await TryHandleColdTextApprovalResponseAsync(message);
-        }
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            return true;
-        }
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(
-                message.Text ?? string.Empty,
-                pending!.Options,
-                out var selectedKey)
-            || selectedKey is null)
-        {
-            return false;
-        }
-
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionResponse
-            {
-                SessionId = _sessionId,
-                CallId = pending!.CallId,
-                SelectedKey = new ApprovalOptionKey(selectedKey),
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Mattermost text approval response for call {CallId}", pending!.CallId);
-            return true;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                _log.Info(
-                    "Session rejected Mattermost text approval response for call {CallId} reason={Reason}; skipping redraw",
-                    pending!.CallId,
-                    nack.Reason ?? "<none>");
-                return true;
-
-            case not CommandAck:
-                _log.Warning(
-                    "Mattermost text approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    pending!.CallId,
-                    feedbackResult.GetType().Name);
-                return true;
-        }
-
-        _pendingApprovalRequests.Remove(pending!);
-        Persist(new PendingApprovalPromptCleared
-        {
-            CallId = pending.CallId.Value
-        }, ApplyPendingApprovalPromptCleared);
-
-        await TryResolveApprovalPromptAsync(
-            pending!.PromptPostId,
-            pending!.Request,
-            pending!.CallId,
-            selectedKey,
-            message.SenderId.Value,
-            persistedToolName: pending.ToolName,
-            persistedDisplayText: pending.DisplayText);
-        return true;
-    }
-
-    private async Task<bool> TryHandleColdTextApprovalResponseAsync(MattermostThreadInbound message)
-    {
-        if (!ToolInteractionResponseParser.LooksLikeApprovalResponse(message.Text ?? string.Empty))
-            return false;
-
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionTextResponse
-            {
-                SessionId = _sessionId,
-                Text = message.Text ?? string.Empty,
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-
-            if (reply is CommandAck)
-            {
-                _log.Info(
-                    "Forwarded cold Mattermost text approval response from sender={SenderId} without local pending prompt state",
-                    message.SenderId);
-                return true;
-            }
-
-            // approval_no_history means the session has never had an approval request.
-            // The message was a false-positive from LooksLikeApprovalResponse.
-            // Don't consume — let it fall through to normal LLM ingress. See #1164.
-            if (reply is CommandNack { Reason: ApprovalNackReasons.NoHistory })
-                return false;
-
-            return reply is CommandNack;
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route cold Mattermost text approval response from sender {SenderId}", message.SenderId);
-            return false;
-        }
-    }
-
-    private async Task HandleApprovalResponseAsync(MattermostApprovalResponse message)
+    // The Mattermost interactive-message webhook asks the binding over HTTP and
+    // waits for the session's verdict, so this is the one channel that registers
+    // the synchronous-reply hook.
+    private Task HandleApprovalResponseAsync(MattermostApprovalResponse message)
     {
         var replyTo = Sender;
-        var (result, pending) = ResolvePendingRequest(message.SenderId, message.CallId);
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            ReplyIfExpected(replyTo, CommandNack.For(_sessionId, ApprovalNackReasons.WrongRequester));
-            return;
-        }
-
-        ISessionResponse feedbackResult;
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionResponse
-            {
-                SessionId = _sessionId,
-                CallId = message.CallId,
-                SelectedKey = new ApprovalOptionKey(message.SelectedKey),
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Mattermost approval response for call {CallId}", message.CallId);
-            ReplyIfExpected(replyTo, CommandNack.For(_sessionId, ApprovalNackReasons.PersistFailed));
-            return;
-        }
-
-        CommandAck ack;
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                ReplyIfExpected(replyTo, nack);
-                return;
-
-            case CommandAck ok:
-                ack = ok;
-                break;
-
-            default:
-                // Unreachable: ISessionResponse is implemented only by CommandAck
-                // and CommandNack. Kept as a defensive guard so an unexpected
-                // future implementer surfaces a structured Nack instead of an
-                // unobservable null reference.
-                _log.Warning(
-                    "Mattermost approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    message.CallId,
-                    feedbackResult.GetType().Name);
-                ReplyIfExpected(replyTo, CommandNack.For(_sessionId, ApprovalNackReasons.PersistFailed));
-                return;
-        }
-
-        if (pending is not null)
-        {
-            _pendingApprovalRequests.Remove(pending);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-            // Prefer captured post ID; fall back to payload-provided ID when capture
-            // failed (very narrow race window — see binding's TryPostButtonPromptAsync).
-            var promptPostId = pending.PromptPostId ?? message.PromptPostId;
-            await TryResolveApprovalPromptAsync(
-                promptPostId,
-                pending.Request,
-                pending.CallId,
-                message.SelectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-        }
-        else if (message.PromptPostId is { } payloadPromptPostId)
-        {
-            // Cold-spawn path with no local pending entry for this CallId (no
-            // journal record replayed, or the entry was already cleared). The
-            // Mattermost action callback always carries the prompt's post_id;
-            // render the generic banner so the buttons clear. Pre-0.21 journals
-            // that DO replay take the upper `pending is not null` branch — they
-            // render generically via the !IsNullOrEmpty fallback inside the
-            // builder, not here. See issue #939.
-            await TryResolveApprovalPromptAsync(
-                payloadPromptPostId,
-                request: null,
-                message.CallId,
-                message.SelectedKey,
-                message.SenderId.Value);
-
-            _log.Info(
-                "Forwarded Mattermost approval response for call {0} to session without local pending entry; redrew prompt via payload postId={1}",
-                message.CallId,
-                payloadPromptPostId.Value);
-        }
-        else
-        {
-            // Cold-spawn path without payload context (e.g. text-reply A-E in a
-            // thread whose binding has been passivated). Approval still routes;
-            // redraw is not possible. Remaining gap tracked under #939.
-            _log.Info(
-                "Forwarded Mattermost approval response for call {0} to session without local pending entry; redraw skipped",
-                message.CallId);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
-        }
-
-        ReplyIfExpected(replyTo, ack);
+        return _approvalFlow.HandleApprovalResponseAsync(
+            message.CallId,
+            message.SelectedKey,
+            message.SenderId.Value,
+            message.PromptPostId,
+            respondSynchronously: response => ReplyIfExpected(replyTo, response));
     }
 
     private async Task TryResolveApprovalPromptAsync(
@@ -1083,7 +573,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         if (message.Source.DeliveryObserver is { } deliveryObserver
             && message.Source.ReminderId is { } reminderKey
             && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _reminderDeliveryObservers[reminderKey] = deliveryObserver;
+            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {
@@ -1105,8 +595,6 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
     }
 
-    private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }
-
     private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
         => new(
             ChannelType.Mattermost.ToWireValue(),
@@ -1115,135 +603,23 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             _channelId.Value,
             _rootPostId.Value);
 
-    private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
-        MattermostUserId senderId, ToolCallId? callId)
-    {
-        if (callId is { } resolvedCallId)
-        {
-            var byCallId = _pendingApprovalRequests.LastOrDefault(p =>
-                p.CallId == resolvedCallId);
-            if (byCallId is null)
-                return (ApprovalLookupResult.NotFound, null);
-            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId, senderId.Value))
-                return (ApprovalLookupResult.WrongRequester, null);
-            return (ApprovalLookupResult.Matched, byCallId);
-        }
-
-        if (_pendingApprovalRequests.Count == 0)
-            return (ApprovalLookupResult.NotFound, null);
-
-        var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId, senderId.Value));
-        return bySender is not null
-            ? (ApprovalLookupResult.Matched, bySender)
-            : (ApprovalLookupResult.WrongRequester, null);
-    }
-
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {
-        switch (msg.Output)
-        {
-            case TextOutput textOutput:
-                if (await SafeReplyAsync(textOutput.Text))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case ErrorOutput error:
-                if (await SafeReplyAsync($":warning: {error.Message}"))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case FileOutput file:
-                if (await SafeUploadFileAsync(file))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
-                _hasObservedApprovalRequest = true;
-                var pendingApproval = new PendingApprovalRequest(request);
-                _pendingApprovalRequests.Add(pendingApproval);
-
-                var promptPostId = await SafeReplyWithApprovalPromptAsync(request);
-                if (promptPostId is not null)
-                {
-                    pendingApproval.PromptPostId = promptPostId;
-                    Persist(new PendingApprovalPromptTracked
-                    {
-                        CallId = pendingApproval.CallId.Value,
-                        RequesterSenderId = pendingApproval.RequesterSenderId,
-                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
-                        OptionKeys = pendingApproval.OptionKeys,
-                        PromptId = promptPostId.Value.Value,
-                        ToolName = pendingApproval.ToolName,
-                        // Preserve null-vs-set semantics on the wire: Truncate
-                        // returns string.Empty for null input, which would round-
-                        // trip as DisplayText="" with HasDisplayText=true.
-                        DisplayText = string.IsNullOrEmpty(pendingApproval.DisplayText)
-                            ? null
-                            : ApprovalDisplayTextFormatter.Truncate(
-                                pendingApproval.DisplayText,
-                                PendingApprovalPromptTracked.MaxPersistedDisplayTextChars)
-                    }, ApplyPendingApprovalPromptTracked);
-                }
-                else
-                {
-                    _pendingApprovalRequests.Remove(pendingApproval);
-                }
-                break;
-
-            // Mattermost threads don't support renaming, so SessionTitleOutput is ignored.
-
-            case TurnCompleted completed:
-                if (completed.Outcome == TurnOutcome.Completed && _pendingCursorPostId is { } pendingCursor)
-                    AdvanceCursor(pendingCursor);
-                _pendingCursorPostId = null;
-                _turnInFlight = false;
-
-                if (completed.SourceReminderId is { } sourceReminderKey
-                    && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
-                    && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
-                {
-                    reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey,
-                        ChannelType.Mattermost,
-                        Delivered: _deliveredThisTurn,
-                        FailureReason: _deliveredThisTurn ? null : "Mattermost post did not succeed",
-                        ObservedAtMs: completed.TimestampMs));
-                }
-
-                // Only post the empty-turn fallback when the turn genuinely
-                // produced nothing. A failed post already notified the session
-                // (SafeReplyAsync -> NotifyDeliveryFailedAsync); posting "I
-                // didn't manage to produce a reply" on top would be misleading
-                // (a reply WAS produced) and double up with the redelivered one.
-                if (!_deliveredThisTurn && !_postFailedThisTurn)
-                    await SafeReplyAsync(EmptyTurnFallbackText);
-
-                _turnNumber = completed.TurnNumber;
-                var clearedPrompts = _pendingApprovalRequests
-                    .Select(pending => new PendingApprovalPromptCleared
-                    {
-                        CallId = pending.CallId.Value
-                    })
-                    .ToArray();
-                if (clearedPrompts.Length > 0)
-                {
-                    PersistAll(
-                        clearedPrompts,
-                        cleared => ApplyPendingApprovalPromptCleared(cleared));
-                }
-                _pendingApprovalRequests.Clear();
-                _deliveredThisTurn = false;
-                _postFailedThisTurn = false;
-                break;
-        }
+        var clearedPrompts = await _outputEngine.HandleOutputAsync(msg.Output);
+        if (clearedPrompts.Count > 0)
+            PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
     }
+
+    /// <summary>
+    /// Handles the outputs the shared engine leaves to the channel. Mattermost
+    /// supports none of them, so every one is ignored here. Mattermost threads
+    /// cannot be renamed, so a <c>SessionTitleOutput</c> has no effect, and the
+    /// binding renders no processing indicator. The missing processing
+    /// indicator is a capability difference from Slack and Discord. Whether
+    /// Mattermost should gain one is a product question, recorded as an open
+    /// question in the OpenSpec design for this change.
+    /// </summary>
+    private Task HandleChannelSpecificOutputAsync(SessionOutput output) => Task.CompletedTask;
 
     private async Task<MattermostPostId?> SafeReplyWithApprovalPromptAsync(ToolInteractionRequest request)
     {
@@ -1310,9 +686,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
         catch (Exception ex)
         {
+            // The shared output engine auto-denies the request when this
+            // returns null, so the blocked tool call still unwinds.
             _log.Error(ex, "Failed posting Mattermost approval prompt; auto-denying request");
             ChannelTelemetry.For(ChannelType.Mattermost).RecordExtra("approvalFallbackActivated", "auto_deny");
-            await SendApprovalDenyOnFailureAsync(request.CallId);
             return null;
         }
     }
@@ -1323,31 +700,12 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     /// notifying the session of the delivery failure). Callers that gate
     /// reminder delivery confirmation on real delivery must honor the result.
     /// </summary>
-    private async Task<bool> SafeReplyAsync(string text)
-    {
-        var chunks = ChunkMessage(text);
-        foreach (var chunk in chunks)
-        {
-            var startedAt = _dependencies.TimeProvider.GetTimestamp();
-            try
-            {
-                var postMessage = BuildPostMessage(chunk);
-                await _dependencies.ReplyClient.PostReplyAsync(postMessage);
-                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-                ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
-            }
-            catch (Exception ex)
-            {
-                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-                _log.Warning(ex, "Failed posting Mattermost reply for session {0}", _sessionId.Value);
-                ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
-                await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-                return false;
-            }
-        }
-
-        return true;
-    }
+    private Task<bool> SafeReplyAsync(string text)
+        => _safeCall.PostChunkedAsync(
+            text,
+            MaxMattermostPostLength,
+            chunk => _dependencies.ReplyClient.PostReplyAsync(BuildPostMessage(chunk)),
+            ex => _log.Warning(ex, "Failed posting Mattermost reply for session {0}", _sessionId.Value));
 
     private MattermostPostMessage BuildPostMessage(
         string text,
@@ -1362,65 +720,41 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task<bool> SafeUploadFileAsync(FileOutput file)
     {
-        var startedAt = _dependencies.TimeProvider.GetTimestamp();
-        try
+        // A missing file never reaches the transport, so it carries no transport
+        // telemetry and a different failure kind.
+        if (!File.Exists(file.FilePath))
         {
-            if (!File.Exists(file.FilePath))
+            _log.Warning("File not found for upload: {Path}", file.FilePath);
+            await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
+            return false;
+        }
+
+        var uploaded = await _safeCall.InvokeAsync(
+            async () =>
             {
-                _log.Warning("File not found for upload: {Path}", file.FilePath);
-                await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
-                return false;
-            }
+                using var uploadCts = new CancellationTokenSource(OperationTimeout);
+                var fileId = await _dependencies.ReplyClient.UploadFileAsync(
+                    _channelId,
+                    file.FilePath,
+                    file.FileName,
+                    uploadCts.Token);
 
-            using var uploadCts = new CancellationTokenSource(OperationTimeout);
-            var fileId = await _dependencies.ReplyClient.UploadFileAsync(
-                _channelId,
-                file.FilePath,
-                file.FileName,
-                uploadCts.Token);
+                using var postCts = new CancellationTokenSource(OperationTimeout);
+                var postMessage = BuildPostMessage($":paperclip: {file.FileName}", fileIds: [fileId]);
+                await _dependencies.ReplyClient.PostReplyAsync(postMessage, postCts.Token);
+            },
+            ex =>
+            {
+                if (ex is OperationCanceledException)
+                    _log.Error(ex, "Timed out uploading file {FileName} to Mattermost thread", file.FileName);
+                else
+                    _log.Error(ex, "Failed to upload file {FileName} to Mattermost thread", file.FileName);
+            });
 
-            using var postCts = new CancellationTokenSource(OperationTimeout);
-            var postMessage = BuildPostMessage($":paperclip: {file.FileName}", fileIds: [fileId]);
-            await _dependencies.ReplyClient.PostReplyAsync(postMessage, postCts.Token);
-
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyPosted(duration);
+        if (uploaded)
             _log.Info("Uploaded file to Mattermost thread: {FileName}", file.FileName);
-            return true;
-        }
-        catch (OperationCanceledException ex)
-        {
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            _log.Error(ex, "Timed out uploading file {FileName} to Mattermost thread", file.FileName);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-            return false;
-        }
-        catch (Exception ex)
-        {
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            _log.Error(ex, "Failed to upload file {FileName} to Mattermost thread", file.FileName);
-            ChannelTelemetry.For(ChannelType.Mattermost).RecordReplyFailed(duration);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-            return false;
-        }
-    }
 
-    /// <summary>
-    /// Tells every in-flight reminder observer that delivery did not happen,
-    /// then clears them. Called when a turn can no longer reach TurnCompleted
-    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
-    /// rather than waiting out its backstop timeout.
-    /// </summary>
-    private void FailPendingReminderDeliveries(string reason)
-    {
-        if (_reminderDeliveryObservers.Count == 0)
-            return;
-
-        foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Mattermost, Delivered: false, FailureReason: reason));
-
-        _reminderDeliveryObservers.Clear();
+        return uploaded;
     }
 
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
@@ -1430,7 +764,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
             {
                 SessionId = _sessionId,
-                TurnNumber = _turnNumber,
+                TurnNumber = _outputEngine.LastCompletedTurnNumber,
                 ChannelType = ChannelType.Mattermost,
                 FailureKind = failureKind,
                 ErrorMessage = errorMessage
@@ -1438,7 +772,13 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send delivery feedback to session");
+            // A dead feedback pipe means the session never learns the turn
+            // failed. Rethrow so supervision tears this actor down. The parent
+            // conversation actor stops it; the next inbound re-creates it with
+            // a fresh pipeline. Slack's parent restarts its binding eagerly.
+            // Both paths replace the dead pipeline instead of leaving a zombie.
+            _log.Error(ex, "Failed to send delivery feedback to session; propagating to trigger pipeline reinit");
+            throw;
         }
     }
 
@@ -1595,32 +935,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
                 return null;
             });
 
-    internal static List<string> ChunkMessage(string text)
-    {
-        if (text.Length <= MaxMattermostPostLength)
-            return [text];
-
-        var chunks = new List<string>();
-        var remaining = text.AsSpan();
-        while (remaining.Length > 0)
-        {
-            if (remaining.Length <= MaxMattermostPostLength)
-            {
-                chunks.Add(remaining.ToString());
-                break;
-            }
-
-            var splitAt = MaxMattermostPostLength;
-            var newlineIdx = remaining[..splitAt].LastIndexOf('\n');
-            if (newlineIdx > 0)
-                splitAt = newlineIdx + 1;
-
-            chunks.Add(remaining[..splitAt].ToString());
-            remaining = remaining[splitAt..];
-        }
-
-        return chunks;
-    }
+    internal static List<string> ChunkMessage(string text) =>
+        MessageChunker.Chunk(text, MaxMattermostPostLength);
 
     private void AdvanceCursor(string candidatePostId)
     {
@@ -1644,27 +960,17 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
-        _hasObservedApprovalRequest = true;
-
-        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
-        if (existing is not null)
-        {
-            existing.PromptPostId = new MattermostPostId(tracked.PromptId);
-            return;
-        }
-
-        _pendingApprovalRequests.Add(new PendingApprovalRequest(
-            new ToolCallId(tracked.CallId),
-            tracked.RequesterSenderId,
-            tracked.RequesterPrincipal,
-            tracked.OptionKeys,
-            new MattermostPostId(tracked.PromptId),
-            toolName: tracked.ToolName,
-            displayText: tracked.DisplayText));
+        _outputEngine.MarkApprovalRequestObserved();
+        PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, MattermostPostId>(
+            _pendingApprovalRequests,
+            tracked,
+            wrapPromptId: value => new MattermostPostId(value),
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
-        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
+        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, MattermostPostId>(_pendingApprovalRequests, cleared);
 
     private sealed record InitializePipeline
     {

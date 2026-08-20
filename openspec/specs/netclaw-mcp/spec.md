@@ -419,3 +419,241 @@ audience, and for granted tool names that do not exist on the server.
 - **GIVEN** no audience profile has `McpServerToolGrants` entries for `memorizer`
 - **WHEN** the daemon connects to `memorizer`
 - **THEN** no tool change detection warnings are logged for that server
+
+### Requirement: MCP tool and prompt notification compatibility
+
+The system SHALL listen for tool and prompt list changes on each published MCP client generation.
+
+For MCP revision 2026-07-28, the system SHALL use one `subscriptions/listen` request.
+It SHALL enable only the event types in the matching acknowledgement.
+
+For older revisions, the system SHALL accept direct list-change notifications only for capabilities that declare `listChanged` support.
+
+#### Scenario: Modern server accepts both event types
+
+- **GIVEN** a server negotiates MCP revision 2026-07-28
+- **AND** it acknowledges tool and prompt list changes
+- **WHEN** it sends either accepted notification with the matching subscription identifier
+- **THEN** the system requests a catalog refresh without waiting for the poll interval
+
+#### Scenario: Modern server accepts one event type
+
+- **GIVEN** a server negotiates MCP revision 2026-07-28
+- **AND** it acknowledges only tool list changes
+- **WHEN** it sends a prompt list notification
+- **THEN** the system does not request a refresh for that notification
+- **AND** the existing poll remains active
+
+#### Scenario: Legacy server declares direct notifications
+
+- **GIVEN** a server negotiates a revision before 2026-07-28
+- **AND** its tool capability declares `listChanged`
+- **WHEN** it sends a direct tool list-change notification
+- **THEN** the system requests a catalog refresh without a `subscriptions/listen` request
+
+#### Scenario: Server declares no notification support
+
+- **GIVEN** a server does not support modern or legacy catalog notifications
+- **WHEN** the connection becomes healthy
+- **THEN** the system keeps the existing catalog poll active
+- **AND** the connection remains healthy
+
+### Requirement: Notification refresh preserves atomic catalog generations
+
+The system SHALL list the complete supported tool and prompt candidate before it publishes a notification refresh.
+It SHALL publish one immutable generation only when the complete catalog fingerprint changes.
+
+It SHALL keep the last good generation after any list failure.
+It SHALL retain one active refresh and at most one queued follow-up refresh for each server.
+
+#### Scenario: Tool notification changes the catalog
+
+- **GIVEN** a connected server has a published tool and prompt generation
+- **WHEN** a tool notification starts a successful refresh with a changed fingerprint
+- **THEN** the system publishes one new generation with the complete tool and prompt catalog
+
+#### Scenario: Duplicate notifications do not create unbounded work
+
+- **GIVEN** one notification refresh is active
+- **WHEN** the server sends repeated tool and prompt notifications
+- **THEN** the system queues at most one follow-up refresh
+- **AND** it does not run concurrent catalog refreshes for that server
+
+#### Scenario: Notification refresh finds no change
+
+- **GIVEN** a connected server sends a supported notification
+- **WHEN** the complete catalog fingerprint is unchanged
+- **THEN** the system keeps the current generation
+- **AND** it resets the poll interval after the successful check
+
+#### Scenario: Notification refresh fails
+
+- **GIVEN** a connected server has a last good generation
+- **WHEN** a notification refresh cannot list the complete catalog
+- **THEN** the system keeps the last good generation
+- **AND** a later notification or poll can retry the refresh
+
+### Requirement: MCP catalog notification lease lifecycle
+
+Each MCP client candidate SHALL own one notification lease.
+The system SHALL install its handlers before client creation and activate refresh work only after publication.
+
+The system SHALL deactivate and dispose the lease when it replaces or disposes its client.
+A stale lease SHALL NOT refresh a later generation.
+
+#### Scenario: Notification arrives before publication
+
+- **GIVEN** a candidate client receives a supported notification during initialization
+- **WHEN** the system publishes that candidate
+- **THEN** its lease processes the queued notification against the published generation
+
+#### Scenario: Reconnect renews the lease
+
+- **GIVEN** a server has a published connection and notification lease
+- **WHEN** the system publishes a replacement connection
+- **THEN** the replacement owns a new notification lease
+- **AND** the old lease cannot refresh the replacement generation
+
+#### Scenario: Shutdown removes notification work
+
+- **GIVEN** a published connection has an active notification lease
+- **WHEN** daemon shutdown disposes the connection
+- **THEN** the system stops the lease worker
+- **AND** it disposes the client without leaked notification work
+
+### Requirement: MCP notification failure and repair behavior
+
+The system SHALL keep a usable MCP connection and the existing poll after notification setup or listener failure.
+It SHALL report the compatibility mode and failures through safe structured logs.
+
+#### Scenario: Modern subscription method is unsupported
+
+- **GIVEN** a server negotiates MCP revision 2026-07-28
+- **WHEN** `subscriptions/listen` returns an unsupported-method error
+- **THEN** the system keeps the connection and catalog available
+- **AND** the existing poll remains the repair path
+- **AND** the system logs the failure category without raw protocol content
+
+#### Scenario: Modern acknowledgement times out
+
+- **GIVEN** a server accepts the listen request but sends no matching acknowledgement
+- **WHEN** the 15-second `TimeProvider` timeout expires
+- **THEN** the system keeps the connection and catalog available
+- **AND** the existing poll remains the repair path
+
+#### Scenario: Listener closes after publication
+
+- **GIVEN** a modern notification listener is active
+- **WHEN** its request ends unexpectedly
+- **THEN** the system disables that notification lease
+- **AND** it logs a warning
+- **AND** the existing poll remains the repair path
+
+#### Scenario: Poll repairs a missed notification
+
+- **GIVEN** a connected server changes its catalog without a usable notification
+- **WHEN** the next catalog poll succeeds
+- **THEN** the system publishes the repaired catalog through the same generation rules
+
+### Requirement: MCP prompt discovery and generation ownership
+
+The system SHALL list prompts when an enabled MCP server declares prompt support.
+It SHALL publish prompt descriptors in the same immutable server generation as the discovered tools.
+
+Each descriptor SHALL use the logical name `mcp__<server>__<prompt>`.
+It SHALL retain the server name, prompt name, prompt arguments, and generation.
+
+#### Scenario: Prompt-capable server connects
+
+- **GIVEN** an enabled server declares prompt support
+- **WHEN** the daemon initializes the server connection
+- **THEN** the daemon lists the server prompts
+- **AND** it publishes the tools and prompts in one server generation
+- **AND** each prompt appears in the skill registry under its canonical logical name
+
+#### Scenario: Tool-only server connects
+
+- **GIVEN** an enabled server does not declare prompt support
+- **WHEN** the daemon initializes the server connection
+- **THEN** the daemon does not call `prompts/list`
+- **AND** the server tools remain available
+
+#### Scenario: Prompt discovery fails during replacement
+
+- **GIVEN** a healthy published server generation
+- **WHEN** a replacement candidate cannot list its declared prompts
+- **THEN** the system keeps the prior server generation
+- **AND** it keeps the prior MCP prompt skill inventory
+- **AND** diagnostics report the replacement failure
+
+### Requirement: MCP prompt catalog poll
+
+The existing MCP catalog poll SHALL include prompts for a prompt-capable server.
+It SHALL publish one replacement generation when a tool or prompt descriptor changes.
+
+#### Scenario: Prompt descriptor changes
+
+- **GIVEN** a connected server changes a prompt description or argument descriptor
+- **WHEN** the next catalog poll succeeds
+- **THEN** the system publishes a new server generation
+- **AND** the skill registry contains the new prompt descriptor
+
+#### Scenario: Prompt catalog becomes empty
+
+- **GIVEN** a connected prompt-capable server removes its final prompt
+- **WHEN** the next catalog poll succeeds with an empty prompt list
+- **THEN** the system removes that server's MCP prompt skills
+- **AND** it preserves the server's tools and file skills
+
+### Requirement: MCP prompt server permission
+
+The system SHALL use the existing MCP server grant for prompt discovery and prompt use.
+It SHALL NOT add a prompt-specific grant category.
+
+#### Scenario: Audience can use the server
+
+- **GIVEN** an audience can use MCP server `gigatron`
+- **WHEN** the system builds that audience's skill index
+- **THEN** allowed `mcp__gigatron__*` prompt skills appear
+
+#### Scenario: Audience cannot use the server
+
+- **GIVEN** an audience cannot use MCP server `gigatron`
+- **WHEN** the system builds that audience's skill index or handles a prompt load
+- **THEN** no `gigatron` prompt descriptor appears
+- **AND** the load follows the generic denied result
+
+#### Scenario: Unknown skill fallback does not reveal remote prompts
+
+- **GIVEN** the registry contains MCP prompt skills from one or more servers
+- **WHEN** a session requests an unknown skill name
+- **THEN** the fallback list contains no MCP server or prompt names
+- **AND** the audience-filtered skill index remains the discovery source for remote prompts
+
+### Requirement: MCP prompt load generation and failure behavior
+
+The system SHALL resolve an MCP prompt through the client generation that supplied its skill descriptor.
+It SHALL fail visibly when the descriptor is stale, the server is unavailable, or the result has unsupported content.
+
+#### Scenario: Current prompt descriptor loads
+
+- **GIVEN** an MCP prompt skill references the current server generation
+- **WHEN** `skill_load` loads the prompt
+- **THEN** the system calls `prompts/get` on that generation
+- **AND** the result identifies the source server, prompt, and generation
+- **AND** the result preserves each prompt message role
+
+#### Scenario: Stale prompt descriptor fails
+
+- **GIVEN** an MCP prompt skill references a replaced server generation
+- **WHEN** `skill_load` loads the prompt
+- **THEN** the system returns an explicit stale-generation error
+- **AND** it does not call `prompts/get` on the new generation
+
+#### Scenario: Unsupported prompt content fails
+
+- **GIVEN** `prompts/get` returns a content block that this slice cannot render
+- **WHEN** the adapter processes the result
+- **THEN** it returns an explicit unsupported-content error
+- **AND** it does not silently omit the block
+

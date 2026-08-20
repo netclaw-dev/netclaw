@@ -521,17 +521,18 @@ fi
 # Zsh: resolve a non-exported ZDOTDIR from .zshenv, then execute the selected
 # startup file under zsh so a Bash-compatible false positive cannot pass.
 if command -v zsh >/dev/null 2>&1; then
+  ZSH_EXECUTABLE="$(command -v zsh)"
   ZSH_HOME="$WORK/shell-zsh"
   ZDOT_DIR="$ZSH_HOME/custom-zdotdir"
   ZSH_INSTALL="$ZSH_HOME/netclaw install's/bin"
   mkdir -p "$ZDOT_DIR"
   printf "ZDOTDIR='%s'\n" "$ZDOT_DIR" > "$ZSH_HOME/.zshenv"
   printf '# existing zsh config\n' > "$ZDOT_DIR/.zshrc"
-  if (unset ZDOTDIR; run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null) \
-      && (unset ZDOTDIR; run_unix_installer "$(command -v zsh)" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null); then
+  if (unset ZDOTDIR; run_unix_installer "$ZSH_EXECUTABLE" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null) \
+      && (unset ZDOTDIR; run_unix_installer "$ZSH_EXECUTABLE" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null); then
     ZSH_INSTALL_PHYSICAL=$(cd "$ZSH_INSTALL" && pwd -P)
     zsh_path=$(PATH="/usr/bin:/bin" ZDOTDIR="$ZDOT_DIR" \
-      zsh -f -c 'source "$ZDOTDIR/.zshrc"; print -rn -- "$PATH"')
+      "$ZSH_EXECUTABLE" -f -c 'source "$ZDOTDIR/.zshrc"; print -rn -- "$PATH"')
     assert_path_once "zsh" "$zsh_path" "$ZSH_INSTALL_PHYSICAL"
     if [ ! -e "$ZSH_HOME/.zshrc" ]; then
       pass "zsh: non-exported ZDOTDIR is authoritative"
@@ -547,15 +548,16 @@ fi
 
 # Fish owns a native conf.d file. Execute that file with fish, not Bash.
 if command -v fish >/dev/null 2>&1; then
+  FISH_EXECUTABLE="$(command -v fish)"
   FISH_HOME="$WORK/shell-fish"
   FISH_INSTALL="$FISH_HOME/netclaw install's/bin"
   FISH_RC="$FISH_HOME/.config/fish/conf.d/netclaw.fish"
   if XDG_CONFIG_HOME="$FISH_HOME/.config" \
-      run_unix_installer "$(command -v fish)" "$FISH_HOME" "$FISH_INSTALL" >/dev/null \
+      run_unix_installer "$FISH_EXECUTABLE" "$FISH_HOME" "$FISH_INSTALL" >/dev/null \
       && XDG_CONFIG_HOME="$FISH_HOME/.config" \
-      run_unix_installer "$(command -v fish)" "$FISH_HOME" "$FISH_INSTALL" >/dev/null; then
+      run_unix_installer "$FISH_EXECUTABLE" "$FISH_HOME" "$FISH_INSTALL" >/dev/null; then
     FISH_INSTALL_PHYSICAL=$(cd "$FISH_INSTALL" && pwd -P)
-    fish_path=$(PATH="/usr/bin:/bin" fish --no-config -c \
+    fish_path=$(PATH="/usr/bin:/bin" "$FISH_EXECUTABLE" --no-config -c \
       "source '$FISH_RC'; string join : -- \$PATH")
     assert_path_once "fish" "$fish_path" "$FISH_INSTALL_PHYSICAL"
   else

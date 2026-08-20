@@ -6,6 +6,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Jobs;
 using Netclaw.Configuration;
 using Xunit;
@@ -153,7 +154,17 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
     [Fact]
     public void DeleteJobArtifacts_keeps_definition_when_output_cleanup_fails_then_retries()
     {
-        var store = new BackgroundJobDefinitionStore(_paths);
+        var rejectCleanup = true;
+        var store = new BackgroundJobDefinitionStore(
+            _paths,
+            NullLogger<BackgroundJobDefinitionStore>.Instance,
+            (path, recursive) =>
+            {
+                if (rejectCleanup)
+                    throw new IOException("simulated output cleanup failure");
+
+                Directory.Delete(path, recursive);
+            });
         var jobId = new BackgroundJobId("cleanup-retry-001");
         store.Save(new BackgroundJobDefinition
         {
@@ -168,18 +179,17 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
             OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
         });
 
-        var outputLogPath = store.GetOutputLogPathOnly(jobId);
+        var outputLogPath = store.GetOutputLogPath(jobId);
         var outputDirectory = Path.GetDirectoryName(outputLogPath)!;
-        File.WriteAllText(outputDirectory, "path collision");
+        File.WriteAllText(outputLogPath, "build output");
 
         var error = Assert.Throws<IOException>(() => store.DeleteJobArtifacts(jobId));
 
-        Assert.Contains("is not a directory", error.Message);
+        Assert.Contains("simulated output cleanup failure", error.Message);
         Assert.NotNull(store.Get(jobId));
-        Assert.True(File.Exists(outputDirectory));
+        Assert.True(File.Exists(outputLogPath));
 
-        File.Delete(outputDirectory);
-        File.WriteAllText(store.GetOutputLogPath(jobId), "build output");
+        rejectCleanup = false;
 
         Assert.True(store.DeleteJobArtifacts(jobId));
         Assert.Null(store.Get(jobId));

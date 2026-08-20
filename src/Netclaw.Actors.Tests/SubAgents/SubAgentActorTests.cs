@@ -209,7 +209,8 @@ public class SubAgentActorTests : TestKit
         Assert.Contains("safety, security, trust-boundary, approval, and tool-policy rules remain mandatory", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Do not ask the user clarifying questions", fakeClient.LastReceivedMessages[0].Text);
         Assert.Contains("Parent-mediated tool approval", fakeClient.LastReceivedMessages[0].Text);
-        Assert.Contains("call set_working_directory once, even with absolute paths", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("Before tool work in another task-named project", fakeClient.LastReceivedMessages[0].Text);
+        Assert.Contains("Declare the task's first project path exactly", fakeClient.LastReceivedMessages[0].Text);
     }
 
     [Fact]
@@ -1011,7 +1012,7 @@ public class SubAgentActorTests : TestKit
                 Task = "Run the same approval-gated tool twice",
                 Timeout = TimeSpan.FromSeconds(5)
             },
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            ApprovalAskTimeout, TestContext.Current.CancellationToken);
 
         Assert.True(result.Success);
         Assert.Equal(2, approvalBridge.RequestCount);

@@ -103,6 +103,17 @@ public sealed class McpToolAdapter : INetclawTool
     public string BareToolName => _toolName;
 
     /// <summary>
+    /// MCP servers are trusted, user-configured integrations — the model can only
+    /// reach them because the operator added and granted them — so their output is
+    /// passed to the model verbatim, matching Claude Code, Cursor, and other MCP
+    /// harnesses. <see cref="Netclaw.Security.SecretOutputRedactor"/> remains on for
+    /// genuinely-untrusted sources (shell, file reads, web fetch, background jobs);
+    /// applying it to MCP results corrupts legitimate payloads such as presigned
+    /// upload URLs, whose signed query parameters look like live credentials.
+    /// </summary>
+    public bool SuppressOutputRedaction => true;
+
+    /// <summary>
     /// Returns the AITool with a sanitized JSON schema for LLM compatibility.
     /// </summary>
     public AITool ToAITool() => _sanitizedTool;
