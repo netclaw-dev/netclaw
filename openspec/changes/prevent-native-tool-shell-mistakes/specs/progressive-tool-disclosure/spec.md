@@ -4,9 +4,10 @@
 
 The initial parent-session model tool set SHALL contain policy-exposed definitions for
 `search_tools`, `load_tool`, `skill_load`, `skill_read_resource`,
-`set_working_directory`, `file_read`, `file_list`, `file_write`, `file_edit`,
-`attach_file`, and `shell_execute`. Other first-party and MCP tools SHALL be
-deferred unless a later specification adds them to the core.
+`set_working_directory`, `file_search`, `file_read`, `file_list`, `file_write`,
+`file_edit`, `tool_output_read`, `attach_file`, and `shell_execute`. Other
+first-party and MCP tools SHALL be deferred unless a later specification adds
+them to the core. The core SHALL NOT include `json_read` or `file_read_many`.
 
 Sub-agent model tool sets SHALL exclude `attach_file` from core exposure,
 discovery, loading, and direct dispatch until an internal typed attachment
