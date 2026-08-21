@@ -539,6 +539,7 @@ start_eval_daemon() {
         -e "NETCLAW_Daemon__Port=$EVAL_PORT"
         -e "HOME=/home/netclaw"
         -e "NETCLAW_HOME=/home/netclaw/.netclaw"
+        -e "NETCLAW_Workspaces__Directory=/home/netclaw/.netclaw/workspaces"
         -e "NETCLAW_Providers__eval__Type=$EVAL_PROVIDER_TYPE"
         -e "NETCLAW_Providers__eval__Endpoint=$EVAL_PROVIDER_ENDPOINT"
         -e "NETCLAW_Models__Main__Provider=eval"
