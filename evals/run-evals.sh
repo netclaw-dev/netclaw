@@ -1498,11 +1498,13 @@ setup_tool_direct_attachment() {
     local session_id="eval/tool_direct_attachment-run${run}-$$"
     local sanitized_session_id="${session_id//\//_}"
     local source_session_id="${sanitized_session_id}_source"
-    local host_source_dir="$EVAL_HOME/data/sessions/$source_session_id/project"
+    local container_source_dir="/home/netclaw/.netclaw/sessions/$source_session_id/project"
     DIRECT_ATTACHMENT_SOURCE_PATH="/home/netclaw/.netclaw/sessions/$source_session_id/project/direct-attachment.txt"
     DIRECT_ATTACHMENT_DESTINATION_ROOT="/home/netclaw/.netclaw/sessions/$sanitized_session_id/attachments"
-    mkdir -p "$host_source_dir"
-    printf 'synthetic attachment\n' > "$host_source_dir/direct-attachment.txt"
+    docker exec --user root "$EVAL_CONTAINER_NAME" mkdir -p "$container_source_dir"
+    printf 'synthetic attachment\n' \
+        | docker exec --interactive --user root "$EVAL_CONTAINER_NAME" \
+            tee "$DIRECT_ATTACHMENT_SOURCE_PATH" >/dev/null
 }
 
 assert_tool_native_shell_recovery() {
