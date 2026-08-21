@@ -1469,7 +1469,7 @@ assert_tool_cli_invoke() {
 }
 
 assert_tool_direct_attachment() {
-    local call_id headless_log host_source file_line attached_path host_attached_path
+    local call_id headless_log host_source file_line attached_path
     stdout_json_envelope_valid || return 1
     stdout_json_tool_call_sequence_matches '["attach_file"]' || return 1
     jq -e --arg source "$DIRECT_ATTACHMENT_SOURCE_PATH" '
@@ -1483,25 +1483,19 @@ assert_tool_direct_attachment() {
     file_line=$(grep -aF "FILE: name=direct-attachment.txt path=" "$headless_log" | tail -1) || return 1
     attached_path=${file_line#* path=}
     attached_path=${attached_path% mime=*}
-    [[ "$attached_path" == "$DIRECT_ATTACHMENT_DESTINATION_ROOT/"* ]] || return 1
-    [[ "$attached_path" != "$DIRECT_ATTACHMENT_SOURCE_PATH" ]] || return 1
+    [[ "$attached_path" == "$DIRECT_ATTACHMENT_SOURCE_PATH" ]] || return 1
 
     host_source="$EVAL_HOME/data/${DIRECT_ATTACHMENT_SOURCE_PATH#/home/netclaw/.netclaw/}"
-    host_attached_path="$EVAL_HOME/data/${attached_path#/home/netclaw/.netclaw/}"
     [[ -f "$host_source" ]] || return 1
-    [[ -f "$host_attached_path" ]] || return 1
-    [[ "$(< "$host_source")" == "synthetic attachment" ]] \
-        && [[ "$(< "$host_attached_path")" == "synthetic attachment" ]]
+    [[ "$(< "$host_source")" == "synthetic attachment" ]]
 }
 
 setup_tool_direct_attachment() {
     local run="$1"
     local session_id="eval/tool_direct_attachment-run${run}-$$"
     local sanitized_session_id="${session_id//\//_}"
-    local source_project_id="direct-attachment-source-$sanitized_session_id"
-    local container_source_dir="/home/netclaw/.netclaw/workspaces/$source_project_id"
+    local container_source_dir="/home/netclaw/.netclaw/sessions/$sanitized_session_id/project"
     DIRECT_ATTACHMENT_SOURCE_PATH="$container_source_dir/direct-attachment.txt"
-    DIRECT_ATTACHMENT_DESTINATION_ROOT="/home/netclaw/.netclaw/sessions/$sanitized_session_id/attachments"
     docker exec --user root "$EVAL_CONTAINER_NAME" mkdir -p "$container_source_dir"
     printf 'synthetic attachment\n' \
         | docker exec --interactive --user root "$EVAL_CONTAINER_NAME" \
