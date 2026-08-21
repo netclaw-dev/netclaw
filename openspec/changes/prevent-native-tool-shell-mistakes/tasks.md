@@ -36,11 +36,11 @@
 
 - [x] 6.1 Add deterministic synthetic cases for direct attachment and shell-to-native recovery; preserve a deferred-tool discovery case after `attach_file` becomes Core.
 - [x] 6.2 Run fixed baseline and treatment trials for direct attachment and shell-to-native recovery with fresh sessions.
-- [ ] 6.3 Publish only PII-free aggregate completion, tool-choice, shell-authored, shell-started, approval, activation, and correction-to-native metrics on the PR.
+- [x] 6.3 Publish only PII-free aggregate completion, tool-choice, shell-authored, shell-started, approval, activation, and correction-to-native metrics on the PR.
 
 ## 7. Delivery Gates
 
 - [x] 7.1 Run Release build and full tests with zero failures and warnings.
 - [x] 7.2 Run strict OpenSpec, headers, changed-file formatting, shell harness checks, diff check, and Slopwatch with zero findings.
-- [ ] 7.3 Perform a frozen-SHA adversarial review of authority, privacy, parent/child parity, and public/durable compatibility.
-- [ ] 7.4 Rebase on the refreshed #2046 head, push as the next stacked PR with GitHub CLI, apply relevant labels, and leave merge and auto-merge disabled.
+- [x] 7.3 Perform a frozen-SHA adversarial review of authority, privacy, parent/child parity, and public/durable compatibility.
+- [x] 7.4 Rebase on the refreshed #2046 head, push as the next stacked PR with GitHub CLI, apply relevant labels, and leave merge and auto-merge disabled.

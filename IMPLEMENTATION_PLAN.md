@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-14
+Last updated: 2026-08-21
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -173,7 +173,7 @@ Done when:
 - [x] Return a typed correction before shell approval or execution and expose one deferred schema actor-locally.
 - [x] Prove parent/child, hard-deny, hidden-tool, and eventual-authorization boundaries.
 - [x] Refresh deterministic and hosted PII-free behavioral evidence.
-- [ ] Complete Release, OpenSpec, header, formatting, Slopwatch, and adversarial-review gates before opening the stacked PR.
+- [x] Complete Release, OpenSpec, header, formatting, Slopwatch, and adversarial-review gates before opening the stacked PR.
 
 ### Priority: Reduce Shell Approval Fatigue
 
