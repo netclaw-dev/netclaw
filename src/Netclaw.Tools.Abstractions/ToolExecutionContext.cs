@@ -48,7 +48,7 @@ internal sealed record ToolFileActivity
     {
         if (!Enum.IsDefined(kind))
             throw new ArgumentOutOfRangeException(nameof(kind));
-        if (!IsCanonicalAbsolutePath(canonicalPath))
+        if (!ToolInvocationReceipt.IsCanonicalAbsolutePath(canonicalPath))
             throw new ArgumentException("File activity requires a canonical absolute path.", nameof(canonicalPath));
 
         CanonicalPath = canonicalPath;
@@ -57,25 +57,6 @@ internal sealed record ToolFileActivity
 
     public string CanonicalPath { get; }
     public ToolFileActivityKind Kind { get; }
-
-    private static bool IsCanonicalAbsolutePath(string path)
-    {
-        if (string.IsNullOrWhiteSpace(path)
-            || path.Any(char.IsControl)
-            || !Path.IsPathFullyQualified(path))
-        {
-            return false;
-        }
-
-        try
-        {
-            return string.Equals(path, Path.GetFullPath(path), StringComparison.Ordinal);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
-        {
-            return false;
-        }
-    }
 }
 
 internal sealed record ToolInvocationReceipt
@@ -111,8 +92,13 @@ internal sealed record ToolInvocationReceipt
         if (remediationCode is { } code && !Enum.IsDefined(code))
             throw new ArgumentOutOfRangeException(nameof(remediationCode));
 
-        if (declaredProjectDirectory is not null)
-            _ = new ToolFileActivity(declaredProjectDirectory, ToolFileActivityKind.Read);
+        if (declaredProjectDirectory is not null
+            && !IsCanonicalAbsolutePath(declaredProjectDirectory))
+        {
+            throw new ArgumentException(
+                "Declared project directory requires a canonical absolute path.",
+                nameof(declaredProjectDirectory));
+        }
 
         Category = category;
         FileActivity = Array.AsReadOnly(activity);
@@ -124,6 +110,25 @@ internal sealed record ToolInvocationReceipt
     public IReadOnlyList<ToolFileActivity> FileActivity { get; }
     public ToolRemediationCode? RemediationCode { get; }
     public string? DeclaredProjectDirectory { get; }
+
+    internal static bool IsCanonicalAbsolutePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || path.Any(char.IsControl)
+            || !Path.IsPathFullyQualified(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(path, Path.GetFullPath(path), StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
 }
 
 /// <summary>

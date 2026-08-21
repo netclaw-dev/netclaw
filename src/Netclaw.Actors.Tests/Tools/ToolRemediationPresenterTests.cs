@@ -12,39 +12,40 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class ToolRemediationPresenterTests
 {
-    private static readonly (ToolRemediationCode Code, string ExpectedAction)[] SupportedRemediations =
+    public static TheoryData<string, string> SupportedRemediations { get; } = new()
     {
-        (
-            ToolRemediationCode.SetWorkingDirectory,
+        {
+            nameof(ToolRemediationCode.SetWorkingDirectory),
             "Next action: call set_working_directory with the project directory from this result, then retry the failed tool call."
-        ),
-        (
-            ToolRemediationCode.UseSessionScratch,
+        },
+        {
+            nameof(ToolRemediationCode.UseSessionScratch),
             "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths."
-        ),
-        (
-            ToolRemediationCode.ProvideUniqueOldString,
+        },
+        {
+            nameof(ToolRemediationCode.ProvideUniqueOldString),
             "Next action: retry file_edit with a unique OldString, or set ReplaceAll=true when every match should change."
-        )
+        }
     };
 
-    [Fact]
-    public void Presenter_appends_one_action_for_each_supported_remediation()
+    [Theory]
+    [MemberData(nameof(SupportedRemediations))]
+    public void Presenter_appends_one_action_for_supported_remediation(
+        string codeName,
+        string expectedAction)
     {
-        foreach (var (code, expectedAction) in SupportedRemediations)
-        {
-            var receipt = new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: code);
+        var code = Enum.Parse<ToolRemediationCode>(codeName);
+        var receipt = new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.RecoverableCorrection,
+            remediationCode: code);
 
-            var result = ToolRemediationPresenter.Present(
-                Message("bounded failure"),
-                receipt,
-                setWorkingDirectoryAvailable: true);
+        var result = ToolRemediationPresenter.Present(
+            Message("bounded failure"),
+            receipt,
+            setWorkingDirectoryAvailable: true);
 
-            Assert.Equal($"bounded failure\n{expectedAction}", result.Content);
-            Assert.Equal(1, CountOccurrences(result.Content, "Next action:"));
-        }
+        Assert.Equal($"bounded failure\n{expectedAction}", result.Content);
+        Assert.Equal(1, CountOccurrences(result.Content, "Next action:"));
     }
 
     [Fact]

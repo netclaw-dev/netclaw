@@ -1165,8 +1165,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ToolExecutionContext? context = null,
             CancellationToken ct = default)
         {
-            Assert.NotNull(context);
-            context.Outputs.TryComplete(new ToolInvocationReceipt(
+            var requiredContext = context
+                ?? throw new InvalidOperationException("Execution context is required.");
+            requiredContext.Outputs.TryComplete(new ToolInvocationReceipt(
                 ToolInvocationOutcomeCategory.RecoverableCorrection,
                 remediationCode: ToolRemediationCode.SetWorkingDirectory));
             return Task.FromResult("Error: invalid_context: No project or session directory is available.");
