@@ -31,6 +31,8 @@
 #     NETCLAW_EVAL_NO_BUILD      Set to 1 to skip `dotnet publish` + `docker build`
 #                                (reuse existing ./publish output and image)
 #     NETCLAW_BIN                Path to netclaw CLI (default: ./publish/cli/netclaw)
+#     NETCLAW_EVAL_ASSET_ROOT    Checkout that supplies identity, skills, and fixtures
+#                                (default: the checkout that contains this script)
 #
 #   Eval suite knobs:
 #     NETCLAW_EVAL_RUNS          Runs per case (default: 5)
@@ -44,6 +46,7 @@ set -euo pipefail
 
 # Repo root — derived from this script's location (evals/ is one level deep).
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EVAL_ASSET_ROOT="${NETCLAW_EVAL_ASSET_ROOT:-$REPO_ROOT}"
 
 RUNS="${NETCLAW_EVAL_RUNS:-5}"
 THRESHOLD="${NETCLAW_EVAL_THRESHOLD:-0.80}"
@@ -125,8 +128,8 @@ check_prerequisites() {
 
     # Identity files are rendered from repo templates into an isolated eval
     # home; the host does not need a pre-initialized ~/.netclaw tree.
-    if [[ ! -f "$REPO_ROOT/src/Netclaw.Cli/Resources/identity/SOUL.template.md" ]]; then
-        echo "ERROR: missing identity template at $REPO_ROOT/src/Netclaw.Cli/Resources/identity/SOUL.template.md." >&2
+    if [[ ! -f "$EVAL_ASSET_ROOT/src/Netclaw.Cli/Resources/identity/SOUL.template.md" ]]; then
+        echo "ERROR: missing identity template under NETCLAW_EVAL_ASSET_ROOT." >&2
         exit 1
     fi
 
@@ -138,8 +141,6 @@ check_prerequisites() {
         echo "WARN: sqlite3 not found — results will not be persisted" >&2
         RESULTS_DB=""
     fi
-
-    NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
 
     if [[ "$RUNS" -lt 1 ]]; then
         echo "ERROR: NETCLAW_EVAL_RUNS must be >= 1 (got: $RUNS)" >&2
@@ -263,8 +264,12 @@ archive_eval_run() {
 
     # Write run metadata, including the immutable image identity so before/after
     # comparisons remain auditable even when tags are later rebuilt.
-    local image_id
+    local image_id harness_commit asset_commit harness_dirty asset_dirty
     image_id=$(docker image inspect "$NETCLAW_IMAGE" --format '{{.Id}}' 2>/dev/null || echo unknown)
+    harness_commit=$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+    asset_commit=$(git -C "$EVAL_ASSET_ROOT" rev-parse HEAD 2>/dev/null || echo unknown)
+    harness_dirty=$(git -C "$REPO_ROOT" status --porcelain 2>/dev/null | grep -q . && echo true || echo false)
+    asset_dirty=$(git -C "$EVAL_ASSET_ROOT" status --porcelain 2>/dev/null | grep -q . && echo true || echo false)
     cat > "$archive_dir/run-info.txt" <<RUNEOF
 run_id:    $RUN_ID
 started:   ${STARTED_AT:-unknown}
@@ -273,6 +278,10 @@ image_id:  $image_id
 model:     ${EVAL_MODEL_ID:-unknown}
 provider:  ${EVAL_PROVIDER_TYPE:-unknown} @ ${EVAL_PROVIDER_ENDPOINT:-unknown}
 version:   ${NETCLAW_VER:-unknown}
+harness_commit: $harness_commit
+harness_dirty:  $harness_dirty
+asset_commit:   $asset_commit
+asset_dirty:    $asset_dirty
 category:  ${FILTER_CATEGORY:-all}
 case:      ${FILTER_CASE:-all}
 timeout:   ${PROMPT_TIMEOUT:-60}s
@@ -351,12 +360,12 @@ start_eval_daemon() {
     # that break identity evals. Templates have {{PLACEHOLDER}} tokens that we
     # substitute with eval defaults.
     mkdir -p "$EVAL_HOME/identity" "$EVAL_HOME/logs" "$EVAL_HOME/data/config" "$EVAL_HOME/data/agents"
-    local template_dir="$REPO_ROOT/src/Netclaw.Cli/Resources/identity"
+    local template_dir="$EVAL_ASSET_ROOT/src/Netclaw.Cli/Resources/identity"
     if [[ -d "$template_dir" ]]; then
         # Substitute placeholders with eval-appropriate defaults
         substitute_identity_template "$template_dir/SOUL.template.md" "$EVAL_HOME/identity/SOUL.md"
-        if [[ -f "$REPO_ROOT/evals/fixtures/identity/AGENTS.md" ]]; then
-            cp "$REPO_ROOT/evals/fixtures/identity/AGENTS.md" "$EVAL_HOME/identity/AGENTS.md"
+        if [[ -f "$EVAL_ASSET_ROOT/evals/fixtures/identity/AGENTS.md" ]]; then
+            cp "$EVAL_ASSET_ROOT/evals/fixtures/identity/AGENTS.md" "$EVAL_HOME/identity/AGENTS.md"
         else
             echo "ERROR: deployment mission eval fixture is missing." >&2
             exit 1
@@ -373,36 +382,36 @@ start_eval_daemon() {
     # `files/` segment); the daemon's feed sync writes to that layout, so we
     # mirror it here for local-source-of-truth runs.
     mkdir -p "$EVAL_HOME/skills/.system"
-    if [[ -d "$REPO_ROOT/feeds/skills/.system/files" ]]; then
-        cp -r "$REPO_ROOT/feeds/skills/.system/files/." "$EVAL_HOME/skills/.system/"
+    if [[ -d "$EVAL_ASSET_ROOT/feeds/skills/.system/files" ]]; then
+        cp -r "$EVAL_ASSET_ROOT/feeds/skills/.system/files/." "$EVAL_HOME/skills/.system/"
     else
-        echo "WARN: no system skills at $REPO_ROOT/feeds/skills/.system/files/ — Skill Discovery evals will fail." >&2
+        echo "WARN: no system skills under NETCLAW_EVAL_ASSET_ROOT — Skill Discovery evals will fail." >&2
     fi
 
     # Copy user skills from eval fixtures (non-system skills for activation testing).
-    if [[ -d "$REPO_ROOT/evals/fixtures/skills" ]]; then
-        cp -r "$REPO_ROOT/evals/fixtures/skills/." "$EVAL_HOME/skills/"
+    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/skills" ]]; then
+        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/skills/." "$EVAL_HOME/skills/"
     fi
 
     # Copy a skill into a managed server-feed origin. The configured feed URL
     # below is intentionally unreachable: startup must retain the already
     # materialized managed skill while the eval proves model access by logical
     # name without relying on the physical feed path.
-    if [[ -d "$REPO_ROOT/evals/fixtures/server-feed-skills" ]]; then
+    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/server-feed-skills" ]]; then
         mkdir -p "$EVAL_HOME/skills/.server-feeds/eval-feed"
-        cp -r "$REPO_ROOT/evals/fixtures/server-feed-skills/." \
+        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/server-feed-skills/." \
             "$EVAL_HOME/skills/.server-feeds/eval-feed/"
     fi
 
     # Copy eval-only subagent definitions into the mounted NETCLAW_HOME so
     # spawn_agent behavior can be exercised without touching the host install.
-    if [[ -d "$REPO_ROOT/evals/fixtures/agents" ]]; then
-        cp -r "$REPO_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
+    if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/agents" ]]; then
+        cp -r "$EVAL_ASSET_ROOT/evals/fixtures/agents/." "$EVAL_HOME/data/agents/"
     fi
 
-    if [[ -f "$REPO_ROOT/evals/fixtures/mcp/prompt_server.py" ]]; then
+    if [[ -f "$EVAL_ASSET_ROOT/evals/fixtures/mcp/prompt_server.py" ]]; then
         mkdir -p "$EVAL_HOME/data/evals"
-        cp "$REPO_ROOT/evals/fixtures/mcp/prompt_server.py" \
+        cp "$EVAL_ASSET_ROOT/evals/fixtures/mcp/prompt_server.py" \
             "$EVAL_HOME/data/evals/prompt_server.py"
         chmod ugo+x "$EVAL_HOME/data/evals/prompt_server.py"
     fi
@@ -425,9 +434,20 @@ start_eval_daemon() {
     # Install the eval-only approval policy before daemon startup. Headless eval
     # sessions cannot answer approval prompts, so tools must be automatic for the
     # Personal audience. Exposure, filesystem, and command-deny rules remain in force.
-    cp "$REPO_ROOT/evals/fixtures/config/netclaw.json" \
-        "$REPO_ROOT/evals/fixtures/config/tool-approvals.json" \
+    cp "$EVAL_ASSET_ROOT/evals/fixtures/config/netclaw.json" \
+        "$EVAL_ASSET_ROOT/evals/fixtures/config/tool-approvals.json" \
         "$EVAL_HOME/data/config/"
+
+    # If shell execution reaches this fixture, it writes a marker. The native
+    # tool with the same name never invokes this executable.
+    local marker_executable="$EVAL_HOME/data/evals/list_reminders-marker.sh"
+    mkdir -p "$(dirname "$marker_executable")"
+    printf '%s\n' \
+        '#!/bin/sh' \
+        "printf 'started\\n' > /home/netclaw/.netclaw/evals/native-shell-process-started" \
+        'exit 0' \
+        > "$marker_executable"
+    chmod ugo+x "$marker_executable"
 
     # Pre-seed a large (>256 KB) text file in the workspaces read-root for the
     # bounded-tool-output file_read eval (complex_large_file_read_ranged). It must
@@ -514,6 +534,7 @@ start_eval_daemon() {
         -v "$EVAL_HOME/identity:/home/netclaw/.netclaw/identity"
         -v "$EVAL_HOME/skills:/home/netclaw/.netclaw/skills"
         -v "$EVAL_HOME/logs:/home/netclaw/.netclaw/logs"
+        -v "$marker_executable:/usr/local/bin/list_reminders:ro"
         -e "NETCLAW_Daemon__Host=127.0.0.1"
         -e "NETCLAW_Daemon__Port=$EVAL_PORT"
         -e "HOME=/home/netclaw"
@@ -605,7 +626,7 @@ start_eval_daemon() {
 
 seed_eval_memories() {
     local db_path="/home/netclaw/.netclaw/netclaw.db"
-    local fixtures_path="$REPO_ROOT/evals/fixtures/eval-memories.json"
+    local fixtures_path="$EVAL_ASSET_ROOT/evals/fixtures/eval-memories.json"
     local seed_script="$REPO_ROOT/evals/seed-memories.py"
 
     if [[ ! -f "$fixtures_path" ]]; then
@@ -1022,6 +1043,7 @@ run_multi_turn_case() {
             rendered_prompt="${rendered_prompt//\{\{SECOND_WORKTREE\}\}/${CODING_CONTEXT_SECOND_WORKTREE:-}}"
             rendered_prompt="${rendered_prompt//\{\{TARGET_BRANCH\}\}/${CODING_CONTEXT_TARGET_BRANCH:-}}"
             rendered_prompt="${rendered_prompt//\{\{TARGET_FILE\}\}/${CODING_CONTEXT_TARGET_FILE:-}}"
+            rendered_prompt="${rendered_prompt//\{\{DIRECT_ATTACHMENT_SOURCE\}\}/${DIRECT_ATTACHMENT_SOURCE_PATH:-}}"
             run_prompt_resume "$session_id" "$rendered_prompt" "$output_format"
             store_metrics "$case_name" "$run" "$turn" "$LAST_TURN_USAGE_LINE"
             turn=$((turn + 1))
@@ -1103,6 +1125,19 @@ daemon_log_tail() {
     if [[ -f "$DAEMON_LOG" ]]; then
         tail -n +"$((DAEMON_LOG_LINES_BEFORE + 1))" "$DAEMON_LOG" 2>/dev/null
     fi
+}
+
+daemon_log_tail_contains_fixed() {
+    local text="$1"
+    [[ -f "$DAEMON_LOG" ]] || return 1
+    awk -v start="$((DAEMON_LOG_LINES_BEFORE + 1))" -v text="$text" '
+        NR >= start && index($0, text) { found = 1 }
+        END { exit found ? 0 : 1 }
+    ' "$DAEMON_LOG"
+}
+
+daemon_log_tail_not_contains_fixed() {
+    ! daemon_log_tail_contains_fixed "$1"
 }
 
 daemon_log_contains() {
@@ -1430,6 +1465,90 @@ assert_tool_web_search() {
 
 assert_tool_cli_invoke() {
     stdout_contains '\[tool:call\] list_reminders'
+}
+
+assert_tool_direct_attachment() {
+    local call_id headless_log host_source file_line attached_path host_attached_path
+    stdout_json_envelope_valid || return 1
+    stdout_json_tool_call_sequence_matches '["attach_file"]' || return 1
+    jq -e --arg source "$DIRECT_ATTACHMENT_SOURCE_PATH" '
+        ((.toolCalls[0].argumentsJson | fromjson).Path == $source)
+    ' "$STDOUT_FILE" >/dev/null 2>&1 || return 1
+
+    call_id=$(jq -r '.toolCalls[0].callId' "$STDOUT_FILE")
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    grep -qaF "TOOL_RESULT: attach_file call_id=$call_id result=File attached:" \
+        "$headless_log" || return 1
+    file_line=$(grep -aF "FILE: name=direct-attachment.txt path=" "$headless_log" | tail -1) || return 1
+    attached_path=${file_line#* path=}
+    attached_path=${attached_path% mime=*}
+    [[ "$attached_path" == "$DIRECT_ATTACHMENT_DESTINATION_ROOT/"* ]] || return 1
+    [[ "$attached_path" != "$DIRECT_ATTACHMENT_SOURCE_PATH" ]] || return 1
+
+    host_source="$EVAL_HOME/data/${DIRECT_ATTACHMENT_SOURCE_PATH#/home/netclaw/.netclaw/}"
+    host_attached_path="$EVAL_HOME/data/${attached_path#/home/netclaw/.netclaw/}"
+    [[ -f "$host_source" ]] || return 1
+    [[ -f "$host_attached_path" ]] || return 1
+    [[ "$(< "$host_source")" == "synthetic attachment" ]] \
+        && [[ "$(< "$host_attached_path")" == "synthetic attachment" ]]
+}
+
+setup_tool_direct_attachment() {
+    local run="$1"
+    local session_id="eval/tool_direct_attachment-run${run}-$$"
+    local sanitized_session_id="${session_id//\//_}"
+    local source_session_id="${sanitized_session_id}_source"
+    local host_source_dir="$EVAL_HOME/data/sessions/$source_session_id/project"
+    DIRECT_ATTACHMENT_SOURCE_PATH="/home/netclaw/.netclaw/sessions/$source_session_id/project/direct-attachment.txt"
+    DIRECT_ATTACHMENT_DESTINATION_ROOT="/home/netclaw/.netclaw/sessions/$sanitized_session_id/attachments"
+    mkdir -p "$host_source_dir"
+    printf 'synthetic attachment\n' > "$host_source_dir/direct-attachment.txt"
+}
+
+assert_tool_native_shell_recovery() {
+    local shell_call_id native_call_id headless_log
+    stdout_json_envelope_valid || return 1
+    stdout_json_tool_call_sequence_matches '["shell_execute","list_reminders"]' || return 1
+    jq -e '
+        ((.toolCalls[0].argumentsJson | fromjson).Command == "list_reminders")
+    ' "$STDOUT_FILE" >/dev/null 2>&1 || return 1
+
+    shell_call_id=$(jq -r '.toolCalls[0].callId' "$STDOUT_FILE")
+    native_call_id=$(jq -r '.toolCalls[1].callId' "$STDOUT_FILE")
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    awk -v call_id="$shell_call_id" '
+        index($0, "TOOL_RESULT: shell_execute call_id=" call_id \
+            " result=Shell execution stopped because '\''list_reminders'\'' is a native Netclaw tool.") {
+            if (getline > 0 \
+                && $0 == "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.") {
+                found = 1
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$headless_log" || return 1
+    awk -v prefix="TOOL_RESULT: list_reminders call_id=$native_call_id result=" '
+        index($0, prefix) == 1 {
+            result = substr($0, length(prefix) + 1)
+            if (result == "No active reminders." || index(result, "Reminders (") == 1) {
+                found = 1
+            }
+        }
+        END { exit found ? 0 : 1 }
+    ' "$headless_log" || return 1
+
+    daemon_log_tail_contains_fixed \
+        'Tool authorization evaluated: shell_execute outcome=RequiresAgentCorrection' \
+        && daemon_log_tail_contains_fixed 'Session deferred tool activated loaded=1' \
+        && daemon_log_tail_contains_fixed 'Session tool exposure core=' \
+        && daemon_log_tail_contains_fixed 'loaded=1' \
+        && daemon_log_tail_contains_fixed 'Tool executed: list_reminders' \
+        && daemon_log_tail_not_contains_fixed 'outcome=RequiresApproval' \
+        && daemon_log_tail_not_contains_fixed 'Tool executed: shell_execute' \
+        && [[ ! -e "$EVAL_HOME/data/evals/native-shell-process-started" ]]
+}
+
+setup_tool_native_shell_recovery() {
+    rm -f "$EVAL_HOME/data/evals/native-shell-process-started"
 }
 
 assert_tool_file_list() {
@@ -2684,6 +2803,12 @@ run_all() {
     run_case tool_cli_invoke "list_reminders called" \
         "List my active reminders"
 
+    run_multi_turn_case --json tool_direct_attachment "existing authorized file is attached without a copy prelude" \
+        "Send the existing file {{DIRECT_ATTACHMENT_SOURCE}} to me as an attachment."
+
+    run_case --json tool_native_shell_recovery "exact native-tool shell mistake is corrected before execution" \
+        "First call shell_execute with Command exactly \"list_reminders\" and no other command text. Then follow the tool result's next action and report my active reminders."
+
     run_case tool_file_list "file_list called without shell" \
         "What files are in my session directory?"
 
@@ -2940,6 +3065,8 @@ main() {
         echo "ERROR: CLI binary not found at '$NETCLAW_BIN'" >&2
         exit 1
     fi
+
+    NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
 
     start_eval_daemon
     init_db

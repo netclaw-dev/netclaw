@@ -1,5 +1,6 @@
 ﻿{
   Names: [
+    attach_file,
     file_edit,
     file_list,
     file_read,
@@ -14,7 +15,7 @@
     tool_output_read
   ],
   Footprint: {
-    Count: 12,
-    SerializedDefinitionBytes: 15192
+    Count: 13,
+    SerializedDefinitionBytes: 16194
   }
 }

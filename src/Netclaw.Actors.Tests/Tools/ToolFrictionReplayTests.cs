@@ -43,6 +43,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
     [InlineData("TF05")]
     [InlineData("TF06")]
     [InlineData("TF07")]
+    [InlineData("TF08")]
     public async Task Sanitized_friction_case_replays_through_real_tool_boundaries(string caseId)
     {
         var policyCase = LoadCase(caseId);
@@ -91,6 +92,17 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
                 $"{caseId.ToLowerInvariant()}-{index}");
             var receipt = Assert.Single(completed.ToolReceipts).Value;
             Assert.Equal(ParseOutcome(policyCase.ExpectedOutcome), receipt.Category);
+            if (caseId == "TF08")
+            {
+                var attachment = Assert.Single(completed.FileAttachments);
+                Assert.StartsWith(
+                    Path.Combine(setup.SessionDirectory, "attachments"),
+                    attachment.FilePath,
+                    StringComparison.Ordinal);
+                Assert.Equal("synthetic report", await File.ReadAllTextAsync(
+                    attachment.FilePath,
+                    TestContext.Current.CancellationToken));
+            }
             current = WorkingContextUpdater.UpdateFromToolReceipts(
                 current,
                 completed.ToolResults,
@@ -214,7 +226,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
 
     private async Task AssertChildCatalogAsync(RuntimeSetup runtime, ScenarioSetup setup)
     {
-        const string attachToolName = "attach_file";
+        const string deferredToolName = "web_fetch";
         var client = new RecordingChatClient();
         client.PlannedResponses.Enqueue([setup.Calls[0]]);
         client.PlannedResponses.Enqueue([setup.Calls[1]]);
@@ -244,7 +256,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
                     scopeId: "signalr/tool-friction/subagent/fixture-agent/run",
                     sessionDirectory: setup.SessionDirectory,
                     projectDirectory: setup.ProjectDirectory),
-                Task = "Find and load the deferred attachment tool.",
+                Task = "Find and load the deferred page retrieval tool.",
                 Timeout = TimeSpan.FromSeconds(5)
             },
             TimeSpan.FromSeconds(10),
@@ -252,18 +264,21 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
 
         Assert.True(result.Success);
         Assert.Equal(3, client.ReceivedToolNames.Count);
-        var expectedCore = coreNames.OrderBy(static name => name, StringComparer.Ordinal).ToList();
+        var expectedCore = coreNames
+            .Where(SubAgentToolPolicy.IsAllowedForSubAgent)
+            .OrderBy(static name => name, StringComparer.Ordinal)
+            .ToList();
         Assert.Equal(expectedCore, client.ReceivedToolNames[0].OrderBy(static name => name, StringComparer.Ordinal));
         Assert.Equal(expectedCore, client.ReceivedToolNames[1].OrderBy(static name => name, StringComparer.Ordinal));
-        Assert.DoesNotContain(attachToolName, client.ReceivedToolNames[0]);
-        Assert.DoesNotContain(attachToolName, client.ReceivedToolNames[1]);
-        Assert.Contains(attachToolName, client.ReceivedToolNames[2]);
+        Assert.DoesNotContain(deferredToolName, client.ReceivedToolNames[0]);
+        Assert.DoesNotContain(deferredToolName, client.ReceivedToolNames[1]);
+        Assert.Contains(deferredToolName, client.ReceivedToolNames[2]);
         Assert.Contains(
-            attachToolName,
+            deferredToolName,
             GetToolResult(client.ReceivedMessages[1], setup.Calls[0].CallId),
             StringComparison.Ordinal);
         Assert.Equal(
-            attachToolName,
+            deferredToolName,
             GetToolResult(client.ReceivedMessages[2], setup.Calls[1].CallId));
     }
 
@@ -297,6 +312,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             "TF05" => await SpillContinuationAsync(project, session, seed, denied, cancellationToken),
             "TF06" => FailedFileActivity(project, session, seed, denied),
             "TF07" => SubagentCatalogExposure(project, session, seed, denied),
+            "TF08" => await DirectAttachmentAsync(project, session, seed, denied, cancellationToken),
             _ => throw new InvalidOperationException($"Unsupported fixture case: {policyCase.Id}")
         };
     }
@@ -408,10 +424,35 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             seed,
             denied,
             [
-                Call("search-tools", "search_tools", "Query", "attach local file"),
-                Call("load-tool", "load_tool", "Name", "attach_file")
+                Call("search-tools", "search_tools", "Query", "retrieve page content"),
+                Call("load-tool", "load_tool", "Name", "web_fetch")
             ],
             fallback: null);
+
+    private static async Task<ScenarioSetup> DirectAttachmentAsync(
+        string project,
+        string session,
+        string seed,
+        string denied,
+        CancellationToken cancellationToken)
+    {
+        var report = Path.Join(project, "report.txt");
+        await File.WriteAllTextAsync(report, "synthetic report", cancellationToken);
+        return Setup(
+            project,
+            session,
+            seed,
+            denied,
+            [Call("attach-report", "attach_file", "Path", "report.txt")],
+            Call(
+                "copy-before-attach",
+                ShellTool.ToolName,
+                "Command",
+                "cp report.txt ../sessions/current/report.txt",
+                "WorkingDirectory",
+                project),
+            [report]);
+    }
 
     private static ScenarioSetup Setup(
         string project,

@@ -164,6 +164,17 @@ Done when:
 - [x] Approval authority, scratch retry state, durable messages, and public APIs remain unchanged.
 - [ ] The stacked follow-up handles `attach_file` exposure and native-tool shell mistakes separately.
 
+### Priority: Prevent Native-Tool Shell Mistakes
+
+**Stack parent:** PR #2046 (`fix/repair-tool-rollout-contracts`).
+
+- [x] Specify `attach_file` as a policy-filtered Core tool that accepts the authorized source path directly.
+- [x] Specify parser-owned exact executable matching without executable-private argument parsing.
+- [x] Return a typed correction before shell approval or execution and expose one deferred schema actor-locally.
+- [x] Prove parent/child, hard-deny, hidden-tool, and eventual-authorization boundaries.
+- [ ] Refresh deterministic and hosted PII-free behavioral evidence.
+- [ ] Complete Release, OpenSpec, header, formatting, Slopwatch, and adversarial-review gates before opening the stacked PR.
+
 ### Priority: Reduce Shell Approval Fatigue
 
 **PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`

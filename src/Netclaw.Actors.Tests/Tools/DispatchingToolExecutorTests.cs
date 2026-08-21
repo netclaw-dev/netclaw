@@ -3613,6 +3613,266 @@ public class DispatchingToolExecutorTests
             logger: logger);
     }
 
+    [Theory]
+    [InlineData("file_read")]
+    [InlineData("file_read --path notes.txt")]
+    [InlineData("echo ignored | file_read --path notes.txt")]
+    [InlineData("echo ignored && file_read --path notes.txt")]
+    [InlineData("file_read > result.txt")]
+    public void Detector_accepts_complete_static_bash_occurrences(string command)
+    {
+        var environment = ShellExecutionEnvironmentDefaults.Bash;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/workspace");
+        var context = CreateInteractivePersonalContext("signalr/native-detector-bash");
+
+        var correction = NativeToolShellCorrectionDetector.Detect(
+            analysis,
+            registry,
+            policy,
+            context.Invocation);
+
+        Assert.NotNull(correction);
+        Assert.Equal("file_read", correction.ToolName.Value);
+    }
+
+    [Theory]
+    [InlineData("file_read")]
+    [InlineData("file_read -Path notes.txt")]
+    [InlineData("Write-Output ignored | file_read -Path notes.txt")]
+    [InlineData("Write-Output ignored; file_read -Path notes.txt")]
+    [InlineData("file_read -Path notes.txt *> result.txt")]
+    public void Detector_accepts_complete_static_power_shell_occurrences(string command)
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "C:\\workspace");
+        var context = CreateInteractivePersonalContext("signalr/native-detector-pwsh");
+
+        var correction = NativeToolShellCorrectionDetector.Detect(
+            analysis,
+            registry,
+            policy,
+            context.Invocation);
+
+        Assert.NotNull(correction);
+        Assert.Equal("file_read", correction.ToolName.Value);
+    }
+
+    [Fact]
+    public void Detector_returns_first_exact_visible_native_tool_in_source_order()
+    {
+        var environment = ShellExecutionEnvironmentDefaults.Bash;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(
+            "file_write --path first && file_read --path second",
+            "/workspace");
+        var context = CreateInteractivePersonalContext("signalr/native-detector-order");
+
+        var correction = NativeToolShellCorrectionDetector.Detect(
+            analysis,
+            registry,
+            policy,
+            context.Invocation);
+
+        Assert.NotNull(correction);
+        Assert.Equal("file_write", correction.ToolName.Value);
+    }
+
+    [Fact]
+    public void Detector_keeps_wrapper_payload_before_later_outer_native_tool()
+    {
+        var environment = ShellExecutionEnvironmentDefaults.Bash;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(
+            "sudo bash -lc \"file_read\"; file_write",
+            "/workspace");
+        var context = CreateInteractivePersonalContext("signalr/native-detector-wrapper-order");
+
+        var correction = NativeToolShellCorrectionDetector.Detect(
+            analysis,
+            registry,
+            policy,
+            context.Invocation);
+
+        Assert.NotNull(correction);
+        Assert.Equal("file_read", correction.ToolName.Value);
+    }
+
+    [Theory]
+    [InlineData("FILE_READ")]
+    [InlineData("./file_read")]
+    [InlineData("unknown_tool")]
+    [InlineData("file_reed")]
+    [InlineData("shell_execute")]
+    [InlineData("echo $dynamic && file_read")]
+    [InlineData("echo 'unterminated && file_read")]
+    public void Detector_rejects_non_exact_dynamic_or_unresolved_occurrences(string command)
+    {
+        var environment = ShellExecutionEnvironmentDefaults.Bash;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/workspace");
+        var context = CreateInteractivePersonalContext("signalr/native-detector-negative");
+
+        var correction = NativeToolShellCorrectionDetector.Detect(
+            analysis,
+            registry,
+            policy,
+            context.Invocation);
+
+        Assert.Null(correction);
+    }
+
+    [Fact]
+    public void Detector_rejects_mcp_tools_even_when_the_authored_alias_is_exact()
+    {
+        var environment = ShellExecutionEnvironmentDefaults.Bash;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
+        registry.Register(new McpToolAdapter(
+            AIFunctionFactory.Create(() => "unused", "native_probe"),
+            "memorizer",
+            "native_probe",
+            invoker: new RecordingMcpToolInvoker("unused")));
+        var analysis = new ShellCommandAnalyzer(environment).Analyze(
+            "memorizer__native_probe",
+            "/workspace");
+        var context = CreateInteractivePersonalContext("signalr/native-detector-mcp");
+
+        var correction = NativeToolShellCorrectionDetector.Detect(
+            analysis,
+            registry,
+            policy,
+            context.Invocation);
+
+        Assert.Null(correction);
+    }
+
+    [Fact]
+    public void Detector_rejects_policy_hidden_native_tools()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Team.AllowedTools = ["shell_execute"];
+
+        Assert.Null(DetectNativeToolForConfig(config, TrustAudience.Team));
+    }
+
+    [Fact]
+    public void Detector_rejects_policy_denied_native_tools()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["file_read"] = ToolApprovalMode.Deny,
+            },
+        };
+        Assert.Null(DetectNativeToolForConfig(config, TrustAudience.Personal));
+    }
+
+    [Fact]
+    public async Task Native_tool_correction_precedes_approval_and_execution()
+    {
+        var approvalService = new FixedShellApprovalService(_ =>
+            throw new InvalidOperationException("Native correction must precede approval matching."));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = CreateToolCall(
+            "call-native-correction",
+            "shell_execute",
+            ToolInput.Create("Command", "file_read --path notes.txt"));
+        var context = CreateInteractivePersonalContext("signalr/native-correction");
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+        var correction = Assert.IsType<ToolAgentCorrection.NativeToolSuggested>(decision.AgentCorrection);
+        Assert.Equal("file_read", correction.ToolName.Value);
+        Assert.Equal(0, approvalService.RequestCount);
+
+        var exception = await Assert.ThrowsAsync<ToolAgentCorrectionRequiredException>(() =>
+            executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
+        var thrownCorrection = Assert.IsType<ToolAgentCorrection.NativeToolSuggested>(exception.Correction);
+        Assert.Equal("file_read", thrownCorrection.ToolName.Value);
+        Assert.Null(context.Receipt);
+        Assert.Equal(0, approvalService.RequestCount);
+    }
+
+    [Fact]
+    public async Task Shell_hard_deny_precedes_native_tool_correction()
+    {
+        var approvalService = new FixedShellApprovalService(_ =>
+            throw new InvalidOperationException("Hard deny must precede approval matching."));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = CreateToolCall(
+            "call-native-hard-deny",
+            "shell_execute",
+            ToolInput.Create("Command", "file_read && rm -rf /"));
+        var context = CreateInteractivePersonalContext("signalr/native-hard-deny");
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.StartsWith("hard_deny_", decision.DenyReason, StringComparison.Ordinal);
+        Assert.Null(decision.AgentCorrection);
+        Assert.Equal(0, approvalService.RequestCount);
+    }
+
+    [Fact]
+    public async Task Protected_path_deny_precedes_native_tool_correction()
+    {
+        var approvalService = new FixedShellApprovalService(_ =>
+            throw new InvalidOperationException("Protected-path denial must precede approval matching."));
+        var executor = CreateApprovalGatedShellExecutor(
+            approvalService,
+            deniedPaths: ["/protected"]);
+        var call = CreateToolCall(
+            "call-native-protected-path",
+            "shell_execute",
+            ToolInput.Create("Command", "file_read /protected/secret.txt"));
+        var context = CreateInteractivePersonalContext("signalr/native-protected-path");
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
+        Assert.Null(decision.AgentCorrection);
+        Assert.Equal(0, approvalService.RequestCount);
+    }
+
+    [Fact]
+    public async Task Invalid_call_arguments_precede_native_tool_correction()
+    {
+        var approvalService = new FixedShellApprovalService(_ =>
+            throw new InvalidOperationException("Argument validation must precede approval matching."));
+        var executor = CreateApprovalGatedShellExecutor(approvalService);
+        var call = CreateToolCall(
+            "call-native-invalid-input",
+            "shell_execute",
+            ToolInput.Create("Command", "file_read", "_background", "not-a-boolean"));
+        var context = CreateInteractivePersonalContext("signalr/native-invalid-input");
+
+        var result = await executor.ExecuteAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("Meta argument '_background'", result, StringComparison.Ordinal);
+        Assert.Equal(ToolInvocationOutcomeCategory.InvalidInput, context.Receipt?.Category);
+        Assert.Null(context.Receipt?.RemediationCode);
+        Assert.Equal(0, approvalService.RequestCount);
+    }
+
     // Shared by CreateApprovalGatedShellExecutor and the one-time-approval
     // tests that construct DispatchingToolExecutor directly (those tests
     // pass approvalService themselves, or intentionally omit it to exercise
@@ -3791,6 +4051,47 @@ public class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
+
+    private static ToolAgentCorrection.NativeToolSuggested? DetectNativeToolForConfig(
+        ToolConfig config,
+        TrustAudience audience)
+    {
+        var environment = ShellExecutionEnvironmentDefaults.Bash;
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, []);
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            commandPolicy,
+            pathPolicy);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(
+            config,
+            new NetclawPaths(),
+            pathPolicy,
+            commandPolicy,
+            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        var analysis = new ShellCommandAnalyzer(environment).Analyze("file_read", "/workspace");
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/native-detector-visibility",
+            null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = audience,
+                Boundary = audience is TrustAudience.Team ? TrustBoundary.Team : null,
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true),
+            });
+
+        return NativeToolShellCorrectionDetector.Detect(
+            analysis,
+            registry,
+            policy,
+            context.Invocation);
+    }
 
     private sealed class AllowAllShellTrustZonePolicy : IShellTrustZonePolicy
     {

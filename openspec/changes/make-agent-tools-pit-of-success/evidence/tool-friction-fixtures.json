@@ -76,6 +76,16 @@
       "expectedApprovalRequired": false,
       "fallbackApprovalRequired": false,
       "expectedContextEffect": "CoreOnlyChildCatalog"
+    },
+    {
+      "id": "TF08",
+      "scenario": "DirectAttachment",
+      "observedFriction": "PreparatoryShellCopyBeforeAttachment",
+      "expectedToolSequence": ["attach_file"],
+      "expectedOutcome": "success",
+      "expectedApprovalRequired": false,
+      "fallbackApprovalRequired": true,
+      "expectedContextEffect": "RecordOneCanonicalFile"
     }
   ]
 }

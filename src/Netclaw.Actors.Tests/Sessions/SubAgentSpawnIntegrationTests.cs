@@ -214,6 +214,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
         registry.RegisterCore(new SpawnAgentTool(subAgentRegistry, spawner, subAgentPaths));
         registry.RegisterCore(new SearchToolsTool(registry, toolAccessPolicy));
         registry.RegisterCore(new LoadToolTool(registry, toolAccessPolicy));
+        registry.RegisterCore(new AttachFileTool(toolConfig, subAgentPaths, new ToolPathPolicy([])));
         _recordingFileReadTool = new RecordingContextTool("file_read", "stub file content", "file");
         registry.RegisterCore(_recordingFileReadTool);
         _recordingApprovalTool = new RecordingContextTool(ApprovalProbeToolName, "approval ok");
@@ -323,8 +324,10 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             .OrderBy(static name => name, StringComparer.Ordinal)
             .ToList();
         Assert.Equal(
-            mainToolNames.Where(static name => name != "spawn_agent"),
+            mainToolNames.Where(static name => name is not "attach_file" and not "spawn_agent"),
             childToolNames);
+        Assert.Contains("attach_file", mainToolNames);
+        Assert.DoesNotContain("attach_file", childToolNames);
     }
 
     [Fact]
@@ -521,7 +524,19 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             CreateToolCall(
                 "call-load-hidden",
                 "load_tool",
-                new Dictionary<string, object?> { ["Name"] = HiddenSpecialtyToolName })
+                new Dictionary<string, object?> { ["Name"] = HiddenSpecialtyToolName }),
+            CreateToolCall(
+                "call-search-attach",
+                "search_tools",
+                new Dictionary<string, object?> { ["Query"] = "attach_file" }),
+            CreateToolCall(
+                "call-load-attach",
+                "load_tool",
+                new Dictionary<string, object?> { ["Name"] = "attach_file" }),
+            CreateToolCall(
+                "call-dispatch-attach",
+                "attach_file",
+                new Dictionary<string, object?> { ["Path"] = "report.txt" })
         ]);
 
         var sessionId = new SessionId("console/subagent-policy-boundaries");
@@ -571,6 +586,17 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             $"Tool '{HiddenSpecialtyToolName}' not found.",
             GetToolResult(resultMessages, "call-load-hidden"),
             StringComparison.Ordinal);
+        Assert.StartsWith(
+            "No tools found matching",
+            GetToolResult(resultMessages, "call-search-attach"),
+            StringComparison.Ordinal);
+        Assert.StartsWith(
+            "Tool 'attach_file' not found.",
+            GetToolResult(resultMessages, "call-load-attach"),
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "Unknown tool: attach_file",
+            GetToolResult(resultMessages, "call-dispatch-attach"));
 
         Assert.NotNull(_recordingHiddenTool);
         Assert.False(_recordingHiddenTool!.WasCalled);
@@ -579,6 +605,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             names =>
             {
                 Assert.DoesNotContain("spawn_agent", names);
+                Assert.DoesNotContain("attach_file", names);
                 Assert.DoesNotContain(HiddenSpecialtyToolName, names);
                 Assert.Equal(
                     ["file_read", "load_tool", "search_tools"],
@@ -666,6 +693,126 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
             ["file_read", "load_tool", "search_tools"],
             _clientProvider.Compaction.ReceivedToolNames[2]
                 .OrderBy(static name => name, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task Child_native_correction_exposes_one_tool_only_until_child_completion()
+    {
+        const string deferredToolName = ApprovalProbeToolName;
+        var shellProbe = new RecordingContextTool("shell_execute", "shell must not run", "shell");
+        _toolRegistry.Register(shellProbe);
+
+        _clientProvider.Main.PlannedResponses.Enqueue(
+        [
+            CreateToolCall(
+                "call-native-child-spawn-1",
+                "spawn_agent",
+                new Dictionary<string, object?>
+                {
+                    ["agent"] = "summarizer",
+                    ["task"] = "Inspect with the native probe."
+                })
+        ]);
+        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("First child returned.")]);
+        _clientProvider.Main.PlannedResponses.Enqueue(
+        [
+            CreateToolCall(
+                "call-native-child-spawn-2",
+                "spawn_agent",
+                new Dictionary<string, object?>
+                {
+                    ["agent"] = "summarizer",
+                    ["task"] = "Start without inherited tools."
+                })
+        ]);
+        _clientProvider.Main.PlannedResponses.Enqueue([new TextContent("Second child returned.")]);
+        _clientProvider.Compaction.PlannedResponses.Enqueue(
+        [
+            CreateToolCall(
+                "call-native-child-correction",
+                "shell_execute",
+                new Dictionary<string, object?>
+                {
+                    ["command"] = $"{deferredToolName} --inspect"
+                })
+        ]);
+        _clientProvider.Compaction.PlannedResponses.Enqueue(
+        [
+            CreateToolCall(
+                "call-native-child-authorization",
+                deferredToolName,
+                new Dictionary<string, object?>())
+        ]);
+        _clientProvider.Compaction.PlannedResponses.Enqueue([new TextContent("First child completed.")]);
+        _clientProvider.Compaction.PlannedResponses.Enqueue([new TextContent("Fresh child completed.")]);
+
+        var sessionId = new SessionId("console/subagent-native-correction-isolation");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("subagent-native-correction-events");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var source = BuildPersonalSource();
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run the correcting child.",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SubAgentOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var approval = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(deferredToolName, approval.ToolName.Value);
+        var denied = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = approval.CallId,
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+            SenderId = source.SenderId!
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.IsType<CommandAck>(denied);
+        await ExpectTurnCompletedAsync(
+            subscriber,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run a fresh child.",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await ExpectTurnCompletedAsync(
+            subscriber,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(_clientProvider.Compaction.ReceivedToolNames.Count >= 4);
+        Assert.DoesNotContain(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[0]);
+        Assert.Contains(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[1]);
+        Assert.Contains(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[2]);
+        Assert.DoesNotContain(deferredToolName, _clientProvider.Compaction.ReceivedToolNames[^1]);
+        Assert.False(shellProbe.WasCalled);
+        Assert.NotNull(_recordingApprovalTool);
+        Assert.False(_recordingApprovalTool!.WasCalled);
+        var correction = GetToolResult(
+            _clientProvider.Compaction.ReceivedMessages[1],
+            "call-native-child-correction");
+        Assert.Equal(
+            $"Shell execution stopped because '{deferredToolName}' is a native Netclaw tool.\n" +
+            "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
+            correction);
     }
 
     [Fact]

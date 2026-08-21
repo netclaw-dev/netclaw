@@ -259,6 +259,86 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal(1, executor.Attempts);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Native_tool_correction_bypasses_approval_and_background_dispatch(
+        bool streamResults,
+        bool background)
+    {
+        var executor = new NativeToolCorrectionExecutor();
+        var resultProbe = CreateTestProbe("native-correction-result");
+        var jobManagerProbe = CreateTestProbe("native-correction-job-manager");
+        var approvals = new List<ToolInteractionRequest>();
+        var arguments = new Dictionary<string, object?>
+        {
+            ["command"] = "file_read README.md"
+        };
+        if (background)
+        {
+            arguments["_background"] = true;
+            arguments["_rationale"] = "read later";
+        }
+
+        var fixture = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-native-correction", "shell_execute", arguments)],
+                new SessionId("D1/native-tool-correction"),
+                resultProbe.Ref)
+            .WithBackgroundJobs(jobManagerProbe.Ref)
+            .WithApprovals(
+                new ApprovalChannel(),
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan);
+        if (streamResults)
+            fixture.StreamingResults();
+
+        var pipelineTask = fixture.ExecuteAsync(TestContext.Current.CancellationToken);
+        ToolCallResult result;
+        if (streamResults)
+        {
+            result = (await resultProbe.ExpectMsgAsync<ToolExecutionSingleCompleted>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken)).Result;
+            await resultProbe.ExpectMsgAsync<ToolExecutionBatchCompleted>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+        else
+        {
+            var completed = await resultProbe.ExpectMsgAsync<ToolExecutionCompleted>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+            var message = Assert.Single(completed.ToolResults);
+            var request = Assert.Single(completed.ToolExposureRequests);
+            result = new ToolCallResult(
+                message,
+                [],
+                [],
+                [],
+                [],
+                Receipt: completed.ToolReceipts[message.ToolCallId!.Value.Value],
+                ExposureRequest: request.Value);
+        }
+
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "Shell execution stopped because 'file_read' is a native Netclaw tool.\n" +
+            "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
+            result.Message.Content);
+        Assert.Equal(ToolInvocationOutcomeCategory.RecoverableCorrection, result.Receipt?.Category);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, result.Receipt?.RemediationCode);
+        Assert.Equal("file_read", result.ExposureRequest?.ToolName.Value);
+        Assert.Empty(approvals);
+        Assert.Equal(background ? 1 : 0, executor.AuthorizationAttempts);
+        Assert.Equal(background ? 0 : 1, executor.ExecutionBoundaryAttempts);
+        await jobManagerProbe.ExpectNoMsgAsync(
+            TimeSpan.FromMilliseconds(200),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
     [Fact]
     public async Task Streaming_result_is_presented_before_delivery()
     {
@@ -1172,6 +1252,34 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                 remediationCode: ToolRemediationCode.SetWorkingDirectory));
             return Task.FromResult("Error: invalid_context: No project or session directory is available.");
         }
+    }
+
+    private sealed class NativeToolCorrectionExecutor : IToolExecutor
+    {
+        public int AuthorizationAttempts { get; private set; }
+
+        public int ExecutionBoundaryAttempts { get; private set; }
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            AuthorizationAttempts++;
+            throw CreateCorrection();
+        }
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            ExecutionBoundaryAttempts++;
+            throw CreateCorrection();
+        }
+
+        private static ToolAgentCorrectionRequiredException CreateCorrection()
+            => new(new ToolAgentCorrection.NativeToolSuggested(new ToolName("file_read")));
     }
 
     private sealed class ScratchCorrectionRequiredExecutor : IToolExecutor

@@ -83,21 +83,34 @@ internal sealed class ShellCommandAnalyzer
             return ShellAnalysisFailure.None;
         }
 
-        // The v0.3 parser owns contracted wrapper forms. This fallback keeps
-        // Netclaw's extra bundled bash -lc form. Remove only a direct shell
-        // dispatch: prefix executables such as sudo, env, and nohup remain
-        // visible to hard-deny and approval policy.
-        commands.AddRange(parsed.Commands.Where(static occurrence =>
-            !IsUnexpandedWrapperClause(occurrence.Clause)
-            || !IsTransparentShellDispatch(occurrence.Clause)));
-
         if (innerCommands.Count != unexpandedWrappers.Count)
-            return ShellAnalysisFailure.Unresolved;
-
-        for (var i = 0; i < innerCommands.Count; i++)
         {
+            // Preserve the prior defense scan when wrapper extraction is incomplete.
+            commands.AddRange(parsed.Commands.Where(static occurrence =>
+                !IsUnexpandedWrapperClause(occurrence.Clause)
+                || !IsTransparentShellDispatch(occurrence.Clause)));
+            return ShellAnalysisFailure.Unresolved;
+        }
+
+        // The v0.3 parser owns contracted wrapper forms. This fallback keeps
+        // Netclaw's extra bundled bash -lc form. Expand each wrapper at its
+        // parser-owned position so every consumer sees execution order. Remove
+        // only a direct shell dispatch; retain prefix executables such as sudo,
+        // env, and nohup for hard-deny and approval policy.
+        var innerIndex = 0;
+        foreach (var occurrence in parsed.Commands)
+        {
+            if (!IsUnexpandedWrapperClause(occurrence.Clause))
+            {
+                commands.Add(occurrence);
+                continue;
+            }
+
+            if (!IsTransparentShellDispatch(occurrence.Clause))
+                commands.Add(occurrence);
+
             if (!TryResolveWrapperWorkingDirectory(
-                    unexpandedWrappers[i],
+                    occurrence,
                     workingDirectory,
                     out var innerWorkingDirectory))
             {
@@ -105,7 +118,7 @@ internal sealed class ShellCommandAnalyzer
             }
 
             var failure = Analyze(
-                innerCommands[i],
+                innerCommands[innerIndex++],
                 innerWorkingDirectory,
                 depth + 1,
                 commands);

@@ -305,7 +305,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (exception is OperationCanceledException && callerToken.IsCancellationRequested)
             return;
 
-        if (exception is ToolApprovalRequiredException)
+        if (exception is ToolApprovalRequiredException or ToolAgentCorrectionRequiredException)
             return;
 
         var category = exception switch
@@ -357,12 +357,29 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                     tool,
                     context,
                     toolCall.Arguments);
-                shellAuthorization = await _shellPolicyCoordinator.EvaluateAsync(
-                    tool,
-                    toolCall,
-                    context,
-                    preflight,
-                    ct);
+                var analysis = preflight switch
+                {
+                    ShellPolicyPreflightResult.Complete complete => complete.AuthorizedAnalysis,
+                    ShellPolicyPreflightResult.Continue next => next.Analysis,
+                    _ => null,
+                };
+                var correction = analysis is null
+                    ? null
+                    : NativeToolShellCorrectionDetector.Detect(
+                        analysis,
+                        _registry,
+                        _policy,
+                        context.Invocation);
+                shellAuthorization = correction is null
+                    ? await _shellPolicyCoordinator.EvaluateAsync(
+                        tool,
+                        toolCall,
+                        context,
+                        preflight,
+                        ct)
+                    : new ShellPolicyAuthorization(
+                        ToolAuthorizationDecision.RequireAgentCorrection(correction),
+                        authorizedAnalysis: null);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -464,6 +481,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                 ?? throw new InvalidOperationException("Approval decision missing approval context."));
         }
 
+        if (decision.Outcome is ToolAuthorizationOutcome.RequiresAgentCorrection)
+        {
+            throw new ToolAgentCorrectionRequiredException(
+                decision.AgentCorrection
+                ?? throw new InvalidOperationException("Agent correction decision missing correction facts."));
+        }
+
         if (decision.Outcome is ToolAuthorizationOutcome.Denied)
         {
             throw new ToolAccessDeniedException(
@@ -552,6 +576,12 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                     allowReason.GetDescription());
                 break;
             case ToolAuthorizationOutcome.RequiresApproval:
+                _logger.LogInformation(
+                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome}",
+                    toolName,
+                    decision.Outcome.ToString());
+                break;
+            case ToolAuthorizationOutcome.RequiresAgentCorrection:
                 _logger.LogInformation(
                     "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome}",
                     toolName,

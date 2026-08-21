@@ -40,6 +40,39 @@ public class ToolRegistrationExtensionsTests
         return Verifier.Verify(snapshot);
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Attach_file_is_core_without_bypassing_default_audience_policy(TrustAudience audience)
+    {
+        var registry = CreateFullFirstPartyRegistry();
+        var tool = Assert.IsType<AttachFileTool>(registry.GetByName("attach_file"));
+        var policy = CreateAccessPolicy(new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed });
+
+        Assert.True(registry.IsCoreTool(tool.Name));
+        Assert.True(policy.IsToolExposed(tool, audience));
+    }
+
+    [Fact]
+    public void Attach_file_core_is_hidden_by_an_audience_deny_override()
+    {
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Team.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                ["attach_file"] = ToolApprovalMode.Deny
+            }
+        };
+        var registry = CreateFullFirstPartyRegistry();
+        var tool = Assert.IsType<AttachFileTool>(registry.GetByName("attach_file"));
+        var policy = CreateAccessPolicy(config);
+
+        Assert.True(registry.IsCoreTool(tool.Name));
+        Assert.False(policy.IsToolExposed(tool, TrustAudience.Team));
+    }
+
     [Fact]
     public void Registration_defaults_to_deferred_and_core_replacement_is_explicit()
     {
@@ -94,15 +127,7 @@ public class ToolRegistrationExtensionsTests
     {
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-core-tool-contract"));
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        var policy = new ToolAccessPolicy(
-            config,
-            new EffectivePolicyDefaults(
-                DeploymentPosture.Personal,
-                TrustAudience.Personal,
-                ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
-            new ShellCommandPolicy(),
-            new ToolPathPolicy([]));
+        var policy = CreateAccessPolicy(config);
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(
             config,
@@ -132,6 +157,17 @@ public class ToolRegistrationExtensionsTests
 
         return registry;
     }
+
+    private static ToolAccessPolicy CreateAccessPolicy(ToolConfig config) =>
+        new(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
     private static string[] GetFunctionNames(IReadOnlyList<AITool> tools) =>
         tools

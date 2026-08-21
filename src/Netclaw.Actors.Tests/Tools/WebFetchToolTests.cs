@@ -545,7 +545,7 @@ public class WebFetchToolTests : IDisposable
         Assert.Contains(".png", result);
         Assert.Contains("Content-Type: image/png", result);
         Assert.Contains("binary file", result);
-        Assert.Contains("attach_file", result);
+        Assert.Contains("available file-delivery tool", result);
 
         var files = Directory.GetFiles(_dir.Path, "*.png");
         Assert.Single(files);

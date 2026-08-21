@@ -33,7 +33,8 @@ internal enum ToolRemediationCode
 {
     SetWorkingDirectory,
     UseSessionScratch,
-    ProvideUniqueOldString
+    ProvideUniqueOldString,
+    UseNativeTool
 }
 
 internal enum ToolFileActivityKind

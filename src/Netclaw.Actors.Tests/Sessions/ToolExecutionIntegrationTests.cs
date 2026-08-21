@@ -453,11 +453,16 @@ internal sealed class FakeToolExecutor : IToolExecutor
 
     public Dictionary<string, ToolInvocationReceipt> Receipts { get; } = [];
 
+    public Dictionary<string, ToolAgentCorrection> Corrections { get; } = [];
+
     /// <summary>Tool names that should throw on execution.</summary>
     public HashSet<string> FailForTools { get; } = [];
 
     public Task AuthorizeAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {
+        if (Corrections.TryGetValue(toolCall.Name, out var correction))
+            throw new ToolAgentCorrectionRequiredException(correction);
+
         if (FailForTools.Contains(toolCall.Name))
             throw new InvalidOperationException($"Tool '{toolCall.Name}' failed (simulated)");
 
@@ -467,6 +472,9 @@ internal sealed class FakeToolExecutor : IToolExecutor
     public async Task<string> ExecuteAsync(FunctionCallContent toolCall, Netclaw.Tools.ToolExecutionContext context, CancellationToken ct = default)
     {
         Interlocked.Increment(ref _callCount);
+
+        if (Corrections.TryGetValue(toolCall.Name, out var correction))
+            throw new ToolAgentCorrectionRequiredException(correction);
 
         if (FailForTools.Contains(toolCall.Name))
         {

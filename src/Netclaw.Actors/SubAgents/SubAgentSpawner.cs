@@ -459,8 +459,8 @@ public sealed class SubAgentSpawner
     private ResolvedSubAgentTools ResolveTools(ToolInvocationContext context)
     {
         // Sub-agents inherit the parent session's runtime tool policy. Agent
-        // definition tool metadata is advisory only; the only static
-        // sub-agent-specific filter denies recursive spawn_agent delegation.
+        // definition tool metadata is advisory only. The static child filter
+        // denies recursive delegation and tools that need parent-only output transport.
         var tools = _toolRegistry.GetAllRegistrations()
             .Select(static registration => registration.Tool)
             .Where(static tool => SubAgentToolPolicy.IsAllowedForSubAgent(tool.Name));

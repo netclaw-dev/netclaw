@@ -292,6 +292,10 @@ public class SubAgentActorTests : TestKit
             "You are a test agent.",
             "[Skill Overlay]",
             "[Subagent Execution Contract]");
+        Assert.Contains(
+            "Return each authorized file path that the parent session should deliver.",
+            systemPrompt,
+            StringComparison.Ordinal);
         Assert.EndsWith(
             "Always end by emitting a final output for the parent session.",
             systemPrompt.TrimEnd(),

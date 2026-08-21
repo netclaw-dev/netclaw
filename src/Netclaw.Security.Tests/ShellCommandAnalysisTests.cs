@@ -78,6 +78,24 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
+    [InlineData("bash -lc", "file_read", "file_write")]
+    [InlineData("sudo bash -lc", "sudo", "file_read", "file_write")]
+    [InlineData("env bash -lc", "env", "file_read", "file_write")]
+    public void Bash_wrapper_payload_stays_before_later_outer_command(
+        string invocation,
+        params string[] expectedVerbs)
+    {
+        var analysis = _analyzer.Analyze(
+            $"{invocation} \"file_read\"; file_write",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            expectedVerbs,
+            analysis.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+    }
+
+    [Theory]
     [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status'", "pwsh")]
     [InlineData("powershell.exe -Command 'git status'", "powershell.exe")]
     public void Bash_treats_power_shell_as_an_ordinary_external_command(

@@ -25,6 +25,10 @@ public class ToolRemediationPresenterTests
         {
             nameof(ToolRemediationCode.ProvideUniqueOldString),
             "Next action: retry file_edit with a unique OldString, or set ReplaceAll=true when every match should change."
+        },
+        {
+            nameof(ToolRemediationCode.UseNativeTool),
+            "Next action: call the native Netclaw tool named in this result directly instead of shell_execute."
         }
     };
 

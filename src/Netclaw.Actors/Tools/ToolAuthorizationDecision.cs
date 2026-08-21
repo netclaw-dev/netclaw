@@ -32,6 +32,11 @@ internal enum ToolAuthorizationOutcome
     RequiresApproval,
 
     /// <summary>
+    /// The current attempt must not execute because the agent should call a native tool.
+    /// </summary>
+    RequiresAgentCorrection,
+
+    /// <summary>
     /// The current attempt cannot execute and must not prompt the user.
     /// </summary>
     /// <remarks>
@@ -148,6 +153,7 @@ internal sealed record ToolAuthorizationDecision
         ToolAllowReason? allowReason,
         string? denyReason,
         ToolApprovalContext? approvalContext,
+        ToolAgentCorrection? agentCorrection,
         IReadOnlyList<ToolApprovalMatch> approvalMatches,
         ShellPolicyDecisionTrace? shellPolicyTrace = null)
     {
@@ -155,6 +161,7 @@ internal sealed record ToolAuthorizationDecision
         AllowReason = allowReason;
         DenyReason = denyReason;
         ApprovalContext = approvalContext;
+        AgentCorrection = agentCorrection;
         ApprovalMatches = approvalMatches;
         ShellPolicyTrace = shellPolicyTrace ?? ShellPolicyDecisionTrace.Empty;
     }
@@ -180,6 +187,12 @@ internal sealed record ToolAuthorizationDecision
     public ToolApprovalContext? ApprovalContext { get; }
 
     /// <summary>
+    /// Gets the typed correction when <see cref="Outcome"/> is
+    /// <see cref="ToolAuthorizationOutcome.RequiresAgentCorrection"/>.
+    /// </summary>
+    public ToolAgentCorrection? AgentCorrection { get; }
+
+    /// <summary>
     /// Gets the session or persistent grants that matched this attempt.
     /// </summary>
     /// <remarks>
@@ -198,7 +211,7 @@ internal sealed record ToolAuthorizationDecision
     public static ToolAuthorizationDecision Allow(ToolAllowReason reason)
     {
         ValidateAllowReason(reason);
-        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Allowed, reason, null, null, []);
+        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Allowed, reason, null, null, null, []);
     }
 
     /// <summary>
@@ -215,6 +228,7 @@ internal sealed record ToolAuthorizationDecision
             reason,
             null,
             null,
+            null,
             [.. approvalMatches]);
     }
 
@@ -224,7 +238,7 @@ internal sealed record ToolAuthorizationDecision
     public static ToolAuthorizationDecision Deny(string reason)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Denied, null, reason, null, []);
+        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Denied, null, reason, null, null, []);
     }
 
     /// <summary>
@@ -233,7 +247,7 @@ internal sealed record ToolAuthorizationDecision
     public static ToolAuthorizationDecision RequiresApproval(ToolApprovalContext context)
     {
         ArgumentNullException.ThrowIfNull(context);
-        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.RequiresApproval, null, null, context, []);
+        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.RequiresApproval, null, null, context, null, []);
     }
 
     /// <summary>
@@ -250,7 +264,23 @@ internal sealed record ToolAuthorizationDecision
             null,
             null,
             context,
+            null,
             [.. approvalMatches]);
+    }
+
+    /// <summary>
+    /// Creates a typed agent-correction result that grants no execution authority.
+    /// </summary>
+    public static ToolAuthorizationDecision RequireAgentCorrection(ToolAgentCorrection correction)
+    {
+        ArgumentNullException.ThrowIfNull(correction);
+        return new ToolAuthorizationDecision(
+            ToolAuthorizationOutcome.RequiresAgentCorrection,
+            null,
+            null,
+            null,
+            correction,
+            []);
     }
 
     internal static ToolAuthorizationDecision From(
@@ -281,4 +311,16 @@ internal sealed record ToolAuthorizationDecision
         if (!Enum.IsDefined(reason))
             throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown tool allow reason.");
     }
+}
+
+internal sealed class ToolAgentCorrectionRequiredException : InvalidOperationException
+{
+    internal ToolAgentCorrectionRequiredException(ToolAgentCorrection correction)
+        : base("Tool invocation requires agent correction.")
+    {
+        ArgumentNullException.ThrowIfNull(correction);
+        Correction = correction;
+    }
+
+    internal ToolAgentCorrection Correction { get; }
 }

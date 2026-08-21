@@ -15,10 +15,11 @@ namespace Netclaw.Actors.Tools;
 /// Attaches a file as output to the user.
 /// Paths inside the current session are attached directly. Paths from sibling
 /// Netclaw session directories are copied into the current session first.
-/// All other paths are rejected to prevent traversal/exfiltration.
+/// Interactive Personal sessions can copy another policy-authorized readable
+/// source. Other callers remain limited to the session tree.
 /// </summary>
 [NetclawTool("attach_file",
-    "Attach a file to send to the user. Paths in the current session attach directly; files from other Netclaw session folders are copied into this session first.",
+    "Attach an existing authorized file to the user. Pass the source path directly; Netclaw copies the file into the current session when required. Do not copy the file with shell or another file tool first.",
     Grant = "file")]
 public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 {
@@ -26,7 +27,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
     private readonly ToolPathPolicy _pathPolicy;
 
     public record Params(
-        [property: Description("File path to attach. Relative paths use the current project, then session scratch.")] string Path,
+        [property: Description("Existing authorized source file path. Relative paths use the current project, then session scratch. Pass this path directly without first copying the file.")] string Path,
         [property: Description("Optional display name for the file")] string? DisplayName = null);
 
     public AttachFileTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)

@@ -929,6 +929,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Result = result.Content ?? string.Empty,
                 FailureCode = msg.ToolFailureCodes.GetValueOrDefault(toolCallId.Value)
             }, OutputFilter.ToolCalls);
+
+            if (msg.ToolExposureRequests.TryGetValue(toolCallId.Value, out var exposureRequest))
+                TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
         }
 
         foreach (var change in msg.ScratchCorrectionChanges)
@@ -3467,10 +3470,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var registration = _fullRegistry.GetRegistrationByToolName(toolName);
         if (registration is null) return false;
 
-        if (_toolAccessPolicy is not null && !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
+        if (_toolAccessPolicy is null || !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
             return false;
 
         var tool = registration.Tool;
+        if (_fullRegistry.IsCoreTool(tool.Name))
+            return true;
+
         // Cache and log under the canonical name regardless of which form
         // the LLM sent (load_tool / search_tools now emit the LLM-facing
         // alias for MCP, but legacy strings may still arrive). Cache key
@@ -4746,6 +4752,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             Result = toolMessage.Content ?? string.Empty,
             FailureCode = result.FailureCode
         }, OutputFilter.ToolCalls);
+
+        if (result.ExposureRequest is { } exposureRequest)
+            TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
 
         var updatedContext = WorkingContextUpdater.UpdateFromToolReceipt(
             _state.WorkingContext,

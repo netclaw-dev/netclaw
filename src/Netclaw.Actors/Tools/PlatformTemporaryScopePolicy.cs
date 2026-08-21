@@ -20,6 +20,8 @@ internal abstract record ToolAgentCorrection
         string SessionDirectory,
         string TemporaryRoot,
         ApprovalShell Shell) : ToolAgentCorrection;
+
+    internal sealed record NativeToolSuggested(ToolName ToolName) : ToolAgentCorrection;
 }
 
 internal readonly record struct SessionScratchCallSemantics(

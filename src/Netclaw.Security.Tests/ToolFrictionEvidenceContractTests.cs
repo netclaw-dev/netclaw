@@ -15,7 +15,7 @@ public sealed partial class ToolFrictionEvidenceContractTests
 {
     private const string FixtureFile = "tool-friction-fixtures.json";
     private const string FixtureSha256 =
-        "40ae6dbe3b9c6e9c8d061face39b341ee0124b517d63414353430f5ed7f3442c";
+        "20be5a3fdc97fd311aba4245347fdb45510708d04ca7f1695312ca26bee25c05";
 
     private static readonly string[] ProhibitedRawIdentifierClasses =
     [
@@ -45,7 +45,9 @@ public sealed partial class ToolFrictionEvidenceContractTests
         new("TF06", "FailedFileActivity", "FailedCallPollutedRecentFiles", ["file_write"],
             "access_denied", false, false, "PreserveRecentFiles"),
         new("TF07", "SubagentCatalogExposure", "EagerSubagentSchemaCatalog",
-            ["search_tools", "load_tool"], "success", false, false, "CoreOnlyChildCatalog")
+            ["search_tools", "load_tool"], "success", false, false, "CoreOnlyChildCatalog"),
+        new("TF08", "DirectAttachment", "PreparatoryShellCopyBeforeAttachment", ["attach_file"],
+            "success", false, true, "RecordOneCanonicalFile")
     ];
 
     [Fact]

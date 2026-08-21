@@ -61,6 +61,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         "Before tool work in another task-named project, call set_working_directory once, even with absolute paths. " +
         "Declare the task's first project path exactly before probing it.";
     private const string HeadlessExecutionContractSuffix =
+        "You cannot attach files directly. Return each authorized file path that the parent session should deliver. " +
         "Always end by emitting a final output for the parent session.";
     private static readonly TimeSpan StreamPingInterval = TimeSpan.FromSeconds(2);
 
@@ -569,6 +570,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     TryApplyProjectDirectory(result.Name, receipt);
                     if (receipt is not null)
                         _log.Info("SubAgent tool outcome category={OutcomeCategory}", receipt.Category);
+                    if (msg.ToolExposureRequests.TryGetValue(callId.Value, out var exposureRequest))
+                        TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
                 }
                 if (result.Name is "load_tool" && result.Content is not null)
                     TryActivateDiscoveredTool(result.Content.Trim());
@@ -1437,6 +1440,21 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             ? new SessionScratchCorrectionChange.Consume(directConsumed)
                             : null);
                 }
+                catch (ToolAgentCorrectionRequiredException correctionEx)
+                {
+                    if (correctionEx.Correction is not ToolAgentCorrection.NativeToolSuggested nativeTool)
+                        throw;
+
+                    toolContext.Outputs.TryComplete(new ToolInvocationReceipt(
+                        ToolInvocationOutcomeCategory.RecoverableCorrection,
+                        remediationCode: ToolRemediationCode.UseNativeTool));
+                    return BuildToolResult(
+                        cleanedTc,
+                        SessionToolExecutionPipeline.BuildNativeToolCorrection(nativeTool.ToolName),
+                        toolContext,
+                        modelInputBudget,
+                        exposureRequest: new ToolExposureRequest(nativeTool.ToolName));
+                }
                 catch (ToolApprovalRequiredException approvalEx)
                 {
                     var ctx = approvalEx.ApprovalContext;
@@ -1625,6 +1643,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             : throw new InvalidOperationException("A child tool receipt requires a call identity."),
                         result => result.Receipt
                             ?? throw new InvalidOperationException("A selected child tool result requires a receipt."),
+                        StringComparer.Ordinal),
+                ToolExposureRequests = results
+                    .Where(result => result.ExposureRequest is not null)
+                    .ToDictionary<SubAgentToolCallResult, string, ToolExposureRequest>(
+                        result => result.Message.ToolCallId is { } callId
+                            ? callId.Value
+                            : throw new InvalidOperationException("A child tool exposure request requires a call identity."),
+                        result => result.ExposureRequest
+                            ?? throw new InvalidOperationException("A selected child tool result requires an exposure request."),
                         StringComparer.Ordinal)
             });
         }
@@ -1649,7 +1676,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         string resultText,
         ToolExecutionContext toolContext,
         ModelInputBatchBudget modelInputBudget,
-        SessionScratchCorrectionChange? scratchCorrectionChange = null)
+        SessionScratchCorrectionChange? scratchCorrectionChange = null,
+        ToolExposureRequest? exposureRequest = null)
     {
         var materialization = MaterializeModelInputFiles(toolContext, modelInputBudget);
         if (materialization.RequestedCount > materialization.MediaReferences.Count)
@@ -1671,7 +1699,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             },
             materialization.MediaReferences,
             scratchCorrectionChange,
-            receipt);
+            receipt,
+            exposureRequest);
     }
 
     private static ModelInputMaterializationResult MaterializeModelInputFiles(
@@ -1695,7 +1724,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         SerializableChatMessage Message,
         IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences,
         SessionScratchCorrectionChange? ScratchCorrectionChange,
-        ToolInvocationReceipt? Receipt);
+        ToolInvocationReceipt? Receipt,
+        ToolExposureRequest? ExposureRequest);
 
     private string BuildSystemPrompt(
         SubAgentDefinition definition,

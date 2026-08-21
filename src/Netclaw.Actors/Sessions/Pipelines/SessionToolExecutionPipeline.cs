@@ -39,7 +39,8 @@ internal sealed record ToolCallResult(
     Jobs.ActiveJobInfo? StartedBackgroundJob = null,
     SessionScratchCorrectionChange? ScratchCorrectionChange = null,
     string? FailureCode = null,
-    ToolInvocationReceipt? Receipt = null);
+    ToolInvocationReceipt? Receipt = null,
+    ToolExposureRequest? ExposureRequest = null);
 
 internal abstract record SessionScratchCorrectionChange
 {
@@ -424,6 +425,15 @@ internal sealed class SessionToolExecutionPipeline
                             : throw new InvalidOperationException("A tool receipt requires a call identity."),
                         result => result.Receipt
                             ?? throw new InvalidOperationException("A selected tool result requires a receipt."),
+                        StringComparer.Ordinal),
+                ToolExposureRequests = results
+                    .Where(result => result.ExposureRequest is not null)
+                    .ToDictionary<ToolCallResult, string, ToolExposureRequest>(
+                        result => result.Message.ToolCallId is { } callId
+                            ? callId.Value
+                            : throw new InvalidOperationException("A tool exposure request requires a call identity."),
+                        result => result.ExposureRequest
+                            ?? throw new InvalidOperationException("A selected tool result requires an exposure request."),
                         StringComparer.Ordinal)
             });
         }
@@ -688,6 +698,25 @@ internal sealed class SessionToolExecutionPipeline
             sw.Stop();
 
         }
+        catch (ToolAgentCorrectionRequiredException correctionEx)
+        {
+            if (correctionEx.Correction is not ToolAgentCorrection.NativeToolSuggested nativeTool)
+                throw;
+
+            sw.Stop();
+            var correctionReceipt = new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.RecoverableCorrection,
+                remediationCode: ToolRemediationCode.UseNativeTool);
+            return new ToolCallResult(new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = BuildNativeToolCorrection(nativeTool.ToolName),
+                ToolCallId = new ToolCallId(tc.CallId),
+                Name = tc.Name
+            }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+                Receipt: correctionReceipt,
+                ExposureRequest: new ToolExposureRequest(nativeTool.ToolName));
+        }
         catch (ToolApprovalRequiredException approvalEx)
         {
             if (approvalEx.ApprovalContext.AgentCorrection is
@@ -925,6 +954,9 @@ internal sealed class SessionToolExecutionPipeline
                 ? new SessionScratchCorrectionChange.Consume(consumed)
                 : null);
     }
+
+    internal static string BuildNativeToolCorrection(ToolName toolName)
+        => $"Shell execution stopped because '{toolName.Value}' is a native Netclaw tool.";
 
     internal static SessionScratchCallSemantics? BuildSessionScratchCallSemantics(
         FunctionCallContent toolCall,
