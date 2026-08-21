@@ -1,0 +1,41 @@
+// -----------------------------------------------------------------------
+// <copyright file="ToolRemediationPresenter.cs" company="Petabridge, LLC">
+//      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
+// </copyright>
+// -----------------------------------------------------------------------
+using Netclaw.Tools;
+using Netclaw.Actors.Protocol;
+
+namespace Netclaw.Actors.Tools;
+
+internal static class ToolRemediationPresenter
+{
+    public static SerializableChatMessage Present(
+        SerializableChatMessage message,
+        ToolInvocationReceipt? receipt,
+        bool setWorkingDirectoryAvailable)
+    {
+        if (receipt?.RemediationCode is not { } remediationCode)
+            return message;
+
+        var action = remediationCode switch
+        {
+            ToolRemediationCode.SetWorkingDirectory when setWorkingDirectoryAvailable =>
+                "Next action: call set_working_directory with the project directory from this result, then retry the failed tool call.",
+            ToolRemediationCode.SetWorkingDirectory => null,
+            ToolRemediationCode.UseSessionScratch =>
+                "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths.",
+            ToolRemediationCode.ProvideUniqueOldString =>
+                "Next action: retry file_edit with a unique OldString, or set ReplaceAll=true when every match should change.",
+            _ => throw new InvalidOperationException("Unsupported tool remediation code.")
+        };
+
+        if (action is null)
+            return message;
+
+        var content = string.IsNullOrWhiteSpace(message.Content)
+            ? action
+            : $"{message.Content}\n{action}";
+        return message with { Content = content };
+    }
+}

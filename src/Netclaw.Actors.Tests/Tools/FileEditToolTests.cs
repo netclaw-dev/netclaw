@@ -62,9 +62,12 @@ public class FileEditToolTests : IDisposable
         var original = "foo bar foo baz foo";
         await File.WriteAllTextAsync(filePath, original, TestContext.Current.CancellationToken);
 
-        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "OldString", "foo", "NewString", "qux"), CreatePersonalContext(), CancellationToken.None);
+        var context = CreatePersonalContext();
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "OldString", "foo", "NewString", "qux"), context, CancellationToken.None);
 
         Assert.Contains("matches 3 locations", result);
+        Assert.DoesNotContain("Next action", result, StringComparison.Ordinal);
+        Assert.Equal(ToolRemediationCode.ProvideUniqueOldString, context.Receipt?.RemediationCode);
         Assert.Equal(original, await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
@@ -75,9 +78,11 @@ public class FileEditToolTests : IDisposable
         var original = "hello world";
         await File.WriteAllTextAsync(filePath, original, TestContext.Current.CancellationToken);
 
-        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "OldString", "goodbye", "NewString", "farewell"), CreatePersonalContext(), CancellationToken.None);
+        var context = CreatePersonalContext();
+        var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "OldString", "goodbye", "NewString", "farewell"), context, CancellationToken.None);
 
         Assert.Contains("not found", result);
+        Assert.Equal(ToolRemediationCode.ProvideUniqueOldString, context.Receipt?.RemediationCode);
         Assert.Equal(original, await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 

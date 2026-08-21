@@ -49,7 +49,9 @@ public class WorkingContextUpdaterTests
         var category = (ToolInvocationOutcomeCategory)categoryValue;
         var result = Result("call-1", "file_read", "successful-looking presentation");
         var receipt = category == ToolInvocationOutcomeCategory.RecoverableCorrection
-            ? new ToolInvocationReceipt(category, remediationCode: "set_working_directory")
+            ? new ToolInvocationReceipt(
+                category,
+                remediationCode: ToolRemediationCode.SetWorkingDirectory)
             : new ToolInvocationReceipt(category);
 
         var updated = WorkingContextUpdater.UpdateFromToolReceipts(
@@ -99,15 +101,27 @@ public class WorkingContextUpdaterTests
         Assert.Contains("successful", exception.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    [Theory]
-    [InlineData("")]
-    [InlineData("bad\ncode")]
-    [InlineData("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")]
-    public void Recoverable_receipt_rejects_invalid_remediation_code(string code)
+    [Fact]
+    public void Recoverable_receipt_requires_remediation()
     {
         Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.RecoverableCorrection));
+    }
+
+    [Fact]
+    public void Non_corrective_receipt_rejects_remediation()
+    {
+        Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt(
+            ToolInvocationOutcomeCategory.AccessDenied,
+            remediationCode: ToolRemediationCode.SetWorkingDirectory));
+    }
+
+    [Fact]
+    public void Remediation_rejects_undefined_code()
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ToolInvocationReceipt(
             ToolInvocationOutcomeCategory.RecoverableCorrection,
-            remediationCode: code));
+            remediationCode: (ToolRemediationCode)int.MaxValue));
     }
 
     private static ToolInvocationReceipt Success(string path, ToolFileActivityKind kind)

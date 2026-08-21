@@ -149,13 +149,12 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>
                 if (occurrences == 0)
                     return context.RecoverableCorrection(
                         $"Error: The specified text was not found in {authorizedPath}",
-                        "provide_unique_old_string");
+                        ToolRemediationCode.ProvideUniqueOldString);
 
                 if (occurrences > 1 && !replaceAll)
                     return context.RecoverableCorrection(
-                        $"Error: OldString matches {occurrences} locations in {authorizedPath}. " +
-                        "Provide more surrounding context to create a unique match, or set ReplaceAll=true.",
-                        "provide_unique_old_string");
+                        $"Error: OldString matches {occurrences} locations in {authorizedPath}.",
+                        ToolRemediationCode.ProvideUniqueOldString);
 
                 string newContent;
                 int replacementCount;

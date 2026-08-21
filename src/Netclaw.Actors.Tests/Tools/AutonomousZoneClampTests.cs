@@ -253,7 +253,7 @@ public sealed class AutonomousZoneClampTests : IDisposable
             out var failure));
         Assert.Empty(resolved);
         Assert.Contains("invalid_context", error, StringComparison.Ordinal);
-        Assert.Contains("set_working_directory", error, StringComparison.Ordinal);
+        Assert.DoesNotContain("set_working_directory", error, StringComparison.Ordinal);
         Assert.Equal(ScopedFileAccessPolicy.PathResolutionFailure.MissingBase, failure);
     }
 

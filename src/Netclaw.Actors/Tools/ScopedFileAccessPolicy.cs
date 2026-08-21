@@ -181,7 +181,7 @@ internal sealed class ScopedFileAccessPolicy
                     }
                     else
                     {
-                        error = "Error: invalid_context: No project or session directory is available. Call set_working_directory with an absolute project path, then retry.";
+                        error = "Error: invalid_context: No project or session directory is available.";
                         failure = PathResolutionFailure.MissingBase;
                     }
 

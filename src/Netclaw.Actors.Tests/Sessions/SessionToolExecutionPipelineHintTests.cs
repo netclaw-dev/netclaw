@@ -172,7 +172,7 @@ public sealed class SessionToolExecutionPipelineHintTests
     }
 
     [Fact]
-    public void Project_scope_correction_preserves_exact_directory_and_retry_intent()
+    public void Project_scope_correction_reports_only_the_failure_reason()
     {
         var context = new ToolApprovalContext(
             ToolName: ShellTool,
@@ -189,9 +189,9 @@ public sealed class SessionToolExecutionPipelineHintTests
             setWorkingDirectoryAvailable: true);
 
         Assert.Contains("working_directory_not_declared", correction);
-        Assert.Contains("set_working_directory", correction);
-        Assert.Contains("/home/user/repos/project", correction);
-        Assert.Contains("exact shell command unchanged", correction);
+        Assert.DoesNotContain("set_working_directory", correction);
+        Assert.Contains("Project directory: '/home/user/repos/project'", correction);
+        Assert.DoesNotContain("Next action", correction);
     }
 
     [Fact]

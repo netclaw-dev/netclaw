@@ -29,6 +29,13 @@ internal enum ToolInvocationOutcomeCategory
     RecoverableCorrection
 }
 
+internal enum ToolRemediationCode
+{
+    SetWorkingDirectory,
+    UseSessionScratch,
+    ProvideUniqueOldString
+}
+
 internal enum ToolFileActivityKind
 {
     Read,
@@ -73,12 +80,10 @@ internal sealed record ToolFileActivity
 
 internal sealed record ToolInvocationReceipt
 {
-    private const int MaxRemediationCodeLength = 64;
-
     public ToolInvocationReceipt(
         ToolInvocationOutcomeCategory category,
         IReadOnlyList<ToolFileActivity>? fileActivity = null,
-        string? remediationCode = null,
+        ToolRemediationCode? remediationCode = null,
         string? declaredProjectDirectory = null)
     {
         if (!Enum.IsDefined(category))
@@ -97,13 +102,14 @@ internal sealed record ToolInvocationReceipt
             throw new ArgumentException("Only a recoverable correction may report remediation.", nameof(remediationCode));
         }
 
-        if (remediationCode is not null
-            && (string.IsNullOrWhiteSpace(remediationCode)
-                || remediationCode.Length > MaxRemediationCodeLength
-                || remediationCode.Any(char.IsControl)))
+        if (category == ToolInvocationOutcomeCategory.RecoverableCorrection
+            && remediationCode is null)
         {
-            throw new ArgumentException("The remediation code is invalid.", nameof(remediationCode));
+            throw new ArgumentException("A recoverable correction requires remediation.", nameof(remediationCode));
         }
+
+        if (remediationCode is { } code && !Enum.IsDefined(code))
+            throw new ArgumentOutOfRangeException(nameof(remediationCode));
 
         if (declaredProjectDirectory is not null)
             _ = new ToolFileActivity(declaredProjectDirectory, ToolFileActivityKind.Read);
@@ -116,7 +122,7 @@ internal sealed record ToolInvocationReceipt
 
     public ToolInvocationOutcomeCategory Category { get; }
     public IReadOnlyList<ToolFileActivity> FileActivity { get; }
-    public string? RemediationCode { get; }
+    public ToolRemediationCode? RemediationCode { get; }
     public string? DeclaredProjectDirectory { get; }
 }
 

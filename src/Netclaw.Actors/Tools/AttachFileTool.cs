@@ -41,9 +41,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             return Task.FromResult(context.InvalidInput("Error: 'path' parameter is required."));
 
         if (string.IsNullOrWhiteSpace(context.SessionDirectory))
-            return Task.FromResult(context.RecoverableCorrection(
-                "Error: No session directory available.",
-                ToolOutcomeResults.SetWorkingDirectoryRemediation));
+            return Task.FromResult(context.InvalidInput("Error: invalid_context: No session directory available."));
 
         if (!_fileAccessPolicy.TryResolveAttachPath(
                 args.Path,

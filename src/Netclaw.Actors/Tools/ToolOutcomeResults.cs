@@ -9,9 +9,6 @@ namespace Netclaw.Actors.Tools;
 
 internal static class ToolOutcomeResults
 {
-    public const string SetWorkingDirectoryRemediation = "set_working_directory";
-    public const string UseSessionScratchRemediation = "use_session_scratch";
-
     public static string Success(this ToolInvocationContext context, string result)
         => Complete(context, result, ToolInvocationOutcomeCategory.Success);
 
@@ -59,7 +56,7 @@ internal static class ToolOutcomeResults
     public static string RecoverableCorrection(
         this ToolInvocationContext context,
         string result,
-        string remediationCode)
+        ToolRemediationCode remediationCode)
         => Complete(
             context,
             result,
@@ -73,7 +70,9 @@ internal static class ToolOutcomeResults
         => failure switch
         {
             ScopedFileAccessPolicy.PathResolutionFailure.MissingBase =>
-                context.RecoverableCorrection(result, SetWorkingDirectoryRemediation),
+                context.RecoverableCorrection(
+                    result,
+                    ToolRemediationCode.SetWorkingDirectory),
             ScopedFileAccessPolicy.PathResolutionFailure.InvalidInput => context.InvalidInput(result),
             _ => context.AccessDenied(result)
         };
@@ -83,7 +82,7 @@ internal static class ToolOutcomeResults
         string result,
         ToolInvocationOutcomeCategory category,
         IReadOnlyList<ToolFileActivity>? fileActivity = null,
-        string? remediationCode = null,
+        ToolRemediationCode? remediationCode = null,
         string? declaredProjectDirectory = null)
     {
         context.TryComplete(new ToolInvocationReceipt(

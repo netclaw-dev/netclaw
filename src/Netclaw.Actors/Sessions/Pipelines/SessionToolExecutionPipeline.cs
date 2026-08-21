@@ -372,6 +372,13 @@ internal sealed class SessionToolExecutionPipeline
                         ? scratchDirectory
                         : null,
                     modelInputBudget);
+                result = result with
+                {
+                    Message = ToolRemediationPresenter.Present(
+                        result.Message,
+                        result.Receipt,
+                        batch.SetWorkingDirectoryAvailable)
+                };
                 if (batch.StreamResults)
                     batch.ReplyTo.Tell(new ToolExecutionSingleCompleted(result));
                 return result;
@@ -693,6 +700,9 @@ internal sealed class SessionToolExecutionPipeline
                     correctedCall,
                     scratchCorrection.TemporaryRoot,
                     scratchCorrection.SessionDirectory);
+                var correctionReceipt = new ToolInvocationReceipt(
+                    ToolInvocationOutcomeCategory.RecoverableCorrection,
+                    remediationCode: ToolRemediationCode.UseSessionScratch);
 
                 return new ToolCallResult(new SerializableChatMessage
                 {
@@ -701,9 +711,7 @@ internal sealed class SessionToolExecutionPipeline
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
                 }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
-                    Receipt: new ToolInvocationReceipt(
-                        ToolInvocationOutcomeCategory.RecoverableCorrection,
-                        remediationCode: ToolOutcomeResults.UseSessionScratchRemediation),
+                    Receipt: correctionReceipt,
                     ScratchCorrectionChange: new SessionScratchCorrectionChange.Arm(newCorrectionKey));
             }
 
@@ -717,6 +725,9 @@ internal sealed class SessionToolExecutionPipeline
                 sw.Stop();
                 resultText = projectScopeCorrection;
 
+                var correctionReceipt = new ToolInvocationReceipt(
+                    ToolInvocationOutcomeCategory.RecoverableCorrection,
+                    remediationCode: ToolRemediationCode.SetWorkingDirectory);
                 return new ToolCallResult(new SerializableChatMessage
                 {
                     Role = Protocol.ChatRole.Tool,
@@ -724,9 +735,7 @@ internal sealed class SessionToolExecutionPipeline
                     ToolCallId = new ToolCallId(tc.CallId),
                     Name = tc.Name
                 }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
-                    Receipt: new ToolInvocationReceipt(
-                        ToolInvocationOutcomeCategory.RecoverableCorrection,
-                        remediationCode: ToolOutcomeResults.SetWorkingDirectoryRemediation));
+                    Receipt: correctionReceipt);
             }
 
             if (!CanRequestInteractiveApproval(batch.TurnContext))
@@ -894,6 +903,8 @@ internal sealed class SessionToolExecutionPipeline
                 resultText,
                 modelInputMaterialization.RequestedCount - modelInputMaterialization.MediaReferences.Count);
 
+        var receipt = context.Receipt
+            ?? new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success);
         var message = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.Tool,
@@ -909,8 +920,7 @@ internal sealed class SessionToolExecutionPipeline
             context.Outputs.FileAttachments,
             completedRuns,
             acceptedFindings,
-            Receipt: context.Receipt
-                ?? new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success),
+            Receipt: receipt,
             ScratchCorrectionChange: consumedScratchKey is { } consumed
                 ? new SessionScratchCorrectionChange.Consume(consumed)
                 : null);
@@ -1327,8 +1337,7 @@ internal sealed class SessionToolExecutionPipeline
 
     internal static string BuildSessionScratchCorrection(string sessionDirectory)
         => "Tool execution deferred: shared_temporary_directory\n" +
-           $"Use the private session scratch directory '{sessionDirectory}' for disposable artifacts. " +
-           "Author a replacement shell call there. If this exact platform path is required, retry the original call unchanged.";
+           $"Session scratch directory: '{sessionDirectory}'.";
 
     /// <summary>
     /// Builds the agent-facing correction for reviewed-safe shell work whose
@@ -1350,7 +1359,7 @@ internal sealed class SessionToolExecutionPipeline
         }
 
         return "Tool execution deferred: working_directory_not_declared\n" +
-               $"Call set_working_directory with '{context.SuggestedProjectDirectory}', then retry this exact shell command unchanged.";
+               $"Project directory: '{context.SuggestedProjectDirectory}'.";
     }
 
     /// <summary>

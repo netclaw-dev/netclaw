@@ -156,9 +156,9 @@ public sealed class WorkspaceToolRelativePathTests : IDisposable
             TestContext.Current.CancellationToken);
 
         Assert.Contains("invalid_context", result, StringComparison.Ordinal);
-        Assert.Contains("set_working_directory", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("set_working_directory", result, StringComparison.Ordinal);
         Assert.Equal(ToolInvocationOutcomeCategory.RecoverableCorrection, context.Receipt?.Category);
-        Assert.Equal(ToolOutcomeResults.SetWorkingDirectoryRemediation, context.Receipt?.RemediationCode);
+        Assert.Equal(ToolRemediationCode.SetWorkingDirectory, context.Receipt?.RemediationCode);
         Assert.Empty(context.Receipt?.FileActivity ?? []);
     }
 

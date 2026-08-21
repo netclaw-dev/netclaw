@@ -146,6 +146,24 @@ Done when:
 - [x] Focused tests and the full repository quality gates pass.
 - [ ] An installed daemon restart confirms the live process uses the durable directory.
 
+### Priority: Complete Tool Remediation
+
+**PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/changes/complete-tool-remediation/`
+**Surface area:** internal tool receipts and model-facing tool results
+**Verification:** L2
+
+The receipt must drive the next action. The model must not depend on duplicated
+handwritten guidance or an unchecked string code.
+
+Done when:
+
+- [x] Every `RecoverableCorrection` receipt carries one defined internal code.
+- [x] Parent and child paths use one presenter before result delivery.
+- [x] Hidden tools are not named by remediation.
+- [x] Approval authority, scratch retry state, durable messages, and public APIs remain unchanged.
+- [ ] The stacked follow-up handles `attach_file` exposure and native-tool shell mistakes separately.
+
 ### Priority: Reduce Shell Approval Fatigue
 
 **PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`

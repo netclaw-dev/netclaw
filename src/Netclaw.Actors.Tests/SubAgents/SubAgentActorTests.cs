@@ -704,8 +704,10 @@ public class SubAgentActorTests : TestKit
         Assert.True(result.Success, result.Output);
         Assert.False(fakeTool.WasCalled);
         Assert.Equal(0, approvalBridge.RequestCount);
-        Assert.Contains(
-            "shared_temporary_directory",
+        Assert.Equal(
+            "Tool execution deferred: shared_temporary_directory\n" +
+            "Session scratch directory: '/home/user/.netclaw/sessions/example'.\n" +
+            "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths.",
             GetLastToolResult(fakeClient, "call-scratch-correction"));
     }
 
@@ -729,9 +731,11 @@ public class SubAgentActorTests : TestKit
         Assert.False(scenario.Shell.WasCalled);
         Assert.Equal(0, approvalBridge?.RequestCount ?? 0);
         var correction = GetLastToolResult(scenario.Client, callId);
-        Assert.Contains("working_directory_not_declared", correction, StringComparison.Ordinal);
-        Assert.Contains(scenario.Worktree, correction, StringComparison.Ordinal);
-        Assert.Contains(SetWorkingDirectoryTool.ToolName, correction, StringComparison.Ordinal);
+        Assert.Equal(
+            "Tool execution deferred: working_directory_not_declared\n" +
+            $"Project directory: '{scenario.Worktree}'.\n" +
+            "Next action: call set_working_directory with the project directory from this result, then retry the failed tool call.",
+            correction);
         var preservedCall = scenario.Client.LastReceivedMessages!
             .SelectMany(message => message.Contents.OfType<FunctionCallContent>())
             .Single(call => call.CallId == callId);
@@ -759,6 +763,27 @@ public class SubAgentActorTests : TestKit
         Assert.Equal(scenario.Worktree, approvalBridge.RequestedCwd);
         Assert.DoesNotContain(
             "working_directory_not_declared",
+            GetLastToolResult(scenario.Client, callId),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Subagent_policy_hidden_project_scope_tool_is_not_revealed()
+    {
+        const string callId = "call-project-scope-hidden";
+        var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+        var scenario = await RunProjectScopeScenarioAsync(
+            callId,
+            includeScopeTool: true,
+            scopeToolAccepts: true,
+            approvalBridge,
+            hideScopeTool: true);
+
+        Assert.True(scenario.Result.Success, scenario.Result.Output);
+        Assert.True(scenario.Shell.WasCalled);
+        Assert.Equal(1, approvalBridge.RequestCount);
+        Assert.DoesNotContain(
+            SetWorkingDirectoryTool.ToolName,
             GetLastToolResult(scenario.Client, callId),
             StringComparison.Ordinal);
     }
@@ -1359,7 +1384,8 @@ public class SubAgentActorTests : TestKit
         string callId,
         bool includeScopeTool,
         bool scopeToolAccepts,
-        IParentApprovalBridge? approvalBridge)
+        IParentApprovalBridge? approvalBridge,
+        bool hideScopeTool = false)
     {
         var worktree = Path.GetFullPath(AppContext.BaseDirectory);
         var shell = new FakeNetclawTool(ShellTool.ToolName, "approved");
@@ -1381,7 +1407,7 @@ public class SubAgentActorTests : TestKit
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition(tools),
             client,
-            CreateProjectScopeCorrectionPolicy(worktree)));
+            CreateProjectScopeCorrectionPolicy(worktree, hideScopeTool)));
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
@@ -1421,14 +1447,19 @@ public class SubAgentActorTests : TestKit
         public string? GetOperatingRules(TrustAudience audience) => null;
     }
 
-    private static ToolAccessPolicy CreateProjectScopeCorrectionPolicy(string workspacesDirectory)
+    private static ToolAccessPolicy CreateProjectScopeCorrectionPolicy(
+        string workspacesDirectory,
+        bool hideScopeTool = false)
     {
         var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
             ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
             {
-                [ShellTool.ToolName] = ToolApprovalMode.Approval
+                [ShellTool.ToolName] = ToolApprovalMode.Approval,
+                [SetWorkingDirectoryTool.ToolName] = hideScopeTool
+                    ? ToolApprovalMode.Deny
+                    : ToolApprovalMode.Auto
             }
         };
         var environment = TestShellEnvironment.Current;

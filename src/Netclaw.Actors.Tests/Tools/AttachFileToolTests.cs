@@ -39,6 +39,25 @@ public class AttachFileToolTests : IDisposable
     }
 
     [Fact]
+    public async Task Missing_session_is_invalid_and_does_not_suggest_project_declaration()
+    {
+        var context = TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal
+        });
+
+        var result = await _tool.ExecuteAsync(
+            ToolInput.Create("Path", "report.png"),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("invalid_context", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("set_working_directory", result, StringComparison.Ordinal);
+        Assert.Equal(ToolInvocationOutcomeCategory.InvalidInput, context.Receipt?.Category);
+        Assert.Null(context.Receipt?.RemediationCode);
+    }
+
+    [Fact]
     public async Task Path_traversal_attempt_is_rejected()
     {
         // Autonomous Personal: the out-of-session boundary holds for
