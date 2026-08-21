@@ -30,12 +30,12 @@
 - [x] 5.2 Add negatives for dynamic, unknown, fuzzy, path-qualified, hidden, denied, MCP, and `shell_execute` identities.
 - [x] 5.3 Add protected-path and invalid-input precedence tests proving no correction or activation after a terminal preflight deny.
 - [x] 5.4 Add parent batch, parent streaming, parent background, and child tests proving no shell execution, no approval request, exact shared presentation, and next-request schema exposure.
-- [ ] 5.5 Add direct-attachment tool-choice coverage proving no shell or file-mutation prelude is required.
+- [x] 5.5 Add direct-attachment tool-choice coverage proving no shell or file-mutation prelude is required.
 
 ## 6. PII-Free Behavioral Evidence
 
 - [x] 6.1 Add deterministic synthetic cases for direct attachment and shell-to-native recovery; preserve a deferred-tool discovery case after `attach_file` becomes Core.
-- [ ] 6.2 Run fixed baseline and treatment trials for direct attachment and shell-to-native recovery with fresh sessions.
+- [x] 6.2 Run fixed baseline and treatment trials for direct attachment and shell-to-native recovery with fresh sessions.
 - [ ] 6.3 Publish only PII-free aggregate completion, tool-choice, shell-authored, shell-started, approval, activation, and correction-to-native metrics on the PR.
 
 ## 7. Delivery Gates

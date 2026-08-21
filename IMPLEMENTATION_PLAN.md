@@ -172,7 +172,7 @@ Done when:
 - [x] Specify parser-owned exact executable matching without executable-private argument parsing.
 - [x] Return a typed correction before shell approval or execution and expose one deferred schema actor-locally.
 - [x] Prove parent/child, hard-deny, hidden-tool, and eventual-authorization boundaries.
-- [ ] Refresh deterministic and hosted PII-free behavioral evidence.
+- [x] Refresh deterministic and hosted PII-free behavioral evidence.
 - [ ] Complete Release, OpenSpec, header, formatting, Slopwatch, and adversarial-review gates before opening the stacked PR.
 
 ### Priority: Reduce Shell Approval Fatigue

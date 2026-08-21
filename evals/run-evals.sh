@@ -1207,6 +1207,17 @@ stdout_json_headless_log_path() {
     printf '%s\n' "$log_path"
 }
 
+stdout_json_session_actor_log_path() {
+    local session_id session_segment log_path
+    session_id=$(jq -r '.sessionId // empty' "$STDOUT_FILE")
+    [[ -n "$session_id" ]] || return 1
+
+    session_segment="${session_id//\//_}"
+    log_path="$EVAL_HOME/logs/sessions/$session_segment/session.log"
+    [[ -f "$log_path" ]] || return 1
+    printf '%s\n' "$log_path"
+}
+
 stdout_json_tool_result_equals() {
     local tool_name="$1"
     local call_id="$2"
@@ -1503,7 +1514,7 @@ setup_tool_direct_attachment() {
 }
 
 assert_tool_native_shell_recovery() {
-    local shell_call_id native_call_id headless_log
+    local shell_call_id native_call_id headless_log session_log
     stdout_json_envelope_valid || return 1
     stdout_json_tool_call_sequence_matches '["shell_execute","list_reminders"]' || return 1
     jq -e '
@@ -1513,6 +1524,7 @@ assert_tool_native_shell_recovery() {
     shell_call_id=$(jq -r '.toolCalls[0].callId' "$STDOUT_FILE")
     native_call_id=$(jq -r '.toolCalls[1].callId' "$STDOUT_FILE")
     headless_log=$(stdout_json_headless_log_path) || return 1
+    session_log=$(stdout_json_session_actor_log_path) || return 1
     awk -v call_id="$shell_call_id" '
         index($0, "TOOL_RESULT: shell_execute call_id=" call_id \
             " result=Shell execution stopped because '\''list_reminders'\'' is a native Netclaw tool.") {
@@ -1535,9 +1547,9 @@ assert_tool_native_shell_recovery() {
 
     daemon_log_tail_contains_fixed \
         'Tool authorization evaluated: shell_execute outcome=RequiresAgentCorrection' \
-        && daemon_log_tail_contains_fixed 'Session deferred tool activated loaded=1' \
-        && daemon_log_tail_contains_fixed 'Session tool exposure core=' \
-        && daemon_log_tail_contains_fixed 'loaded=1' \
+        && grep -qaF 'Session deferred tool activated loaded=1' "$session_log" \
+        && grep -qaF 'Session tool exposure core=' "$session_log" \
+        && grep -qaF 'loaded=1' "$session_log" \
         && daemon_log_tail_contains_fixed 'Tool executed: list_reminders' \
         && daemon_log_tail_not_contains_fixed 'outcome=RequiresApproval' \
         && daemon_log_tail_not_contains_fixed 'Tool executed: shell_execute' \
