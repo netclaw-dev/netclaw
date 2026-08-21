@@ -1497,9 +1497,9 @@ setup_tool_direct_attachment() {
     local run="$1"
     local session_id="eval/tool_direct_attachment-run${run}-$$"
     local sanitized_session_id="${session_id//\//_}"
-    local source_session_id="${sanitized_session_id}_source"
-    local container_source_dir="/home/netclaw/.netclaw/sessions/$source_session_id/project"
-    DIRECT_ATTACHMENT_SOURCE_PATH="/home/netclaw/.netclaw/sessions/$source_session_id/project/direct-attachment.txt"
+    local source_project_id="direct-attachment-source-$sanitized_session_id"
+    local container_source_dir="/home/netclaw/.netclaw/workspaces/$source_project_id"
+    DIRECT_ATTACHMENT_SOURCE_PATH="$container_source_dir/direct-attachment.txt"
     DIRECT_ATTACHMENT_DESTINATION_ROOT="/home/netclaw/.netclaw/sessions/$sanitized_session_id/attachments"
     docker exec --user root "$EVAL_CONTAINER_NAME" mkdir -p "$container_source_dir"
     printf 'synthetic attachment\n' \
