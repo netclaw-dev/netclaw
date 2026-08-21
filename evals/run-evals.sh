@@ -1524,8 +1524,8 @@ assert_tool_native_shell_recovery() {
         END { exit found ? 0 : 1 }
     ' "$headless_log" || return 1
     awk -v prefix="TOOL_RESULT: list_reminders call_id=$native_call_id result=" '
-        index($0, prefix) == 1 {
-            result = substr($0, length(prefix) + 1)
+        index($0, prefix) {
+            result = substr($0, index($0, prefix) + length(prefix))
             if (result == "No active reminders." || index(result, "Reminders (") == 1) {
                 found = 1
             }
