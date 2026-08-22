@@ -2,9 +2,9 @@
 
 ### Requirement: First-party tool outcomes are machine-actionable
 
-First-party workspace tool execution SHALL produce exactly one call-local outcome category: `success`, `invalid_input`, `access_denied`, `not_found`, `transient_failure`, or `recoverable_correction`. The category SHALL be separate from the model-facing string. The system SHALL NOT infer it from that string. The outcome MAY carry a bounded remediation code and canonical file activity. A remediation code SHALL reject controls and excessive length. The outcome SHALL NOT change the public string-returning `INetclawTool` contract.
+First-party workspace tool execution SHALL produce exactly one call-local outcome category: `success`, `invalid_input`, `access_denied`, `not_found`, `transient_failure`, or `recoverable_correction`. The category SHALL be separate from the model-facing string. The system SHALL NOT infer it from that string. The outcome MAY carry canonical file activity. A `recoverable_correction` outcome SHALL carry exactly one defined internal remediation code. Every other category SHALL reject remediation. The outcome SHALL NOT change the public string-returning `INetclawTool` contract.
 
-The shared dispatcher SHALL classify a terminal policy denial as `access_denied` for parent and child callers. An approval request SHALL NOT create a terminal receipt before its final decision.
+The shared dispatcher, `DispatchingToolExecutor`, SHALL classify a terminal policy denial as `access_denied` for parent and child callers. An approval request SHALL NOT create a terminal receipt before its final decision.
 
 #### Scenario: Access denial has no successful file activity
 
@@ -33,7 +33,7 @@ The shared dispatcher SHALL classify a terminal policy denial as `access_denied`
 - **GIVEN** a workspace tool can continue after the project directory is declared
 - **WHEN** the missing declaration is the only blocker
 - **THEN** the outcome category is `recoverable_correction`
-- **AND** its remediation code identifies `set_working_directory`
+- **AND** its remediation code is `SetWorkingDirectory`
 - **AND** no authority is granted by the outcome itself
 
 ### Requirement: Working context records successful file activity only

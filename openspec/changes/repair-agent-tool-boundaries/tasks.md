@@ -5,7 +5,7 @@
 - [x] 1.3 Move terminal authorization classification into the shared dispatcher receipt boundary.
 - [x] 1.4 Prove parent and child policy denials both produce `access_denied` without successful activity.
 - [x] 1.5 Keep approval requests non-terminal and prove that an approved retry can execute.
-- [x] 1.6 Bound remediation codes and reject controls or excessive length.
+- [x] 1.6 Replace free-form remediation with a closed enum and reject undefined or wrong-category values.
 - [x] 1.7 Apply a project receipt only when `set_working_directory` produced it successfully.
 - [x] 1.8 Run focused security, dispatcher, parent, child, header, and Slopwatch gates.
 

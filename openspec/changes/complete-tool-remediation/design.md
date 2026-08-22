@@ -48,6 +48,11 @@ This is safer than a string because new values require a deliberate code change.
 It also avoids a second free-form field that could carry invalid paths or
 instruction-like text.
 
+Example: a relative `file_read` has no project or session base. The factual
+result explains that no base is available. Its receipt contains only
+`SetWorkingDirectory`; it does not copy a path or instruction into the receipt.
+Creating that corrective receipt without a defined code fails immediately.
+
 ### Present the correction once
 
 Add one internal presenter in the actor tool-execution layer. It accepts the
@@ -65,6 +70,11 @@ project-declaration action when that tool is hidden. It does not grant
 authority. It does not call another tool. It returns the original result for a
 non-corrective receipt.
 
+Example: a parent and child receive the same `UseSessionScratch` receipt. The
+presenter appends the same short next action to both results. If
+`set_working_directory` is hidden, the presenter does not name or recommend it
+for a `SetWorkingDirectory` correction.
+
 ### Keep retry state separate
 
 The existing session-scratch correction key remains the loop-control mechanism
@@ -72,11 +82,19 @@ for the shell approval path. The typed remediation does not replace that state.
 It describes the next action only. Project declaration and file-edit corrections
 remain model decisions and do not gain automatic retry state.
 
+Example: `UseSessionScratch` tells the model where the next call should work.
+It does not execute that call, approve it, or grant scratch authority. The
+existing scratch-correction key still decides whether another retry would loop.
+
 ### Keep actor and persistence boundaries unchanged
 
 Receipts remain internal call-local data. Batch and streaming messages may carry
 the internal receipt in memory. Durable chat messages still contain only the
 model-facing string. Actor recovery does not restore remediation receipts.
+
+Example: after restart, the model can see the correction text already stored in
+chat history. Netclaw does not restore the old receipt or automatically perform
+the suggested action.
 
 ## Risks / Trade-offs
 
