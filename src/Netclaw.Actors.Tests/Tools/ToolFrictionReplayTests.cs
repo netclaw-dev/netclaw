@@ -96,7 +96,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             {
                 var attachment = Assert.Single(completed.FileAttachments);
                 Assert.StartsWith(
-                    Path.Combine(setup.SessionDirectory, "attachments"),
+                    Path.Join(setup.SessionDirectory, "attachments"),
                     attachment.FilePath,
                     StringComparison.Ordinal);
                 Assert.Equal("synthetic report", await File.ReadAllTextAsync(
