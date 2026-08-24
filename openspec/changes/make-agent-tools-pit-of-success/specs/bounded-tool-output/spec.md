@@ -1,5 +1,10 @@
 ## ADDED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+The later `repair-agent-tool-boundaries` change modifies the spill response and
+steer. Review that delta for the current contract.
+
 ### Requirement: Spilled output has an opaque bounded continuation tool
 
 The system SHALL provide a core `tool_output_read` tool that accepts an opaque

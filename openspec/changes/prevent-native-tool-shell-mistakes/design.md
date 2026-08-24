@@ -1,6 +1,13 @@
 ## Context
 
-The current core exposes general workspace tools but defers `attach_file`, even though attaching an existing authorized file is a small and frequent operation. An agent that does not see the schema may copy the file into session scratch with shell before it discovers the attachment tool. Separately, agents sometimes put a known Netclaw tool name in `shell_execute`; the authorization pipeline then treats it as an ordinary process request and can prompt the user.
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for the
+cross-cutting terms in this design.
+
+Before this change, the core exposed general workspace tools but deferred
+`attach_file`. An agent without that schema could copy a file into session
+scratch before it discovered the attachment tool. Agents also put known
+Netclaw tool names in `shell_execute`. The authorization pipeline then treated
+those names as ordinary process requests and could prompt the user.
 
 Netclaw already has the necessary boundaries:
 
@@ -9,9 +16,76 @@ Netclaw already has the necessary boundaries:
 - `ToolAccessPolicy.IsToolExposed` applies deployment, audience, and approval-policy visibility.
 - `ToolAuthorizationDecision` is the internal pre-execution result.
 - parent and child actors already activate deferred tools in actor-local caches.
-- typed `ToolInvocationReceipt` remediation reaches both actor paths without entering durable history.
+- the closed `ToolInvocationReceipt` remediation code reaches both actor paths without entering durable history.
 
 The design must not add executable-specific parsing to Netclaw, infer native arguments from shell text, or make schema exposure equivalent to authorization.
+
+## Runtime Flow and Examples
+
+### Exact shell mistake to native retry
+
+```text
+model calls shell_execute("list_reminders")
+  -> ShellSyntaxTree supplies one complete static command occurrence
+  -> shell input, audience, hard-deny, and protected-path checks pass
+  -> detector finds the exact policy-visible first-party name
+  -> authorization returns RequiresAgentCorrection
+       NativeToolSuggested("list_reminders")
+  -> actor records the correction result
+  -> actor exposes the schema when policy still allows it
+  -> next model request includes list_reminders
+  -> a later list_reminders call runs normal authorization
+```
+
+The correction does not run either tool. It creates no approval or grant.
+
+### Exact and non-exact executable examples
+
+| Authored shell input | Native-tool correction |
+|---|---|
+| `list_reminders` | Yes. The exact policy-visible first-party name matches. |
+| `list_reminders --all > reminders.txt` | Yes. Netclaw stops the complete shell call and ignores native argument meaning. |
+| `list_reminders \| Select-Object -First 1` | Yes. The PowerShell pipeline remains one stopped shell call. |
+| `./list_reminders` | No. The executable token is path-qualified. |
+| `$tool_name` | No. The executable identity is dynamic. |
+| `list-reminder` | No. Netclaw does not use fuzzy matching. |
+| a hidden, denied, MCP, or `shell_execute` name | No. The normal shell policy remains authoritative. |
+
+These examples describe executable identity only. Netclaw does not translate
+shell arguments into native tool arguments.
+
+### Parent attachment and child exclusion
+
+```text
+interactive Personal parent session:
+  attach_file(Path = "/workspace/project/report.pdf")
+    -> normal attachment policy
+    -> Netclaw performs any required safe session copy
+
+subagent run:
+  attach_file schema is absent from core, search, load, and dispatch
+    -> child can report the saved path to the parent
+    -> parent decides whether to attach it
+```
+
+The child exclusion prevents a success result that the child cannot deliver.
+
+### Actor-local exposure and durable history
+
+```text
+main session:
+  correction result text        -> normal durable chat history
+  receipt and exposure request  -> call-local only
+  activated deferred schema     -> actor-local only
+
+subagent:
+  correction result, receipt, and schema exposure
+    -> discarded when the child run ends
+```
+
+After main-session recovery, the correction text can remain in history. The
+deferred schema does not remain loaded. A recalled name still enters normal
+dispatch authorization.
 
 ## Goals / Non-Goals
 
@@ -29,7 +103,7 @@ The design must not add executable-specific parsing to Netclaw, infer native arg
 - Fuzzy-match, alias-resolve, or guess an intended tool.
 - Intercept dynamic or unresolved executable identities.
 - Correct MCP names or `shell_execute` itself.
-- Persist loaded schemas, corrections, or new durable state.
+- Persist correction facts, receipts, exposure requests, or loaded schemas.
 - Automatically retry or execute any tool.
 
 ## Decisions
@@ -38,7 +112,7 @@ The design must not add executable-specific parsing to Netclaw, infer native arg
 
 `ToolRegistrationExtensions` will register `attach_file` as Core. Parent sessions will receive its schema when current policy exposes it. Its description will state that the caller passes the authorized source path directly and Netclaw performs any required safe copy into the current session. Existing `ScopedFileAccessPolicy`, proximity checks, and `ToolPathPolicy` remain unchanged.
 
-Sub-agents will exclude `attach_file` from core exposure, discovery, loading, and direct dispatch. A child tool context can create an attachment, but the current child completion path has no internal typed handoff that can carry that attachment to the parent invocation and channel. Exclusion prevents a false-success result without adding attachment state to the public `SubAgentResult` contract. A later change can remove the exclusion after it adds an internal child-to-parent attachment handoff.
+Sub-agents will exclude `attach_file` from core exposure, discovery, loading, and direct dispatch. A child tool context can create an attachment, but the current child completion path has no internal handoff that can carry that attachment to the parent invocation and channel. Exclusion prevents a false-success result without adding attachment state to the public `SubAgentResult` contract. A later change can remove the exclusion after it adds an internal child-to-parent attachment handoff.
 
 This adds one small schema to parent sessions but removes a discovery round trip and the misleading incentive to use shell copy first. Audience policy still removes the tool when it is unavailable.
 
@@ -46,7 +120,10 @@ This adds one small schema to parent sessions but removes a discovery round trip
 
 ### Detect exact authored executable identity from ShellSyntaxTree facts
 
-After ordinary shell argument validation, audience checks, protected-path checks, and analysis succeed, but before stored-grant matching, approval, or execution, the dispatcher will scan the parser-owned command occurrences in source order. A match requires:
+After ShellSyntaxTree analysis and all ordinary terminal preflight checks
+succeed, but before stored-grant matching, approval, or execution, the
+dispatcher scans parser-owned command occurrences in source order. A match
+requires:
 
 - the complete analysis is resolved and contains no dynamic syntax;
 - the occurrence is complete and its authored verb is static;
@@ -59,11 +136,15 @@ Arguments, redirects, pipelines, and surrounding static compound structure are n
 
 **Alternative considered:** search raw command text. This would create quoting, comment, alias, and injection errors and would duplicate ShellSyntaxTree.
 
-### Represent correction explicitly through the authorization boundary
+### Represent the correction explicitly through the authorization boundary
 
 Add an internal `RequiresAgentCorrection` authorization outcome carrying `ToolAgentCorrection.NativeToolSuggested`. The dispatcher adapter converts it to a dedicated internal correction exception for the existing async execution boundary. It does not represent allow, deny, or approval and cannot contain approval matches.
 
-Parent and child catch the correction, return a `RecoverableCorrection` receipt with the new closed `UseNativeTool` code, and include a separate typed actor-local exposure request containing the canonical tool name. The shared remediation presenter appends one fixed instruction; it does not parse result text or interpolate untrusted shell arguments.
+Parent and child catch the correction and return a `RecoverableCorrection`
+receipt with the closed `UseNativeTool` code. They also add a separate
+actor-local exposure fact that contains the exact registered tool name. The shared
+presenter appends one fixed instruction. It does not parse result text or add
+untrusted shell arguments.
 
 **Alternative considered:** encode the target in a free-form remediation string. That would recreate the weak string contract removed by the lower stack and would encourage actor code to parse model-facing text.
 

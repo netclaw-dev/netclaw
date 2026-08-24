@@ -1,5 +1,10 @@
 ## ADDED Requirements
 
+The terms in these requirements use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+Later changes add parent-and-child denial parity, real-child replay proof, and
+the child `attach_file` exclusion.
+
 ### Requirement: Subagents use progressive tool disclosure
 
 A subagent SHALL begin with the same policy-exposed core tool set as a main

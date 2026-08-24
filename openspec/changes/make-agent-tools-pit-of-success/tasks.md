@@ -59,3 +59,8 @@
 - [x] 7.5 Run Release build, full tests, headers, formatting, strict OpenSpec, changed-file Slopwatch, PII audit, and API compatibility gates.
 - [x] 7.6 Run native Windows and Linux validation.
 - [x] 7.7 Rebase the final stack on upstream/dev, merge in order, remove merged worktrees, produce a binary-swap build, and harvest a new sanitized live window.
+
+## 8. Superseding Changes
+
+- [x] 8.1 Mark the `json_read` and `file_read_many` decisions as superseded by `repair-agent-tool-boundaries`.
+- [x] 8.2 Record the later parent-only `attach_file` Core decision and child handoff boundary.

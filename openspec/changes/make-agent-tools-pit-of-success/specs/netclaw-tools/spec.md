@@ -1,5 +1,10 @@
 ## ADDED Requirements
 
+The terms in these requirements use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+The later `repair-agent-tool-boundaries` change removes the `json_read` and
+`file_read_many` requirements. It also strengthens the receipt contract.
+
 ### Requirement: First-party tool outcomes are machine-actionable
 
 First-party workspace tool execution SHALL produce exactly one call-local

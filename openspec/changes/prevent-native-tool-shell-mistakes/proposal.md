@@ -5,8 +5,12 @@ Recent tool-friction evidence shows agents still copy files into session scratch
 ## What Changes
 
 - Add policy-exposed `attach_file` to the initial parent-session core tool set and state that it accepts an authorized source path directly; the agent does not need to copy the file into session scratch first.
-- Before shell approval or execution, recognize a complete static shell analysis containing an authored command occurrence whose exact executable token names an audience-visible first-party Netclaw tool.
-- Return a typed, bounded remediation that tells the model to call the native tool directly, and expose that tool schema for the next model request when it was deferred.
+- Before shell approval or execution, recognize a complete static shell
+  analysis containing an authored command occurrence whose exact executable
+  token names a policy-visible first-party Netclaw tool.
+- Return the closed `UseNativeTool` remediation code with a
+  `NativeToolSuggested` correction fact. Carry schema exposure as a separate
+  actor-local fact.
 - Keep dynamic or unresolved executable identities, unknown names, hidden tools, MCP tools, and policy-denied tools on the existing shell path. Arguments and surrounding static shell structure do not change the exact executable-name test and are never interpreted as native-tool arguments.
 - Preserve all ordinary tool authorization: remediation and schema exposure grant no execution authority and create no approval grant.
 - Add deterministic parent/child regressions, PII-free fixture coverage, and hosted before/after behavioral evidence.
@@ -33,7 +37,7 @@ None.
 
 ### Modified Capabilities
 
-- `progressive-tool-disclosure`: Add `attach_file` to the policy-filtered parent-session core, keep it unavailable to children until typed handoff exists, and allow a typed correction to activate one deferred first-party schema.
+- `progressive-tool-disclosure`: Add `attach_file` to the policy-filtered parent-session core, keep it unavailable to children until an attachment handoff exists, and let one correction expose one deferred first-party schema.
 - `tool-approval-gates`: Prevent an exact native-tool shell mistake from reaching approval or execution while preserving all other shell behavior.
 - `netclaw-tools`: Clarify that `attach_file` accepts an authorized source path directly and performs its own safe session copy.
 

@@ -1,17 +1,41 @@
 ## Context
 
-Netclaw currently treats every non-MCP registration as always loaded. Main
-sessions dynamically load MCP tools, but subagents receive every discoverable
-registration except recursive `spawn_agent`. In the observed deployment this
-meant roughly 220 schemas per subagent. Despite that large choice surface,
-agents repeatedly used approval-gated shell or Python for operations absent from
-the first-party workspace API: recursive search, batch reads, JSON projection,
-image dimensions, and continuation of spilled output.
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for the
+cross-cutting terms in this design.
 
-The file tools also resolve a relative path through the daemon process current
-directory. Recent-file context is reconstructed from authored arguments for all
-tool results, including failures. These behaviors make the less-safe route
-easier and allow a failed operation to influence later model context.
+## Status and Superseding Changes
+
+This design records the first implementation. Later stacked changes replace
+some decisions:
+
+```text
+make-agent-tools-pit-of-success
+  -> establishes progressive disclosure, receipts, relative paths,
+     file_search, image metadata, and tool_output_read
+
+repair-agent-tool-boundaries
+  -> removes json_read and file_read_many
+  -> strengthens path-base, receipt, child, and spill contracts
+
+prevent-native-tool-shell-mistakes
+  -> makes attach_file a parent-session Core tool
+  -> keeps attach_file unavailable to children without an attachment handoff
+```
+
+Use the later delta specifications as the current contract when the documents
+conflict. The decisions below explain the original implementation. Their
+future-tense language records the plan at that time; it is not current work.
+
+Before this change, Netclaw treated every non-MCP registration as always loaded.
+Main sessions loaded MCP tools on demand, but subagents received every
+discoverable registration except recursive `spawn_agent`. In the observed
+deployment, this meant roughly 220 schemas per subagent. Agents still used
+approval-gated shell or Python for missing workspace operations.
+
+Before this change, file tools also resolved relative paths through the daemon
+process current directory. Recent-file context came from authored arguments for
+all tool results, including failures. These behaviors made the less-safe route
+easier. They also let a failed operation affect later model context.
 
 Constraints:
 
@@ -237,10 +261,9 @@ names, authored content, credentials, or raw paths from production.
 Rollback is a normal code rollback. No persisted state or configuration needs
 migration; recovered sessions simply reseed the prior always-loaded catalog.
 
-## Open Questions
+## Later Decisions
 
-- Whether `attach_file` is frequent and small enough to remain core will be
-  decided from schema-byte measurements and sanitized traffic counts.
-- Whether the JSON projection primitive should support only RFC 6901 pointers or
-  a second bounded array-index shorthand will be decided before its schema is
-  frozen; arbitrary query languages remain out of scope.
+- `prevent-native-tool-shell-mistakes` makes `attach_file` Core for parent
+  sessions. Subagents still exclude it.
+- `repair-agent-tool-boundaries` removes `json_read`. No JSON projection query
+  language remains in the current tool surface.

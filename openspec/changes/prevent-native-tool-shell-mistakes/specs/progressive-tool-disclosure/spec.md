@@ -1,5 +1,8 @@
 ## MODIFIED Requirements
 
+The terms in these requirements use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: Sessions start with a bounded workspace core
 
 The initial parent-session model tool set SHALL contain policy-exposed definitions for
@@ -10,7 +13,7 @@ first-party and MCP tools SHALL be deferred unless a later specification adds
 them to the core. The core SHALL NOT include `json_read` or `file_read_many`.
 
 Sub-agent model tool sets SHALL exclude `attach_file` from core exposure,
-discovery, loading, and direct dispatch until an internal typed attachment
+discovery, loading, and direct dispatch until an internal attachment
 handoff can deliver child attachments through the parent invocation.
 
 #### Scenario: Specialty tools are not eagerly exposed
@@ -37,7 +40,26 @@ handoff can deliver child attachments through the parent invocation.
 
 ### Requirement: Agent correction can expose one deferred first-party tool
 
-A typed shell-to-native correction SHALL be able to request actor-local exposure of one policy-visible deferred first-party tool. The actor SHALL record the correction result before activating the schema, SHALL recheck current exposure policy, and SHALL NOT persist the activation or treat it as execution authority.
+The closed `UseNativeTool` remediation code and its `NativeToolSuggested` correction fact SHALL be able to request actor-local exposure of one policy-visible deferred first-party tool.
+
+The actor SHALL record the correction result before activating the schema. It
+SHALL recheck current exposure policy. It SHALL NOT persist the activation or
+treat schema exposure as execution authority.
+
+Required order:
+
+```text
+1. Record the model-facing correction result.
+2. Read the separate exposure fact with the exact registered tool name.
+3. Resolve the exact registration again.
+4. Recheck current exposure policy.
+5. Add only the schema to the current actor exposure set.
+6. Run normal authorization if the model later calls the tool.
+```
+
+Main-session recovery and child completion discard the activated deferred
+schema. They do not discard a main-session correction message that already
+entered durable chat history.
 
 #### Scenario: Deferred target appears on the next model request
 

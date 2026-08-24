@@ -1,8 +1,42 @@
 ## ADDED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: Exact native-tool shell executables receive an agent correction
 
-After shell input validation, audience checks, protected-path checks, and complete static analysis succeed, but before stored-grant matching, approval, or execution, the system SHALL inspect parser-owned command occurrences. If the first authored executable token of an occurrence exactly names an audience-visible first-party Netclaw tool other than `shell_execute`, the system SHALL stop the entire shell call and return a typed native-tool correction. It SHALL use ordinal exact name comparison and SHALL NOT infer private native-tool syntax from shell arguments.
+After shell input and audience validation, complete ShellSyntaxTree analysis, and all terminal preflight checks succeed, but before stored-grant matching, approval, or execution, the system SHALL inspect parser-owned command occurrences.
+
+If the first authored executable token of an occurrence exactly names a
+policy-visible first-party Netclaw tool other than `shell_execute`, the system
+SHALL stop the entire shell call. It SHALL return the closed `UseNativeTool`
+remediation code with a `NativeToolSuggested` correction fact.
+
+The comparison SHALL be ordinal and exact. The system SHALL NOT infer private
+native-tool syntax from shell arguments.
+
+Boundary examples:
+
+| Authored executable form | Required result |
+|---|---|
+| `list_reminders` | Return the correction and stop the shell call. |
+| `list_reminders --all` | Return the correction. Do not translate `--all`. |
+| `./list_reminders` | Keep the normal shell path. The token is path-qualified. |
+| `$tool_name` | Keep the normal shell path. The identity is dynamic. |
+| `list-reminder` | Keep the normal shell path. The name is not exact. |
+
+Precedence:
+
+```text
+input and audience checks
+  -> complete ShellSyntaxTree analysis
+  -> protected-path, hard-deny, and other terminal preflight checks
+  -> exact native-tool detector
+  -> stored grants, approval, or shell execution
+```
+
+A terminal preflight result stops the flow before the detector. A detector
+match stops the flow before grants, approval, or execution.
 
 #### Scenario: Bare deferred tool name is corrected and exposed
 
@@ -31,7 +65,7 @@ After shell input validation, audience checks, protected-path checks, and comple
 
 #### Scenario: Hard deny takes precedence
 
-- **GIVEN** a shell call contains an exact visible native-tool executable token
+- **GIVEN** a shell call contains an exact policy-visible native-tool executable token
 - **AND** ordinary preflight detects invalid input, a protected path, or another terminal deny
 - **WHEN** authorization runs
 - **THEN** the terminal denial is returned
@@ -42,6 +76,15 @@ After shell input validation, audience checks, protected-path checks, and comple
 - **GIVEN** the exact executable token names a hidden or denied first-party tool, an MCP tool, or `shell_execute`
 - **WHEN** the shell call reaches authorization
 - **THEN** no native-tool correction confirms or activates that target
+- **AND** the existing shell path remains authoritative
+
+#### Scenario: Child-static-denied target is not disclosed
+
+- **GIVEN** a subagent authors `attach_file` or `spawn_agent` as an exact shell executable
+- **AND** child policy omits that registration from the child-private registry
+- **WHEN** the child shell call reaches authorization
+- **THEN** no native-tool correction confirms the denied name
+- **AND** no schema exposure request is created
 - **AND** the existing shell path remains authoritative
 
 #### Scenario: Eventual native call keeps normal authority

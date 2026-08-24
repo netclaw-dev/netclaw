@@ -1,3 +1,8 @@
+## 0. Specification Clarity
+
+- [x] 0.1 Link the shared glossary and define the complete correction, exposure, authorization, and persistence flow.
+- [x] 0.2 Add exact positive, negative, parent, and child examples for the changed behavior.
+
 ## 1. Freeze the Behavior Contract
 
 - [x] 1.1 Validate the proposal, design, and three delta specifications in strict mode.
@@ -7,19 +12,19 @@
 
 - [x] 2.1 Register `attach_file` as parent-session Core without changing its audience or path authorization.
 - [x] 2.2 Rewrite the tool definition and shared guidance to require the existing authorized source path directly and forbid a preparatory shell copy.
-- [x] 2.3 Update exact core-name, schema-footprint, and audience snapshots; exclude child `attach_file` search, load, and dispatch until a typed attachment handoff exists.
+- [x] 2.3 Update exact core-name, schema-footprint, and audience snapshots; exclude child `attach_file` search, load, and dispatch until an attachment handoff exists.
 
-## 3. Add Typed Native-Tool Correction
+## 3. Add a Closed Native-Tool Correction
 
 - [x] 3.1 Add `UseNativeTool` to the closed internal remediation code and one fixed shared presenter action.
-- [x] 3.2 Add an internal authorization correction outcome and typed `NativeToolSuggested` fact without changing public or durable contracts.
+- [x] 3.2 Add an internal authorization correction outcome and a closed `NativeToolSuggested` fact without changing public or durable contracts.
 - [x] 3.3 Detect the first exact policy-visible first-party executable occurrence from complete static ShellSyntaxTree analysis after hard-deny preflight and before shell policy, approval, or execution.
-- [x] 3.4 Exclude dynamic and unresolved identities, hidden or denied tools, MCP tools, `shell_execute`, and non-exact names without parsing private tool syntax.
+- [x] 3.4 Exclude dynamic and unresolved identities, hidden or denied tools (including child-static-denied registrations), MCP tools, `shell_execute`, and non-exact names without parsing private tool syntax.
 - [x] 3.5 Translate the correction through buffered, streaming, background, and child execution without starting a shell process or contacting approval.
 
 ## 4. Activate the Native Schema Safely
 
-- [x] 4.1 Carry one typed canonical exposure request in internal call-local result messages, separate from model-facing text and durable messages.
+- [x] 4.1 Carry one exposure fact with the exact registered tool name in call-local messages, separate from model-facing and durable messages.
 - [x] 4.2 Record the correction result before parent or child activation, then recheck registry and current exposure policy at the actor seam.
 - [x] 4.3 Prove Core activation is a no-op, Deferred activation reaches the next model request, and eventual native dispatch uses normal authorization.
 - [x] 4.4 Prove actor failure, recovery, and child completion do not persist or share correction-driven exposure.

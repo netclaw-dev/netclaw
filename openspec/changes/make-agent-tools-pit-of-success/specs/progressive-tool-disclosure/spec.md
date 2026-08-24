@@ -1,5 +1,9 @@
 ## ADDED Requirements
 
+The terms in these requirements use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+Later changes modify the exact Core set and add parent-only `attach_file`.
+
 ### Requirement: Tool registrations declare an exposure tier
 
 Every registered tool SHALL have an exposure tier of `Core` or `Deferred`.

@@ -1,5 +1,10 @@
 ## ADDED Requirements
 
+The terms in these requirements use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+The later `repair-agent-tool-boundaries` change adds complete base-chain link
+validation and exact fallback states.
+
 ### Requirement: Relative first-party filesystem paths use session-owned bases
 
 First-party filesystem tools SHALL resolve a relative path against the declared

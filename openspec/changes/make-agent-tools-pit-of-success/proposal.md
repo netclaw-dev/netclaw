@@ -7,6 +7,21 @@ result continuation. This undermines PRD-001 outcomes 7 and 9, PRD-006 outcome
 5, and PRD-007 outcomes 3 and 5: the safe, structured route exists in pieces but
 is not the easiest route for either main sessions or subagents.
 
+## Status and Superseding Changes
+
+This change records the original progressive-disclosure and workspace-tool
+delivery. Two later stacked changes replace part of this plan:
+
+- [`repair-agent-tool-boundaries`](../repair-agent-tool-boundaries/design.md)
+  removes `json_read` and `file_read_many`. It also strengthens path, receipt,
+  child, and spill boundaries.
+- [`prevent-native-tool-shell-mistakes`](../prevent-native-tool-shell-mistakes/design.md)
+  makes `attach_file` a parent-session Core tool. It keeps the tool unavailable
+  to subagents until a child attachment handoff exists.
+
+Review the later delta specifications for the current target behavior. The
+original decisions below remain a history of the implemented first pass.
+
 ## What Changes
 
 - Define one audience-filtered progressive-disclosure contract for first-party

@@ -614,6 +614,99 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Child_shell_correction_does_not_expose_statically_denied_tools()
+    {
+        var shellProbe = new RecordingContextTool(ShellTool.ToolName, "shell must not run", "shell");
+        _toolRegistry.Register(shellProbe);
+        _clientProvider.Main.ToolCallsOnFirstCall =
+        [
+            CreateToolCall(
+                "call-denied-native-spawn",
+                "spawn_agent",
+                new Dictionary<string, object?>
+                {
+                    ["agent"] = "summarizer",
+                    ["task"] = "Check denied native tool names through the shell."
+                })
+        ];
+        _clientProvider.Compaction.PlannedResponses.Enqueue(
+        [
+            CreateToolCall(
+                "call-shell-attach",
+                ShellTool.ToolName,
+                new Dictionary<string, object?> { ["command"] = "attach_file" }),
+            CreateToolCall(
+                "call-shell-spawn",
+                ShellTool.ToolName,
+                new Dictionary<string, object?> { ["command"] = "spawn_agent" })
+        ]);
+        _clientProvider.Compaction.PlannedResponses.Enqueue([new TextContent("Child completed.")]);
+
+        var sessionId = new SessionId("console/subagent-denied-native-correction");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("subagent-denied-native-correction-events");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var source = BuildPersonalSource();
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use a child to check denied native tool names.",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SubAgentOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        for (var i = 0; i < 2; i++)
+        {
+            var approval = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(ShellTool.ToolName, approval.ToolName.Value);
+            var denied = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+            {
+                SessionId = sessionId,
+                CallId = approval.CallId,
+                SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+                SenderId = source.SenderId!
+            }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.IsType<CommandAck>(denied);
+        }
+        await ExpectTurnCompletedAsync(
+            subscriber,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        var resultMessages = _clientProvider.Compaction.ReceivedMessages[1];
+        Assert.DoesNotContain(
+            "native Netclaw tool",
+            GetToolResult(resultMessages, "call-shell-attach"),
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "native Netclaw tool",
+            GetToolResult(resultMessages, "call-shell-spawn"),
+            StringComparison.Ordinal);
+        Assert.False(shellProbe.WasCalled);
+        Assert.All(
+            _clientProvider.Compaction.ReceivedToolNames,
+            names =>
+            {
+                Assert.DoesNotContain("attach_file", names);
+                Assert.DoesNotContain("spawn_agent", names);
+            });
+    }
+
+    [Fact]
     public async Task Loaded_child_tool_does_not_transfer_to_the_next_child()
     {
         RegisterSyntheticMcpCatalog();
