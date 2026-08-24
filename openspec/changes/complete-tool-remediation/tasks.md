@@ -1,8 +1,8 @@
-## 1. Typed remediation contract
+## 1. Closed next-action contract
 
 - [x] 1.1 Add the closed internal remediation code.
 - [x] 1.2 Require exactly one remediation for each recoverable correction receipt and reject it for other outcomes.
-- [x] 1.3 Convert project declaration, session scratch, and file edit producers from strings to typed remediation.
+- [x] 1.3 Convert project declaration, session scratch, and file edit producers from free-form strings to the closed next-action code.
 - [x] 1.4 Add constructor and producer regressions for valid, missing, undefined, and wrong-category remediations.
 
 ## 2. Shared model presentation

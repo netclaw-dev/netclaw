@@ -21,7 +21,7 @@ internal static class ToolRemediationPresenter
         var action = remediationCode switch
         {
             ToolRemediationCode.SetWorkingDirectory when setWorkingDirectoryAvailable =>
-                "Next action: call set_working_directory with the project directory from this result, then retry the failed tool call.",
+                "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
             ToolRemediationCode.SetWorkingDirectory => null,
             ToolRemediationCode.UseSessionScratch =>
                 "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths.",

@@ -1,5 +1,8 @@
 ## MODIFIED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: Subagents use progressive tool disclosure
 
 A subagent SHALL begin with the same policy-exposed core tool set as a main session, minus tools prohibited by subagent policy. It SHALL NOT eagerly receive every discoverable first-party or MCP tool. `search_tools` and `load_tool` SHALL activate deferred schemas only in that child actor's ephemeral exposure set.

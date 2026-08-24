@@ -250,7 +250,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal(
             "Tool execution deferred: working_directory_not_declared\n" +
             "Project directory: '/home/user/repos/project'.\n" +
-            "Next action: call set_working_directory with the project directory from this result, then retry the failed tool call.",
+            "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
             result.Content);
         Assert.Equal(
             ToolRemediationCode.SetWorkingDirectory,
@@ -288,7 +288,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         Assert.Equal(
             "Error: invalid_context: No project or session directory is available.\n" +
-            "Next action: call set_working_directory with the project directory from this result, then retry the failed tool call.",
+            "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
             completed.Result.Message.Content);
         Assert.Equal(ToolRemediationCode.SetWorkingDirectory, completed.Result.Receipt?.RemediationCode);
     }

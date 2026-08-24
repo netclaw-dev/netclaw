@@ -1,5 +1,8 @@
 ## MODIFIED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: First-party tool outcomes are machine-actionable
 
 First-party workspace tool execution SHALL produce exactly one call-local
@@ -18,6 +21,25 @@ omit a next action that names a tool hidden from the current audience. It SHALL
 NOT grant authority, execute a tool, rewrite a tool call, or persist the
 remediation.
 
+The following pseudocode shows the required separation:
+
+```text
+tool implementation returns:
+  result  = raw factual text
+  receipt = trusted internal facts for the actor
+
+dispatcher normal-return path:
+  redact and bound the factual text
+
+shared presenter receives:
+  current model-result text
+  receipt.RemediationCode
+  current tool visibility
+
+shared presenter returns:
+  one final tool-role message for the model
+```
+
 #### Scenario: Access denial has no successful file activity
 
 - **GIVEN** `file_read` is called for a path outside the current read authority
@@ -27,9 +49,10 @@ remediation.
 - **AND** the outcome contains no remediation
 - **AND** the model receives a bounded denial string
 
-#### Scenario: Missing declaration has a typed correction
+#### Scenario: Missing declaration has a closed correction code
 
 - **GIVEN** a workspace tool can continue after the project directory is declared
+- **AND** `set_working_directory` is visible to the current model
 - **WHEN** the missing declaration is the only blocker
 - **THEN** the outcome category is `recoverable_correction`
 - **AND** its remediation code is `SetWorkingDirectory`
@@ -49,6 +72,24 @@ remediation.
 - **AND** `set_working_directory` is hidden from the current audience
 - **WHEN** the shared presenter creates the tool-role message
 - **THEN** it does not add an action that names the hidden tool
+- **AND** it returns the factual tool result unchanged
+
+#### Scenario: Ambiguous file edit has one next action
+
+- **GIVEN** `file_edit` finds more than one `OldString` match
+- **WHEN** `ReplaceAll` is false
+- **THEN** the tool changes no file
+- **AND** the result reports the match count
+- **AND** the remediation code is `ProvideUniqueOldString`
+- **AND** the presenter adds one fixed retry action
+
+#### Scenario: Shared temporary path suggests session scratch
+
+- **GIVEN** shell policy proposes the session directory for a shared temporary path
+- **WHEN** the call returns a recoverable correction
+- **THEN** the remediation code is `UseSessionScratch`
+- **AND** the presenter adds one fixed session-scratch action
+- **AND** a later retry still runs normal shell authorization
 
 #### Scenario: Recoverable correction requires a known value
 

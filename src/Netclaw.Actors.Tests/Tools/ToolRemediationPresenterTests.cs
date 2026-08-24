@@ -16,7 +16,7 @@ public class ToolRemediationPresenterTests
     {
         {
             nameof(ToolRemediationCode.SetWorkingDirectory),
-            "Next action: call set_working_directory with the project directory from this result, then retry the failed tool call."
+            "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call."
         },
         {
             nameof(ToolRemediationCode.UseSessionScratch),

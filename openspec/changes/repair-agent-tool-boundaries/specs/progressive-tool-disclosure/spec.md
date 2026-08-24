@@ -1,5 +1,8 @@
 ## MODIFIED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: Sessions start with a bounded workspace core
 
 The initial model tool set SHALL contain policy-exposed definitions for `search_tools`, `load_tool`, `skill_load`, `skill_read_resource`, `set_working_directory`, `file_search`, `file_read`, `file_list`, `file_write`, `file_edit`, `tool_output_read`, and `shell_execute`. Other first-party and MCP tools SHALL be deferred unless a later specification adds them to the core. The core SHALL NOT include `json_read` or `file_read_many`.

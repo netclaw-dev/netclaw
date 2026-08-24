@@ -1,10 +1,32 @@
 ## MODIFIED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: First-party tool outcomes are machine-actionable
 
 First-party workspace tool execution SHALL produce exactly one call-local outcome category: `success`, `invalid_input`, `access_denied`, `not_found`, `transient_failure`, or `recoverable_correction`. The category SHALL be separate from the model-facing string. The system SHALL NOT infer it from that string. The outcome MAY carry canonical file activity. A `recoverable_correction` outcome SHALL carry exactly one defined internal remediation code. Every other category SHALL reject remediation. The outcome SHALL NOT change the public string-returning `INetclawTool` contract.
 
 The shared dispatcher, `DispatchingToolExecutor`, SHALL classify a terminal policy denial as `access_denied` for parent and child callers. An approval request SHALL NOT create a terminal receipt before its final decision.
+
+Example receipt shapes:
+
+```text
+successful file read:
+  category      = Success
+  file activity = Read("/workspace/project/README.md")
+  remediation   = none
+
+policy denial before tool execution:
+  category      = AccessDenied
+  file activity = empty
+  remediation   = none
+
+correctable missing path base:
+  category      = RecoverableCorrection
+  file activity = empty
+  remediation   = SetWorkingDirectory
+```
 
 #### Scenario: Access denial has no successful file activity
 

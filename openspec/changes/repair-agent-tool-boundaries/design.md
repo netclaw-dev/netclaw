@@ -14,18 +14,32 @@ Constraints:
 - ShellSyntaxTree remains the owner of shell syntax facts.
 - Netclaw adds no executable-specific command parser.
 
-## Terms Used in This Design
+## Vocabulary and Tool Flow
 
-- **Dispatcher** means `DispatchingToolExecutor`. It finds the registered tool,
-  runs authorization, invokes the tool, and records the call-local outcome.
-- **Receipt** means the internal outcome data for one tool call. It is not the
-  text returned to the model and is not stored in the durable chat history.
-- **Project scope** means the declared project directory used to resolve
-  relative workspace paths and build project instructions.
-- **Schema exposure** means that the model can see a tool definition. It does
-  not mean that the model has permission to execute the tool.
-- **Spill** means the full redacted result stored in session-owned output when
-  the result is too large for the inline tool response.
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for the
+cross-cutting terms in this design.
+
+The normal first-party tool-return flow is:
+
+```text
+model
+  -> tool call
+  -> DispatchingToolExecutor
+       -> authorization
+       -> tool implementation
+       -> factual result -> redaction and output bound --+
+       -> ToolInvocationReceipt --------------------------+---> correction presenter
+                                                           -> model-facing result
+
+ToolInvocationReceipt
+  -> optional working-context update in LlmSessionActor or SubAgentActor
+```
+
+An approval request pauses this flow before tool execution. It does not create
+a terminal receipt. Caller cancellation also propagates without a receipt or
+model-facing failure. For another terminal exception, the dispatcher first
+classifies the receipt. The parent or child actor then creates the factual
+failure result and applies the same correction presenter before model delivery.
 
 ## Goals / Non-Goals
 
@@ -56,12 +70,23 @@ The validation will reject a link or junction in the base or its ancestors below
 
 The policy will not retry against session scratch after a project-based denial. A stale project can use the existing session fallback only before path authorization starts.
 
-Example: `/srv/workspaces` is an allowed root and the declared project is
-`/srv/workspaces/team/project`. If `/srv/workspaces/team` is replaced by a link
-to `/outside`, `file_read` with `README.md` returns `access_denied`. It does not
-read through the link or retry the same path under session scratch. By contrast,
-if the declared project no longer exists before authorization starts, the policy
-may select the valid session directory as the relative base.
+Example:
+
+```text
+allowed root     = /srv/workspaces
+declared project = /srv/workspaces/team/project
+authored path    = README.md
+
+/srv/workspaces/team is a link to /outside
+  -> project base state = Unsafe
+  -> result category    = AccessDenied
+  -> file access        = none
+  -> session fallback   = forbidden
+
+/srv/workspaces/team/project does not exist
+  -> project base state = Unavailable
+  -> try the valid session directory before authorization starts
+```
 
 Alternative: inspect only the final base. This leaves an ancestor-link escape.
 
@@ -73,10 +98,18 @@ A `ToolApprovalRequiredException` will stay non-terminal. The caller can still c
 
 Workspace tools can set a more exact terminal receipt. The dispatcher will fill a receipt only when the tool has not set one.
 
-Example: policy denies `file_read` before `FileReadTool` runs. The dispatcher
-records `access_denied` with no successful file activity for both a parent and a
-child actor. If the same call needs approval instead, the dispatcher records no
-terminal receipt. An approved retry enters authorization again and can execute.
+Example:
+
+```text
+policy denies file_read before FileReadTool runs
+  -> parent receipt = AccessDenied
+  -> child receipt  = AccessDenied
+  -> file activity  = empty
+
+policy requires approval
+  -> terminal receipt = none
+  -> approved retry enters authorization again
+```
 
 Alternative: keep actor-specific exception maps. That design already caused parent and child drift.
 
@@ -87,11 +120,20 @@ Actors will apply `DeclaredProjectDirectory` only for a successful `set_working_
 Remediation codes will use a closed internal enum. A corrective receipt must use
 one defined enum value. Every other outcome must reject remediation.
 
-Example: a successful `file_read` receipt that contains a project directory
-cannot replace the current project. A successful `set_working_directory`
-receipt can replace it. If `file_edit` finds several matches, its corrective
-receipt uses `ProvideUniqueOldString`; it cannot insert arbitrary instruction
-text into the remediation field.
+Example:
+
+```text
+file_read + Success + DeclaredProjectDirectory
+  -> actor rejects the project effect
+
+set_working_directory + Success + DeclaredProjectDirectory
+  -> actor replaces the project scope
+
+file_edit finds three matches
+  -> result reports the match count
+  -> receipt = RecoverableCorrection(ProvideUniqueOldString)
+  -> no arbitrary instruction enters the receipt
+```
 
 Alternative: trust any internal receipt producer. This makes future tool additions able to widen scope by accident.
 
@@ -108,10 +150,20 @@ An agent can compose these retained tools:
 
 The replay corpus will not preserve a product expectation for a removed tool. A retained scenario can assert the composed route when that route matches the original intent.
 
-Example: to inspect `README.md` and `CONTRIBUTING.md`, the model issues two
-bounded `file_read` calls in one parallel batch. It does not use
-`file_read_many`. To inspect bounded JSON text, it uses `file_read`; a stable
-domain query should use a purpose-built producer tool instead of `json_read`.
+Example:
+
+```text
+one model response:
+  file_read(Path = "README.md", Offset = 0, Limit = 200)
+  file_read(Path = "CONTRIBUTING.md", Offset = 0, Limit = 200)
+
+runtime:
+  execute both bounded calls in one tool batch
+  return two separate bounded results
+```
+
+For bounded JSON text, the model uses `file_read`. A stable domain query should
+use a purpose-built producer tool.
 
 Alternative: keep the bulk tools with lower bounds. The larger schemas and batch results still duplicate simpler calls and invite context floods.
 
@@ -123,10 +175,19 @@ Dispatch will still resolve a known registered name and run normal authorization
 
 Guidance will tell an agent to call `load_tool` directly when it knows the exact name. The agent will use `search_tools` only when it knows an intent but not a name.
 
-Example: when the model already knows `list_reminders`, it calls `load_tool`
-with that exact name. The next model request can see the schema, but a later
-`list_reminders` call still runs normal authorization. When the model knows only
-that it needs a scheduling tool, it calls `search_tools` first.
+Example:
+
+```text
+model knows the exact name:
+  load_tool(Name = "list_reminders")
+  -> next request includes the list_reminders schema
+  -> later call still runs authorization
+
+model knows only the intent:
+  search_tools(Query = "show scheduled reminders")
+  -> policy-filtered results
+  -> load one exact result
+```
 
 Alternative: require an activation lease before dispatch. This adds a second authority-like state and does not improve the real approval boundary.
 
@@ -136,10 +197,20 @@ The dispatcher will not reveal a raw spill path to the model. Its steer will nam
 
 The canonical specification will remove the old `file_read` and shell grep route. A later design can assess search over spilled output.
 
-Example: a shell call produces 40,000 characters and exceeds the inline limit.
-The response keeps the bounded inline preview and names an opaque call id such
-as `call-example`. The model uses `tool_output_read` with that id to continue.
-It does not receive the spill file path and cannot pass that path to shell.
+Example:
+
+```text
+shell result length = 40,000 characters
+inline budget       = 12,000 characters
+
+model receives:
+  bounded head and tail preview
+  opaque call id = call-example
+  next tool      = tool_output_read
+
+model does not receive:
+  /session/.../tool-calls/call-example.txt
+```
 
 Alternative: expose the spill file to file tools or shell. This couples continuation to filesystem authority and lower-audience shell access.
 
@@ -151,16 +222,26 @@ The tool-removal PR will update the core snapshot and remove bulk-tool fixtures.
 
 The final eval run will use the reduced surface. Public evidence will contain aggregate, PII-free results only.
 
-Example: the child-catalog replay starts a real `SubAgentActor` and inspects the
-first child model request. It does not substitute the parent catalog. The path
-tests create a native link or junction in the selected base chain and verify
-that no file access crosses it.
+Example:
+
+```text
+child catalog test:
+  start SubAgentActor through SubAgentSpawner
+  capture the first child model request
+  assert the allowed core schemas
+  assert hidden schemas are absent
+
+path security test:
+  create a native link or junction in the selected base chain
+  call a relative file tool
+  assert AccessDenied and no file access
+```
 
 ## Actor Boundaries and Persistence
 
 `DispatchingToolExecutor` owns authorization and terminal receipt classification. `LlmSessionActor` and `SubAgentActor` consume the same receipt facts.
 
-Only those actors update their current work context. The main session persists its existing `WorkingContext`. A child keeps its context ephemeral.
+Only those actors update their current working context. The main session persists its existing `WorkingContext`. A child keeps its context ephemeral.
 
 This change adds no event, snapshot, protobuf, or configuration field. Recovery behavior stays unchanged.
 

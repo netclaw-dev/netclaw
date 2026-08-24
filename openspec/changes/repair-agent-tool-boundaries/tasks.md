@@ -1,3 +1,8 @@
+## 0. Specification clarity
+
+- [x] 0.1 Define shared tool, actor, path, authority, and output terms in the engineering glossary.
+- [x] 0.2 Add end-to-end pseudocode and concrete examples for the path and receipt boundaries.
+
 ## 1. Security and receipt boundaries
 
 - [x] 1.1 Reject a relative project base that has a symlink or junction ancestor below its allowed root.

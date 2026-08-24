@@ -1,5 +1,8 @@
 # Netclaw OpenSpec Capabilities
 
+Use [the engineering glossary](../../docs/spec/GLOSSARY.md) for cross-cutting
+terms. Define capability-specific terms in the capability specification.
+
 - `netclaw-slack-socket`
 - `netclaw-session`
 - `netclaw-gateway-security`

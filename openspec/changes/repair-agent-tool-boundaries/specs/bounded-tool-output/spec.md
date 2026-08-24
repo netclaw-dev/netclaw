@@ -1,5 +1,8 @@
 ## MODIFIED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: Spill to a session-scoped file with a steer
 
 When a result exceeds its inline budget, the dispatcher SHALL write the full redacted result to an internal file under the current session `tool-calls` directory. The dispatcher SHALL derive the file name from the sanitized call id. It SHALL return the opaque call id and a steer to `tool_output_read`. It SHALL NOT reveal the raw spill path or direct the model to shell, grep, or `file_read`. When no session directory or call id is available, the dispatcher SHALL return the inline window without a spill steer.

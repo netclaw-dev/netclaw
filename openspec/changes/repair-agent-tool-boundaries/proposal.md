@@ -7,9 +7,10 @@ This change supports PRD-001 outcomes 7 and 9, PRD-006 outcome 5, and PRD-007 ou
 ## What Changes
 
 - Fix relative workspace access when a declared project has a symlink or junction ancestor.
+- Define shared engineering terms and show the tool flow with pseudocode.
 - Classify policy denials at the shared receipt boundary for parent and child sessions.
 - Restrict project-scope receipt effects to `set_working_directory`.
-- Bound receipt remediation codes and keep approval requests non-terminal.
+- Use a closed next-action code and keep approval requests non-terminal.
 - **BREAKING** Remove the unreleased `json_read` tool and its public type.
 - **BREAKING** Remove the unreleased `file_read_many` tool and its public type.
 - Replace their eval cases with composed `file_search` and `file_read` use.
@@ -22,6 +23,7 @@ This change supports PRD-001 outcomes 7 and 9, PRD-006 outcome 5, and PRD-007 ou
 ### In scope
 
 - Workspace path, receipt, and project-scope security boundaries.
+- The shared engineering glossary and examples for these boundaries.
 - Removal of two unreleased bulk tools.
 - Core tool schemas, agent guidance, replay fixtures, and eval cases.
 - Parent and child deferred-tool exposure contracts.

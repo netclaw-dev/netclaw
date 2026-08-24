@@ -1,5 +1,8 @@
 ## MODIFIED Requirements
 
+The terms in this requirement use the
+[Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
 ### Requirement: Relative first-party filesystem paths use session-owned bases
 
 First-party filesystem tools SHALL resolve a relative path against the declared project directory when one exists. Otherwise, they SHALL use the immutable session directory. If neither base exists, they SHALL return an `invalid_context` correction. They SHALL NOT use the daemon process current directory.
