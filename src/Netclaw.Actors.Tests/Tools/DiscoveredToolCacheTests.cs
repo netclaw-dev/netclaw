@@ -119,7 +119,7 @@ public class DiscoveredToolCacheTests
         Assert.True(cache.HasTool("server/tool_12"));
         Assert.DoesNotContain(
             cache.AvailableTools,
-            static tool => tool is AIFunction function && function.Name == "server/tool_00");
+            static tool => tool is AIFunction function && function.Name == "server__tool_00");
     }
 
     [Fact]
