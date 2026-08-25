@@ -81,6 +81,48 @@ public class DiscoveredToolCacheTests
     }
 
     [Fact]
+    public void PrepareForNewTurn_WithZeroRetention_EvictsLoadedTools()
+    {
+        var registry = new ToolRegistry();
+        var cache = new DiscoveredToolCache();
+
+        RegisterAndRemember(registry, cache, "notion", "search", retentionTurns: 3, maxCount: 12);
+        Assert.Single(cache.AvailableTools);
+
+        cache.PrepareForNewTurn(retentionTurns: 0, maxCount: 12, registry);
+
+        Assert.Empty(cache.AvailableTools);
+        Assert.False(cache.HasTool("notion/search"));
+    }
+
+    [Fact]
+    public void PrepareForNewTurn_OverMaximum_EvictsOldestLoadedTool()
+    {
+        var registry = new ToolRegistry();
+        var cache = new DiscoveredToolCache();
+
+        for (var i = 0; i < 13; i++)
+        {
+            RegisterAndRemember(
+                registry,
+                cache,
+                "server",
+                $"tool_{i:D2}",
+                retentionTurns: 3,
+                maxCount: 12);
+        }
+
+        cache.PrepareForNewTurn(retentionTurns: 3, maxCount: 12, registry);
+
+        Assert.Equal(12, cache.LoadedToolCount);
+        Assert.False(cache.HasTool("server/tool_00"));
+        Assert.True(cache.HasTool("server/tool_12"));
+        Assert.DoesNotContain(
+            cache.AvailableTools,
+            static tool => tool is AIFunction function && function.Name == "server/tool_00");
+    }
+
+    [Fact]
     public void Deferred_first_party_tool_uses_the_same_lease_and_eviction_path()
     {
         var registry = new ToolRegistry();

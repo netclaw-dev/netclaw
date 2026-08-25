@@ -168,6 +168,8 @@ public class SearchToolsToolTests
         Assert.Contains("Did you mean", result);
         Assert.Contains("browser_chrome_devtools__navigate_page", result);
         Assert.Contains("Suggestions are not loaded yet", result);
+        Assert.Contains("Call load_tool with one of the exact tool names above", result);
+        Assert.DoesNotContain("Call search_tools again", result);
         Assert.DoesNotContain("browser_chrome_devtools__navigate_page —", result);
     }
 

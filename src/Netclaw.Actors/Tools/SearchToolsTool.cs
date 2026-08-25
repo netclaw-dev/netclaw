@@ -109,7 +109,7 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
 
             suggestionBuilder.AppendLine();
             suggestionBuilder.AppendLine(
-                "Suggestions are not loaded yet. Call search_tools again with one of the exact tool names above.");
+                "Suggestions are not loaded yet. Call load_tool with one of the exact tool names above.");
             return Task.FromResult(suggestionBuilder.ToString());
         }
 
