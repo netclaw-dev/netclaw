@@ -102,10 +102,8 @@ public sealed partial class SearchToolsTool : NetclawTool<SearchToolsTool.Params
                     : tool.Description;
                 var parameterHint = GetParameterHint(tool);
 
-                // NOTE: Keep suggestions in a distinct format so LlmSessionActor doesn't
-                // auto-load them as discovered tools. Auto-loading is only for exact matches.
-                // Emit the LLM-facing alias so what the model reads here
-                // matches what it must emit in a tool_use call.
+                // Keep suggestions distinct from exact search results. Emit the
+                // LLM-facing alias so the model can pass that exact name to load_tool.
                 suggestionBuilder.AppendLine($"  ? {tool.LlmFacingName} :: {desc}{parameterHint}");
             }
 

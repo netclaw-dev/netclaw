@@ -2,6 +2,7 @@
 
 - [x] 0.1 Define shared tool, actor, path, authority, and output terms in the engineering glossary.
 - [x] 0.2 Add end-to-end pseudocode and concrete examples for the path and receipt boundaries.
+- [x] 0.3 Add positive examples and counterexamples for every modified specification, including tool leases, recursive-child denial, policy reasons, canonical activity, removed tools, and spill behavior.
 
 ## 1. Security and receipt boundaries
 

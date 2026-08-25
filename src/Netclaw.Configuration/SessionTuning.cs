@@ -43,15 +43,16 @@ public sealed record SessionTuning
     public int MaxInlineToolResultChars { get; init; } = 12_000;
 
     /// <summary>
-    /// Number of future user turns that dynamically discovered MCP tools remain
-    /// available without re-running <c>search_tools</c>. Set to 0 to require
-    /// discovery on every user turn.
+    /// Number of future user turns that dynamically loaded deferred first-party
+    /// or MCP tools remain available without another load. Set to 0 to require
+    /// activation again on every user turn.
     /// </summary>
     public int DiscoveredToolRetentionTurns { get; init; } = 3;
 
     /// <summary>
-    /// Maximum number of discovered MCP tools retained across turns.
-    /// Oldest discovered tools are evicted first when the cap is exceeded.
+    /// Maximum number of loaded deferred first-party or MCP tools retained
+    /// across turns. Oldest loaded tools are evicted first when the cap is
+    /// exceeded.
     /// </summary>
     public int DiscoveredToolMaxCount { get; init; } = 12;
 

@@ -11,8 +11,8 @@ namespace Netclaw.Actors.Sessions.Handlers;
 
 /// <summary>
 /// Owns the session's exposed tool list — the always-loaded base tools plus the
-/// deferred tools discovered via search_tools — and manages lease-based retention and
-/// eviction of the discovered set across turns. Because the cache owns the list
+/// deferred tools activated through load_tool — and manages lease-based retention and
+/// eviction of the loaded set across turns. Because the cache owns the list
 /// it rebuilds, callers seed the base tools once and then drive
 /// <see cref="PrepareForNewTurn"/> / <see cref="EvictAll"/> / <see cref="AddIfMissing"/>
 /// without passing the list around. Transient and actor-owned; never persisted.
@@ -26,7 +26,7 @@ internal sealed class DiscoveredToolCache
 
     /// <summary>
     /// The tools currently exposed to the model this turn: the base tools
-    /// followed by any discovered tools with an active lease.
+    /// followed by any loaded Deferred tools with an active lease.
     /// </summary>
     public IReadOnlyList<AITool> AvailableTools => _availableTools;
 
@@ -36,7 +36,7 @@ internal sealed class DiscoveredToolCache
 
     /// <summary>
     /// Seed the always-loaded base tools once at session start. Everything added
-    /// beyond this set is a discovered tool subject to lease-based eviction.
+    /// beyond this set is a loaded Deferred tool subject to lease-based eviction.
     /// </summary>
     public void SeedBaseTools(IReadOnlyList<AITool> alwaysLoadedTools)
     {
@@ -50,7 +50,7 @@ internal sealed class DiscoveredToolCache
     /// and rebuild the available tools list from the cache.
     /// </summary>
     /// <param name="retentionTurns">Configured retention turns (0 or negative disables caching).</param>
-    /// <param name="maxCount">Maximum discovered tools to retain.</param>
+    /// <param name="maxCount">Maximum loaded Deferred tools to retain.</param>
     /// <param name="registry">Tool registry for resolving tool instances.</param>
     public void PrepareForNewTurn(int retentionTurns, int maxCount, ToolRegistry? registry)
     {
@@ -97,7 +97,7 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
-    /// Remember a discovered deferred tool with a lease for future turns.
+    /// Remember a loaded Deferred tool with a lease for future turns.
     /// </summary>
     public void Remember(string toolName, INetclawTool tool, int leaseTurns, int maxCount)
     {
@@ -121,7 +121,7 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
-    /// Evict all discovered tools and trim the available tools list back to the
+    /// Evict all loaded Deferred tools and trim the available tools list back to the
     /// base tools. Used when an LLM call fails to prevent a bad tool set from
     /// poisoning subsequent turns.
     /// </summary>
@@ -133,7 +133,7 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
-    /// Check whether the cache contains a tool with an active lease.
+    /// Check whether the cache contains a loaded tool with an active lease.
     /// </summary>
     public bool HasTool(string toolName)
     {
@@ -159,7 +159,7 @@ internal sealed class DiscoveredToolCache
     }
 
     /// <summary>
-    /// Rebuild the available tools list from the discovered tool cache.
+    /// Rebuild the available tools list from the loaded-tool cache.
     /// </summary>
     private void RebuildFromCache(ToolRegistry registry)
     {

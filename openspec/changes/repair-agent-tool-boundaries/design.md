@@ -98,6 +98,13 @@ A `ToolApprovalRequiredException` will stay non-terminal. The caller can still c
 
 Workspace tools can set a more exact terminal receipt. The dispatcher will fill a receipt only when the tool has not set one.
 
+The receipt carries the stable category used by actor state. The separate
+bounded result carries the reason presented to the model. For example, a
+dispatcher policy denial can return
+`Tool access denied: tool_not_allowed_for_audience_profile` while the receipt
+remains the closed `AccessDenied` category. Actors never parse that sentence to
+recover the category.
+
 Example:
 
 ```text
@@ -154,8 +161,8 @@ Example:
 
 ```text
 one model response:
-  file_read(Path = "README.md", Offset = 0, Limit = 200)
-  file_read(Path = "CONTRIBUTING.md", Offset = 0, Limit = 200)
+  file_read(Path = "README.md", StartLine = 1, Limit = 200)
+  file_read(Path = "CONTRIBUTING.md", StartLine = 1, Limit = 200)
 
 runtime:
   execute both bounded calls in one tool batch
@@ -175,6 +182,14 @@ Dispatch will still resolve a known registered name and run normal authorization
 
 Guidance will tell an agent to call `load_tool` directly when it knows the exact name. The agent will use `search_tools` only when it knows an intent but not a name.
 
+When retention and maximum-count tuning are positive, main sessions retain a
+loaded schema for the configured number of future user turns, which defaults to
+three. Reloading refreshes the lease. The default maximum is twelve loaded
+schemas; adding another evicts the oldest. Recovery or an LLM failure discards
+the actor-local loaded set. A child has a shorter and simpler lifetime: a loaded
+schema remains for later iterations in that child run and disappears when the
+child ends.
+
 Example:
 
 ```text
@@ -190,6 +205,9 @@ model knows only the intent:
 ```
 
 Alternative: require an activation lease before dispatch. This adds a second authority-like state and does not improve the real approval boundary.
+
+Counterexample: a loaded schema is not durable session state. A recovered main
+session and a newly started child both begin from their policy-filtered core.
 
 ### 6. Spill continuation uses one opaque contract
 
@@ -219,6 +237,11 @@ Alternative: expose the spill file to file tools or shell. This couples continua
 The security PR will add POSIX and native Windows ancestor-link tests. It will also add executor, parent, and child policy-denial receipt tests.
 
 The tool-removal PR will update the core snapshot and remove bulk-tool fixtures. The rollout PR will create a real subagent for the child catalog replay.
+
+The child catalog excludes `spawn_agent` by design, not merely because the
+schema is Deferred. A child cannot recursively create a grandchild. This keeps
+concurrency bounded for self-hosted models and preserves one parent-owned
+`spawn_agent` lifecycle per child.
 
 The final eval run will use the reduced surface. Public evidence will contain aggregate, PII-free results only.
 

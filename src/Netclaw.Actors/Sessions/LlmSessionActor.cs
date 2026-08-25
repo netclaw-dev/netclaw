@@ -264,7 +264,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 NoLogger.Instance);
 
         // Load only the explicit core for initial LLM calls. Deferred first-party and
-        // MCP tools use search_tools and share the configured discovery lease.
+        // MCP tools are discovered through search_tools, activated through load_tool,
+        // and share the configured loaded-tool lease.
         _fullRegistry = tools?.ToolRegistry;
         if (_fullRegistry is not null)
         {
@@ -668,7 +669,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // the failure reaches here, so a failed turn is terminal.
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
-            // Evict discovered tools to prevent a poisoned tool set from cascading
+            // Evict loaded Deferred tools to prevent a poisoned tool set from cascading
             // across turns (e.g., oversized Notion schemas causing repeated 502s).
             _discoveredToolCache.EvictAll();
             TurnLog().Info("turn_discovered_tools_evicted — tool list reset to base tools after LLM call failure");
@@ -3456,7 +3457,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     /// <summary>
-    /// Attempt to activate a single discovered tool by name.
+    /// Attempt to activate a single Deferred tool by name.
     /// Checks registry, access policy, and adds to the available tools cache.
     /// </summary>
     private bool TryActivateDiscoveredTool(string toolName)

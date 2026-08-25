@@ -28,6 +28,8 @@ This change supports PRD-001 outcomes 7 and 9, PRD-006 outcome 5, and PRD-007 ou
 - Core tool schemas, agent guidance, replay fixtures, and eval cases.
 - Parent and child deferred-tool exposure contracts.
 - Canonical specifications for spilled output.
+- Concrete positive and negative examples for every changed authority, lifetime,
+  state, and output boundary.
 
 ### Out of scope
 

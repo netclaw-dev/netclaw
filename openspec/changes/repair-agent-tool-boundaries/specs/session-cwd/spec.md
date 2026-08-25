@@ -9,6 +9,18 @@ First-party filesystem tools SHALL resolve a relative path against the declared 
 
 The selected base SHALL be a canonical absolute path. A declared project base SHALL remain within an owning allowed root. The system SHALL reject a symlink or junction in that project base or in an ancestor below the owning root. The final canonical path SHALL pass existing scope and protected-path policies. The system SHALL NOT retry another base after a selected base fails authorization.
 
+Resolution examples and counterexamples:
+
+| Authored path and context | Selected path | Result |
+|---|---|---|
+| `src/App.cs`, project `/workspace/project` | `/workspace/project/src/App.cs` | Apply normal read or write policy. |
+| `notes.md`, no project, session `/session/current` | `/session/current/notes.md` | Apply normal session policy. |
+| `notes.md`, stale unavailable project, valid session | `/session/current/notes.md` | Fall back before authorization begins. |
+| `notes.md`, project has a link ancestor | none | `access_denied`; do not try the session base. |
+| `../../outside.txt`, valid project | canonical outside path | Deny if existing scope policy does not authorize it; do not try the session base. |
+| `notes.md`, no project or session | none | `invalid_context`; do not use the daemon current directory. |
+| `/absolute/report.md` | `/absolute/report.md` | Do not select a relative base; apply normal policy directly. |
+
 #### Scenario: Relative read uses declared project
 
 - **GIVEN** a project directory `/workspace/project` and session `/session/current`
@@ -47,6 +59,26 @@ The selected base SHALL be a canonical absolute path. A declared project base SH
 ### Requirement: Failed filesystem operations do not change project context
 
 A denied or failed `set_working_directory` or filesystem call SHALL NOT change the project directory or recent-file context. Only a validated successful `set_working_directory` receipt SHALL replace the project and reload its instructions. Another tool receipt SHALL NOT declare project scope.
+
+Project-effect example:
+
+```text
+current project = /workspace/old
+
+set_working_directory("/workspace/new")
+  -> Success + DeclaredProjectDirectory("/workspace/new")
+  -> project becomes /workspace/new
+  -> project instructions reload
+
+file_read("README.md")
+  -> Success + Read("/workspace/new/README.md")
+  -> RecentFiles changes
+  -> project remains /workspace/new
+
+hypothetical file_read receipt carrying DeclaredProjectDirectory("/outside")
+  -> actor rejects the project effect
+  -> project remains /workspace/new
+```
 
 #### Scenario: Denied declaration leaves prior project intact
 
