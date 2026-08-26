@@ -9,7 +9,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.26.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.26.0 — Less approval fatigue, more token efficiency, MCP reliability + OAuth improvements, and MCP server prompts invocable as skills. Agents reach for the right tool (tool calls cut more than half on attachment tasks), structured tools are selected in 25/25 eval trials, native tool names can no longer leak into the shell, OAuth refresh survives cold restarts, and server prompts plug into Netclaw's skill system. Now proven by an executable behavioral eval harness, not vibes.
+    <PackageReleaseNotes>Netclaw v0.26.0 — Less approval fatigue, more token efficiency, MCP reliability + OAuth improvements, and MCP server prompts invocable as skills. Agents reach for the right tool (tool calls cut more than half on attachment tasks), structured tools are selected in 25/25 eval trials, native tool names can no longer leak into the shell, OAuth refresh survives cold restarts, and server prompts plug into Netclaw's skill system. Now proven by an executable behavioral eval harness, not vibes.</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
