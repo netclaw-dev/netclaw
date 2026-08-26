@@ -204,6 +204,44 @@ public sealed class McpServersDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task DaemonReportedAuthFailureOnAStaticHeaderServer_NamesTheConfiguredCredential()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            McpServers = new
+            {
+                shortio = new
+                {
+                    Transport = "http",
+                    Url = "https://mcp.example.com",
+                    Enabled = true,
+                    Headers = new { Authorization = "Bearer operator-key" },
+                }
+            }
+        });
+
+        var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            shortio = new
+            {
+                state = "AuthFailed",
+                toolCount = 0,
+                error = "Authentication rejected by server (401 Unauthorized). Check configured credentials or headers."
+            }
+        })));
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        // The operator owns this header. `netclaw mcp auth` refuses such a server, so the
+        // remediation must name the credential instead.
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("auth failed", result.Message);
+        Assert.DoesNotContain("netclaw mcp auth", result.Remediation);
+        Assert.Contains("credentials or headers", result.Remediation);
+    }
+
+    [Fact]
     public async Task DaemonReportedAwaitingAuth_ReturnsWarning()
     {
         WriteConfig(new

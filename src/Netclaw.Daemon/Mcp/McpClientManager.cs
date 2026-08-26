@@ -364,7 +364,17 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
             if (IsAuthFailure(ex))
             {
-                MarkAwaitingAuthorization(lifecycle, current, ex, entry.Url);
+                // AwaitingAuth sends the operator to `netclaw mcp auth`, and
+                // StartAuthorizationAsync refuses a server with a configured Authorization
+                // header. Such a server gets the same AuthFailed status a tool-call 401
+                // publishes, so the remedy names the credential the operator owns. A stdio
+                // server keeps the existing path. It carries no HTTP status, and Netclaw
+                // does not manage its credential.
+                if (entry.Transport is not "stdio" && !HasOAuthRuntimeHints(current.Name, entry))
+                    MarkToolAuthFailure(current.Name, entry, GetHttpStatusText(ex));
+                else
+                    MarkAwaitingAuthorization(lifecycle, current, ex, entry.Url);
+
                 return McpCatalogRefreshResult.Failed;
             }
 
@@ -1138,7 +1148,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// the one state that needs operator action would be the one state never shown.
     /// The status and the alert come from the connect path's factory, so the remedy
     /// matches the server's auth scheme: <c>netclaw mcp auth</c> for an OAuth-capable
-    /// server, and a credential check for a static header.
+    /// server, and a credential check for a static header. The catalog refresh path uses
+    /// this method for a server that cannot run <c>netclaw mcp auth</c>.
     /// </summary>
     private void MarkToolAuthFailure(
         McpServerName serverName,
@@ -1163,7 +1174,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         lifecycle.Publish(current with { Status = status });
 
         _logger.LogWarning(
-            "MCP server '{Name}' rejected a tool call on authentication: {Detail}",
+            "MCP server '{Name}' rejected the credential: {Detail}",
             serverName.Value,
             status.ErrorMessage);
         if (oauthManaged)

@@ -810,7 +810,7 @@ public sealed class McpClientManagerLifecycleTests
         };
 
     // An HTTP server the operator authenticates with a static header. It never uses OAuth.
-    private static McpServerEntry StaticHeaderEntry()
+    internal static McpServerEntry StaticHeaderEntry()
         => new()
         {
             Enabled = true,

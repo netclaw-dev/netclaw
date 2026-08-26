@@ -252,7 +252,8 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
         JsonElement daemonStatuses)
     {
         var statusMessages = new List<string>();
-        var hasAuthFailure = false;
+        var hasOAuthAuthFailure = false;
+        var hasStaticCredentialAuthFailure = false;
         var hasConnectivityFailure = false;
         var hasAwaitingAuth = false;
         var enabledCount = 0;
@@ -290,7 +291,11 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
                     break;
                 case "AuthFailed":
                     failedCount++;
-                    hasAuthFailure = true;
+                    if (CanRunMcpAuthCommand(entry))
+                        hasOAuthAuthFailure = true;
+                    else
+                        hasStaticCredentialAuthFailure = true;
+
                     statusMessages.Add($"{name}: auth failed ({error ?? "authentication rejected"})");
                     break;
                 case "Unreachable":
@@ -311,9 +316,11 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
 
         var summary = string.Join("; ", statusMessages);
 
-        if (hasAuthFailure)
+        if (hasOAuthAuthFailure || hasStaticCredentialAuthFailure)
+        {
             return DoctorCheckResult.Error("mcp-servers", summary,
-                "Re-authorize affected MCP servers with `netclaw mcp auth <name>`.");
+                BuildAuthFailureRemediation(hasOAuthAuthFailure, hasStaticCredentialAuthFailure));
+        }
 
         if (hasConnectivityFailure)
         {
@@ -333,6 +340,30 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
 
         return DoctorCheckResult.Pass("mcp-servers", summary);
     }
+
+    /// <summary>
+    /// Names the remedy that fits the affected servers. An operator who owns the
+    /// credential cannot repair it with <c>netclaw mcp auth</c>, and that command refuses
+    /// a server with a configured Authorization header.
+    /// </summary>
+    private static string BuildAuthFailureRemediation(bool oauthAffected, bool staticCredentialAffected)
+        => oauthAffected && staticCredentialAffected
+            ? "Re-authorize the OAuth MCP servers with `netclaw mcp auth <name>`, and check the configured credentials or headers for the other affected servers."
+            : oauthAffected
+                ? "Re-authorize affected MCP servers with `netclaw mcp auth <name>`."
+                : "Check the configured credentials or headers for the affected MCP servers.";
+
+    /// <summary>
+    /// Mirrors the daemon's <c>HasOAuthRuntimeHints</c> rule, which decides the remedy the
+    /// daemon publishes in the server status. An HTTP server the operator has not given an
+    /// Authorization header can run <c>netclaw mcp auth</c>; any other server cannot.
+    /// <see cref="IsOAuthHttpServer"/> answers a different question: whether the operator
+    /// configured OAuth explicitly. The offline probe keeps that test.
+    /// </summary>
+    private static bool CanRunMcpAuthCommand(McpServerEntry entry)
+        => entry.Transport is "http" or "sse"
+           && entry.Headers?.Keys.Any(key =>
+               string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase)) != true;
 
     private static bool IsOAuthHttpServer(McpServerEntry entry)
         => entry.Transport is "http" or "sse"

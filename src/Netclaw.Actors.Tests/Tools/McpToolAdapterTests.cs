@@ -192,6 +192,17 @@ public class McpToolAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithContext_HttpUnauthorized_RecordsAccessDenied()
+    {
+        // The manager also moves the server to AuthFailed on this status. The result the
+        // model reads must still name the denial, not a transient fault to retry.
+        var context = await ExecuteWithFailureAsync(
+            new HttpRequestException("Unauthorized", null, HttpStatusCode.Unauthorized));
+
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithContext_HttpForbidden_RecordsAccessDenied()
     {
         var context = await ExecuteWithFailureAsync(
