@@ -3802,37 +3802,40 @@ public class DispatchingToolExecutorTests
         Assert.Equal(0, approvalService.RequestCount);
     }
 
-    [Fact]
-    public async Task Compound_native_tool_correction_executes_no_earlier_command()
+    [Theory]
+    [InlineData(ShellGrammar.Bash, "printf marker; file_read --path report.txt")]
+    [InlineData(ShellGrammar.PowerShell, "Write-Output marker; file_read -Path report.txt")]
+    public async Task Compound_native_tool_correction_executes_no_earlier_command(
+        ShellGrammar grammar,
+        string command)
     {
-        var root = Directory.CreateTempSubdirectory("netclaw-native-compound-");
-        try
-        {
-            var markerPath = Path.Combine(root.FullName, "sentinel.txt");
-            var quotedMarkerPath = ShellEnvironment.Grammar == ShellGrammar.PowerShell
-                ? markerPath.Replace("'", "''", StringComparison.Ordinal)
-                : markerPath.Replace("'", "'\"'\"'", StringComparison.Ordinal);
-            var command = ShellEnvironment.Grammar == ShellGrammar.PowerShell
-                ? $"Set-Content -LiteralPath '{quotedMarkerPath}' -Value marker; file_read report.txt"
-                : $"printf marker > '{markerPath}'; file_read report.txt";
-            var call = CreateToolCall(
-                "call-native-compound-no-partial-execution",
-                ShellTool.ToolName,
-                ToolInput.Create("Command", command));
-            var context = CreateInteractivePersonalContext(
-                "signalr/native-compound-no-partial-execution");
+        var environment = grammar == ShellGrammar.PowerShell
+            ? ShellExecutionEnvironment.CreatePowerShell(
+                "C:\\Program Files\\PowerShell\\7\\pwsh.exe",
+                PwshDialect.PowerShell7)
+            : ShellExecutionEnvironmentDefaults.Bash;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(environment);
+        var registeredShell = Assert.IsAssignableFrom<INetclawTool>(
+            registry.GetByName(ShellTool.ToolName));
+        var recordingShell = new RecordingTool(registeredShell);
+        registry.ReplaceCore(recordingShell);
+        var executor = new DispatchingToolExecutor(
+            registry,
+            policy,
+            GrantEveryShellCandidate());
+        var call = CreateToolCall(
+            "call-native-compound-no-partial-execution",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", command));
+        var context = CreateInteractivePersonalContext(
+            "signalr/native-compound-no-partial-execution");
 
-            var exception = await Assert.ThrowsAsync<ToolAgentCorrectionRequiredException>(() =>
-                _executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
+        var exception = await Assert.ThrowsAsync<ToolAgentCorrectionRequiredException>(() =>
+            executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
 
-            var correction = Assert.IsType<ToolAgentCorrection.NativeToolSuggested>(exception.Correction);
-            Assert.Equal("file_read", correction.ToolName.Value);
-            Assert.False(File.Exists(markerPath));
-        }
-        finally
-        {
-            root.Delete(recursive: true);
-        }
+        var correction = Assert.IsType<ToolAgentCorrection.NativeToolSuggested>(exception.Correction);
+        Assert.Equal("file_read", correction.ToolName.Value);
+        Assert.False(recordingShell.WasCalled);
     }
 
     [Fact]
@@ -4130,6 +4133,30 @@ public class DispatchingToolExecutorTests
     {
         public bool IsShellWritePathAuthorized(string fullPath, ToolInvocationContext context)
             => true;
+    }
+
+    private sealed class RecordingTool(INetclawTool inner) : INetclawTool
+    {
+        public string Name => inner.Name;
+        public LlmFacingToolName LlmFacingName => inner.LlmFacingName;
+        public string Description => inner.Description;
+        public string GrantCategory => inner.GrantCategory;
+        public ToolLivenessMode LivenessMode => inner.LivenessMode;
+        public int InlineOutputBudgetChars => inner.InlineOutputBudgetChars;
+        public bool SuppressOutputRedaction => inner.SuppressOutputRedaction;
+        public System.Text.Json.JsonElement ParameterSchema => inner.ParameterSchema;
+        public bool WasCalled { get; private set; }
+
+        public AITool ToAITool() => inner.ToAITool();
+
+        public Task<string> ExecuteAsync(
+            IDictionary<string, object?>? arguments,
+            ToolInvocationContext context,
+            CancellationToken ct = default)
+        {
+            WasCalled = true;
+            return Task.FromResult("recorded shell execution");
+        }
     }
 
     public static bool IsPosix => !OperatingSystem.IsWindows();
