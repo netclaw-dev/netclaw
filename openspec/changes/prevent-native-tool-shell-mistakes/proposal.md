@@ -1,5 +1,8 @@
 ## Why
 
+This proposal uses the
+[Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
+
 Recent tool-friction evidence shows agents still copy files into session scratch before attaching them and sometimes type a known Netclaw tool name into `shell_execute`. The first pattern wastes work and can trigger approval; the second turns a recoverable tool-choice mistake into a shell approval prompt. This change advances PRD-001 tool execution and PRD-002 least-authority behavior by making the intended structured path the easiest path.
 
 ## What Changes

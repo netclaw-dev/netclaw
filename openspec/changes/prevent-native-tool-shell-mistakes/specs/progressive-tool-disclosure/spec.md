@@ -12,6 +12,10 @@ The initial parent-session model tool set SHALL contain policy-exposed definitio
 first-party and MCP tools SHALL be deferred unless a later specification adds
 them to the core. The core SHALL NOT include `json_read` or `file_read_many`.
 
+The `skill_read_resource` name uses the glossary definition of a skill
+resource. It reads an additional file through a permitted relative path. The
+`skill_load` tool reads `SKILL.md` instead.
+
 Sub-agent model tool sets SHALL exclude `attach_file` from core exposure,
 discovery, loading, and direct dispatch until an internal attachment
 handoff can deliver child attachments through the parent invocation.
@@ -56,6 +60,16 @@ Required order:
 5. Add only the schema to the current actor exposure set.
 6. Run normal authorization if the model later calls the tool.
 ```
+
+Exposure examples and counterexamples:
+
+| Correction target | Required exposure result |
+|---|---|
+| Policy-visible Deferred `list_reminders` | Add only that schema to the next actor request. |
+| Policy-visible Core `file_read` | Keep the existing Core schema. Add no duplicate. |
+| A tool that policy hides before activation | Add no schema. Reveal no new tool detail. |
+| A registration removed before activation | Add no schema. Execute nothing. |
+| A later native call after activation | Run normal authorization. The exposure fact grants nothing. |
 
 Main-session recovery and child completion discard the activated deferred
 schema. They do not discard a main-session correction message that already

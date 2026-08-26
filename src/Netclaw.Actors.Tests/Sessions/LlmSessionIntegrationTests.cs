@@ -39,6 +39,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     private readonly RecordingSessionLifecycleObserver _lifecycleObserver = new();
     private readonly ControllableWorkingContextSnapshotProvider _workingContextSnapshots = new();
     private ToolRegistry _toolRegistry = null!;
+    private ToolConfig _toolConfig = null!;
 
     protected override bool VerifySerialization => true;
 
@@ -80,13 +81,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             AIFunctionFactory.Create((string url) => "ok", "navigate_page", "Navigate to URL"),
             "browser_chrome_devtools",
             "navigate_page"));
-        var toolConfig = new ToolConfig();
-        toolConfig.AudienceProfiles.Public.AllowedMcpServers.Add("browser_chrome_devtools");
-        toolConfig.AudienceProfiles.Public.McpServerToolGrants = new Dictionary<string, List<string>>
+        _toolConfig = new ToolConfig();
+        _toolConfig.AudienceProfiles.Public.AllowedMcpServers.Add("browser_chrome_devtools");
+        _toolConfig.AudienceProfiles.Public.McpServerToolGrants = new Dictionary<string, List<string>>
         {
             ["browser_chrome_devtools"] = ["navigate_page"]
         };
-        var toolAccessPolicy = TestToolAccessPolicy.Create(toolConfig);
+        var toolAccessPolicy = TestToolAccessPolicy.Create(_toolConfig);
         registry.RegisterCore(new SearchToolsTool(registry, toolAccessPolicy));
         registry.RegisterCore(new LoadToolTool(registry, toolAccessPolicy));
 
@@ -973,6 +974,85 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Equal(2, _fakeChatClient.ReceivedToolNames.Count);
         Assert.Equal(_fakeChatClient.ReceivedToolNames[0], _fakeChatClient.ReceivedToolNames[1]);
         Assert.Single(_fakeChatClient.ReceivedToolNames[1], static name => name == "load_tool");
+    }
+
+    [Fact]
+    public async Task Native_correction_does_not_expose_tool_denied_before_activation()
+    {
+        const string deferredToolName = "deferred_native_denied_before_activation";
+        _toolRegistry.Register(new DeferredTestTool(deferredToolName));
+        _fakeToolExecutor.BeforeCorrection = () =>
+        {
+            foreach (var profile in _toolConfig.AudienceProfiles.GetAllProfiles())
+            {
+                profile.ApprovalPolicy ??= new ToolApprovalConfig();
+                profile.ApprovalPolicy.ToolOverrides[deferredToolName] = ToolApprovalMode.Deny;
+            }
+        };
+
+        var nextRequestTools = await RunNativeCorrectionTurnAsync(
+            "native-correction-policy-change",
+            deferredToolName);
+
+        Assert.DoesNotContain(deferredToolName, nextRequestTools);
+    }
+
+    [Fact]
+    public async Task Native_correction_does_not_expose_missing_registration()
+    {
+        const string missingToolName = "missing_native_registration";
+
+        var nextRequestTools = await RunNativeCorrectionTurnAsync(
+            "native-correction-missing-registration",
+            missingToolName);
+
+        Assert.DoesNotContain(missingToolName, nextRequestTools);
+    }
+
+    private async Task<IReadOnlyList<string>> RunNativeCorrectionTurnAsync(
+        string sessionSuffix,
+        string toolName)
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-" + sessionSuffix,
+                "shell_execute",
+                new Dictionary<string, object?> { ["command"] = toolName })
+        ];
+        _fakeToolExecutor.Corrections["shell_execute"] =
+            new ToolAgentCorrection.NativeToolSuggested(new ToolName(toolName));
+
+        var sessionId = new SessionId("channel-discovery/" + sessionSuffix);
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe(sessionSuffix + "-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use the named native tool."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, _fakeChatClient.ReceivedToolNames.Count);
+        return _fakeChatClient.ReceivedToolNames[1];
     }
 
     [Fact]

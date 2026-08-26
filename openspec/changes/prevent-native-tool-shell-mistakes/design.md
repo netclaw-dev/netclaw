@@ -39,6 +39,31 @@ model calls shell_execute("list_reminders")
 
 The correction does not run either tool. It creates no approval or grant.
 
+Exact correction shape:
+
+```text
+factual result:
+  Shell execution stopped because 'list_reminders' is a native Netclaw tool.
+
+receipt:
+  category    = RecoverableCorrection
+  remediation = UseNativeTool
+
+authorization correction fact:
+  NativeToolSuggested("list_reminders")
+
+call-local exposure request:
+  ToolExposureRequest("list_reminders")
+
+model-facing result:
+  Shell execution stopped because 'list_reminders' is a native Netclaw tool.
+  Next action: call the native Netclaw tool named in this result directly instead of shell_execute.
+```
+
+The receipt contains the closed correction strategy. The two call-local values
+carry the registered name across authorization and actor activation. None of
+these values grants authority.
+
 ### Exact and non-exact executable examples
 
 | Authored shell input | Native-tool correction |
@@ -53,6 +78,20 @@ The correction does not run either tool. It creates no approval or grant.
 
 These examples describe executable identity only. Netclaw does not translate
 shell arguments into native tool arguments.
+
+Source-order examples:
+
+```text
+file_write --path first && file_read --path second
+  -> select file_write
+  -> execute no part of the shell call
+
+sudo bash -lc "file_read"; file_write
+  -> parser order is sudo, file_read, file_write
+  -> sudo is not a Netclaw tool
+  -> select file_read before the later file_write
+  -> execute no part of the shell call
+```
 
 ### Parent attachment and child exclusion
 
@@ -69,6 +108,15 @@ subagent run:
 ```
 
 The child exclusion prevents a success result that the child cannot deliver.
+
+Attachment authority examples:
+
+| Caller and source | Required result |
+|---|---|
+| Interactive Personal parent; policy-authorized project file | Attach the source. Copy it into the current session when required. |
+| Any parent; protected credential or control-plane file | Deny the call even when `attach_file` is Core. |
+| Non-interactive or Team parent; source outside the Netclaw session tree | Deny the call through the existing proximity gate. |
+| Subagent; any source | Do not expose or dispatch `attach_file`. |
 
 ### Actor-local exposure and durable history
 

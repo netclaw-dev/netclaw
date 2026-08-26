@@ -105,6 +105,48 @@ A first-party tool is implemented and registered by Netclaw. An MCP tool comes
 from an external Model Context Protocol server. Both kinds still pass Netclaw's
 exposure and authorization boundaries.
 
+### Policy-visible tool
+
+A policy-visible tool passes `ToolAccessPolicy.IsToolExposed` for the current
+audience. This check applies feature gates, audience rules, approval-mode
+denies, and shell-coupled limits. MCP registrations also apply MCP server and
+tool rules. A policy-visible tool can still be Deferred and absent from the
+current model request. Policy visibility does not grant execution authority.
+
+Example:
+
+```text
+list_reminders passes ToolAccessPolicy.IsToolExposed
+  -> policy-visible
+  -> still absent until the actor loads its Deferred schema
+  -> normal authorization still controls a later call
+```
+
+**Code anchor:** `ToolAccessPolicy.IsToolExposed`
+
+### Native Netclaw tool
+
+A native Netclaw tool is a first-party structured tool in `ToolRegistry`. In
+this phrase, native does not mean a host executable or a native binary.
+
+**Code anchors:** `ToolRegistry`, `NativeToolShellCorrectionDetector`
+
+### Skill resource
+
+A skill resource is an additional file inside a registered file-backed skill
+directory. The `skill_read_resource` tool resolves it from a logical skill name
+and a permitted relative path. The `skill_load` tool reads `SKILL.md` instead.
+
+```text
+skill_read_resource("netclaw-operations", "references/tools.md")
+  -> read references/tools.md inside the netclaw-operations skill folder
+
+skill_read_resource("netclaw-operations", "SKILL.md")
+  -> reject the request and direct the model to skill_load
+```
+
+**Code anchors:** `SkillReadResourceTool`, `FileSkillSource`
+
 ### Workspace tool
 
 A workspace tool reads, lists, writes, edits, attaches, or selects files and

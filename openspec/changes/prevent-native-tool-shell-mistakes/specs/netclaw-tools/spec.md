@@ -29,6 +29,15 @@ subagent:
   can report a saved path to the parent instead
 ```
 
+Authority examples and counterexamples:
+
+| Caller and source | Required result |
+|---|---|
+| Interactive Personal parent with an authorized project file | Attach it directly. Copy it into the session when required. |
+| Parent with a protected credential path | Deny it. Core exposure does not bypass the read deny. |
+| Team or non-interactive parent with a source outside the session tree | Deny it through the existing proximity rule. |
+| Subagent with any source | Do not expose, find, load, or dispatch `attach_file`. |
+
 #### Scenario: Interactive Personal agent attaches an existing project file directly
 
 - **GIVEN** an interactive Personal parent session can attach an existing project file under current policy

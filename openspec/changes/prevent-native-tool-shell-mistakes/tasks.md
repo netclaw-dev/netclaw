@@ -2,6 +2,7 @@
 
 - [x] 0.1 Link the shared glossary and define the complete correction, exposure, authorization, and persistence flow.
 - [x] 0.2 Add exact positive, negative, parent, and child examples for the changed behavior.
+- [x] 0.3 Define policy visibility, native Netclaw tools, and skill resources. Add exact correction, source-order, authority, and exposure examples.
 
 ## 1. Freeze the Behavior Contract
 
@@ -36,6 +37,8 @@
 - [x] 5.3 Add protected-path and invalid-input precedence tests proving no correction or activation after a terminal preflight deny.
 - [x] 5.4 Add parent batch, parent streaming, parent background, and child tests proving no shell execution, no approval request, exact shared presentation, and next-request schema exposure.
 - [x] 5.5 Add direct-attachment tool-choice coverage proving no shell or file-mutation prelude is required.
+- [x] 5.6 Prove actor activation rejects a now-denied or missing registration.
+- [x] 5.7 Prove a compound correction prevents earlier shell side effects.
 
 ## 6. PII-Free Behavioral Evidence
 

@@ -3803,6 +3803,39 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
+    public async Task Compound_native_tool_correction_executes_no_earlier_command()
+    {
+        var root = Directory.CreateTempSubdirectory("netclaw-native-compound-");
+        try
+        {
+            var markerPath = Path.Combine(root.FullName, "sentinel.txt");
+            var quotedMarkerPath = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                ? markerPath.Replace("'", "''", StringComparison.Ordinal)
+                : markerPath.Replace("'", "'\"'\"'", StringComparison.Ordinal);
+            var command = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+                ? $"Set-Content -LiteralPath '{quotedMarkerPath}' -Value marker; file_read report.txt"
+                : $"printf marker > '{markerPath}'; file_read report.txt";
+            var call = CreateToolCall(
+                "call-native-compound-no-partial-execution",
+                ShellTool.ToolName,
+                ToolInput.Create("Command", command));
+            var context = CreateInteractivePersonalContext(
+                "signalr/native-compound-no-partial-execution");
+
+            var exception = await Assert.ThrowsAsync<ToolAgentCorrectionRequiredException>(() =>
+                _executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
+
+            var correction = Assert.IsType<ToolAgentCorrection.NativeToolSuggested>(exception.Correction);
+            Assert.Equal("file_read", correction.ToolName.Value);
+            Assert.False(File.Exists(markerPath));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Shell_hard_deny_precedes_native_tool_correction()
     {
         var approvalService = new FixedShellApprovalService(_ =>

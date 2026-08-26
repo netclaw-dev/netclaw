@@ -25,6 +25,34 @@ Boundary examples:
 | `$tool_name` | Keep the normal shell path. The identity is dynamic. |
 | `list-reminder` | Keep the normal shell path. The name is not exact. |
 
+Exact correction example:
+
+```text
+shell_execute(Command = "list_reminders")
+
+result:
+  Shell execution stopped because 'list_reminders' is a native Netclaw tool.
+  Next action: call the native Netclaw tool named in this result directly instead of shell_execute.
+
+receipt:
+  category    = RecoverableCorrection
+  remediation = UseNativeTool
+
+authorization correction fact:
+  NativeToolSuggested("list_reminders")
+
+call-local exposure request:
+  ToolExposureRequest("list_reminders")
+```
+
+Source-order counterexamples:
+
+| Authored shell input | Selected target |
+|---|---|
+| `file_write --path first && file_read --path second` | Select `file_write`. Execute no part of the shell call. |
+| `sudo bash -lc "file_read"; file_write` | Select `file_read`. Preserve the wrapper payload before the later outer command. |
+| `echo ready; file_read --path report.txt` | Select `file_read`. Do not execute the earlier `echo`. |
+
 Precedence:
 
 ```text
