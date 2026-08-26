@@ -99,8 +99,8 @@ when one is present, and SHALL redact secrets. Caller cancellation SHALL NOT
 produce that line. An HTTP 401 on a tool call SHALL move any HTTP server to
 `AuthFailed`. The remedy SHALL match the server's auth scheme: `netclaw mcp
 auth` for an OAuth-capable server, and a check of the configured credentials or
-headers for any other server. An HTTP 403 on a tool call SHALL NOT change the
-server state. Only an OAuth-capable server, as the engineering glossary defines
+headers for any other server. An HTTP 401 on a catalog refresh SHALL follow the
+same rule. An HTTP 403 on a tool call SHALL NOT change the server state. Only an OAuth-capable server, as the engineering glossary defines
 it, MAY enter `AuthFailed` because of tool-declared error text. Any other
 server SHALL stay `Connected` after such a result.
 
@@ -182,6 +182,14 @@ server SHALL stay `Connected` after such a result.
 - **AND** the status message tells the operator to check the configured credentials or headers
 - **AND** no message names `netclaw mcp auth`
 - **AND** the next tool call attempts a reconnect before it returns an error
+
+#### Scenario: Catalog refresh 401 on a static-header server names the header remedy
+
+- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
+- **WHEN** a catalog refresh returns HTTP 401
+- **THEN** the server status becomes `AuthFailed`
+- **AND** the status message tells the operator to check the configured credentials or headers
+- **AND** no message names `netclaw mcp auth`
 
 #### Scenario: HTTP 403 on a tool call keeps the server Connected
 

@@ -184,6 +184,8 @@ The connect path already classifies a rejected credential per auth scheme: `Buil
 
 Signal 1, typed. When a tool call ends in `HttpRequestException` with status 401, `InvokeSharedAsync` marks the server `AuthFailed` through `CreateAuthFailedStatus(serverName, ex, oauthManaged: HasOAuthRuntimeHints(serverName, entry), now)` and emits the same alert kind the connect path emits for that scheme. This covers a static bearer that expires mid-session: every HTTP MCP server rejects an expired bearer at the transport level, before the tool runs. A 403 does not mark the server. On a tool call a 403 means "this key cannot do that", not "this key is dead"; it stays an `access_denied` result. A stdio server has no HTTP status and is not covered.
 
+The catalog refresh path follows the same rule. A 401 on refresh marks an OAuth-capable server `AwaitingAuth`, as today. It marks any other HTTP server `AuthFailed` through the same factory, so the operator never sees `netclaw mcp auth` for a server that cannot run it. `netclaw doctor` picks its remediation text by the same scheme test.
+
 Signal 2, text. `ReportToolFailure` calls `MarkToolAuthFailure` only when `HasOAuthRuntimeHints(serverName, entry)` is true, so only an OAuth-capable server (glossary) can be demoted from tool-declared error text. A stdio server or a static-header server keeps `Connected`. The Warning line from `ReportToolFailure` still records the failure. The manager reads the entry from `_serverEntries`, as `ReconnectAfterTransportFailureAsync` does.
 
 `CreateUnavailableException` reads the remedy from the published status message instead of a fixed `netclaw mcp auth` string, so a static-header server names its header on the next call.
@@ -194,7 +196,7 @@ Positive example (static-header server, typed 401; an expired bearer):
 http server, Authorization header configured
   tools/call -> HTTP 401
   result:  access_denied; "Error: MCP tool 'shortio/get-domains' failed: ... 401 (Unauthorized) ..."
-  status:  AuthFailed; "Authentication rejected by server (HTTP 401 Unauthorized). Check configured credentials or headers."
+  status:  AuthFailed; "Authentication rejected by server (401 Unauthorized). Check configured credentials or headers."
   next call: reconnect; a valid header restores Connected
 ```
 
@@ -293,7 +295,7 @@ HttpClient timeout (TaskCanceledException, caller token not cancelled)
 - [The existing expired-token test uses a stdio entry] → It changes to an HTTP entry without an `Authorization` header, so it keeps its meaning under D4.
 - [One Warning per failed call on a flapping server] → Same volume as the tool-declared error path today. Acceptable.
 - [401 or 403 on an OAuth-capable server maps to `access_denied`] → The SDK refreshes inside the call. A surfaced 401 means refresh failed. `access_denied` is accurate.
-- [An HTTP 401 on one tool marks the whole server `AuthFailed`] → The next call reconnects. A valid header restores `Connected` on that call. An expired header fails `initialize` with the same 401 and keeps the same status.
+- [An HTTP 401 on one tool marks the whole server `AuthFailed`] → The next call reconnects. A valid header restores `Connected` on that call. An expired header fails `initialize` with the same 401 and keeps the same status. While the header stays dead, each call costs one reconnect attempt (about five requests) and one alert; the webhook service dedupes one alert type for 300 s. Before this change such a server stayed `Connected` with one request per call and no alert. Accepted for MVP. A minimum reconnect interval for `AuthFailed` is a follow-up if the cost shows up.
 - [A non-compliant server reports a dead session with HTTP 400, not 404] → The observed server answers a stale or deleted session with `HTTP 400 {"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: No valid session ID provided"},"id":null}`. The SDK turns a 400 with a JSON-RPC body into `McpProtocolException`, and the predicate's message check does not read that text as a session failure. Such a server keeps a dead session until the daemon restarts. This is pre-existing: before this change the same answer was a string result with no reconnect. Out of scope here; a follow-up can add a session-scoped check for that message shape.
 - [Sub-issue text narrows] → #2056 drops `Retry-After`; #2057 keeps the heuristic for OAuth-capable servers and adds no 401/403 remedy text. The issues were edited to match, and the pull requests say so.
 
