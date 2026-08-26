@@ -201,6 +201,15 @@ public class McpToolAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_WithContext_HttpNotFound_RecordsNotFound()
+    {
+        var context = await ExecuteWithFailureAsync(
+            new HttpRequestException("Not Found", null, HttpStatusCode.NotFound));
+
+        Assert.Equal(ToolInvocationOutcomeCategory.NotFound, context.Receipt?.Category);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_WithContext_McpProtocolError_RecordsTransientFailure()
     {
         var context = await ExecuteWithFailureAsync(new McpException("application MCP failure"));
