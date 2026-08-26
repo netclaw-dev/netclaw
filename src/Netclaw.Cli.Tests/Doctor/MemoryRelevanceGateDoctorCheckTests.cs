@@ -51,6 +51,20 @@ public sealed class MemoryRelevanceGateDoctorCheckTests
     }
 
     [Fact]
+    public async Task Warns_when_gate_is_explicitly_enabled_but_embeddings_are_disabled()
+    {
+        var paths = CreateTempPaths();
+        var config = WriteConfig(paths, embeddingsEnabled: false, gateEnabled: true);
+        var check = new MemoryRelevanceGateDoctorCheck(paths, config, FixtureAllowlist());
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("cannot run", result.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("Memory.Embeddings.Enabled is false", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Warns_when_gate_active_but_model_is_missing_and_auto_download_is_true()
     {
         var paths = CreateTempPaths();

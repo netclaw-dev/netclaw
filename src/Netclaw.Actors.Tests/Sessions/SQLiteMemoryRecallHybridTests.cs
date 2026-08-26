@@ -78,8 +78,7 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
         // bypasses the floor -- see the coverage-gap facts below.
         await SeedDocumentAsync("doc-lexical-strong", "Grafana dashboard provisioning convention",
             "Grafana dashboard provisioning convention details for the ops team.", ct);
-        await _store.UpsertEmbeddingAsync(
-            "doc-lexical-strong", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-orthogonal", OrthogonalVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-lexical-strong", OrthogonalVector, ct);
 
         var coordinator = BuildHybridCoordinator(TimeProvider.System, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
 
@@ -101,8 +100,7 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
 
         await SeedDocumentAsync("doc-cosine-match", "Grafana dashboard provisioning convention",
             "Grafana dashboard provisioning convention details for the ops team.", ct);
-        await _store.UpsertEmbeddingAsync(
-            "doc-cosine-match", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-match", QueryVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-cosine-match", QueryVector, ct);
 
         var coordinator = BuildHybridCoordinator(TimeProvider.System, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
 
@@ -184,12 +182,10 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
         // fire, only the ordinary absolute-floor admit/reject logic.
         await SeedDocumentAsync("doc-fully-covered-admit", "Grafana dashboard provisioning convention",
             "Grafana dashboard provisioning convention details for the ops team.", ct);
-        await _store.UpsertEmbeddingAsync(
-            "doc-fully-covered-admit", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-admit", QueryVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-fully-covered-admit", QueryVector, ct);
         await SeedDocumentAsync("doc-fully-covered-reject", "Grafana dashboard provisioning convention",
             "Grafana dashboard provisioning convention details for the ops team, second copy.", ct);
-        await _store.UpsertEmbeddingAsync(
-            "doc-fully-covered-reject", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-reject", OrthogonalVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-fully-covered-reject", OrthogonalVector, ct);
 
         var recordingLogger = new RecordingLogger<SQLiteMemoryRecallCoordinator>();
         var coordinator = new SQLiteMemoryRecallCoordinator(
@@ -228,8 +224,7 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
         // to surface as healthy-empty, not a degraded/error result.
         await SeedDocumentAsync("doc-embedded-below-floor", "Grafana dashboard provisioning convention",
             "Grafana dashboard provisioning convention details for the ops team.", ct);
-        await _store.UpsertEmbeddingAsync(
-            "doc-embedded-below-floor", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-zero-survivors", OrthogonalVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-embedded-below-floor", OrthogonalVector, ct);
 
         var coordinator = BuildHybridCoordinator(TimeProvider.System, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
 
@@ -262,8 +257,8 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
         // alone.
         await SeedDocumentAsync("doc-fresh", "Widget rollout plan", "Widget rollout plan details for the release team.", ct, updatedAtMs: nowMs);
         await SeedDocumentAsync("doc-ancient", "Widget rollout plan", "Widget rollout plan details for the release team.", ct, updatedAtMs: ancientMs);
-        await _store.UpsertEmbeddingAsync("doc-fresh", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-fresh", QueryVector, ct);
-        await _store.UpsertEmbeddingAsync("doc-ancient", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-ancient", QueryVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-fresh", QueryVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-ancient", QueryVector, ct);
 
         var coordinator = BuildHybridCoordinator(fakeTime, NullLogger<SQLiteMemoryRecallCoordinator>.Instance);
 
@@ -395,8 +390,7 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
         // effective floor (no config override set below).
         await SeedDocumentAsync("doc-below-manifest-floor", "Grafana dashboard provisioning convention",
             "Grafana dashboard provisioning convention details for the ops team.", ct);
-        await _store.UpsertEmbeddingAsync(
-            "doc-below-manifest-floor", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-below", OrthogonalVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-below-manifest-floor", OrthogonalVector, ct);
 
         var recordingLogger = new RecordingLogger<SQLiteMemoryRecallCoordinator>();
         var coordinator = new SQLiteMemoryRecallCoordinator(
@@ -434,8 +428,7 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
         // enough that it must admit the candidate instead, proving the override wins.
         await SeedDocumentAsync("doc-override-admits", "Grafana dashboard provisioning convention",
             "Grafana dashboard provisioning convention details for the ops team.", ct);
-        await _store.UpsertEmbeddingAsync(
-            "doc-override-admits", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-override", OrthogonalVector, ct);
+        await UpsertCurrentEmbeddingAsync("doc-override-admits", OrthogonalVector, ct);
 
         const double overrideFloor = -0.5;
         var recordingLogger = new RecordingLogger<SQLiteMemoryRecallCoordinator>();
@@ -544,6 +537,20 @@ public sealed class SQLiteMemoryRecallHybridTests : IAsyncDisposable
             ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now), ct);
+    }
+
+    private async Task UpsertCurrentEmbeddingAsync(string documentId, float[] vector, CancellationToken ct)
+    {
+        var document = Assert.Single(
+            await _store.GetDocumentsNeedingEmbeddingAsync(ModelId, force: true, ct),
+            item => item.DocumentId == documentId);
+        await _store.UpsertEmbeddingAsync(
+            documentId,
+            MemoryEmbedOnWriteCoordinator.DocumentItemKind,
+            ModelId,
+            MemoryContentHasher.ComputeHash(document.Title, document.Body),
+            vector,
+            ct);
     }
 
     /// <summary>

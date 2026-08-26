@@ -41,6 +41,14 @@ public sealed class MemoryRelevanceGateDoctorCheck(
     {
         var memoryConfig = configuration.GetSection("Memory").Get<MemoryConfig>() ?? new MemoryConfig();
 
+        if (!memoryConfig.Embeddings.Enabled && memoryConfig.Recall.RelevanceGate.Enabled == true)
+        {
+            return DoctorCheckResult.Warning(
+                CheckName,
+                "Relevance gate enabled but cannot run because Memory.Embeddings.Enabled is false.",
+                "Enable Memory.Embeddings, or remove the relevance-gate override.");
+        }
+
         // "One mental switch" (design D6): the gate follows Memory.Embeddings.Enabled unless
         // explicitly overridden — identical resolution to what SQLiteMemoryRecallCoordinator
         // applies at runtime.
@@ -59,7 +67,8 @@ public sealed class MemoryRelevanceGateDoctorCheck(
 
         try
         {
-            var provisioner = new EmbeddingModelProvisioner(new HttpClient(), new Dictionary<string, EmbeddingModelManifestEntry>());
+            using var httpClient = new HttpClient();
+            var provisioner = new EmbeddingModelProvisioner(httpClient, new Dictionary<string, EmbeddingModelManifestEntry>());
             var verified = await provisioner.TryLoadVerifiedRelevanceModelAsync(modelId, allowlist, modelDirectory, cancellationToken);
             if (verified is null)
             {

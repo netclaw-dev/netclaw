@@ -780,7 +780,7 @@ static void ConfigureDaemonServices(
         // missing-manifest-entry condition elsewhere — the daemon still starts, and
         // EmbeddingWarmupHostedService's own load attempt is what surfaces the loud failure.
         EmbeddingModelProvisioner.Allowlist.TryGetValue(memoryConfig.Embeddings.ModelId, out var initialEmbeddingEntry);
-        services.AddSingleton(new MemoryEmbedderHolder(
+        services.AddSingleton(_ => new MemoryEmbedderHolder(
             new UnavailableMemoryEmbedder(memoryConfig.Embeddings.ModelId, "embedding warmup has not completed yet"),
             initialQueryPrefix: initialEmbeddingEntry?.QueryPrefix ?? string.Empty,
             initialCalibratedMinCosineSimilarity: initialEmbeddingEntry?.CalibratedMinCosineSimilarity));
@@ -798,7 +798,7 @@ static void ConfigureDaemonServices(
         // current scorer is unavailable.
         services.AddSingleton<IReadOnlyDictionary<string, RelevanceModelManifestEntry>>(
             EmbeddingModelProvisioner.RelevanceAllowlist);
-        services.AddSingleton(new RelevanceScorerHolder(
+        services.AddSingleton(_ => new RelevanceScorerHolder(
             new UnavailableRelevanceScorer(
                 EmbeddingModelProvisioner.DefaultRelevanceModelId, "relevance gate warmup has not completed yet"),
             initialCalibratedThreshold: EmbeddingModelProvisioner.RelevanceAllowlist[EmbeddingModelProvisioner.DefaultRelevanceModelId].CalibratedThreshold));

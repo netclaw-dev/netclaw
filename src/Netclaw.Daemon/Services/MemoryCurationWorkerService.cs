@@ -14,9 +14,9 @@ internal sealed class MemoryCurationWorkerService(
     SQLiteMemoryStore store,
     MemoryCurationEngine engine,
     TimeProvider timeProvider,
+    MemoryEmbedderHolder embedderHolder,
     ILogger<MemoryCurationWorkerService> logger,
-    ISessionMetrics? metrics = null,
-    MemoryEmbedderHolder? embedderHolder = null) : IHostedService, IDisposable
+    ISessionMetrics? metrics = null) : IHostedService, IDisposable
 {
     private readonly CancellationTokenSource _cts = new();
     private Task? _worker;

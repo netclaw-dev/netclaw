@@ -95,6 +95,10 @@ public static class MemoryEmbedOnWriteCoordinator
                 await store.UpsertEmbeddingAsync(
                     doc.DocumentId, DocumentItemKind, embedder.ModelId, hash, vector, ct).ConfigureAwait(false);
             }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
+            }
             catch (Exception ex)
             {
                 log.Warning(ex, "memory_embed_on_write_failed documentId={0}", doc.DocumentId);

@@ -538,6 +538,41 @@ public sealed class EmbeddingWarmupHostedServiceTests : IAsyncLifetime
         Assert.Equal(2, scorer.CallCount);
     }
 
+    [Fact]
+    public async Task StopAsync_cancels_and_awaits_the_startup_download()
+    {
+        var handler = new BlockingHttpMessageHandler();
+        using var httpClient = new HttpClient(handler);
+        var provisioner = new EmbeddingModelProvisioner(httpClient, _allowlist);
+        var holder = new MemoryEmbedderHolder(
+            new UnavailableMemoryEmbedder(ModelId, "warmup not yet run"),
+            initialQueryPrefix: string.Empty,
+            initialCalibratedMinCosineSimilarity: null);
+        var memoryConfig = new MemoryConfig
+        {
+            Embeddings = { Enabled = true, ModelId = ModelId, AutoDownload = true },
+        };
+        using var service = new EmbeddingWarmupHostedService(
+            provisioner,
+            _store,
+            holder,
+            CreateRelevanceScorerHolder(),
+            _allowlist,
+            EmptyRelevanceAllowlist,
+            memoryConfig,
+            _paths,
+            TimeProvider.System,
+            NullNotificationSink.Instance,
+            NullLogger<EmbeddingWarmupHostedService>.Instance);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await handler.RequestStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        await service.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(handler.RequestCancelled.Task.IsCompletedSuccessfully);
+    }
+
     private EmbeddingWarmupHostedService CreateService(MemoryEmbedderHolder holder, MemoryConfig memoryConfig)
         => CreateService(holder, memoryConfig, CreateRelevanceScorerHolder(), EmptyRelevanceAllowlist);
 
@@ -593,6 +628,33 @@ public sealed class EmbeddingWarmupHostedServiceTests : IAsyncLifetime
     }
 
     private static string Sha256Hex(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
+
+    private sealed class BlockingHttpMessageHandler : HttpMessageHandler
+    {
+        public TaskCompletionSource RequestStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource RequestCancelled { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            RequestStarted.TrySetResult();
+            var response = new TaskCompletionSource<HttpResponseMessage>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(
+                () => response.TrySetCanceled(cancellationToken));
+            try
+            {
+                return await response.Task;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                RequestCancelled.TrySetResult();
+                throw;
+            }
+        }
+    }
 
     private static async Task TryDeleteDirectoryAsync(string path)
     {

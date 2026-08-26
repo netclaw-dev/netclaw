@@ -381,7 +381,8 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             CreatedAtMs: 1000,
             UpdatedAtMs: 1000), ct);
         await _store.UpsertEmbeddingAsync(
-            "doc-near-dupe", MemoryEmbedOnWriteCoordinator.DocumentItemKind, "test-nominator-model", "hash-near-dupe",
+            "doc-near-dupe", MemoryEmbedOnWriteCoordinator.DocumentItemKind, "test-nominator-model",
+            MemoryContentHasher.ComputeHash("Existing near-dupe", nearDupeBody),
             new float[] { 1f, 0f }, ct);
 
         var operation = MakeOperation(
@@ -506,7 +507,8 @@ public sealed class MemoryCurationEvaluatorParityTests : IAsyncDisposable
             CreatedAtMs: 1000,
             UpdatedAtMs: 1000), ct);
         await _store.UpsertEmbeddingAsync(
-            "doc-existing", MemoryEmbedOnWriteCoordinator.DocumentItemKind, "test-nominator-model", "hash-existing",
+            "doc-existing", MemoryEmbedOnWriteCoordinator.DocumentItemKind, "test-nominator-model",
+            MemoryContentHasher.ComputeHash("Existing", existingBody),
             new float[] { 1f, 0f }, ct);
 
         var operation = MakeOperation(

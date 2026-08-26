@@ -400,8 +400,8 @@
           "properties": {
             "Enabled": {
               "type": "boolean",
-              "default": false,
-              "description": "When true, the daemon provisions the embedding model at startup and computes embeddings on memory writes. Defaults to false: this slice only writes vectors, nothing consumes them yet."
+              "default": true,
+              "description": "When true, the daemon provisions the embedding model, computes embeddings, uses semantic curation nomination and hybrid recall, and enables the relevance gate unless explicitly disabled."
             },
             "ModelId": {
               "type": "string",
@@ -425,14 +425,14 @@
               "minimum": 0,
               "maximum": 1,
               "default": 0.86,
-              "description": "Embedding cosine similarity threshold above which an existing memory is nominated for the curator LLM to adjudicate. Not yet consumed (Slice 3 Stage B)."
+              "description": "Embedding cosine similarity threshold above which an existing memory is nominated for the curator LLM to adjudicate."
             },
             "NominatorK": {
               "type": "integer",
               "minimum": 1,
               "maximum": 50,
               "default": 5,
-              "description": "Maximum number of nearest-neighbor nominees the kNN nominator shortlists per proposal. Not yet consumed (Slice 3 Stage B)."
+              "description": "Maximum number of nearest-neighbor nominees the kNN nominator shortlists per proposal."
             },
             "LlmMaxOutputTokens": {
               "type": "integer",

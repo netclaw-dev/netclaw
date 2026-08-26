@@ -41,11 +41,12 @@ namespace Netclaw.Actors.Memory;
 /// never observe an embedder paired with a stale (different model's) prefix or floor.
 /// </para>
 /// </summary>
-public sealed class MemoryEmbedderHolder
+public sealed class MemoryEmbedderHolder : IDisposable
 {
     private volatile IMemoryEmbedder _current;
     private volatile string _queryPrefix;
     private object? _calibratedMinCosineSimilarityBox;
+    private int _disposed;
 
     public MemoryEmbedderHolder(IMemoryEmbedder initial, string initialQueryPrefix, double? initialCalibratedMinCosineSimilarity)
     {
@@ -90,8 +91,19 @@ public sealed class MemoryEmbedderHolder
     {
         ArgumentNullException.ThrowIfNull(embedder);
         ArgumentNullException.ThrowIfNull(queryPrefix);
-        _current = embedder;
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+        var previous = Interlocked.Exchange(ref _current, embedder);
         _queryPrefix = queryPrefix;
         Volatile.Write(ref _calibratedMinCosineSimilarityBox, calibratedMinCosineSimilarity);
+
+        if (!ReferenceEquals(previous, embedder))
+            (previous as IDisposable)?.Dispose();
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            (_current as IDisposable)?.Dispose();
     }
 }

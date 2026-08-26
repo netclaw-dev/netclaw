@@ -119,13 +119,20 @@ public sealed class OnnxCrossEncoderScorer : IRelevanceScorer, IDisposable
 
         using var sessionOptions = new SessionOptions { IntraOpNumThreads = intraOpNumThreads };
         var session = new InferenceSession(modelPath, sessionOptions);
+        try
+        {
+            var tokenizer = new FastBertTokenizer.BertTokenizer();
+            // The allowlisted model (Xenova/ms-marco-MiniLM-L-6-v2) publishes do_lower_case=true in
+            // its tokenizer_config.json — a standard BERT-base-uncased vocabulary.
+            await tokenizer.LoadVocabularyAsync(vocabPath, convertInputToLowercase: true);
 
-        var tokenizer = new FastBertTokenizer.BertTokenizer();
-        // The allowlisted model (Xenova/ms-marco-MiniLM-L-6-v2) publishes do_lower_case=true in
-        // its tokenizer_config.json — a standard BERT-base-uncased vocabulary.
-        await tokenizer.LoadVocabularyAsync(vocabPath, convertInputToLowercase: true);
-
-        return new OnnxCrossEncoderScorer(modelId, session, tokenizer, maxConcurrency);
+            return new OnnxCrossEncoderScorer(modelId, session, tokenizer, maxConcurrency);
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
     }
 
     /// <inheritdoc />

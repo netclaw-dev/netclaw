@@ -56,7 +56,7 @@ public sealed class SqliteMemoryStoreDedupCollisionTests : IAsyncDisposable
         // must move while created_at (excluded from the ON CONFLICT SET clause) does not.
         _timeProvider.Advance(TimeSpan.FromHours(3));
 
-        await _store.ApplyCurationBatchAsync(
+        var written = await _store.ApplyCurationBatchAsync(
             "cp-collision-1",
             [MakeColliderOperation("project-quasar")],
             ct);
@@ -77,6 +77,9 @@ public sealed class SqliteMemoryStoreDedupCollisionTests : IAsyncDisposable
         Assert.Equal(MemoryUpdateSemantics.AppendDocument.ToWireValue(), row.UpdateSemantics);
         Assert.Equal(createdAt, row.CreatedAtMs);
         Assert.True(row.UpdatedAtMs > createdAt);
+        var result = Assert.Single(written);
+        Assert.Equal(row.Title, result.Title);
+        Assert.Equal(row.MarkdownBody, result.Body);
     }
 
     [Fact]
@@ -89,7 +92,7 @@ public sealed class SqliteMemoryStoreDedupCollisionTests : IAsyncDisposable
 
         _timeProvider.Advance(TimeSpan.FromHours(3));
 
-        await _store.ApplyInlineCurationBatchAsync(
+        var written = await _store.ApplyInlineCurationBatchAsync(
             [MakeColliderOperation("project-nebula")],
             ct);
 
@@ -107,6 +110,9 @@ public sealed class SqliteMemoryStoreDedupCollisionTests : IAsyncDisposable
         Assert.Equal(MemoryUpdateSemantics.AppendDocument.ToWireValue(), row.UpdateSemantics);
         Assert.Equal(createdAt, row.CreatedAtMs);
         Assert.True(row.UpdatedAtMs > createdAt);
+        var result = Assert.Single(written);
+        Assert.Equal(row.Title, result.Title);
+        Assert.Equal(row.MarkdownBody, result.Body);
     }
 
     [Fact]

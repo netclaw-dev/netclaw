@@ -77,7 +77,8 @@ public sealed class MemoryCurationActorNominatorTests : TestKit
                 CreatedAtMs: now,
                 UpdatedAtMs: now), ct);
             await store.UpsertEmbeddingAsync(
-                "doc-existing", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, "hash-existing", ExistingVector, ct);
+                "doc-existing", MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId,
+                MemoryContentHasher.ComputeHash("Existing", existingBody), ExistingVector, ct);
 
             var embedderHolder = new MemoryEmbedderHolder(new ScriptedEmbedder(ModelId, Dimensions, QueryVectorAt093), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
             var vectorIndexHolder = new MemoryVectorIndexHolder(store);

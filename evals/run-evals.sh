@@ -542,6 +542,7 @@ start_eval_daemon() {
         -e "NETCLAW_Workspaces__Directory=/home/netclaw/.netclaw/workspaces"
         -e "NETCLAW_Providers__eval__Type=$EVAL_PROVIDER_TYPE"
         -e "NETCLAW_Providers__eval__Endpoint=$EVAL_PROVIDER_ENDPOINT"
+        -e "NETCLAW_Memory__Embeddings__Enabled=false"
         -e "NETCLAW_Models__Main__Provider=eval"
         -e "NETCLAW_Models__Main__ModelId=$EVAL_MODEL_ID"
         -e "NETCLAW_Models__Fallback__Provider=eval"
@@ -1461,8 +1462,8 @@ assert_memory_recall_filters() {
 # accuracy" metric. Off-topic query against the seeded corpus (travel/color/project-alpha/
 # secret-token fixtures) must inject nothing.
 #
-# The eval container does not set Memory.Embeddings.Enabled (default false), so this case
-# exercises the pre-existing lexical-only floor, not the cross-encoder gate itself (that
+# The eval container explicitly disables Memory.Embeddings.Enabled, so this case exercises the
+# lexical-only floor, not the cross-encoder gate itself (that
 # requires an out-of-process download+provisioning step outside this harness's scope — see
 # openspec/changes/memory-relevance-gate/tasks.md task 2.6: "authoring the case is [required];
 # the eval RUN is not required here"). Asserting injectedCount=0 plus the unconditional

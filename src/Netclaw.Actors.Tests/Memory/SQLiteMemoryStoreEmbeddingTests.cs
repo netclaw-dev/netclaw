@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Data.Sqlite;
 using Netclaw.Actors.Memory;
 using Netclaw.Configuration;
 using Xunit;
@@ -35,8 +36,11 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
     public async Task UpsertEmbeddingAsync_round_trips_the_vector()
     {
         float[] vector = [0.1f, 0.2f, 0.3f, 0.4f];
+        await SeedDocumentAsync("doc-1", "Title", "Body");
 
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", "hash-1", vector, TestContext.Current.CancellationToken);
+        await _store.UpsertEmbeddingAsync(
+            "doc-1", "document", "model-a", MemoryContentHasher.ComputeHash("Title", "Body"), vector,
+            TestContext.Current.CancellationToken);
 
         var rows = await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken);
 
@@ -50,12 +54,14 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
     public async Task UpsertEmbeddingAsync_with_unchanged_hash_is_a_no_op_and_does_not_bump_the_version()
     {
         float[] vector = [1f, 2f, 3f];
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", "hash-1", vector, TestContext.Current.CancellationToken);
+        await SeedDocumentAsync("doc-1", "Title", "Body");
+        var hash = MemoryContentHasher.ComputeHash("Title", "Body");
+        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", hash, vector, TestContext.Current.CancellationToken);
         var versionAfterFirstWrite = _store.EmbeddingDataVersion;
 
         // Same hash, even with a different (bogus) vector — must be skipped entirely: the
         // stored vector is untouched and the version counter does not move.
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", "hash-1", new float[] { 9f, 9f, 9f }, TestContext.Current.CancellationToken);
+        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", hash, new float[] { 9f, 9f, 9f }, TestContext.Current.CancellationToken);
 
         var rows = await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken);
         Assert.Equal(vector, Assert.Single(rows).Vector.ToArray());
@@ -63,12 +69,18 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task UpsertEmbeddingAsync_with_changed_hash_overwrites_and_bumps_the_version()
+    public async Task UpsertEmbeddingAsync_after_document_change_writes_the_new_vector()
     {
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", "hash-1", new float[] { 1f, 2f, 3f }, TestContext.Current.CancellationToken);
+        await SeedDocumentAsync("doc-1", "Title", "First body");
+        await _store.UpsertEmbeddingAsync(
+            "doc-1", "document", "model-a", MemoryContentHasher.ComputeHash("Title", "First body"),
+            new float[] { 1f, 2f, 3f }, TestContext.Current.CancellationToken);
         var versionAfterFirstWrite = _store.EmbeddingDataVersion;
 
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", "hash-2", new float[] { 4f, 5f, 6f }, TestContext.Current.CancellationToken);
+        await _store.ReplaceDocumentTextAsync("doc-1", "Second body", TestContext.Current.CancellationToken);
+        await _store.UpsertEmbeddingAsync(
+            "doc-1", "document", "model-a", MemoryContentHasher.ComputeHash("Title", "Second body"),
+            new float[] { 4f, 5f, 6f }, TestContext.Current.CancellationToken);
 
         var rows = await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken);
         Assert.Equal(new float[] { 4f, 5f, 6f }, Assert.Single(rows).Vector.ToArray());
@@ -76,10 +88,43 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task ReplaceDocumentTextAsync_removes_the_stale_embedding()
+    {
+        await SeedDocumentAsync("doc-1", "Title", "First body");
+        await _store.UpsertEmbeddingAsync(
+            "doc-1", "document", "model-a", MemoryContentHasher.ComputeHash("Title", "First body"),
+            new float[] { 1f }, TestContext.Current.CancellationToken);
+        var versionBeforeUpdate = _store.EmbeddingDataVersion;
+
+        var updated = await _store.ReplaceDocumentTextAsync(
+            "doc-1", "Second body", TestContext.Current.CancellationToken);
+
+        Assert.True(updated);
+        Assert.Empty(await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken));
+        Assert.True(_store.EmbeddingDataVersion > versionBeforeUpdate);
+    }
+
+    [Fact]
+    public async Task UpsertEmbeddingAsync_rejects_a_hash_from_before_a_document_update()
+    {
+        await SeedDocumentAsync("doc-1", "Title", "First body");
+        var staleHash = MemoryContentHasher.ComputeHash("Title", "First body");
+        await _store.ReplaceDocumentTextAsync("doc-1", "Second body", TestContext.Current.CancellationToken);
+
+        var wrote = await _store.UpsertEmbeddingAsync(
+            "doc-1", "document", "model-a", staleHash, new float[] { 1f }, TestContext.Current.CancellationToken);
+
+        Assert.False(wrote);
+        Assert.Empty(await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task UpsertEmbeddingAsync_keys_rows_by_item_and_model_independently()
     {
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", "hash-1", new float[] { 1f }, TestContext.Current.CancellationToken);
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-b", "hash-1", new float[] { 2f }, TestContext.Current.CancellationToken);
+        await SeedDocumentAsync("doc-1", "Title", "Body");
+        var hash = MemoryContentHasher.ComputeHash("Title", "Body");
+        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", hash, new float[] { 1f }, TestContext.Current.CancellationToken);
+        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-b", hash, new float[] { 2f }, TestContext.Current.CancellationToken);
 
         var modelARows = await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken);
         var modelBRows = await _store.GetEmbeddingsForModelAsync("model-b", TestContext.Current.CancellationToken);
@@ -110,7 +155,9 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
             ExpiresAtMs: null,
             CreatedAtMs: now,
             UpdatedAtMs: now), TestContext.Current.CancellationToken);
-        await _store.UpsertEmbeddingAsync("doc-1", "document", "model-a", "hash-1", new float[] { 1f, 2f }, TestContext.Current.CancellationToken);
+        await _store.UpsertEmbeddingAsync(
+            "doc-1", "document", "model-a", MemoryContentHasher.ComputeHash("t", "b"),
+            new float[] { 1f, 2f }, TestContext.Current.CancellationToken);
         var versionBeforeTombstone = _store.EmbeddingDataVersion;
 
         var tombstoned = await _store.TombstoneDocumentAsync("doc-1", TestContext.Current.CancellationToken);
@@ -184,12 +231,17 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
 
         // doc-stale: has a model-a row, but its stored hash no longer matches (content edited
         // since the embedding was written) — should NOT count toward EmbeddedCurrentHashCount.
-        await SeedDocAsync("doc-stale", "Stale", "edited body");
-        await _store.UpsertEmbeddingAsync("doc-stale", "document", "model-a", "stale-hash-from-before-the-edit", new float[] { 2f }, TestContext.Current.CancellationToken);
+        await SeedDocAsync("doc-stale", "Stale", "original body");
+        await _store.UpsertEmbeddingAsync(
+            "doc-stale", "document", "model-a", MemoryContentHasher.ComputeHash("Stale", "original body"),
+            new float[] { 2f }, TestContext.Current.CancellationToken);
+        await MutateDocumentBodyDirectlyAsync("doc-stale", "edited body");
 
         // doc-other-model: only has a row under model-b.
         await SeedDocAsync("doc-other-model", "Other", "other model body");
-        await _store.UpsertEmbeddingAsync("doc-other-model", "document", "model-b", "whatever", new float[] { 3f }, TestContext.Current.CancellationToken);
+        await _store.UpsertEmbeddingAsync(
+            "doc-other-model", "document", "model-b", MemoryContentHasher.ComputeHash("Other", "other model body"),
+            new float[] { 3f }, TestContext.Current.CancellationToken);
 
         // doc-unembedded: no embedding row at all.
         await SeedDocAsync("doc-unembedded", "Unembedded", "never embedded");
@@ -232,8 +284,11 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
         var currentHash = MemoryContentHasher.ComputeHash("Current", "up to date body");
         await _store.UpsertEmbeddingAsync("doc-current", "document", "model-a", currentHash, new float[] { 1f }, TestContext.Current.CancellationToken);
 
-        await SeedDocAsync("doc-stale", "Stale", "edited body");
-        await _store.UpsertEmbeddingAsync("doc-stale", "document", "model-a", "stale-hash-from-before-the-edit", new float[] { 2f }, TestContext.Current.CancellationToken);
+        await SeedDocAsync("doc-stale", "Stale", "original body");
+        await _store.UpsertEmbeddingAsync(
+            "doc-stale", "document", "model-a", MemoryContentHasher.ComputeHash("Stale", "original body"),
+            new float[] { 2f }, TestContext.Current.CancellationToken);
+        await MutateDocumentBodyDirectlyAsync("doc-stale", "edited body");
 
         await SeedDocAsync("doc-unembedded", "Unembedded", "never embedded");
 
@@ -513,6 +568,39 @@ public sealed class SQLiteMemoryStoreEmbeddingTests : IAsyncLifetime
             CreatedAtMs: now,
             UpdatedAtMs: now,
             Audience: audience), TestContext.Current.CancellationToken);
+    }
+
+    private async Task SeedDocumentAsync(string documentId, string title, string body)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: documentId,
+            Anchor: _store.CreateDefaultAnchor(documentId),
+            MemoryClass: "durable_fact",
+            Title: title,
+            MarkdownBody: body,
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
+    }
+
+    private async Task MutateDocumentBodyDirectlyAsync(string documentId, string body)
+    {
+        await using var connection = new SqliteConnection($"Data Source={_dbPath}");
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE memory_documents SET markdown_body = $body WHERE document_id = $id;";
+        command.Parameters.AddWithValue("$id", documentId);
+        command.Parameters.AddWithValue("$body", body);
+        await command.ExecuteNonQueryAsync(TestContext.Current.CancellationToken);
     }
 
     private static SQLiteMemoryCurationOperation DocumentOperation(string? memoryId, string title, string content)

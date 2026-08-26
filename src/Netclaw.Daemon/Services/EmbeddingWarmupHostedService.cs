@@ -103,7 +103,8 @@ internal sealed class EmbeddingWarmupHostedService(
     /// <summary>Minimum interval between two keep-warm-failure debug log lines, mirroring the recall coordinator's degradation-log cooldowns.</summary>
     private static readonly TimeSpan KeepWarmFailureLogCooldown = TimeSpan.FromMinutes(5);
 
-    private readonly CancellationTokenSource _keepWarmCts = new();
+    private readonly CancellationTokenSource _lifetimeCts = new();
+    private Task? _warmupTask;
     private Task? _keepWarmLoop;
     // 0 (not long.MinValue) is the safe "never logged" sentinel: any real Unix-ms timestamp minus
     // 0 is astronomically larger than KeepWarmFailureLogCooldown, so the very first failure always
@@ -118,19 +119,22 @@ internal sealed class EmbeddingWarmupHostedService(
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _ = Task.Run(() => WarmUpAsync(CancellationToken.None), CancellationToken.None);
-        _keepWarmLoop = Task.Run(() => KeepWarmLoopAsync(_keepWarmCts.Token), CancellationToken.None);
+        _warmupTask = Task.Run(() => WarmUpAsync(_lifetimeCts.Token), CancellationToken.None);
+        _keepWarmLoop = Task.Run(() => KeepWarmLoopAsync(_lifetimeCts.Token), CancellationToken.None);
         return Task.CompletedTask;
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        await _keepWarmCts.CancelAsync();
+        await _lifetimeCts.CancelAsync();
+        if (_warmupTask is not null)
+            await _warmupTask.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
         if (_keepWarmLoop is not null)
             await _keepWarmLoop.ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
     }
 
-    public void Dispose() => _keepWarmCts.Dispose();
+    public void Dispose() => _lifetimeCts.Dispose();
 
     /// <summary>
     /// Periodic keep-warm loop (memory-relevance-gate 2026-07 canary fix): ticks every
@@ -259,6 +263,10 @@ internal sealed class EmbeddingWarmupHostedService(
                 queryPrefix.Length > 0,
                 calibratedMinCosineSimilarity);
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "memory_embedding_unavailable model={ModelId} reason={Reason}", modelId, ex.Message);
@@ -271,6 +279,10 @@ internal sealed class EmbeddingWarmupHostedService(
             try
             {
                 await GapRepairAsync(embedder, ct).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -311,6 +323,10 @@ internal sealed class EmbeddingWarmupHostedService(
             var scorer = await LoadRelevanceScorerAsync(modelId, ct).ConfigureAwait(false);
             relevanceScorerHolder.Set(scorer, calibratedThreshold);
             logger.LogInformation("memory_relevance_gate_ready model={ModelId}", scorer.ModelId);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -409,13 +425,20 @@ internal sealed class EmbeddingWarmupHostedService(
 
         var scorer = await OnnxCrossEncoderScorer.LoadAsync(provisioned.ModelPath, provisioned.VocabPath, provisioned.ModelId, ct: ct)
             .ConfigureAwait(false);
+        try
+        {
+            // Warm-up inference (mirrors the embedder's own warm-up call): pays first-call ONNX
+            // session / JIT cost here rather than on the first real recall turn.
+            await scorer.ScoreAsync("netclaw relevance gate warmup query", ["netclaw relevance gate warmup candidate"], ct)
+                .ConfigureAwait(false);
 
-        // Warm-up inference (mirrors the embedder's own warm-up call): pays first-call ONNX
-        // session / JIT cost here rather than on the first real recall turn.
-        await scorer.ScoreAsync("netclaw relevance gate warmup query", ["netclaw relevance gate warmup candidate"], ct)
-            .ConfigureAwait(false);
-
-        return scorer;
+            return scorer;
+        }
+        catch
+        {
+            scorer.Dispose();
+            throw;
+        }
     }
 
     private async Task<IMemoryEmbedder> LoadEmbedderAsync(string modelId, string queryPrefix, CancellationToken ct)
@@ -446,15 +469,22 @@ internal sealed class EmbeddingWarmupHostedService(
             provisioned.Dimensions,
             queryPrefix,
             ct: ct).ConfigureAwait(false);
+        try
+        {
+            // Warm-up inference (design D1/D2): pays first-call ONNX session / JIT cost here rather
+            // than on the first real memory write or recall query. Passage purpose: this is a
+            // generic session/JIT warm-up, not a real query, so there is nothing gained from also
+            // exercising the query-prefix path here (the first real recall turn pays that cost, well
+            // inside its own sub-budget per design D2's negligible token-count claim).
+            await embedder.EmbedAsync("netclaw embedding warmup", EmbeddingPurpose.Passage, ct).ConfigureAwait(false);
 
-        // Warm-up inference (design D1/D2): pays first-call ONNX session / JIT cost here rather
-        // than on the first real memory write or recall query. Passage purpose: this is a
-        // generic session/JIT warm-up, not a real query, so there is nothing gained from also
-        // exercising the query-prefix path here (the first real recall turn pays that cost, well
-        // inside its own sub-budget per design D2's negligible token-count claim).
-        await embedder.EmbedAsync("netclaw embedding warmup", EmbeddingPurpose.Passage, ct).ConfigureAwait(false);
-
-        return embedder;
+            return embedder;
+        }
+        catch
+        {
+            embedder.Dispose();
+            throw;
+        }
     }
 
     /// <summary>
@@ -486,11 +516,21 @@ internal sealed class EmbeddingWarmupHostedService(
                 for (var i = 0; i < batch.Length; i++)
                 {
                     var hash = MemoryContentHasher.ComputeHash(batch[i].Title, batch[i].Body);
-                    await store.UpsertEmbeddingAsync(
-                        batch[i].DocumentId, MemoryEmbedOnWriteCoordinator.DocumentItemKind,
-                        embedder.ModelId, hash, vectors[i], ct).ConfigureAwait(false);
-                    embedded++;
+                    if (await store.UpsertEmbeddingAsync(
+                            batch[i].DocumentId, MemoryEmbedOnWriteCoordinator.DocumentItemKind,
+                            embedder.ModelId, hash, vectors[i], ct).ConfigureAwait(false))
+                    {
+                        embedded++;
+                    }
+                    else
+                    {
+                        failed++;
+                    }
                 }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {

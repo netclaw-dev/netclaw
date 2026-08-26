@@ -30,13 +30,12 @@ public sealed class EmbeddingModelProvisionerTests : IAsyncLifetime
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
         _httpClient.Dispose();
-        _server.Dispose();
+        await _server.DisposeAsync();
         if (Directory.Exists(_destinationDirectory))
             Directory.Delete(_destinationDirectory, recursive: true);
-        return ValueTask.CompletedTask;
     }
 
     private static string Sha256Hex(byte[] bytes) => Convert.ToHexStringLower(SHA256.HashData(bytes));
@@ -93,7 +92,7 @@ public sealed class EmbeddingModelProvisionerTests : IAsyncLifetime
         await provisioner.ProvisionAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
 
         // Tear down the server: any further attempt to reach the network would now throw.
-        _server.Dispose();
+        await _server.DisposeAsync();
 
         // Task 2.7: "already-provisioned+hash-valid loads without network" — this call must
         // succeed even though the server is gone, proving it never re-downloaded.
@@ -145,7 +144,7 @@ public sealed class EmbeddingModelProvisionerTests : IAsyncLifetime
         };
         var provisioner = new EmbeddingModelProvisioner(_httpClient, allowlist);
         await provisioner.ProvisionAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
-        _server.Dispose();
+        await _server.DisposeAsync();
 
         var result = await provisioner.TryLoadVerifiedAsync("test-model", _destinationDirectory, TestContext.Current.CancellationToken);
 

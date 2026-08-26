@@ -28,10 +28,11 @@ namespace Netclaw.Actors.Memory;
 /// calibrated threshold" through a seam it already depends on.
 /// </para>
 /// </summary>
-public sealed class RelevanceScorerHolder
+public sealed class RelevanceScorerHolder : IDisposable
 {
     private volatile IRelevanceScorer _current;
     private double _calibratedThreshold;
+    private int _disposed;
 
     public RelevanceScorerHolder(IRelevanceScorer initial, double initialCalibratedThreshold)
     {
@@ -61,7 +62,18 @@ public sealed class RelevanceScorerHolder
     public void Set(IRelevanceScorer scorer, double calibratedThreshold)
     {
         ArgumentNullException.ThrowIfNull(scorer);
-        _current = scorer;
+        ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) != 0, this);
+
+        var previous = Interlocked.Exchange(ref _current, scorer);
         Volatile.Write(ref _calibratedThreshold, calibratedThreshold);
+
+        if (!ReferenceEquals(previous, scorer))
+            (previous as IDisposable)?.Dispose();
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+            (_current as IDisposable)?.Dispose();
     }
 }

@@ -168,7 +168,7 @@ jobs:
 
           # Check architecture with `file` command
           file_output=$(file "$binary")
-          if ! echo "$file_output" | grep -q "ARM aarch64"; then
+          if ! echo "$file_output" | grep -qi "aarch64"; then
             echo "ERROR: Binary $binary is not ARM64:" >&2
             echo "  $file_output" >&2
             exit 1

@@ -50,7 +50,8 @@ public sealed class MemoryEmbeddingDoctorCheck(
 
         try
         {
-            var provisioner = new EmbeddingModelProvisioner(new HttpClient(), allowlist);
+            using var httpClient = new HttpClient();
+            var provisioner = new EmbeddingModelProvisioner(httpClient, allowlist);
             var verified = await provisioner.TryLoadVerifiedAsync(modelId, modelDirectory, cancellationToken);
             if (verified is null)
             {

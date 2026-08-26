@@ -270,7 +270,12 @@ public sealed class MemoryCurationNominatorTests : IAsyncDisposable
             UpdatedAtMs: freshnessAtMs), ct);
 
         await _store.UpsertEmbeddingAsync(
-            docId, MemoryEmbedOnWriteCoordinator.DocumentItemKind, ModelId, contentHash: $"hash-{docId}", ExistingVector, ct);
+            docId,
+            MemoryEmbedOnWriteCoordinator.DocumentItemKind,
+            ModelId,
+            MemoryContentHasher.ComputeHash($"Existing {anchorName}", content),
+            ExistingVector,
+            ct);
     }
 
     private async Task<int> CountNonTombstonedDocumentsAsync(CancellationToken ct)

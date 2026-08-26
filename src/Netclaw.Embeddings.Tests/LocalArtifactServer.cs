@@ -13,7 +13,7 @@ namespace Netclaw.Embeddings.Tests;
 /// those tests exercise real HTTP download behavior (streaming, byte-exact transfer) without
 /// ever reaching the internet or the real HuggingFace allowlist URLs.
 /// </summary>
-internal sealed class LocalArtifactServer : IDisposable
+internal sealed class LocalArtifactServer : IAsyncDisposable
 {
     private readonly HttpListener _listener;
     private readonly Dictionary<string, byte[]> _routes = new(StringComparer.Ordinal);
@@ -47,12 +47,16 @@ internal sealed class LocalArtifactServer : IDisposable
             {
                 ctx = await _listener.GetContextAsync().ConfigureAwait(false);
             }
-            catch
+            catch (HttpListenerException) when (!_listener.IsListening)
             {
-                return; // listener stopped/disposed — end the loop
+                return;
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
             }
 
-            _ = HandleAsync(ctx);
+            await HandleAsync(ctx).ConfigureAwait(false);
         }
     }
 
@@ -85,7 +89,7 @@ internal sealed class LocalArtifactServer : IDisposable
         return port;
     }
 
-    public void Dispose()
+    public async ValueTask DisposeAsync()
     {
         // Idempotent: some tests dispose the server early (mid-test) to prove a later call
         // makes no network access, then the test class's own DisposeAsync disposes it again.
@@ -95,5 +99,6 @@ internal sealed class LocalArtifactServer : IDisposable
 
         _listener.Stop();
         _listener.Close();
+        await _serveLoop.ConfigureAwait(false);
     }
 }

@@ -98,6 +98,8 @@ public sealed class MemoryEmbedOnWriteCoordinatorTests : IAsyncLifetime
     [Fact]
     public async Task Embed_failure_on_one_item_is_isolated_and_does_not_throw_or_block_others()
     {
+        await SeedDocumentAsync("doc-bad", "Bad", "Body");
+        await SeedDocumentAsync("doc-good", "Good", "Body");
         var holder = new MemoryEmbedderHolder(new FakeMemoryEmbedder("model-a", dimensions: 2, failOnText: "Bad\nBody"), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
         var written = new[]
         {
@@ -124,6 +126,28 @@ public sealed class MemoryEmbedOnWriteCoordinatorTests : IAsyncLifetime
             holder, _store, [], NullLogger.Instance, TestContext.Current.CancellationToken);
 
         Assert.Empty(await _store.GetEmbeddingsForModelAsync("model-a", TestContext.Current.CancellationToken));
+    }
+
+    private async Task SeedDocumentAsync(string documentId, string title, string body)
+    {
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: documentId,
+            Anchor: _store.CreateDefaultAnchor(documentId),
+            MemoryClass: "durable_fact",
+            Title: title,
+            MarkdownBody: body,
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
     }
 
     private sealed class FakeMemoryEmbedder(string modelId, int dimensions, string? failOnText = null) : IMemoryEmbedder

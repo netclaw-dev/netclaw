@@ -444,7 +444,14 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
         // candidate reaches the gate stage exactly like SQLiteMemoryRecallHybridTests's own
         // floor-admission fixtures.
         await _store.UpsertEmbeddingAsync(
-            documentId, MemoryEmbedOnWriteCoordinator.DocumentItemKind, EmbedderModelId, $"hash-{documentId}", QueryVector, ct);
+            documentId,
+            MemoryEmbedOnWriteCoordinator.DocumentItemKind,
+            EmbedderModelId,
+            MemoryContentHasher.ComputeHash(
+                "Grafana dashboard provisioning convention",
+                "Grafana dashboard provisioning convention details for the ops team."),
+            QueryVector,
+            ct);
     }
 
     /// <summary>

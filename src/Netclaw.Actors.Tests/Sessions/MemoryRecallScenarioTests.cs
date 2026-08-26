@@ -463,7 +463,12 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
             UpdatedAtMs: now,
             Audience: audience), ct);
         await _store.UpsertEmbeddingAsync(
-            documentId, MemoryEmbedOnWriteCoordinator.DocumentItemKind, modelId, $"hash-{documentId}", vector, ct);
+            documentId,
+            MemoryEmbedOnWriteCoordinator.DocumentItemKind,
+            modelId,
+            MemoryContentHasher.ComputeHash(title, body),
+            vector,
+            ct);
     }
 
     /// <summary>Hybrid coordinator over HybridModelId/HybridDimensions (only M16 is embedded there).</summary>
@@ -580,7 +585,14 @@ public sealed class MemoryRecallScenarioTests : IAsyncLifetime
         // coordinator without embedder/vector-index holders wired, so this row is inert for them
         // (TryEmbedQueryAsync returns null before ever touching the store's embedding table).
         await _store.UpsertEmbeddingAsync(
-            "M16", MemoryEmbedOnWriteCoordinator.DocumentItemKind, HybridModelId, "hash-m16", M16EmbeddingVector, ct);
+            "M16",
+            MemoryEmbedOnWriteCoordinator.DocumentItemKind,
+            HybridModelId,
+            MemoryContentHasher.ComputeHash(
+                "CI Build Matrix",
+                "CI runs net8.0 and net9.0 on Linux and Windows runners for every pull request."),
+            M16EmbeddingVector,
+            ct);
     }
 
     private async Task UpsertDoc(

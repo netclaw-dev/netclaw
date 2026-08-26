@@ -29,7 +29,33 @@ public sealed class MemoryVectorIndexTests : IAsyncLifetime
 
     private async Task SeedAsync(string itemId, float[] vector)
     {
-        await _store.UpsertEmbeddingAsync(itemId, "document", ModelId, contentHash: $"hash-{itemId}", vector, TestContext.Current.CancellationToken);
+        var now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        var title = $"Title for {itemId}";
+        var body = $"Body for {itemId}";
+        await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
+            DocumentId: itemId,
+            Anchor: _store.CreateDefaultAnchor(itemId),
+            MemoryClass: "durable_fact",
+            Title: title,
+            MarkdownBody: body,
+            AliasesJson: null,
+            FacetsJson: null,
+            SlotsJson: null,
+            UpdateSemantics: "merge-document",
+            Sensitivity: "normal",
+            RecallMode: "auto",
+            Confidence: 0.9,
+            FreshnessAtMs: now,
+            ExpiresAtMs: null,
+            CreatedAtMs: now,
+            UpdatedAtMs: now), TestContext.Current.CancellationToken);
+        await _store.UpsertEmbeddingAsync(
+            itemId,
+            "document",
+            ModelId,
+            MemoryContentHasher.ComputeHash(title, body),
+            vector,
+            TestContext.Current.CancellationToken);
     }
 
     [Fact]

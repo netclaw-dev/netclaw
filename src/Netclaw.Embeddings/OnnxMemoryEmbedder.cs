@@ -147,14 +147,21 @@ public sealed class OnnxMemoryEmbedder : IMemoryEmbedder, IDisposable
 
         using var sessionOptions = new SessionOptions { IntraOpNumThreads = intraOpNumThreads };
         var session = new InferenceSession(modelPath, sessionOptions);
+        try
+        {
+            var tokenizer = new BertTokenizer();
+            // Both allowlisted models (Snowflake/snowflake-arctic-embed-m,
+            // mixedbread-ai/mxbai-embed-large-v1) publish do_lower_case=true in their
+            // tokenizer_config.json — a standard BERT-base-uncased vocabulary.
+            await tokenizer.LoadVocabularyAsync(vocabPath, convertInputToLowercase: true);
 
-        var tokenizer = new BertTokenizer();
-        // Both allowlisted models (Snowflake/snowflake-arctic-embed-m,
-        // mixedbread-ai/mxbai-embed-large-v1) publish do_lower_case=true in their
-        // tokenizer_config.json — a standard BERT-base-uncased vocabulary.
-        await tokenizer.LoadVocabularyAsync(vocabPath, convertInputToLowercase: true);
-
-        return new OnnxMemoryEmbedder(modelId, dimensions, session, tokenizer, maxConcurrency, queryPrefix);
+            return new OnnxMemoryEmbedder(modelId, dimensions, session, tokenizer, maxConcurrency, queryPrefix);
+        }
+        catch
+        {
+            session.Dispose();
+            throw;
+        }
     }
 
     /// <inheritdoc />
