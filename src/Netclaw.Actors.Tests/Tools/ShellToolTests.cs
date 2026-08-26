@@ -182,6 +182,9 @@ public class ShellToolTests
     }
 
     [SlopwatchSuppress("SW001", "This native fallback test requires Windows PowerShell 5.1.")]
+    // This test starts a real powershell.exe. CI runs the NativeShell category alone, after the
+    // parallel run, so a live process start does not compete for CPU with other test collections.
+    [Trait("Category", "NativeShell")]
     [Fact(SkipUnless = nameof(IsWindows), Skip = "Native Windows PowerShell 5.1 execution requires Windows.")]
     public async Task Windows_power_shell_51_executes_through_the_selected_host()
     {
