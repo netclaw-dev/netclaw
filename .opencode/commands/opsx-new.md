@@ -1,16 +1,19 @@
 ---
-description: Start a new change using the experimental artifact workflow (OPSX)
+description: "Start a new change using the experimental artifact workflow (OPSX)"
 ---
 
 Start a new change using the experimental artifact-driven approach.
 
+**Store selection:** If the user names a store (a store is a standalone OpenSpec repo registered on this machine) or the work lives in one, run `openspec store list --json` to discover registered store ids, then pass `--store <id>` on the commands that read or write specs and changes (`new change`, `status`, `instructions`, `list`, `show`, `validate`, `archive`, `doctor`, `context`, `schemas`, `view`). Once selected, treat `--store <id>` as sticky for the rest of the workflow. Every unscoped example of those commands below is shorthand: before running it, append the flag. For example, run `openspec status --change "<name>" --json --store "<id>"`, not the unscoped form shown below. Other commands do not take the flag. Hints printed by commands already carry the flag; keep it on follow-ups. Without a store, commands act on the nearest local `openspec/` root.
+
 **Input**: The argument after `/opsx-new` is the change name (kebab-case), OR a description of what the user wants to build.
+**Provided arguments**: $ARGUMENTS
 
 **Steps**
 
 1. **If no input provided, ask what they want to build**
 
-   Use the **AskUserQuestion tool** (open-ended, no preset options) to ask:
+   Ask the user (open-ended, no preset options):
    > "What change do you want to work on? Describe what you want to build or fix."
 
    From their description, derive a kebab-case name (e.g., "add user authentication" → `add-user-auth`).
@@ -32,13 +35,13 @@ Start a new change using the experimental artifact-driven approach.
    openspec new change "<name>"
    ```
    Add `--schema <name>` only if the user requested a specific workflow.
-   This creates a scaffolded change at `openspec/changes/<name>/` with the selected schema.
+   This creates a scaffolded change in the planning home resolved by the CLI.
 
 4. **Show the artifact status**
    ```bash
-   openspec status --change "<name>"
+   openspec status --change "<name>" --json
    ```
-   This shows which artifacts need to be created and which are ready (dependencies satisfied).
+   Use the returned `planningHome`, `changeRoot`, `artifactPaths`, and `nextSteps` instead of assuming repo-local paths.
 
 5. **Get instructions for the first artifact**
    The first artifact depends on the schema. Check the status output to find the first artifact with status "ready".
