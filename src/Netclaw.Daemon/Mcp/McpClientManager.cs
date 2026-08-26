@@ -617,6 +617,18 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 qualifiedToolName,
                 ex is HttpRequestException { StatusCode: { } statusCode } ? $" (HTTP {(int)statusCode})" : "");
 
+            // A typed 401 is the transport's own verdict on the credential, so it is true for
+            // every HTTP server, not only an OAuth-capable one: a static bearer that expires
+            // mid-session fails here on every call. A 403 is excluded on purpose. On a tool
+            // call it means "this credential cannot do that", not "this credential is dead".
+            // A stdio server carries no HTTP status, so it is skipped.
+            if (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized }
+                && _serverEntries.TryGetValue(serverName.Value, out var authEntry)
+                && authEntry.Transport is not "stdio")
+            {
+                MarkToolAuthFailure(serverName, authEntry, GetHttpStatusText(ex));
+            }
+
             if (!IsTransportOrSessionFailure(ex))
                 throw;
 
@@ -1089,15 +1101,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// The detail reaches the model but no exception reaches the transport layer, so
     /// without this the daemon log keeps only the result length and an operator has
     /// nothing to debug from.
-    /// Only a server that can use OAuth becomes <see cref="McpConnectionState.AuthFailed"/>
-    /// here. The auth test reads free result text, and a tool that proxies a REST API
-    /// answers "Forbidden" for an ordinary business error. A false demotion costs three
-    /// things: it fires an <c>authentication_failed</c> alert; it makes
-    /// <c>netclaw mcp list</c> and <c>netclaw doctor</c> report "auth failed" until the
-    /// next invocation; and that invocation then tears the healthy client down and
-    /// reconnects for nothing. A stdio server and a server with an operator-configured
-    /// Authorization header cannot use <c>netclaw mcp auth</c>, so the remedy that state
-    /// names is wrong for them.
+    /// Two signals move a server to <see cref="McpConnectionState.AuthFailed"/> on the
+    /// tool-call path. A typed HTTP 401 covers any HTTP server; the invocation path owns
+    /// it. This result-text signal covers a server that can use OAuth only. An HTTP 403
+    /// moves no server, because it denies one action and not the credential.
+    /// The auth test reads free result text, and a tool that proxies a REST API answers
+    /// "Forbidden" for an ordinary business error. A false demotion costs three things: it
+    /// fires an auth alert; it makes <c>netclaw mcp list</c> and <c>netclaw doctor</c>
+    /// report "auth failed" until the next invocation; and that invocation then tears the
+    /// healthy client down and reconnects for nothing.
     /// </summary>
     private void ReportToolFailure(McpServerName serverName, string qualifiedToolName, string detail)
     {
@@ -1115,7 +1127,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             || !HasOAuthRuntimeHints(serverName, entry))
             return;
 
-        MarkToolAuthFailure(serverName);
+        // Result text carries no HTTP status, so the status message names none.
+        MarkToolAuthFailure(serverName, entry, httpStatusText: null);
     }
 
     /// <summary>
@@ -1123,8 +1136,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// credential is rejected at call time. The transport stays healthy in this case, so
     /// status would otherwise report a working server while every invocation fails, and
     /// the one state that needs operator action would be the one state never shown.
+    /// The status and the alert come from the connect path's factory, so the remedy
+    /// matches the server's auth scheme: <c>netclaw mcp auth</c> for an OAuth-capable
+    /// server, and a credential check for a static header.
     /// </summary>
-    private void MarkToolAuthFailure(McpServerName serverName)
+    private void MarkToolAuthFailure(
+        McpServerName serverName,
+        McpServerEntry entry,
+        string? httpStatusText)
     {
         if (!_servers.TryGetValue(serverName, out var lifecycle))
             return;
@@ -1133,21 +1152,33 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (current is null || current.Status.State is McpConnectionState.AuthFailed)
             return;
 
-        var status = new McpServerStatus(
-            serverName,
-            McpConnectionState.AuthFailed,
-            current.Status.ToolCount,
-            $"Authentication rejected by server. Run: netclaw mcp auth {serverName.Value}",
-            _timeProvider.GetUtcNow());
+        var oauthManaged = HasOAuthRuntimeHints(serverName, entry);
+        // Keep the catalog count. It tells the operator which server needs the remedy.
+        var status = CreateAuthFailedStatus(
+                serverName,
+                httpStatusText,
+                oauthManaged,
+                _timeProvider.GetUtcNow())
+            with { ToolCount = current.Status.ToolCount };
         lifecycle.Publish(current with { Status = status });
 
         _logger.LogWarning(
-            "MCP server '{Name}' rejected an authenticated tool call; reauthorization is required",
-            serverName.Value);
-        EmitAuthAlert(
-            serverName,
-            $"MCP server '{serverName.Value}' authentication failed. Run: netclaw mcp auth {serverName.Value}",
-            "authentication_failed");
+            "MCP server '{Name}' rejected a tool call on authentication: {Detail}",
+            serverName.Value,
+            status.ErrorMessage);
+        if (oauthManaged)
+        {
+            EmitAuthAlert(
+                serverName,
+                $"MCP server '{serverName.Value}' authentication failed. Run: netclaw mcp auth {serverName.Value}",
+                "credentials_rejected");
+        }
+        else
+        {
+            EmitDisconnectedAlert(
+                serverName,
+                $"MCP server '{serverName.Value}' authentication failed: {status.ErrorMessage}");
+        }
     }
 
     /// <summary>
@@ -1159,16 +1190,25 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpServerName serverName,
         ToolName toolName)
     {
-        var state = _servers.TryGetValue(serverName, out var lifecycle)
-            ? lifecycle.Snapshot?.Status.State
+        var status = _servers.TryGetValue(serverName, out var lifecycle)
+            ? lifecycle.Snapshot?.Status
             : null;
 
-        return state is McpConnectionState.AuthFailed or McpConnectionState.AwaitingAuth
-            ? new InvalidOperationException(
-                $"MCP server '{serverName.Value}' requires authorization. " +
-                $"Run: netclaw mcp auth {serverName.Value}")
-            : new InvalidOperationException(
+        if (status?.State is not (McpConnectionState.AuthFailed or McpConnectionState.AwaitingAuth))
+        {
+            return new InvalidOperationException(
                 $"MCP server '{serverName.Value}' is unavailable or tool '{toolName.Value}' is not registered.");
+        }
+
+        // The published status already names the remedy for this server's auth scheme. A
+        // fixed `netclaw mcp auth` string here sends a static-header operator to a command
+        // that cannot repair their server.
+        var detail = status.ErrorMessage;
+        return string.IsNullOrWhiteSpace(detail)
+            ? new InvalidOperationException(
+                $"MCP server '{serverName.Value}' requires authorization.")
+            : new InvalidOperationException(
+                $"MCP server '{serverName.Value}' requires authorization. {detail}");
     }
 
     private async Task<McpClientCandidate> CreateClientAsync(
@@ -1447,8 +1487,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         Exception ex,
         bool oauthManaged,
         DateTimeOffset errorAt)
+        => CreateAuthFailedStatus(serverName, GetHttpStatusText(ex), oauthManaged, errorAt);
+
+    internal static McpServerStatus CreateAuthFailedStatus(
+        McpServerName serverName,
+        string? statusText,
+        bool oauthManaged,
+        DateTimeOffset errorAt)
     {
-        var statusText = GetHttpStatusText(ex);
         var detail = string.IsNullOrWhiteSpace(statusText)
             ? "Authentication rejected by server."
             : $"Authentication rejected by server ({statusText}).";

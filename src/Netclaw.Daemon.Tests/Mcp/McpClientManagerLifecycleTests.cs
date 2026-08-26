@@ -153,6 +153,118 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
+    public async Task TypedUnauthorizedFromAStaticHeaderServer_NamesTheConfiguredCredential()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            // A static bearer that expires mid-session never reaches the tool. Every HTTP
+            // MCP server rejects it at the transport, so the status is a typed 401.
+            Invoke = (_, _) => Task.FromException<object?>(
+                new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized)),
+        });
+        var alerts = new RecordingNotificationSink();
+        await using var harness = new ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime),
+            alerts,
+            StaticHeaderEntry());
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.AuthFailed, status.State);
+        // The operator owns this header, so `netclaw mcp auth` cannot repair the server.
+        Assert.Contains(
+            "Check configured credentials or headers",
+            status.ErrorMessage ?? string.Empty,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "netclaw mcp auth",
+            status.ErrorMessage ?? string.Empty,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            harness.Logger.Entries,
+            entry => entry.Contains("invocation failed (HTTP 401)", StringComparison.Ordinal));
+        var toolCallAlert = Assert.Single(alerts.Alerts);
+        Assert.Equal(AlertType.McpServerDisconnected, toolCallAlert.Category);
+
+        // The next call reconnects. The same credential fails initialize the same way, so
+        // the agent gets the same remedy rather than a fixed OAuth one.
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Initialize = _ => Task.FromException(
+                new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized)),
+        });
+
+        var error = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        Assert.Contains("credentials or headers", error.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("netclaw mcp auth", error.Message, StringComparison.Ordinal);
+        Assert.Equal(2, runtime.CreateCount);
+    }
+
+    [Fact]
+    public async Task TypedUnauthorizedFromAnOAuthCapableServer_NamesTheAuthCommand()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(
+                new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized)),
+        });
+        var alerts = new RecordingNotificationSink();
+        await using var harness = new ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime),
+            alerts,
+            OAuthCapableEntry());
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.AuthFailed, status.State);
+        Assert.Contains($"netclaw mcp auth {ServerName.Value}", status.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
+        var alert = Assert.Single(alerts.Alerts);
+        Assert.Equal(AlertType.McpAuthExpired, alert.Category);
+        Assert.Equal("credentials_rejected", alert.Context?["reason"]);
+    }
+
+    [Fact]
+    public async Task TypedForbiddenOnAToolCall_KeepsTheServerConnected()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(
+                new HttpRequestException("forbidden", null, HttpStatusCode.Forbidden)),
+        });
+        var alerts = new RecordingNotificationSink();
+        await using var harness = new ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime),
+            alerts,
+            StaticHeaderEntry());
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        // A 403 denies one action. The credential still works, so a demotion would take a
+        // healthy server down and reconnect it for nothing.
+        Assert.Equal(
+            McpConnectionState.Connected,
+            harness.Manager.GetServerStatuses()[ServerName].State);
+        Assert.Equal(1, runtime.CreateCount);
+        Assert.Empty(alerts.Alerts);
+    }
+
+    [Fact]
     public async Task ToolLevelAuthWordsFromAStaticHeaderServer_KeepTheServerConnected()
     {
         var runtime = new ControlledMcpClientRuntime();
