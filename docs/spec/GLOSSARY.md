@@ -377,11 +377,41 @@ http, no headers, no tokens, isError "token expired"   -> not OAuth-managed; sta
 Project scope is the declared project directory for a main session or subagent
 run. Workspace tools use it as the first base for relative paths.
 
-### Session directory and session scratch
+### Session directory and agent-data root
 
-The session directory path is fixed for one session. Its contents are mutable.
-Session scratch means disposable work inside that directory. It is the
-relative-path base when the session has no valid project directory.
+The session directory is the agent-data root for one session. Its path is
+fixed after the session binds it. Its contents are mutable.
+
+The agent-data root contains agent-visible session files. Examples include
+artifacts, inbound files, bounded tool output, temporary files, and worktrees.
+It is the relative-path base when the session has no valid project directory.
+
+The phrase `session scratch` is a legacy term for disposable work directly in
+the session directory. New designs use a managed temporary directory instead.
+
+### Audit root
+
+The audit root contains raw parent and subagent session logs. It is separate
+from the agent-data root. Normal session context does not add it to workspace
+or shell safe spaces.
+
+An opaque log reference does not grant access to the audit root. The reference
+can authorize one bounded and redacted projection through its owning tool.
+
+### Managed temporary directory
+
+A managed temporary directory contains disposable files for one parent or
+subagent run. Netclaw places it below the agent-data root. Each run receives a
+different directory.
+
+Netclaw sets `TMPDIR`, `TMP`, and `TEMP` to this directory for child processes.
+The managed temporary directory is not a project scope or an authority grant.
+
+### Artifact directory
+
+An artifact directory contains outputs that a parent or user must keep or
+attach. It is separate from the managed temporary directory. Netclaw does not
+apply a retention policy to either directory yet.
 
 ### Allowed root
 

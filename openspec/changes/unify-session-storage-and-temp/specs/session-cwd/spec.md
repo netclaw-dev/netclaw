@@ -1,0 +1,181 @@
+This delta uses terms from the
+[engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+
+## RENAMED Requirements
+
+- FROM: `Subagent context announces private session scratch`
+- TO: `Subagent context announces managed session paths`
+- FROM: `Session directory is the private shell scratch location`
+- TO: `Managed temporary directory is the private temporary location`
+
+## MODIFIED Requirements
+
+### Requirement: Subagent context announces managed session paths
+
+Before the first model call, the system SHALL include the exact bound
+`session_dir`, `temp_dir`, and `artifact_dir` in Personal and Team subagent
+working context. It SHALL state the distinct purpose of each path. Public
+subagent context SHALL NOT include these private paths. The guidance SHALL
+preserve an explicitly required platform temporary path.
+
+The context SHALL derive from the child's existing bound run scope. It SHALL
+NOT add a public protocol field, persist a path as agent identity, or change
+shell authorization.
+
+#### Scenario: Example - Personal child receives distinct managed paths
+
+- **GIVEN** a Personal child has a bound session and run scope
+- **WHEN** Netclaw assembles its initial model context
+- **THEN** the context contains its exact session, temporary, and artifact
+  directories
+- **AND** it describes `temp_dir` as disposable working storage
+- **AND** it describes `artifact_dir` as the location for outputs that the
+  parent or user must keep
+- **AND** it does not imply that path knowledge grants shell authority
+
+#### Scenario: Team child receives distinct managed paths
+
+- **GIVEN** a Team child has a valid bound run scope
+- **WHEN** Netclaw assembles its initial model context
+- **THEN** the context contains that run's exact managed paths
+- **AND** existing Team tool and shell policy remains unchanged
+
+#### Scenario: Counterexample - Public child cannot receive private paths
+
+- **GIVEN** a Public child has internal managed paths
+- **WHEN** Netclaw assembles its initial model context
+- **THEN** the context does not contain those paths
+- **AND** no replacement guidance discloses another private filesystem path
+
+#### Scenario: Counterexample - explicit platform temporary intent is preserved
+
+- **GIVEN** a Personal or Team child receives managed-path guidance
+- **WHEN** its task explicitly requires the platform temporary directory
+- **THEN** the guidance tells the child to preserve that requirement
+- **AND** Netclaw does not rewrite the path or grant authority to it
+
+#### Scenario: Project declaration does not replace managed paths
+
+- **GIVEN** a child has received its initial managed-path context
+- **WHEN** it later calls `set_working_directory` successfully
+- **THEN** its project scope and project instructions update through the
+  existing contract
+- **AND** its bound session, temporary, and artifact paths remain unchanged
+
+### Requirement: Managed temporary directory is the private temporary location
+
+The system SHALL provide a separate managed temporary directory for each
+parent and child run. A parent SHALL use `<session-root>/tmp/parent`. A child
+SHALL use `<session-root>/tmp/subagents/<run-id>`. The system SHALL identify
+this directory as the preferred location for disposable files. It SHALL keep
+the session root as the shell working-directory fallback when no project or
+explicit working directory exists.
+
+Personal and Team working context and correction text SHALL provide the
+absolute managed temporary path when the agent needs an alternative to the
+platform temporary root. Public context SHALL retain existing private-path
+redaction. The system SHALL NOT silently substitute a path or imply that
+temporary-directory cleanup occurs as part of this behavior.
+
+#### Scenario: Example - no-project shell separates cwd and temp
+
+- **GIVEN** a session has no declared project directory
+- **WHEN** the agent invokes `shell_execute` without an explicit working
+  directory
+- **THEN** the shell working directory is the bound session root
+- **AND** temporary APIs in the process resolve to the managed temporary
+  directory
+
+#### Scenario: Parent and child temporary directories do not collide
+
+- **GIVEN** a parent and two child runs belong to one session
+- **WHEN** Netclaw resolves their managed temporary directories
+- **THEN** each run receives a different directory
+- **AND** every directory remains below the same session root
+
+#### Scenario: Example - correction names the managed temporary directory
+
+- **GIVEN** a correction recommends private temporary storage
+- **WHEN** the correction is rendered for the agent
+- **THEN** it names the exact managed temporary directory for that run
+- **AND** it does not name the complete session root as disposable storage
+
+#### Scenario: Counterexample - Public context cannot receive managed paths
+
+- **GIVEN** a Public parent or child agent
+- **WHEN** it evaluates a platform-temp operation
+- **THEN** it does not receive a private managed path
+- **AND** existing Public path-redaction behavior remains
+
+#### Scenario: Counterexample - session end does not imply cleanup
+
+- **GIVEN** an agent writes a disposable file under its managed temporary
+  directory
+- **WHEN** the current session ends
+- **THEN** this capability does not delete or schedule deletion of that file
+- **AND** retention remains unchanged until a separate cleanup capability is
+  specified
+
+## ADDED Requirements
+
+### Requirement: Every run receives the standard temporary environment
+
+Before the system starts a shell or another child process, it SHALL create and
+validate the run's managed temporary directory. It SHALL set `TMPDIR`, `TMP`,
+and `TEMP` to that exact directory in the child process environment. It SHALL
+set all three variables on POSIX and Windows. It SHALL NOT change the daemon's
+global process environment.
+
+The system SHALL capture the host platform temporary root before it injects
+the managed values. Policy that identifies an explicitly authored unmanaged
+temporary path SHALL use that captured host value. It SHALL NOT assume a fixed
+Windows temporary path.
+
+#### Scenario: Example - POSIX child process uses managed temp
+
+- **GIVEN** a POSIX parent or child run has a managed temporary directory
+- **WHEN** Netclaw starts a shell process
+- **THEN** `TMPDIR`, `TMP`, and `TEMP` all equal that directory
+- **AND** a standard temporary-path API returns a path below it
+
+#### Scenario: Example - Windows child process uses managed temp
+
+- **GIVEN** a Windows parent or child run has a managed temporary directory
+- **WHEN** Netclaw starts a shell process
+- **THEN** `TMPDIR`, `TMP`, and `TEMP` all equal that directory
+- **AND** the native or .NET temporary-path API returns a path below it
+
+#### Scenario: Sibling runs keep isolated environments
+
+- **GIVEN** two child runs execute concurrently
+- **WHEN** each reads its temporary environment
+- **THEN** each sees only its own managed temporary path
+- **AND** the daemon environment remains unchanged
+
+#### Scenario: Counterexample - failed preparation cannot use host temp
+
+- **GIVEN** the managed temporary directory cannot be created or validated
+- **WHEN** Netclaw prepares a shell or child process
+- **THEN** process creation fails before user code runs
+- **AND** Netclaw does not fall back to the host platform temporary root
+
+### Requirement: Worktrees have a separate session-owned area
+
+The system SHALL distinguish managed worktrees from ordinary temporary files.
+It SHALL allocate worktrees below `<session-root>/worktrees` and SHALL NOT
+place them below a run's managed temporary directory. This capability SHALL
+NOT define automatic worktree cleanup.
+
+#### Scenario: Example - worktree stays outside run temp
+
+- **GIVEN** an agent requests a managed worktree
+- **WHEN** the destination is allocated
+- **THEN** it is below the session worktree area
+- **AND** it is not below the parent or child temporary directory
+
+#### Scenario: Counterexample - session end does not delete worktree
+
+- **GIVEN** a managed worktree contains source changes
+- **WHEN** the session ends
+- **THEN** this capability does not delete the worktree
+- **AND** later cleanup requires a separate policy
