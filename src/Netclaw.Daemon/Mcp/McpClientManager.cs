@@ -538,7 +538,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 suppliedArguments,
                 cancellationToken);
         }
-        catch (McpException ex) when (!IsTransportOrSessionFailure(ex))
+        catch (Exception ex) when (ex is McpException or HttpRequestException && !IsTransportOrSessionFailure(ex))
         {
             return McpPromptSkillLoadResult.Failed(
                 $"MCP prompt '{source.PromptName}' failed: {ex.Message}");
@@ -1798,8 +1798,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     internal static bool IsTransportOrSessionFailure(Exception ex)
     {
-        if (ex is HttpRequestException
-            or IOException
+        // A missing status means the request never got an answer, and the Streamable HTTP
+        // spec reports an expired session as 404. A new session repairs both. Every other
+        // status is an application error from a server that answered, so a new session
+        // cannot change the answer and the reconnect is wasted work.
+        if (ex is HttpRequestException http)
+            return http.StatusCode is null or HttpStatusCode.NotFound;
+
+        if (ex is IOException
             or EndOfStreamException
             or TimeoutException
             or ObjectDisposedException)

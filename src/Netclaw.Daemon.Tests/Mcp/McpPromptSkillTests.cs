@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol.Protocol;
 using Netclaw.Actors.Skills;
@@ -237,6 +238,46 @@ public sealed class McpPromptSkillTests
 
         Assert.False(result.Success);
         Assert.Contains("unsupported content type 'image'", result.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task LoadReturnsFailedResultForAnApplicationHttpStatus()
+    {
+        var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();
+        var plan = CreatePromptPlan();
+        plan.GetPromptFailure = new HttpRequestException(
+            "boom",
+            null,
+            HttpStatusCode.InternalServerError);
+        runtime.Enqueue(plan);
+        // A replacement is queued but must stay unused. Without it a reconnect would fail
+        // inside the runtime before it counts the client, and CreateCount would still
+        // read 1. With it, one reconnect drives CreateCount to 2 and this test fails.
+        var replacement = runtime.Enqueue(CreatePromptPlan());
+        await using var harness = new McpClientManagerLifecycleTests.ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime));
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+        var source = Assert.IsType<McpPromptSkillSource>(
+            harness.SkillRegistry.GetByName("mcp__test__analyze-property")?.Source);
+
+        var result = await harness.Manager.LoadAsync(
+            source,
+            new Dictionary<string, string> { ["property"] = "petabridge-com" },
+            TestToolExecutionContext.CreateUnbound(TrustAudience.Personal).Invocation,
+            TestContext.Current.CancellationToken);
+
+        // The load owns this failure. An escaped exception would reach the tool dispatcher,
+        // and a reconnect cannot change a status the server chose to send.
+        Assert.False(result.Success);
+        Assert.Contains("analyze-property", result.Error, StringComparison.Ordinal);
+        // The first catch clause owns this text. The transport clause says "connection
+        // closed" instead, so this pins which clause ran.
+        Assert.Contains("failed:", result.Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("connection closed", result.Error, StringComparison.Ordinal);
+        Assert.Equal(1, runtime.CreateCount);
+        Assert.Null(replacement.Client);
+        Assert.Equal(1, harness.Manager.GetSnapshot(ServerName)?.Generation);
     }
 
     private static McpClientManagerLifecycleTests.ClientPlan CreatePromptPlan()

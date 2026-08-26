@@ -10,8 +10,8 @@
 
 ## 3. Reconnect classification (#2056)
 
-- [ ] 3.1 Make `IsTransportOrSessionFailure` return true for `HttpRequestException` only when `StatusCode` is null or 404; verify lifecycle tests: HTTP 500 and 429 produce no reconnect and an unchanged generation; HTTP 404 and a status-less failure each produce one reconnect.
-- [ ] 3.2 Widen the first catch clause in `McpClientManager.LoadAsync` to `McpException` or `HttpRequestException` when not a transport failure; verify a `McpPromptSkillTests` test that an HTTP 500 on `GetPromptAsync` returns a failed load result that names the prompt, with no reconnect.
+- [x] 3.1 Make `IsTransportOrSessionFailure` return true for `HttpRequestException` only when `StatusCode` is null or 404; verify lifecycle tests: HTTP 500 and 429 produce no reconnect and an unchanged generation; HTTP 404 and a status-less failure each produce one reconnect.
+- [x] 3.2 Widen the first catch clause in `McpClientManager.LoadAsync` to `McpException` or `HttpRequestException` when not a transport failure; verify a `McpPromptSkillTests` test that an HTTP 500 on `GetPromptAsync` returns a failed load result that names the prompt, with no reconnect.
 
 ## 4. Auth guard for servers that cannot use OAuth (#2057)
 

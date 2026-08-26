@@ -372,6 +372,68 @@ public sealed class McpClientManagerLifecycleTests
         Assert.Equal(2, harness.Manager.GetSnapshot(ServerName)?.Generation);
     }
 
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task ApplicationHttpStatus_ReachesTheCallerWithoutAReconnect(HttpStatusCode status)
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        var plan = runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(
+                new HttpRequestException("boom", null, status)),
+        });
+        // A replacement is queued but must stay unused. Without it a reconnect would fail
+        // inside the runtime before it counts the client, and CreateCount would still
+        // read 1. With it, one reconnect drives CreateCount to 2 and this test fails.
+        var replacement = runtime.Enqueue(new ClientPlan("run"));
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        // A server that answers with a status is reachable. A new session cannot change the
+        // answer, and each reconnect costs about five more requests against a server that
+        // may already enforce a request budget.
+        Assert.Equal(status, error.StatusCode);
+        // The Warning line is the only operator-visible record of a thrown tool call, so it
+        // must name the tool and the status the server sent.
+        var warning = Assert.Single(
+            harness.Logger.Entries,
+            entry => entry.Contains($"{ServerName.Value}/run", StringComparison.Ordinal));
+        Assert.Contains($"(HTTP {(int)status})", warning, StringComparison.Ordinal);
+        Assert.Equal(1, runtime.CreateCount);
+        Assert.Equal(0, plan.DisposeCount);
+        Assert.Null(replacement.Client);
+        Assert.Equal(1, harness.Manager.GetSnapshot(ServerName)?.Generation);
+    }
+
+    [Fact]
+    public async Task SessionExpiryStatus_ReconnectsForLaterCalls()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        var initial = runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(
+                new HttpRequestException("session expired", null, HttpStatusCode.NotFound)),
+        });
+        var replacement = runtime.Enqueue(new ClientPlan("run"));
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        // Streamable HTTP reports an expired session as 404, so a new session repairs it.
+        Assert.Equal(HttpStatusCode.NotFound, error.StatusCode);
+        // The token makes a missed reconnect fail the run instead of hanging it.
+        await initial.Disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, runtime.CreateCount);
+        Assert.Equal(0, replacement.InvocationCount);
+        Assert.Equal(2, harness.Manager.GetSnapshot(ServerName)?.Generation);
+    }
+
     [Fact]
     public async Task CandidateInitializationAndDisposalFailures_AreLoudAndPriorToolsRemainPublished()
     {
@@ -738,6 +800,8 @@ public sealed class McpClientManagerLifecycleTests
             Interlocked.Increment(ref plan.PromptInvocationCountStorage);
             plan.LastPromptName = promptName;
             plan.LastPromptArguments = new Dictionary<string, string>(arguments, StringComparer.Ordinal);
+            if (plan.GetPromptFailure is not null)
+                return ValueTask.FromException<GetPromptResult>(plan.GetPromptFailure);
             return plan.GetPromptResult is null
                 ? ValueTask.FromException<GetPromptResult>(
                     new InvalidOperationException("The controlled prompt result is not configured."))
@@ -804,6 +868,8 @@ public sealed class McpClientManagerLifecycleTests
         public Exception? ListFailure { get; set; }
 
         public Exception? PromptListFailure { get; set; }
+
+        public Exception? GetPromptFailure { get; set; }
 
         public string? LastPromptName { get; set; }
 
