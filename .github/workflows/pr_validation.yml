@@ -54,6 +54,10 @@ jobs:
       - name: "Restore .NET tools"
         run: dotnet tool restore
 
+      - name: "Validate release notes parser"
+        shell: pwsh
+        run: ./scripts/smoke/release-notes-smoke.ps1
+
       - name: "Update release notes"
         shell: pwsh
         run: |
