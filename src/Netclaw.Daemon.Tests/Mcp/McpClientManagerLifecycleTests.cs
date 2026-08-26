@@ -251,8 +251,11 @@ public sealed class McpClientManagerLifecycleTests
 
         var toolError = await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
         Assert.Equal("Error: MCP tool 'test/run' reported a failure: declared failure", toolError);
-        var applicationMcpError = await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
-        Assert.Equal("Error: MCP tool 'test/run' failed: application MCP failure", applicationMcpError);
+        // A JSON-RPC error reaches the caller. The adapter, not the manager, turns it into
+        // the tool result, so the tool call also gets a failure receipt.
+        var applicationMcpError = await Assert.ThrowsAsync<McpException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+        Assert.Equal("application MCP failure", applicationMcpError.Message);
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
 
@@ -260,6 +263,62 @@ public sealed class McpClientManagerLifecycleTests
         Assert.Equal(4, plan.InvocationCount);
         Assert.Equal(0, plan.DisposeCount);
         Assert.Equal(1, harness.Manager.GetSnapshot(ServerName)?.Generation);
+    }
+
+    [Fact]
+    public async Task ThrownToolCall_LogsOneWarningThatNamesTheServerAndTheTool()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(new McpException("application MCP failure")),
+        });
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<McpException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        // The adapter turns the exception into a tool result, so this line is the only
+        // record of the failed call an operator can read in the daemon log.
+        var warning = Assert.Single(
+            harness.Logger.Entries,
+            entry => entry.Contains("invocation failed", StringComparison.Ordinal));
+        Assert.Contains($"'{ServerName.Value}/run'", warning, StringComparison.Ordinal);
+        Assert.Equal(
+            "application MCP failure",
+            Assert.Single(harness.Logger.Exceptions).Message);
+    }
+
+    [Fact]
+    public async Task CallerCancelledToolCall_LogsNoInvocationWarning()
+    {
+        var invocationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverCompletes = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = async (_, ct) =>
+            {
+                invocationEntered.TrySetResult();
+                await neverCompletes.Task.WaitAsync(ct);
+                return "unreachable";
+            },
+        });
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        using var callerCancellation = new CancellationTokenSource();
+        var cancelledCall = InvokeAsync(harness.Manager, callerCancellation.Token);
+        await invocationEntered.Task;
+        await callerCancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledCall);
+
+        // A caller that aborts a call did not see a server failure. A Warning here sends
+        // the operator after a healthy server.
+        Assert.DoesNotContain(
+            harness.Logger.Entries,
+            entry => entry.Contains("invocation failed", StringComparison.Ordinal));
     }
 
     [Fact]

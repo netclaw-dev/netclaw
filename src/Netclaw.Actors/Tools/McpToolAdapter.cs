@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -150,9 +151,21 @@ public sealed class McpToolAdapter : INetclawTool
         {
             throw;
         }
+        // The adapter completes the receipt here because the exception stops here: the
+        // dispatcher never sees it and completes the receipt as Success. The receipt is
+        // first-writer-wins, so this category is the one the actor reads.
         catch (Exception ex)
         {
-            return $"Error: MCP tool '{Name}' failed: {ex.Message}";
+            var text = $"Error: MCP tool '{Name}' failed: {ex.Message}";
+            return ex switch
+            {
+                HttpRequestException
+                    {
+                        StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    } => context.AccessDenied(text),
+                HttpRequestException { StatusCode: HttpStatusCode.NotFound } => context.NotFound(text),
+                _ => context.TransientFailure(text)
+            };
         }
     }
 

@@ -584,25 +584,42 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                        ?? throw CreateUnavailableException(serverName, toolName);
         }
 
+        var qualifiedToolName = $"{serverName.Value}/{toolName.Value}";
+
+        // The lookup stays outside the try: an unavailable tool is the manager's own
+        // report, not a failed invocation, so it must not log as one.
+        if (!snapshot.ToolFunctions.TryGetValue(toolName.Value, out var function))
+            throw CreateUnavailableException(serverName, toolName);
+
         Exception? transportFailure = null;
         try
         {
-            if (!snapshot.ToolFunctions.TryGetValue(toolName.Value, out var function))
-                throw CreateUnavailableException(serverName, toolName);
-
             return await InvokeFunctionAsync(
                 serverName,
                 function,
-                $"{serverName.Value}/{toolName.Value}",
+                qualifiedToolName,
                 arguments,
                 ct);
         }
-        catch (McpException ex) when (!IsTransportOrSessionFailure(ex))
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            return $"Error: MCP tool '{serverName.Value}/{toolName.Value}' failed: {ex.Message}";
+            throw;
         }
-        catch (Exception ex) when (IsTransportOrSessionFailure(ex))
+        catch (Exception ex)
         {
+            // This is the only failure signal an operator gets for a thrown tool call: the
+            // dispatcher logs duration and size, and the adapter turns the exception into a
+            // tool result. Redact first, because an MCP error body can echo the arguments
+            // it rejected and daemon logs leave the box when OTLP export is enabled.
+            _logger.LogWarning(
+                SecretOutputRedactor.RedactForLogging(ex),
+                "MCP tool '{Tool}' invocation failed{HttpStatus}",
+                qualifiedToolName,
+                ex is HttpRequestException { StatusCode: { } statusCode } ? $" (HTTP {(int)statusCode})" : "");
+
+            if (!IsTransportOrSessionFailure(ex))
+                throw;
+
             transportFailure = ex;
         }
 

@@ -74,6 +74,7 @@ debugging a daemon-wide problem → read `daemon.log`.
 |---------|-------|
 | No LLM responses | `netclaw doctor`; verify provider credentials |
 | Missing tools | `netclaw mcp list`; check MCP connection state |
+| An MCP tool call fails | Grep `<NETCLAW_HOME>/logs/daemon-*.log` for `MCP tool '` and `invocation failed`. Each failed call writes one Warning that names the server, the tool, and the HTTP status when the server sent one. The tool-result text gives the kind: `reported a failure:` is an error the tool declared, and `failed:` is an exception from the server or the transport. |
 | Memory recall degraded | `netclaw status` memory section |
 | Daemon won't start | crash logs at `<NETCLAW_HOME>/logs/crash-*.log` (`NETCLAW_HOME` defaults to `~/.netclaw`) |
 | Docker daemon cannot create `/home/netclaw/.netclaw/*` | Official image entrypoint repairs writable bind mounts to UID/GID `1654:1654`; if bypassed or read-only, run `sudo chown -R 1654:1654 <host-data-dir>` or use a Docker named volume |

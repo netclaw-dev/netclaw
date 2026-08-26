@@ -4,8 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Tests.Utilities;
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
+using ModelContextProtocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -178,6 +180,51 @@ public class McpToolAdapterTests
 
         Assert.StartsWith("Error:", result);
         Assert.Contains("session transport failed", result);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithContext_HttpServerError_RecordsTransientFailure()
+    {
+        var context = await ExecuteWithFailureAsync(
+            new HttpRequestException("upstream error", null, HttpStatusCode.InternalServerError));
+
+        Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithContext_HttpForbidden_RecordsAccessDenied()
+    {
+        var context = await ExecuteWithFailureAsync(
+            new HttpRequestException("Forbidden", null, HttpStatusCode.Forbidden));
+
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_WithContext_McpProtocolError_RecordsTransientFailure()
+    {
+        var context = await ExecuteWithFailureAsync(new McpException("application MCP failure"));
+
+        Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
+    }
+
+    /// <summary>
+    /// Runs one failed MCP tool call and asserts the shared result contract: the text names
+    /// the tool, so the model can tell which call failed. The caller asserts the category.
+    /// </summary>
+    private static async Task<ToolExecutionContext> ExecuteWithFailureAsync(Exception failure)
+    {
+        var fakeTool = AIFunctionFactory.Create(() => "unused", "navigate_page");
+        var invoker = new RecordingMcpToolInvoker("ignored") { Failure = failure };
+        var adapter = new McpToolAdapter(fakeTool, "browser_playwright", "navigate_page", invoker: invoker);
+        var context = TestToolExecutionContext.CreateBound("chan/thread", null, TrustAudience.Personal);
+
+        var result = await adapter.ExecuteAsync(ToolInput.Empty(), context, CancellationToken.None);
+
+        Assert.StartsWith("Error: MCP tool '", result, StringComparison.Ordinal);
+        Assert.Contains("browser_playwright/navigate_page", result, StringComparison.Ordinal);
+        Assert.Contains(failure.Message, result, StringComparison.Ordinal);
+        return context;
     }
 
     [Fact]
