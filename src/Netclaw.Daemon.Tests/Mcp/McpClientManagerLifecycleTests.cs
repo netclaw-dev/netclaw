@@ -12,6 +12,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol;
+using ModelContextProtocol.Authentication;
 using ModelContextProtocol.Client;
 using ModelContextProtocol.Protocol;
 using Netclaw.Actors.Skills;
@@ -137,9 +138,11 @@ public sealed class McpClientManagerLifecycleTests
                 """{"content":[{"type":"text","text":"Unauthorized: token expired"}],"isError":true}""")
                 .RootElement.Clone()),
         });
-        // Only an OAuth-capable server carries this case: it is the one server kind that
-        // `netclaw mcp auth` can repair.
-        await using var harness = CreateHarness(runtime, OAuthCapableEntry());
+        // Netclaw holds OAuth tokens for this server, so the words in the result describe a
+        // credential that `netclaw mcp auth` can renew.
+        var entry = HttpEntry();
+        await using var harness = CreateHarness(runtime, entry);
+        await SeedOAuthTokensAsync(harness, entry);
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
         Assert.Equal(
             McpConnectionState.Connected,
@@ -153,22 +156,48 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
-    public async Task TypedUnauthorizedFromAStaticHeaderServer_NamesTheConfiguredCredential()
+    public async Task ToolLevelAuthWordsWithoutStoredTokens_KeepTheServerConnected()
     {
         var runtime = new ControlledMcpClientRuntime();
         runtime.Enqueue(new ClientPlan("run")
         {
-            // A static bearer that expires mid-session never reaches the tool. Every HTTP
+            Invoke = (_, _) => Task.FromResult<object?>(JsonDocument.Parse(
+                """{"content":[{"type":"text","text":"Unauthorized: token expired"}],"isError":true}""")
+                .RootElement.Clone()),
+        });
+        // An HTTP server with no headers and no stored tokens. Netclaw runs no OAuth flow
+        // for it, so free result text is not evidence that its credential died.
+        await using var harness = CreateHarness(runtime, HttpEntry());
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
+
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.Connected, status.State);
+        Assert.Contains(
+            harness.Logger.Entries,
+            entry => entry.Contains("reported a failure", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task TypedUnauthorizedWithoutStoredTokens_NamesTheConfiguredCredential()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            // A static key that expires mid-session never reaches the tool. Every HTTP
             // MCP server rejects it at the transport, so the status is a typed 401.
             Invoke = (_, _) => Task.FromException<object?>(
                 new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized)),
         });
         var alerts = new RecordingNotificationSink();
+        // The key rides in X-Api-Key, not in Authorization. The remedy must still name the
+        // operator's own credential, so no decision here may read a header name.
         await using var harness = new ManagerHarness(
             runtime,
             new FakeTimeProvider(InitialTime),
             alerts,
-            StaticHeaderEntry());
+            ApiKeyHeaderEntry());
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<HttpRequestException>(
@@ -176,7 +205,7 @@ public sealed class McpClientManagerLifecycleTests
 
         var status = harness.Manager.GetServerStatuses()[ServerName];
         Assert.Equal(McpConnectionState.AuthFailed, status.State);
-        // The operator owns this header, so `netclaw mcp auth` cannot repair the server.
+        // Netclaw holds no tokens for this server, so `netclaw mcp auth` cannot repair it.
         Assert.Contains(
             "Check configured credentials or headers",
             status.ErrorMessage ?? string.Empty,
@@ -208,7 +237,7 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
-    public async Task TypedUnauthorizedFromAnOAuthCapableServer_NamesTheAuthCommand()
+    public async Task TypedUnauthorizedWithStoredTokens_NamesTheAuthCommand()
     {
         var runtime = new ControlledMcpClientRuntime();
         runtime.Enqueue(new ClientPlan("run")
@@ -217,11 +246,15 @@ public sealed class McpClientManagerLifecycleTests
                 new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized)),
         });
         var alerts = new RecordingNotificationSink();
+        var entry = HttpEntry();
         await using var harness = new ManagerHarness(
             runtime,
             new FakeTimeProvider(InitialTime),
             alerts,
-            OAuthCapableEntry());
+            entry);
+        // The daemon holds tokens for this server. A 401 then means the SDK could not
+        // refresh them, so the operator must authorize again.
+        await SeedOAuthTokensAsync(harness, entry);
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
 
         await Assert.ThrowsAsync<HttpRequestException>(
@@ -233,6 +266,36 @@ public sealed class McpClientManagerLifecycleTests
         var alert = Assert.Single(alerts.Alerts);
         Assert.Equal(AlertType.McpAuthExpired, alert.Category);
         Assert.Equal("credentials_rejected", alert.Context?["reason"]);
+    }
+
+    [Fact]
+    public async Task OAuthChallengeOnAToolCall_NamesTheAuthCommand()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            // The SDK engages its OAuth handler on a Bearer challenge and throws this when
+            // it cannot finish. The exception itself proves the server runs OAuth, so the
+            // remedy is `netclaw mcp auth` even before any token is stored.
+            Invoke = (_, _) => Task.FromException<object?>(new McpException(
+                "Failed to handle unauthorized response with 'Bearer' scheme. " +
+                "The AuthorizationCallbackHandler returned a null authorization result.")),
+        });
+        var alerts = new RecordingNotificationSink();
+        await using var harness = new ManagerHarness(
+            runtime,
+            new FakeTimeProvider(InitialTime),
+            alerts,
+            HttpEntry());
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<McpException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.AuthFailed, status.State);
+        Assert.Contains($"netclaw mcp auth {ServerName.Value}", status.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
+        Assert.Equal(AlertType.McpAuthExpired, Assert.Single(alerts.Alerts).Category);
     }
 
     [Fact]
@@ -321,9 +384,9 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
-    public async Task InvocationAgainstAnAwaitingAuthServer_NamesTheRemedy()
+    public async Task InvocationAgainstAnAuthFailedServer_NamesTheRemedy()
     {
-        // The remedy only exists for an OAuth-capable server, so this case needs one.
+        // The remedy only exists while Netclaw holds tokens, so this case seeds them.
         var runtime = new ControlledMcpClientRuntime();
         runtime.Enqueue(new ClientPlan("run")
         {
@@ -333,15 +396,16 @@ public sealed class McpClientManagerLifecycleTests
         });
         // The reconnect that follows must fail the way a dead credential does. The SDK
         // engages its OAuth handler on a Bearer challenge and throws this McpException when
-        // it cannot complete the flow. A bare 401 reads as a host or access-control error:
-        // the manager reports Unreachable, and the remedy branch correctly does not apply.
+        // it cannot complete the flow.
         runtime.Enqueue(new ClientPlan("run")
         {
             Initialize = _ => Task.FromException(new McpException(
                 "Failed to handle unauthorized response with 'Bearer' scheme. " +
                 "The AuthorizationCallbackHandler returned a null authorization result.")),
         });
-        await using var harness = CreateHarness(runtime, OAuthCapableEntry());
+        var entry = HttpEntry();
+        await using var harness = CreateHarness(runtime, entry);
+        await SeedOAuthTokensAsync(harness, entry);
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
         await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
         Assert.Equal(
@@ -351,10 +415,10 @@ public sealed class McpClientManagerLifecycleTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
 
-        // The tool-level failure sets AuthFailed. The reauthorization on the next call has
-        // no cached token to refresh, so it moves the server to AwaitingAuth.
+        // The tool-level failure sets AuthFailed. The reconnect fails the same way, and a
+        // stored token that the server rejects keeps the state at AuthFailed.
         Assert.Equal(
-            McpConnectionState.AwaitingAuth,
+            McpConnectionState.AuthFailed,
             harness.Manager.GetServerStatuses()[ServerName].State);
         // This text is what the agent repeats to the operator. "unavailable" would send
         // them looking for a broken server rather than a credential to renew.
@@ -798,10 +862,10 @@ public sealed class McpClientManagerLifecycleTests
             NullNotificationSink.Instance,
             entry);
 
-    // An HTTP server with no operator-configured Authorization header. This is the one
-    // server kind that `netclaw mcp auth` can repair. The controlled runtime opens no
-    // connection, so the URL is never dialled.
-    private static McpServerEntry OAuthCapableEntry()
+    // A plain HTTP server. Whether `netclaw mcp auth` can repair it depends on the stored
+    // token state, not on this entry. The controlled runtime opens no connection, so the
+    // URL is never dialled.
+    internal static McpServerEntry HttpEntry()
         => new()
         {
             Enabled = true,
@@ -809,8 +873,45 @@ public sealed class McpClientManagerLifecycleTests
             Url = "http://127.0.0.1:1/mcp",
         };
 
+    // An HTTP server the operator authenticates with a key in a header that is not named
+    // Authorization. No auth decision may treat it differently from a static bearer.
+    private static McpServerEntry ApiKeyHeaderEntry()
+        => new()
+        {
+            Enabled = true,
+            Transport = "http",
+            Url = "http://127.0.0.1:1/mcp",
+            Headers = new Dictionary<string, SensitiveString>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["X-Api-Key"] = new("operator-key"),
+            },
+        };
+
+    // Publishes usable OAuth tokens through the real store, which is what "the daemon uses
+    // OAuth for this server" means at runtime.
+    private static async Task SeedOAuthTokensAsync(ManagerHarness harness, McpServerEntry entry)
+    {
+        var cache = harness.Credentials.CreateTokenCache(
+            ServerName,
+            entry.Url!,
+            "static-client",
+            explicitAuthorization: true);
+        await cache.StoreTokensAsync(
+            new TokenContainer
+            {
+                AccessToken = "access-token",
+                RefreshToken = "refresh-token",
+                TokenType = "Bearer",
+                Scope = "read",
+                ExpiresIn = 3600,
+                ObtainedAt = InitialTime,
+            },
+            TestContext.Current.CancellationToken);
+        harness.Credentials.Publish(cache, TestContext.Current.CancellationToken);
+    }
+
     // An HTTP server the operator authenticates with a static header. It never uses OAuth.
-    internal static McpServerEntry StaticHeaderEntry()
+    private static McpServerEntry StaticHeaderEntry()
         => new()
         {
             Enabled = true,
@@ -860,7 +961,7 @@ public sealed class McpClientManagerLifecycleTests
         {
             var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
             paths.EnsureDirectoriesExist();
-            var credentials = new McpOAuthCredentialStore(
+            Credentials = new McpOAuthCredentialStore(
                 paths,
                 timeProvider,
                 new NullSecretsProtector(),
@@ -878,7 +979,7 @@ public sealed class McpClientManagerLifecycleTests
                 dependencies.SkillIndexPublisher,
                 dependencies.ToolAccessPolicy,
                 dependencies.ToolConfig,
-                credentials,
+                Credentials,
                 McpOAuthTestDoubles.UnusedRegistrar(),
                 _flowBroker,
                 new DaemonConfig(),
@@ -890,6 +991,10 @@ public sealed class McpClientManagerLifecycleTests
         }
 
         public McpClientManager Manager { get; }
+
+        // The manager reads this store to decide whether the daemon uses OAuth for a
+        // server, so a test seeds tokens through it rather than through a stub.
+        public McpOAuthCredentialStore Credentials { get; }
 
         public ToolRegistry Registry { get; }
 

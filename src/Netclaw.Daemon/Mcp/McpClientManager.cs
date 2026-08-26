@@ -364,14 +364,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             lifecycle.RollbackCatalogRefreshClaim(previousRefreshMs);
             if (IsAuthFailure(ex))
             {
-                // AwaitingAuth sends the operator to `netclaw mcp auth`, and
-                // StartAuthorizationAsync refuses a server with a configured Authorization
-                // header. Such a server gets the same AuthFailed status a tool-call 401
-                // publishes, so the remedy names the credential the operator owns. A stdio
-                // server keeps the existing path. It carries no HTTP status, and Netclaw
-                // does not manage its credential.
-                if (entry is { Transport: not "stdio", IsOAuthCapable: false })
-                    MarkToolAuthFailure(current.Name, entry, GetHttpStatusText(ex));
+                // AwaitingAuth sends the operator to `netclaw mcp auth`. That remedy fits
+                // two cases only: the daemon holds OAuth tokens, or the SDK raised a real
+                // OAuth challenge. Any other HTTP server gets AuthFailed, so the message
+                // names the credential the operator configured. A stdio server keeps the
+                // old path: Netclaw does not manage its credential.
+                if (entry.Transport is not "stdio"
+                    && !HasStoredOAuthTokens(current.Name, entry)
+                    && !IsOAuthChallenge(ex))
+                    MarkToolAuthFailure(current.Name, GetHttpStatusText(ex), oauthManaged: false);
                 else
                     MarkAwaitingAuthorization(lifecycle, current, ex, entry.Url);
 
@@ -454,7 +455,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (entry.Transport is "stdio" || string.IsNullOrWhiteSpace(entry.Url))
             throw new InvalidOperationException(
                 $"MCP server '{serverName.Value}' has no URL (OAuth requires HTTP transport).");
-        if (entry.HasConfiguredAuthorizationHeader)
+        if (HasConfiguredAuthorizationHeader(entry))
         {
             throw new McpOAuthOperationException(new McpErrorResponse(
                 $"MCP server '{serverName.Value}' uses an operator-configured Authorization header. Remove it before starting OAuth.",
@@ -627,16 +628,26 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 qualifiedToolName,
                 ex is HttpRequestException { StatusCode: { } statusCode } ? $" (HTTP {(int)statusCode})" : "");
 
-            // A typed 401 is the transport's own verdict on the credential, so it is true for
-            // every HTTP server, not only an OAuth-capable one: a static bearer that expires
-            // mid-session fails here on every call. A 403 is excluded on purpose. On a tool
-            // call it means "this credential cannot do that", not "this credential is dead".
-            // A stdio server carries no HTTP status, so it is skipped.
-            if (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized }
-                && _serverEntries.TryGetValue(serverName.Value, out var authEntry)
+            // Two signals report a rejected credential. A typed 401 is the transport's own
+            // verdict: it reaches us only when the SDK's OAuth handler did not repair the
+            // call. An OAuth challenge is the SDK's verdict, and it names OAuth outright.
+            // The remedy follows the token state, not a header name. A 403 is excluded on
+            // purpose: it denies one action, not the credential. A stdio server has no HTTP
+            // status and no credential Netclaw manages.
+            if (_serverEntries.TryGetValue(serverName.Value, out var authEntry)
                 && authEntry.Transport is not "stdio")
             {
-                MarkToolAuthFailure(serverName, authEntry, GetHttpStatusText(ex));
+                if (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized })
+                {
+                    MarkToolAuthFailure(
+                        serverName,
+                        GetHttpStatusText(ex),
+                        oauthManaged: HasStoredOAuthTokens(serverName, authEntry));
+                }
+                else if (ex is McpException && IsOAuthChallenge(ex))
+                {
+                    MarkToolAuthFailure(serverName, httpStatusText: null, oauthManaged: true);
+                }
             }
 
             if (!IsTransportOrSessionFailure(ex))
@@ -871,14 +882,13 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             candidateFailure = ex;
             var now = _timeProvider.GetUtcNow();
-            var hasOAuthRuntimeHints = entry.IsOAuthCapable;
-            var credentialStateRequiresAuthorization = hasOAuthRuntimeHints
-                                                       && entry.Url is not null
+            // A stored record that still needs authorization is a token Netclaw cannot
+            // refresh, so the operator must reauthorize.
+            var credentialStateRequiresAuthorization = entry.Url is not null
                                                        && _credentialStore.HasAnyActive(current.Name)
                                                        && _credentialStore.RequiresAuthorization(current.Name, entry.Url);
-            var hasCachedTokens = entry.Url is not null
-                                  && !credentialStateRequiresAuthorization
-                                  && !_credentialStore.RequiresAuthorization(current.Name, entry.Url);
+            var hasCachedTokens = HasStoredOAuthTokens(current.Name, entry);
+            var oauthChallenge = IsOAuthChallenge(ex);
             var failureStatus = credentialStateRequiresAuthorization
                 ? CreateAwaitingAuthStatus(current.Name, now)
                 : BuildConnectionFailureStatus(
@@ -886,7 +896,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                     entry,
                     ex,
                     hasCachedTokens,
-                    hasOAuthRuntimeHints,
+                    oauthChallenge,
                     now);
             lifecycle.Publish(WithFailureStatus(current, failureStatus));
             if (IsAuthFailure(ex))
@@ -900,7 +910,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             }
             else
             {
-                ReportConnectionFailure(current.Name, failureStatus, ex, hasCachedTokens, hasOAuthRuntimeHints);
+                ReportConnectionFailure(current.Name, failureStatus, ex, hasCachedTokens, oauthChallenge);
             }
 
             if (authorizationFlow is not null)
@@ -1111,11 +1121,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// The detail reaches the model but no exception reaches the transport layer, so
     /// without this the daemon log keeps only the result length and an operator has
     /// nothing to debug from.
-    /// Two signals move a server to <see cref="McpConnectionState.AuthFailed"/> on the
-    /// tool-call path. A typed HTTP 401 covers any HTTP server; the invocation path owns
-    /// it. This result-text signal covers a server that can use OAuth only. An HTTP 403
-    /// moves no server, because it denies one action and not the credential.
-    /// The auth test reads free result text, and a tool that proxies a REST API answers
+    /// Three signals move a server to <see cref="McpConnectionState.AuthFailed"/> on the
+    /// tool-call path: a typed HTTP 401, an OAuth challenge, and this result text. An HTTP
+    /// 403 moves no server, because it denies one action and not the credential.
+    /// This signal demotes a server only while the daemon holds OAuth tokens for it. The
+    /// auth test reads free result text, and a tool that proxies a REST API answers
     /// "Forbidden" for an ordinary business error. A false demotion costs three things: it
     /// fires an auth alert; it makes <c>netclaw mcp list</c> and <c>netclaw doctor</c>
     /// report "auth failed" until the next invocation; and that invocation then tears the
@@ -1133,12 +1143,14 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (!IsAuthFailureMessage(detail))
             return;
 
+        // Free text is weak evidence. Netclaw acts on it only for a server whose tokens it
+        // holds, where the words match a credential it can name a remedy for.
         if (!_serverEntries.TryGetValue(serverName.Value, out var entry)
-            || !entry.IsOAuthCapable)
+            || !HasStoredOAuthTokens(serverName, entry))
             return;
 
         // Result text carries no HTTP status, so the status message names none.
-        MarkToolAuthFailure(serverName, entry, httpStatusText: null);
+        MarkToolAuthFailure(serverName, httpStatusText: null, oauthManaged: true);
     }
 
     /// <summary>
@@ -1146,15 +1158,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// credential is rejected at call time. The transport stays healthy in this case, so
     /// status would otherwise report a working server while every invocation fails, and
     /// the one state that needs operator action would be the one state never shown.
-    /// The status and the alert come from the connect path's factory, so the remedy
-    /// matches the server's auth scheme: <c>netclaw mcp auth</c> for an OAuth-capable
-    /// server, and a credential check for a static header. The catalog refresh path uses
-    /// this method for a server that cannot run <c>netclaw mcp auth</c>.
+    /// The status and the alert come from the connect path's factory. The caller decides
+    /// <paramref name="oauthManaged"/> from the token state and the failure, so the
+    /// remedy is <c>netclaw mcp auth</c> only when OAuth is in use. The catalog refresh
+    /// path calls this method too.
     /// </summary>
     private void MarkToolAuthFailure(
         McpServerName serverName,
-        McpServerEntry entry,
-        string? httpStatusText)
+        string? httpStatusText,
+        bool oauthManaged)
     {
         if (!_servers.TryGetValue(serverName, out var lifecycle))
             return;
@@ -1163,7 +1175,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (current is null || current.Status.State is McpConnectionState.AuthFailed)
             return;
 
-        var oauthManaged = entry.IsOAuthCapable;
         // Keep the catalog count. It tells the operator which server needs the remedy.
         var status = CreateAuthFailedStatus(
                 serverName,
@@ -1230,7 +1241,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         CancellationToken ct)
     {
         McpOAuthTokenCache? oauthCache = null;
-        if (entry.IsOAuthCapable)
+        if (HasOAuthRuntimeHints(entry))
         {
             oauthCache = _credentialStore.CreateTokenCache(
                 name,
@@ -1376,7 +1387,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (!headers.ContainsKey(NetclawUserAgent.ComponentHeader))
             headers[NetclawUserAgent.ComponentHeader] = "mcp";
 
-        var oauth = entry.HasConfiguredAuthorizationHeader
+        var oauth = HasConfiguredAuthorizationHeader(entry)
             ? null
             : BuildOAuthOptions(entry, oauthCache!, authorizationFlow);
         return _clientRuntime.CreateHttpTransport(new HttpClientTransportOptions
@@ -1434,12 +1445,31 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private Uri BuildRedirectUri()
         => new($"http://127.0.0.1:{_daemonConfig.Port}/api/mcp/oauth/callback");
 
+    /// <summary>
+    /// Decides whether the SDK's OAuth handler runs on this transport. It does not decide
+    /// whether the operator uses OAuth: SDK OAuth and a configured Authorization header
+    /// would write the same header, so only one of them can own it.
+    /// </summary>
+    private static bool HasOAuthRuntimeHints(McpServerEntry entry)
+        => entry.Transport is not "stdio" && !HasConfiguredAuthorizationHeader(entry);
+
+    private static bool HasConfiguredAuthorizationHeader(McpServerEntry entry)
+        => entry.Headers?.Keys.Any(key =>
+            string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase)) == true;
+
+    /// <summary>
+    /// True when the daemon holds usable OAuth tokens for this server. A rejected
+    /// credential is then a rejected token, so <c>netclaw mcp auth</c> is the remedy.
+    /// </summary>
+    private bool HasStoredOAuthTokens(McpServerName serverName, McpServerEntry entry)
+        => entry.Url is not null && !_credentialStore.RequiresAuthorization(serverName, entry.Url);
+
     internal static McpServerStatus BuildConnectionFailureStatus(
         McpServerName serverName,
         McpServerEntry entry,
         Exception ex,
         bool hasCachedTokens,
-        bool hasOAuthRuntimeHints,
+        bool oauthChallenge,
         DateTimeOffset errorAt)
     {
         // A stdio server is a local child process: no HTTP request is ever made for it, so
@@ -1451,25 +1481,20 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
         if (IsAuthFailure(ex))
         {
-            if (!hasCachedTokens && !isStdioTransport && hasOAuthRuntimeHints)
-            {
-                // "Awaiting auth" -- which sends the operator to `netclaw mcp auth` -- is only
-                // correct for a genuine OAuth challenge: a Bearer WWW-Authenticate response (or
-                // discoverable protected-resource metadata) that drove the SDK's OAuth handler
-                // to throw. A server that simply denies the connection with a bare 401/403 and
-                // no OAuth challenge reaches us as a plain transport HttpRequestException;
-                // reporting that as pending authorization hides the real access-control / host /
-                // URL error behind a dead-end auth prompt, so surface it as a transport failure
-                // carrying the HTTP status instead.
-                return IsOAuthChallenge(ex)
-                    ? CreateAwaitingAuthStatus(serverName, errorAt)
-                    : CreateUnreachableStatus(serverName, ex, errorAt, isStdioTransport);
-            }
+            // "Awaiting auth" -- which sends the operator to `netclaw mcp auth` -- fits one
+            // case: a genuine OAuth challenge on a server that holds no tokens yet. The SDK
+            // raises that challenge from a Bearer WWW-Authenticate response or discoverable
+            // protected-resource metadata.
+            if (!hasCachedTokens && !isStdioTransport && oauthChallenge)
+                return CreateAwaitingAuthStatus(serverName, errorAt);
 
+            // Every other rejected credential is AuthFailed. The remedy follows the OAuth
+            // evidence: a stored token or a challenge names `netclaw mcp auth`, and a bare
+            // 401 or 403 sends the operator to the credential they configured.
             return CreateAuthFailedStatus(
                 serverName,
                 ex,
-                oauthManaged: hasCachedTokens || hasOAuthRuntimeHints,
+                oauthManaged: hasCachedTokens || oauthChallenge,
                 errorAt);
         }
 
@@ -1552,7 +1577,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpServerStatus failureStatus,
         Exception ex,
         bool hasCachedTokens,
-        bool hasOAuthRuntimeHints)
+        bool oauthChallenge)
     {
         if (failureStatus.State is McpConnectionState.AwaitingAuth)
         {
@@ -1566,7 +1591,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (failureStatus.State is McpConnectionState.AuthFailed)
         {
             _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex), "MCP server '{Name}' authentication failed", name.Value);
-            if (hasOAuthRuntimeHints || hasCachedTokens)
+            if (hasCachedTokens || oauthChallenge)
             {
                 EmitAuthAlert(name,
                     $"MCP server '{name.Value}' authentication failed. Run: netclaw mcp auth {name.Value}",

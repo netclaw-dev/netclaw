@@ -3,8 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json.Serialization;
-
 namespace Netclaw.Configuration;
 
 /// <summary>
@@ -58,27 +56,4 @@ public sealed class McpServerEntry
 
     /// <summary>Space-separated OAuth scopes to request (optional override).</summary>
     public string? OAuthScope { get; set; }
-
-    /// <summary>
-    /// True when the operator configured an <c>Authorization</c> header for this server.
-    /// The key comparison ignores case, because a hand-edited config can spell it any way.
-    /// <c>JsonIgnore</c> keeps this computed value out of <c>netclaw.json</c>: the config
-    /// schema sets <c>additionalProperties: false</c> and would reject the written file.
-    /// </summary>
-    [JsonIgnore]
-    public bool HasConfiguredAuthorizationHeader
-        => Headers?.Keys.Any(key =>
-            string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase)) == true;
-
-    /// <summary>
-    /// True for an OAuth-capable server, as the engineering glossary defines it: an HTTP
-    /// or SSE server with no operator-configured <c>Authorization</c> header. Only such a
-    /// server can hold OAuth tokens, and only such a server can run
-    /// <c>netclaw mcp auth</c>. The daemon and the CLI read this one rule, so the remedy
-    /// the daemon publishes and the remedy <c>netclaw doctor</c> prints cannot drift.
-    /// <c>JsonIgnore</c> applies for the same reason as
-    /// <see cref="HasConfiguredAuthorizationHeader"/>.
-    /// </summary>
-    [JsonIgnore]
-    public bool IsOAuthCapable => Transport is not "stdio" && !HasConfiguredAuthorizationHeader;
 }

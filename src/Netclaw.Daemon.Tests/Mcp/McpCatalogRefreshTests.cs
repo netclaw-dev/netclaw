@@ -282,7 +282,7 @@ public sealed class McpCatalogRefreshTests
     }
 
     [Fact]
-    public async Task AuthorizationFailureDuringRefreshOnAStaticHeaderServer_MarksAuthFailed()
+    public async Task AuthorizationFailureDuringRefreshWithoutStoredTokens_MarksAuthFailed()
     {
         var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();
         var plan = runtime.Enqueue(new McpClientManagerLifecycleTests.ClientPlan("tool_a"));
@@ -291,15 +291,15 @@ public sealed class McpCatalogRefreshTests
             runtime,
             time,
             NullNotificationSink.Instance,
-            McpClientManagerLifecycleTests.StaticHeaderEntry());
+            McpClientManagerLifecycleTests.HttpEntry());
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
 
         time.Advance(McpClientManager.CatalogRefreshInterval);
         plan.ListFailure = new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized);
         Assert.False(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
 
-        // `netclaw mcp auth` refuses a server with a configured Authorization header, so
-        // AwaitingAuth would name a remedy the operator cannot run.
+        // Netclaw holds no tokens for this server, so AwaitingAuth would name a remedy the
+        // operator cannot run.
         var status = harness.Manager.GetServerStatuses()[ServerName];
         Assert.Equal(McpConnectionState.AuthFailed, status.State);
         Assert.Contains("credentials or headers", status.ErrorMessage ?? string.Empty, StringComparison.Ordinal);

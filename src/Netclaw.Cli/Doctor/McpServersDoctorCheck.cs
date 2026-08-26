@@ -252,8 +252,7 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
         JsonElement daemonStatuses)
     {
         var statusMessages = new List<string>();
-        var hasOAuthAuthFailure = false;
-        var hasStaticCredentialAuthFailure = false;
+        var hasAuthFailure = false;
         var hasConnectivityFailure = false;
         var hasAwaitingAuth = false;
         var enabledCount = 0;
@@ -291,14 +290,7 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
                     break;
                 case "AuthFailed":
                     failedCount++;
-                    // The entry owns this rule, so doctor names the remedy the daemon
-                    // published. IsOAuthHttpServer answers a different question: whether
-                    // the operator configured OAuth explicitly. The offline probe keeps it.
-                    if (entry.IsOAuthCapable)
-                        hasOAuthAuthFailure = true;
-                    else
-                        hasStaticCredentialAuthFailure = true;
-
+                    hasAuthFailure = true;
                     statusMessages.Add($"{name}: auth failed ({error ?? "authentication rejected"})");
                     break;
                 case "Unreachable":
@@ -319,11 +311,11 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
 
         var summary = string.Join("; ", statusMessages);
 
-        if (hasOAuthAuthFailure || hasStaticCredentialAuthFailure)
-        {
+        // The daemon already chose the remedy per server and put it in the status line.
+        // A remedy named here would guess the auth scheme a second time.
+        if (hasAuthFailure)
             return DoctorCheckResult.Error("mcp-servers", summary,
-                BuildAuthFailureRemediation(hasOAuthAuthFailure, hasStaticCredentialAuthFailure));
-        }
+                "Follow the remedy in each server's status line.");
 
         if (hasConnectivityFailure)
         {
@@ -343,18 +335,6 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
 
         return DoctorCheckResult.Pass("mcp-servers", summary);
     }
-
-    /// <summary>
-    /// Names the remedy that fits the affected servers. An operator who owns the
-    /// credential cannot repair it with <c>netclaw mcp auth</c>, and that command refuses
-    /// a server with a configured Authorization header.
-    /// </summary>
-    private static string BuildAuthFailureRemediation(bool oauthAffected, bool staticCredentialAffected)
-        => oauthAffected && staticCredentialAffected
-            ? "Re-authorize the OAuth MCP servers with `netclaw mcp auth <name>`, and check the configured credentials or headers for the other affected servers."
-            : oauthAffected
-                ? "Re-authorize affected MCP servers with `netclaw mcp auth <name>`."
-                : "Check the configured credentials or headers for the affected MCP servers.";
 
     private static bool IsOAuthHttpServer(McpServerEntry entry)
         => entry.Transport is "http" or "sse"

@@ -200,11 +200,14 @@ public sealed class McpServersDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("auth failed", result.Message);
-        Assert.Contains("netclaw mcp auth", result.Remediation);
+        // The daemon already chose the remedy for this server. Doctor repeats that status
+        // line and points at it, instead of naming a second remedy of its own.
+        Assert.Contains("netclaw mcp auth", result.Message);
+        Assert.Contains("status line", result.Remediation);
     }
 
     [Fact]
-    public async Task DaemonReportedAuthFailureOnAStaticHeaderServer_NamesTheConfiguredCredential()
+    public async Task DaemonReportedAuthFailureWithoutOAuth_RepeatsTheCredentialRemedy()
     {
         WriteConfig(new
         {
@@ -216,7 +219,6 @@ public sealed class McpServersDoctorCheckTests : IDisposable
                     Transport = "http",
                     Url = "https://mcp.example.com",
                     Enabled = true,
-                    Headers = new { Authorization = "Bearer operator-key" },
                 }
             }
         });
@@ -233,12 +235,13 @@ public sealed class McpServersDoctorCheckTests : IDisposable
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        // The operator owns this header. `netclaw mcp auth` refuses such a server, so the
-        // remediation must name the credential instead.
+        // The daemon runs no OAuth flow for this server, so its status names the operator's
+        // own credential. Doctor must not add `netclaw mcp auth` on top of that.
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("auth failed", result.Message);
+        Assert.Contains("credentials or headers", result.Message);
         Assert.DoesNotContain("netclaw mcp auth", result.Remediation);
-        Assert.Contains("credentials or headers", result.Remediation);
+        Assert.DoesNotContain("netclaw mcp auth", result.Message);
     }
 
     [Fact]
