@@ -15,7 +15,7 @@
 
 ## 4. Auth guard for servers that cannot use OAuth (#2057)
 
-- [x] 4.1 Make `ReportToolFailure` call `MarkToolAuthFailure` only when `HasOAuthRuntimeHints(serverName, entry)` is true; add a lifecycle harness overload that accepts an `McpServerEntry`; convert `ToolLevelAuthFailure_MovesServerOutOfConnected` to an HTTP entry without an `Authorization` header; verify new lifecycle tests that a static-header HTTP server and a stdio server each stay `Connected` after an `isError` result with auth words, with the Warning present in `harness.Logger.Entries`.
+- [x] 4.1 Make `ReportToolFailure` demote only when the daemon holds OAuth tokens for the server; add a lifecycle harness overload that accepts an `McpServerEntry`; convert `ToolLevelAuthFailure_MovesServerOutOfConnected` to an HTTP entry with stored tokens; verify lifecycle tests that a server without stored tokens (static header, no headers, or stdio) stays `Connected` after an `isError` result with auth words, with the Warning present in `harness.Logger.Entries`.
 
 ## 5. Validation and documentation
 
@@ -25,4 +25,4 @@
 - [x] 5.4 Edit issue #2055 so its Expected section matches design D2 (the `Tool executed:` line stays); verify the issue body no longer requires that line to be absent.
 - [x] 5.5 Edit issue #2056 to remove the `Retry-After` expectation and to add the prompt-load path; verify the body matches design D3.
 - [x] 5.6 Edit issue #2057 to state the `HasOAuthRuntimeHints` gate, the retained heuristic for OAuth-capable servers, and the absence of 401/403 remedy text; verify the body matches design D4.
-- [x] 5.7 Mark any HTTP server `AuthFailed` on an HTTP 401 tool-call response through `CreateAuthFailedStatus`, and make `CreateUnavailableException` read the published status message; verify lifecycle tests for a static-header 401 (`AuthFailed`, header remedy, reconnect on the next call), an OAuth-capable 401 (`netclaw mcp auth` remedy), and a static-header 403 (stays `Connected`).
+- [x] 5.7 Mark any HTTP server `AuthFailed` on an HTTP 401 tool-call response through `CreateAuthFailedStatus`, and make `CreateUnavailableException` read the published status message; verify lifecycle tests for a 401 without stored OAuth tokens (`AuthFailed`, credentials remedy, reconnect on the next call), a 401 with stored tokens or an OAuth challenge (`netclaw mcp auth` remedy), and a 403 (stays `Connected`).

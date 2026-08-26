@@ -349,23 +349,26 @@ daemon log:  [WRN] McpClientManager: MCP tool 'shortio/search-links' reported a 
 
 **Code anchors:** `McpClientManager.ReportToolFailure`, `McpToolResultFormatter`
 
-### OAuth-capable server
+### OAuth-managed server
 
-An OAuth-capable server is an HTTP or SSE MCP server with no operator-configured
-`Authorization` header. Only such a server can hold OAuth tokens, so only such a
-server can enter `AuthFailed` because of a tool-declared auth error. Any HTTP
-server can enter `AuthFailed` from an HTTP 401 on a tool call. A stdio server
-or a static-header server cannot use `netclaw mcp auth`.
+An OAuth-managed server is one for which Netclaw uses OAuth. The daemon knows
+this from two facts, not from header names: it holds OAuth tokens for the
+server, or the server answered with a genuine OAuth challenge that the SDK
+turned into a Bearer-scheme `McpException`. Only an OAuth-managed server gets
+the `netclaw mcp auth` remedy. A 401 from any other server means the operator
+must check the configured credentials or headers, whatever those headers are
+named.
 
 Example:
 
 ```text
-stdio, no headers                        -> not OAuth-capable
-http, Headers.Authorization configured   -> not OAuth-capable (static header)
-http, no Authorization header            -> OAuth-capable
+http, stored OAuth tokens, tool call -> 401           -> OAuth-managed; "Run: netclaw mcp auth"
+http, no tokens, SDK reports a Bearer challenge        -> OAuth-managed; "Run: netclaw mcp auth"
+http, X-Api-Key header, no tokens, tool call -> 401    -> not OAuth-managed; "Check configured credentials or headers."
+http, no headers, no tokens, isError "token expired"   -> not OAuth-managed; stays Connected
 ```
 
-**Code anchor:** `McpServerEntry.IsOAuthCapable`
+**Code anchors:** `McpClientManager.HasStoredOAuthTokens`, `McpClientManager.IsOAuthChallenge`
 
 ## Filesystem and Output Terms
 

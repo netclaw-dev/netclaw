@@ -1,4 +1,4 @@
-Use the [Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md) for tool call, tool result, tool receipt, transport or session failure, application error, tool-declared error, and OAuth-capable server.
+Use the [Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md) for tool call, tool result, tool receipt, transport or session failure, application error, tool-declared error, and OAuth-managed server.
 
 ## MODIFIED Requirements
 
@@ -96,13 +96,16 @@ state and tool count without fabricating a new failure timestamp. The daemon
 log SHALL record each MCP tool invocation that ends in an exception at Warning
 level or higher. The line SHALL name the server, the tool, and the HTTP status
 when one is present, and SHALL redact secrets. Caller cancellation SHALL NOT
-produce that line. An HTTP 401 on a tool call SHALL move any HTTP server to
-`AuthFailed`. The remedy SHALL match the server's auth scheme: `netclaw mcp
-auth` for an OAuth-capable server, and a check of the configured credentials or
-headers for any other server. An HTTP 401 on a catalog refresh SHALL follow the
-same rule. An HTTP 403 on a tool call SHALL NOT change the server state. Only an OAuth-capable server, as the engineering glossary defines
-it, MAY enter `AuthFailed` because of tool-declared error text. Any other
-server SHALL stay `Connected` after such a result.
+produce that line. An HTTP 401 on a tool call, on a catalog refresh, or at
+`initialize` SHALL move the server to `AuthFailed`. The remedy SHALL follow the
+daemon's OAuth state, as the engineering glossary defines an OAuth-managed
+server, and SHALL NOT depend on the names of configured headers: `netclaw mcp
+auth` for an OAuth-managed server, and a check of the configured credentials
+or headers for any other server. A genuine OAuth challenge with no stored
+tokens SHALL report `AwaitingAuth`. An HTTP 403 on a tool call SHALL NOT change
+the server state. Only an OAuth-managed server MAY enter `AuthFailed` because
+of tool-declared error text. Any other server SHALL stay `Connected` after
+such a result.
 
 #### Scenario: Server becomes unavailable
 
@@ -151,9 +154,63 @@ server SHALL stay `Connected` after such a result.
 - **WHEN** the caller's cancellation token fires
 - **THEN** the daemon log holds no Warning line for that invocation
 
+#### Scenario: Expired static credential surfaces as AuthFailed with the credentials remedy
+
+- **GIVEN** an HTTP server that authenticates with an operator-configured header of any name, for example `X-Api-Key`, and for which the daemon holds no OAuth tokens
+- **WHEN** a tool call returns HTTP 401
+- **THEN** the tool result names the HTTP status with an `access_denied` outcome
+- **AND** the server status becomes `AuthFailed`
+- **AND** the status message tells the operator to check the configured credentials or headers
+- **AND** no message names `netclaw mcp auth`
+- **AND** the next tool call attempts a reconnect before it returns an error
+
+#### Scenario: Rejected OAuth token on a tool call names the auth command
+
+- **GIVEN** an HTTP server for which the daemon holds OAuth tokens
+- **WHEN** a tool call returns HTTP 401
+- **THEN** the server status becomes `AuthFailed`
+- **AND** remediation points to `netclaw mcp auth <name>`
+
+#### Scenario: OAuth challenge on a tool call names the auth command without stored tokens
+
+- **GIVEN** an HTTP server for which the daemon holds no OAuth tokens
+- **WHEN** a tool call fails with the SDK's Bearer-challenge error
+- **THEN** the server status becomes `AuthFailed`
+- **AND** remediation points to `netclaw mcp auth <name>`
+
+#### Scenario: Catalog refresh 401 without stored tokens names the credentials remedy
+
+- **GIVEN** an HTTP server for which the daemon holds no OAuth tokens
+- **WHEN** a catalog refresh returns HTTP 401 with no OAuth challenge
+- **THEN** the server status becomes `AuthFailed`
+- **AND** the status message tells the operator to check the configured credentials or headers
+- **AND** no message names `netclaw mcp auth`
+
+#### Scenario: Bare 401 at initialize without stored tokens reports AuthFailed
+
+- **GIVEN** an HTTP server for which the daemon holds no OAuth tokens
+- **WHEN** `initialize` returns HTTP 401 with no OAuth challenge
+- **THEN** the server status is `AuthFailed`, not `Unreachable`
+- **AND** the status message names the HTTP status and the credentials remedy
+- **AND** no message names `netclaw mcp auth`
+
+#### Scenario: HTTP 403 on a tool call keeps the server Connected
+
+- **GIVEN** an HTTP server authenticated by an operator-configured header
+- **WHEN** a tool call returns HTTP 403
+- **THEN** the tool result names the HTTP status with an `access_denied` outcome
+- **AND** the server status stays `Connected`
+
+#### Scenario: Server without stored tokens ignores auth words in a tool result
+
+- **GIVEN** an HTTP server with no operator-configured headers and no stored OAuth tokens
+- **WHEN** a tool returns a tool-declared error whose text reports an expired token
+- **THEN** the server status stays `Connected`
+- **AND** the daemon log records the tool failure at Warning
+
 #### Scenario: Static-header server ignores auth words in a tool result
 
-- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
+- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header and no stored OAuth tokens
 - **WHEN** a tool returns a tool-declared error whose text contains "Forbidden", for example `{"error":"Request failed: 403 Forbidden"}`
 - **THEN** the server status stays `Connected`
 - **AND** the daemon log records the tool failure at Warning
@@ -166,34 +223,9 @@ server SHALL stay `Connected` after such a result.
 - **THEN** the server status stays `Connected`
 - **AND** no remedy names `netclaw mcp auth`
 
-#### Scenario: OAuth-capable server still reclassifies an expired-token result
+#### Scenario: Server with stored OAuth tokens still reclassifies an expired-token result
 
-- **GIVEN** an HTTP server without an operator-configured `Authorization` header
+- **GIVEN** an HTTP server for which the daemon holds OAuth tokens
 - **WHEN** a tool returns a tool-declared error whose text reports an expired token
 - **THEN** the server status becomes `AuthFailed`
 - **AND** remediation points to `netclaw mcp auth <name>`
-
-#### Scenario: Expired static bearer surfaces as AuthFailed
-
-- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
-- **WHEN** a tool call returns HTTP 401
-- **THEN** the tool result names the HTTP status with an `access_denied` outcome
-- **AND** the server status becomes `AuthFailed`
-- **AND** the status message tells the operator to check the configured credentials or headers
-- **AND** no message names `netclaw mcp auth`
-- **AND** the next tool call attempts a reconnect before it returns an error
-
-#### Scenario: Catalog refresh 401 on a static-header server names the header remedy
-
-- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
-- **WHEN** a catalog refresh returns HTTP 401
-- **THEN** the server status becomes `AuthFailed`
-- **AND** the status message tells the operator to check the configured credentials or headers
-- **AND** no message names `netclaw mcp auth`
-
-#### Scenario: HTTP 403 on a tool call keeps the server Connected
-
-- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
-- **WHEN** a tool call returns HTTP 403
-- **THEN** the tool result names the HTTP status with an `access_denied` outcome
-- **AND** the server status stays `Connected`

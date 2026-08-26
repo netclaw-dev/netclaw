@@ -1,6 +1,6 @@
 ## Context
 
-Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for tool call, dispatcher, tool result, tool receipt, outcome category, authority, transport or session failure, application error, tool-declared error, and OAuth-capable server. This change adds the last four terms to the glossary. See proposal.md for motivation.
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for tool call, dispatcher, tool result, tool receipt, outcome category, authority, transport or session failure, application error, tool-declared error, and OAuth-managed server. This change adds the last four terms to the glossary. See proposal.md for motivation.
 
 The real examples below come from a link-shortener MCP server (`shortio`) observed on 2026-08-26. The server never returned HTTP 5xx. It returned tool-declared errors with the text `Internal Server Error`, HTTP 429 under a 30-requests-per-minute budget, and HTTP 401 for a bad key.
 
@@ -27,7 +27,7 @@ Constraints that shape the approach:
 - `ToolOutcomeResults` (#2033) already attaches a category to a result string. The workspace tools use it. Its one-argument helpers need no file activity and no remediation code.
 - `McpClientManager.IsTransportOrSessionFailure` is the single predicate that decides a reconnect. It has two consumers: the tool path (`InvokeSharedAsync`) and the prompt-skill path (`LoadAsync`).
 - `McpClientManager.ReportToolFailure` owns the tool-declared error path and its Warning log.
-- `McpClientManager.HasOAuthRuntimeHints(serverName, entry)` already decides whether a server is OAuth-capable.
+- The daemon already knows whether it uses OAuth for a server. `HasStoredOAuthTokens` asks the credential store, and `IsOAuthChallenge` recognizes the Bearer-scheme `McpException` the SDK raises after a genuine challenge. `HasOAuthRuntimeHints` reads the `Authorization` header only to decide whether the SDK OAuth handler may be installed without a collision. It must not classify a failure.
 - In the SDK (`ModelContextProtocol.Core` 2.2.0), `McpException` carries no error code. Only the derived `McpProtocolException.ErrorCode` does, and the SDK reserves `-32602` for a malformed request or an unknown primitive name. Tool input validation arrives as a tool-declared error, not as this exception.
 - The existing test `ToolLevelAuthFailure_MovesServerOutOfConnected` documents the expired-token case: the token failure reaches the agent as a tool-declared error, not as an HTTP 401. Its harness uses a stdio entry today.
 - Production always passes the manager as the adapter's invoker (`PrepareMcpTools`). The adapter's bound-tool path is unreachable in the daemon.
@@ -40,7 +40,7 @@ Constraints that shape the approach:
 - One receipt per failed call with a category the actor can trust.
 - One Warning line per failed call in the daemon log.
 - Reconnect only for a transport or session failure.
-- No false `AuthFailed` for a server that is not OAuth-capable.
+- No false `AuthFailed`, and no `netclaw mcp auth` remedy, for a server that does not use OAuth. Never decide that from header names.
 - The fewest moving parts. Reuse existing helpers. Add no new type, interface, or configuration.
 
 **Non-Goals:**
@@ -178,34 +178,48 @@ tools/call -> HTTP 404 (session expired)
 
 Alternative: a second predicate for application statuses. Rejected. One predicate is enough.
 
-### D4. Two auth signals on the tool-call path: a typed 401 for any HTTP server, result text for OAuth-capable servers only
+### D4. A 401 plus the daemon's OAuth state decides the auth remedy; header names never do
 
-The connect path already classifies a rejected credential per auth scheme: `BuildConnectionFailureStatus` moves the server to `AuthFailed` through `CreateAuthFailedStatus`, which names `netclaw mcp auth` for an OAuth-capable server and "Check configured credentials or headers." for any other server. The tool-call path reuses that factory and adds nothing new.
+The rule, in one sentence: a 401 comes back, and the daemon either uses OAuth for that server or it does not. "Uses OAuth" is a fact the daemon holds, not a guess from configuration: `HasStoredOAuthTokens(name, entry)` (the credential store holds tokens for the server) or `IsOAuthChallenge(ex)` (the SDK turned the 401 into a Bearer-scheme `McpException`). A plain `HttpRequestException` 401 reaching Netclaw means the SDK's OAuth handler did not act, so the credential the operator configured was rejected, whatever header carries it.
 
-Signal 1, typed. When a tool call ends in `HttpRequestException` with status 401, `InvokeSharedAsync` marks the server `AuthFailed` through `CreateAuthFailedStatus(serverName, ex, oauthManaged: HasOAuthRuntimeHints(serverName, entry), now)` and emits the same alert kind the connect path emits for that scheme. This covers a static bearer that expires mid-session: every HTTP MCP server rejects an expired bearer at the transport level, before the tool runs. A 403 does not mark the server. On a tool call a 403 means "this key cannot do that", not "this key is dead"; it stays an `access_denied` result. A stdio server has no HTTP status and is not covered.
+All paths reuse the connect path's `CreateAuthFailedStatus`, which names `netclaw mcp auth` when `oauthManaged` is true and "Check configured credentials or headers." otherwise.
 
-The catalog refresh path follows the same rule. A 401 on refresh marks an OAuth-capable server `AwaitingAuth`, as today. It marks any other HTTP server `AuthFailed` through the same factory, so the operator never sees `netclaw mcp auth` for a server that cannot run it. `netclaw doctor` picks its remediation text by the same scheme test.
+Signal 1, typed, tool call. `HttpRequestException` 401 → `MarkToolAuthFailure(name, statusText, oauthManaged: HasStoredOAuthTokens(name, entry))`. `McpException` with `IsOAuthChallenge` → `oauthManaged: true`. The alert kind follows `oauthManaged`. A 403 does not mark the server: on a tool call it means "this key cannot do that", not "this key is dead", and it stays an `access_denied` result. A stdio server has no HTTP status and is not covered.
 
-Signal 2, text. `ReportToolFailure` calls `MarkToolAuthFailure` only when `HasOAuthRuntimeHints(serverName, entry)` is true, so only an OAuth-capable server (glossary) can be demoted from tool-declared error text. A stdio server or a static-header server keeps `Connected`. The Warning line from `ReportToolFailure` still records the failure. The manager reads the entry from `_serverEntries`, as `ReconnectAfterTransportFailureAsync` does.
+Catalog refresh, same rule. `HasStoredOAuthTokens || IsOAuthChallenge` → `AwaitingAuth`, as today. Any other HTTP entry → `AuthFailed` with the credentials remedy.
 
-`CreateUnavailableException` reads the remedy from the published status message instead of a fixed `netclaw mcp auth` string, so a static-header server names its header on the next call.
+Connect path, same rule. `BuildConnectionFailureStatus` takes `oauthChallenge` (`IsOAuthChallenge(ex)`) instead of a header-derived flag. A genuine challenge with no tokens → `AwaitingAuth`. Any other auth failure → `AuthFailed` with `oauthManaged: hasCachedTokens || oauthChallenge`. A bare 401 or 403 at `initialize` with no tokens therefore reports `AuthFailed` and the credentials remedy, where #1908 reported `Unreachable` with the HTTP status. The status text still carries the HTTP status, and no OAuth prompt appears, which was #1908's concern.
 
-Positive example (static-header server, typed 401; an expired bearer):
+Signal 2, text. `ReportToolFailure` demotes only when `HasStoredOAuthTokens` is true, then with `oauthManaged: true`. A server without stored tokens keeps `Connected`; the Warning line still records the failure.
+
+`CreateUnavailableException` reads the remedy from the published status message. `netclaw doctor` prints "Follow the remedy in each server's status line." and owns no scheme logic.
+
+Header names survive in exactly two places, both collision checks: the SDK OAuth handler is not installed over an operator-configured `Authorization` header, and `netclaw mcp auth` is refused when one is configured. Neither classifies a failure.
+
+Positive example (server that authenticates with `X-Api-Key`, no stored tokens; the key expired):
 
 ```text
-http server, Authorization header configured
+http server, X-Api-Key header configured, no stored OAuth tokens
   tools/call -> HTTP 401
   result:  access_denied; "Error: MCP tool 'shortio/get-domains' failed: ... 401 (Unauthorized) ..."
   status:  AuthFailed; "Authentication rejected by server (401 Unauthorized). Check configured credentials or headers."
   next call: reconnect; a valid header restores Connected
 ```
 
-Positive example (OAuth-capable server, reclassified from text; the fixture in `ToolLevelAuthFailure_MovesServerOutOfConnected`):
+Positive example (server with stored OAuth tokens, reclassified from text; the fixture in `ToolLevelAuthFailure_MovesServerOutOfConnected`):
 
 ```text
-http server, no Authorization header
+http server, daemon holds OAuth tokens for it
   tool-declared error text: "Unauthorized: token expired"
   status: AuthFailed; remedy names "netclaw mcp auth <name>"
+```
+
+Negative example (no stored tokens, same text; the old header rule would have demoted it):
+
+```text
+http server, no headers, no stored OAuth tokens
+  tool-declared error text: "Unauthorized: token expired"
+  status: Connected; Warning logged
 ```
 
 Negative example (static-header server, not reclassified). The observed server relays its REST layer's failures as tool-declared errors with the shape `{"error":"Request failed: 404 Not Found"}` and `{"error":"Request failed: 400 Bad Request"}`. A REST 403 follows the same shape:
@@ -218,11 +232,11 @@ http server, Authorization header configured (the observed shortio profile)
   after:  status Connected; Warning logged; no remedy names "netclaw mcp auth"
 ```
 
-Alternative: delete the result-text heuristic. Rejected. The expired-token case is real and has a test. A false positive on an OAuth-capable server is a separate issue.
+Alternative: delete the result-text heuristic. Rejected. The expired-token case is real and has a test. A false positive on a server with stored tokens is a separate issue.
 
-Alternative: gate on `HasConfiguredAuthorizationHeader` only. Rejected. A stdio server has no header and would stay demotable, with the same wrong remedy.
+Alternative: classify by header names (an `Authorization` header present or absent). Rejected in review. A server can authenticate with any header name, so the presence of one specific name proves nothing about OAuth. The daemon's token state and the failure shape are the facts.
 
-Alternative: demote only OAuth-capable servers, on any signal. Rejected. A static bearer with an expiry would then fail every call while `netclaw mcp list` reported `Connected`.
+Alternative: demote only servers with stored tokens, on any signal. Rejected. A static credential with an expiry would then fail every call while `netclaw mcp list` reported `Connected`.
 
 Alternative: also mark the server on a typed 403. Rejected. A 403 on one tool is usually per-resource authorization, not a dead credential.
 
@@ -246,6 +260,7 @@ http server, Authorization header configured
 | Prompt load failure result | `McpClientManager.LoadAsync` | call-local |
 | Server status change from result text | `McpClientManager.ReportToolFailure` | actor-local snapshot |
 | Server status change from HTTP 401 | `McpClientManager.InvokeSharedAsync` via `CreateAuthFailedStatus` | actor-local snapshot |
+| "Uses OAuth" decision | `McpClientManager.HasStoredOAuthTokens`, `IsOAuthChallenge` | reads the durable token store; call-local result |
 
 No durable record, event, snapshot, protobuf, configuration, or public API changes.
 
@@ -267,7 +282,7 @@ application error, HTTP status (5xx, 429, 403, other 4xx)
   -> adapter: category per D1 -> result string
 
 application error, HTTP 401 (rejected credential)
-  -> Warning log -> server AuthFailed with the scheme's remedy -> rethrow, no reconnect
+  -> Warning log -> server AuthFailed; remedy from the OAuth token state -> rethrow, no reconnect
   -> adapter: access_denied -> result string
   -> next call reconnects; the connect path classifies the same 401 the same way
 
@@ -290,14 +305,15 @@ HttpClient timeout (TaskCanceledException, caller token not cancelled)
 
 ## Risks / Trade-offs
 
-- [OAuth-capable servers keep substring auth detection on result text] → Documented in D4. A false positive on such a server gets its own issue.
+- [Servers with stored OAuth tokens keep substring auth detection on result text] → Documented in D4. A false positive on such a server gets its own issue.
+- [A bare 401 or 403 at `initialize` now reports `AuthFailed`, not `Unreachable`] → The message still names the HTTP status, and the remedy names credentials or headers, never `netclaw mcp auth`. #1908's dead-end prompt cannot return.
 - [Tests that assert the manager returns an error string for `McpException`] → `McpClientManagerLifecycleTests` (the `application MCP failure` assertion) changes to expect the exception. The adapter test asserts the string.
-- [The existing expired-token test uses a stdio entry] → It changes to an HTTP entry without an `Authorization` header, so it keeps its meaning under D4.
+- [The existing expired-token test uses a stdio entry] → It changes to an HTTP entry with stored OAuth tokens, so it keeps its meaning under D4.
 - [One Warning per failed call on a flapping server] → Same volume as the tool-declared error path today. Acceptable.
-- [401 or 403 on an OAuth-capable server maps to `access_denied`] → The SDK refreshes inside the call. A surfaced 401 means refresh failed. `access_denied` is accurate.
+- [401 or 403 on a server with stored tokens maps to `access_denied`] → The SDK refreshes inside the call. A surfaced 401 means refresh failed. `access_denied` is accurate.
 - [An HTTP 401 on one tool marks the whole server `AuthFailed`] → The next call reconnects. A valid header restores `Connected` on that call. An expired header fails `initialize` with the same 401 and keeps the same status. While the header stays dead, each call costs one reconnect attempt (about five requests) and one alert; the webhook service dedupes one alert type for 300 s. Before this change such a server stayed `Connected` with one request per call and no alert. Accepted for MVP. A minimum reconnect interval for `AuthFailed` is a follow-up if the cost shows up.
 - [A non-compliant server reports a dead session with HTTP 400, not 404] → The observed server answers a stale or deleted session with `HTTP 400 {"jsonrpc":"2.0","error":{"code":-32000,"message":"Bad Request: No valid session ID provided"},"id":null}`. The SDK turns a 400 with a JSON-RPC body into `McpProtocolException`, and the predicate's message check does not read that text as a session failure. Such a server keeps a dead session until the daemon restarts. This is pre-existing: before this change the same answer was a string result with no reconnect. Out of scope here; a follow-up can add a session-scoped check for that message shape.
-- [Sub-issue text narrows] → #2056 drops `Retry-After`; #2057 keeps the heuristic for OAuth-capable servers and adds no 401/403 remedy text. The issues were edited to match, and the pull requests say so.
+- [Sub-issue text changed] → #2056 drops `Retry-After`; #2057 keeps the text heuristic only for servers with stored OAuth tokens and adds the typed 401 signal on every path. The issues were edited to match, and the pull requests say so.
 
 ## Migration Plan
 
