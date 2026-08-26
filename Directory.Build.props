@@ -9,10 +9,7 @@
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
     <VersionPrefix>0.26.0</VersionPrefix>
-    <VersionSuffix>beta.5</VersionSuffix>
-    <PackageReleaseNotes>
-      Features: MCP tools inherit the server approval default; fewer shell approval prompts in fresh sessions; one approval for causal Bash diagnostic chains; agents use file tools and stable project scope. Bug fixes: MCP tool output no longer corrupted by redaction; shell_execute no longer hangs on background children; Mattermost initial connection race fixed; MCP OAuth cold-start refresh works again; MCP secrets redacted from OAuth failure logs; MCP non-OAuth 401/403 no longer reported as awaiting auth; self-update no longer crashes on Windows after success. Internal: typed shell approval policy with ShellSyntaxTree 0.3.3; tool rationale required across tool loops; CI test stability fixes. Dependency updates: ModelContextProtocol.Core 2.2.0, Termina 0.16.2, Microsoft.NET.Test.Sdk 18.9.0, Testcontainers 4.14.0.
-    </PackageReleaseNotes>
+    <PackageReleaseNotes>Netclaw v0.26.0 — Less approval fatigue, more token efficiency, MCP reliability + OAuth improvements, and MCP server prompts invocable as skills. Agents reach for the right tool (tool calls cut more than half on attachment tasks), structured tools are selected in 25/25 eval trials, native tool names can no longer leak into the shell, OAuth refresh survives cold restarts, and server prompts plug into Netclaw's skill system. Now proven by an executable behavioral eval harness, not vibes.
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
