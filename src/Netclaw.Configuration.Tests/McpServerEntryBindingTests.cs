@@ -114,4 +114,42 @@ public sealed class McpServerEntryBindingTests : IDisposable
 
         Assert.Equal("Bearer plaintext-token", bound["test"].Headers!["Authorization"].Value);
     }
+
+    [Fact]
+    public void IsOAuthCapable_identifies_the_one_server_kind_that_can_run_netclaw_mcp_auth()
+    {
+        // The daemon publishes the auth remedy from this rule and `netclaw doctor` prints
+        // it from the same rule. Two copies would drift and name a command the operator
+        // cannot run. The header key comparison ignores case: a hand-edited config or a
+        // provider example can spell it any way.
+        var stdio = new McpServerEntry { Transport = "stdio", Command = "local-server" };
+        var staticHeader = new McpServerEntry
+        {
+            Transport = "http",
+            Url = "https://example.com/mcp",
+            Headers = new Dictionary<string, SensitiveString>(StringComparer.Ordinal)
+            {
+                ["authorization"] = new("Bearer operator-key"),
+            },
+        };
+        var oauthCapable = new McpServerEntry { Transport = "http", Url = "https://example.com/mcp" };
+
+        Assert.False(stdio.IsOAuthCapable);
+        Assert.False(staticHeader.IsOAuthCapable);
+        Assert.True(staticHeader.HasConfiguredAuthorizationHeader);
+        Assert.True(oauthCapable.IsOAuthCapable);
+    }
+
+    [Fact]
+    public void Computed_auth_scheme_properties_stay_out_of_the_written_config()
+    {
+        // `netclaw mcp add` writes the serialized entry into netclaw.json, and the config
+        // schema sets additionalProperties: false. A computed property without JsonIgnore
+        // would make every new server fail schema validation.
+        var json = System.Text.Json.JsonSerializer.Serialize(
+            new McpServerEntry { Transport = "http", Url = "https://example.com/mcp" });
+
+        Assert.DoesNotContain("IsOAuthCapable", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("HasConfiguredAuthorizationHeader", json, StringComparison.Ordinal);
+    }
 }

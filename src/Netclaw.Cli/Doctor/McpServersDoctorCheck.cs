@@ -291,7 +291,10 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
                     break;
                 case "AuthFailed":
                     failedCount++;
-                    if (CanRunMcpAuthCommand(entry))
+                    // The entry owns this rule, so doctor names the remedy the daemon
+                    // published. IsOAuthHttpServer answers a different question: whether
+                    // the operator configured OAuth explicitly. The offline probe keeps it.
+                    if (entry.IsOAuthCapable)
                         hasOAuthAuthFailure = true;
                     else
                         hasStaticCredentialAuthFailure = true;
@@ -352,18 +355,6 @@ public sealed class McpServersDoctorCheck : IDoctorCheck
             : oauthAffected
                 ? "Re-authorize affected MCP servers with `netclaw mcp auth <name>`."
                 : "Check the configured credentials or headers for the affected MCP servers.";
-
-    /// <summary>
-    /// Mirrors the daemon's <c>HasOAuthRuntimeHints</c> rule, which decides the remedy the
-    /// daemon publishes in the server status. An HTTP server the operator has not given an
-    /// Authorization header can run <c>netclaw mcp auth</c>; any other server cannot.
-    /// <see cref="IsOAuthHttpServer"/> answers a different question: whether the operator
-    /// configured OAuth explicitly. The offline probe keeps that test.
-    /// </summary>
-    private static bool CanRunMcpAuthCommand(McpServerEntry entry)
-        => entry.Transport is "http" or "sse"
-           && entry.Headers?.Keys.Any(key =>
-               string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase)) != true;
 
     private static bool IsOAuthHttpServer(McpServerEntry entry)
         => entry.Transport is "http" or "sse"

@@ -370,7 +370,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 // publishes, so the remedy names the credential the operator owns. A stdio
                 // server keeps the existing path. It carries no HTTP status, and Netclaw
                 // does not manage its credential.
-                if (entry.Transport is not "stdio" && !HasOAuthRuntimeHints(current.Name, entry))
+                if (entry is { Transport: not "stdio", IsOAuthCapable: false })
                     MarkToolAuthFailure(current.Name, entry, GetHttpStatusText(ex));
                 else
                     MarkAwaitingAuthorization(lifecycle, current, ex, entry.Url);
@@ -454,7 +454,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (entry.Transport is "stdio" || string.IsNullOrWhiteSpace(entry.Url))
             throw new InvalidOperationException(
                 $"MCP server '{serverName.Value}' has no URL (OAuth requires HTTP transport).");
-        if (HasConfiguredAuthorizationHeader(entry))
+        if (entry.HasConfiguredAuthorizationHeader)
         {
             throw new McpOAuthOperationException(new McpErrorResponse(
                 $"MCP server '{serverName.Value}' uses an operator-configured Authorization header. Remove it before starting OAuth.",
@@ -871,7 +871,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         {
             candidateFailure = ex;
             var now = _timeProvider.GetUtcNow();
-            var hasOAuthRuntimeHints = HasOAuthRuntimeHints(current.Name, entry);
+            var hasOAuthRuntimeHints = entry.IsOAuthCapable;
             var credentialStateRequiresAuthorization = hasOAuthRuntimeHints
                                                        && entry.Url is not null
                                                        && _credentialStore.HasAnyActive(current.Name)
@@ -1134,7 +1134,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             return;
 
         if (!_serverEntries.TryGetValue(serverName.Value, out var entry)
-            || !HasOAuthRuntimeHints(serverName, entry))
+            || !entry.IsOAuthCapable)
             return;
 
         // Result text carries no HTTP status, so the status message names none.
@@ -1163,7 +1163,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (current is null || current.Status.State is McpConnectionState.AuthFailed)
             return;
 
-        var oauthManaged = HasOAuthRuntimeHints(serverName, entry);
+        var oauthManaged = entry.IsOAuthCapable;
         // Keep the catalog count. It tells the operator which server needs the remedy.
         var status = CreateAuthFailedStatus(
                 serverName,
@@ -1230,7 +1230,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         CancellationToken ct)
     {
         McpOAuthTokenCache? oauthCache = null;
-        if (entry.Transport is not "stdio" && !HasConfiguredAuthorizationHeader(entry))
+        if (entry.IsOAuthCapable)
         {
             oauthCache = _credentialStore.CreateTokenCache(
                 name,
@@ -1376,7 +1376,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         if (!headers.ContainsKey(NetclawUserAgent.ComponentHeader))
             headers[NetclawUserAgent.ComponentHeader] = "mcp";
 
-        var oauth = HasConfiguredAuthorizationHeader(entry)
+        var oauth = entry.HasConfiguredAuthorizationHeader
             ? null
             : BuildOAuthOptions(entry, oauthCache!, authorizationFlow);
         return _clientRuntime.CreateHttpTransport(new HttpClientTransportOptions
@@ -1433,13 +1433,6 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     private Uri BuildRedirectUri()
         => new($"http://127.0.0.1:{_daemonConfig.Port}/api/mcp/oauth/callback");
-
-    private bool HasOAuthRuntimeHints(McpServerName serverName, McpServerEntry entry)
-        => entry.Transport is not "stdio" && !HasConfiguredAuthorizationHeader(entry);
-
-    private static bool HasConfiguredAuthorizationHeader(McpServerEntry entry)
-        => entry.Headers?.Keys.Any(key =>
-            string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase)) == true;
 
     internal static McpServerStatus BuildConnectionFailureStatus(
         McpServerName serverName,

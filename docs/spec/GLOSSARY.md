@@ -365,7 +365,7 @@ http, Headers.Authorization configured   -> not OAuth-capable (static header)
 http, no Authorization header            -> OAuth-capable
 ```
 
-**Code anchor:** `McpClientManager.HasOAuthRuntimeHints`
+**Code anchor:** `McpServerEntry.IsOAuthCapable`
 
 ## Filesystem and Output Terms
 
