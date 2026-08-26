@@ -353,8 +353,9 @@ daemon log:  [WRN] McpClientManager: MCP tool 'shortio/search-links' reported a 
 
 An OAuth-capable server is an HTTP or SSE MCP server with no operator-configured
 `Authorization` header. Only such a server can hold OAuth tokens, so only such a
-server can enter `AuthFailed` because of a tool-declared auth error. A stdio
-server or a static-header server cannot use `netclaw mcp auth`.
+server can enter `AuthFailed` because of a tool-declared auth error. Any HTTP
+server can enter `AuthFailed` from an HTTP 401 on a tool call. A stdio server
+or a static-header server cannot use `netclaw mcp auth`.
 
 Example:
 

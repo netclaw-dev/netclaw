@@ -9,7 +9,7 @@ PRD-006 (MCP-005, MCP-008) requires that runtime diagnostics show recent MCP inv
 - Give an MCP tool-call exception a non-success outcome category in its tool receipt. The tool result text keeps its current shape.
 - Log each MCP tool-call exception once at Warning. The line names the server, the tool, and the HTTP status when present.
 - Classify an HTTP response that carries an application-level status code as an application error. Netclaw returns it without a reconnect. Only a missing status or a 404 session expiry counts as a transport or session failure.
-- Keep tool-result-text auth detection for HTTP servers without an operator-configured `Authorization` header. A stdio server or a server with such a header never enters `AuthFailed` because of tool-result text.
+- Mark any HTTP server `AuthFailed` when a tool call returns HTTP 401, with the remedy that matches its auth scheme. Keep tool-result-text auth detection for OAuth-capable servers only. A stdio server or a static-header server never enters `AuthFailed` because of result text.
 - Apply the same application-error classification to MCP prompt loads, so an HTTP error returns a failed load result instead of an exception.
 - Remove the duplicate exception-to-string conversion in the client manager. The adapter owns that conversion.
 - Add four MCP invocation terms to the engineering glossary: transport or session failure, application error, tool-declared error, and OAuth-capable server. Both modified capabilities use them.

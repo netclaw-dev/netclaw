@@ -96,9 +96,13 @@ state and tool count without fabricating a new failure timestamp. The daemon
 log SHALL record each MCP tool invocation that ends in an exception at Warning
 level or higher. The line SHALL name the server, the tool, and the HTTP status
 when one is present, and SHALL redact secrets. Caller cancellation SHALL NOT
-produce that line. Only an OAuth-capable server, as the engineering glossary
-defines it, MAY enter `AuthFailed` because of a tool-declared auth error. Any
-other server SHALL stay `Connected` after such a result.
+produce that line. An HTTP 401 on a tool call SHALL move any HTTP server to
+`AuthFailed`. The remedy SHALL match the server's auth scheme: `netclaw mcp
+auth` for an OAuth-capable server, and a check of the configured credentials or
+headers for any other server. An HTTP 403 on a tool call SHALL NOT change the
+server state. Only an OAuth-capable server, as the engineering glossary defines
+it, MAY enter `AuthFailed` because of tool-declared error text. Any other
+server SHALL stay `Connected` after such a result.
 
 #### Scenario: Server becomes unavailable
 
@@ -168,3 +172,20 @@ other server SHALL stay `Connected` after such a result.
 - **WHEN** a tool returns a tool-declared error whose text reports an expired token
 - **THEN** the server status becomes `AuthFailed`
 - **AND** remediation points to `netclaw mcp auth <name>`
+
+#### Scenario: Expired static bearer surfaces as AuthFailed
+
+- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
+- **WHEN** a tool call returns HTTP 401
+- **THEN** the tool result names the HTTP status with an `access_denied` outcome
+- **AND** the server status becomes `AuthFailed`
+- **AND** the status message tells the operator to check the configured credentials or headers
+- **AND** no message names `netclaw mcp auth`
+- **AND** the next tool call attempts a reconnect before it returns an error
+
+#### Scenario: HTTP 403 on a tool call keeps the server Connected
+
+- **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
+- **WHEN** a tool call returns HTTP 403
+- **THEN** the tool result names the HTTP status with an `access_denied` outcome
+- **AND** the server status stays `Connected`
