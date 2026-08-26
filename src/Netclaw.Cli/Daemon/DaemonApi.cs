@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DaemonApi.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -141,6 +141,24 @@ public sealed class DaemonApi
         return await JsonSerializer.DeserializeAsync<SkillUsageStats.Response>(stream, JsonDefaults.Api, cts.Token);
     }
 
+    // ── Skills ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Fetches the daemon's live skill inventory — file skills plus dynamic MCP
+    /// prompt skills a disk scan cannot see. Throws <see cref="HttpRequestException"/>
+    /// (or a timeout) when the daemon is unreachable; callers report the daemon as
+    /// unavailable rather than degrading to a disk scan.
+    /// </summary>
+    public async Task<SkillInventory.Response?> GetSkillsAsync(CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        using var response = await client.GetAsync($"{_endpoint}/api/skills", cts.Token);
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<SkillInventory.Response>(stream, JsonDefaults.Api, cts.Token);
+    }
+
     // ── Reminders ─────────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> ListRemindersAsync(CancellationToken ct = default)
@@ -214,6 +232,43 @@ public sealed class DaemonApi
         return options is not null
             ? await client.PostAsJsonAsync($"{_endpoint}/api/reminders/import", request, options, cts.Token)
             : await client.PostAsJsonAsync($"{_endpoint}/api/reminders/import", request, cts.Token);
+    }
+
+    // ── Webhook routes ────────────────────────────────────────────────
+
+    /// <summary>
+    /// Lists the daemon's webhook routes. The CLI also uses this call as its
+    /// write availability probe: a transport failure means the daemon is down,
+    /// and a 404 means the daemon predates the resource. Every answer other than
+    /// success fails the mutation; there is no local write path.
+    /// </summary>
+    public async Task<HttpResponseMessage> ListWebhookRoutesAsync(CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        return await client.GetAsync($"{_endpoint}/api/webhooks", cts.Token);
+    }
+
+    /// <summary>
+    /// Creates or updates one webhook route. <paramref name="request"/> is a
+    /// field-level patch: an omitted (null) property leaves the stored value
+    /// unchanged, so two patches of different fields compose in the daemon.
+    /// </summary>
+    public async Task<HttpResponseMessage> UpsertWebhookRouteAsync(
+        string name,
+        object request,
+        CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        return await client.PutAsJsonAsync($"{_endpoint}/api/webhooks/{Uri.EscapeDataString(name)}", request, cts.Token);
+    }
+
+    public async Task<HttpResponseMessage> DeleteWebhookRouteAsync(string name, CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        return await client.DeleteAsync($"{_endpoint}/api/webhooks/{Uri.EscapeDataString(name)}", cts.Token);
     }
 
     // ── MCP OAuth ─────────────────────────────────────────────────────

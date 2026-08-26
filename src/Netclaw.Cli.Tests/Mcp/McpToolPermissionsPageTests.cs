@@ -5,14 +5,13 @@
 // -----------------------------------------------------------------------
 using System.Net.Http;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Tests.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Rendering;
 using Termina.Terminal;
@@ -356,6 +355,44 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     }
 
     [Fact]
+    public async Task ToolGrid_RightArrowOnScrolledToolRow_PreservesScrollPosition()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input, height: 18);
+
+        var tools = Enumerable.Range(1, 50)
+            .Select(i => $"tool-{i:00}")
+            .ToList();
+
+        vm.InitializeForTests(new McpServerName("notion"), tools);
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        if (!vm.IsServerAllowedForSelectedAudience())
+            vm.ToggleServerAccess();
+
+        // Cursor starts at row 0. Move to row 38:
+        // row 0 = Audience, row 1 = Server enabled, row 2 = Server default,
+        // row 3 = tool-01, so row 38 = tool-36.
+        for (var i = 0; i < 38; i++)
+            input.EnqueueKey(ConsoleKey.DownArrow);
+
+        input.EnqueueKey(ConsoleKey.RightArrow);
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        Assert.True(terminal.Contains("tool-36"),
+            $"Expected scrolled/focused row to remain visible after RightArrow. Screen:\n{terminal}");
+        Assert.False(terminal.Contains("tool-01"),
+            $"Expected scroll not to reset to the top after RightArrow. Screen:\n{terminal}");
+        AssertLineHasBackground(terminal, "tool-36", Color.Cyan);
+
+        var (mode, inherited) = vm.GetEffectiveMode(new ToolName("tool-36"));
+        Assert.Equal(ToolApprovalMode.Auto, mode);
+        Assert.False(inherited);
+    }
+
+    [Fact]
     public async Task Loading_Escape_QuitsInsteadOfStalling()
     {
         var (_, app, vm) = CreateHeadlessApp(out var input);
@@ -371,36 +408,18 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     // ── Helpers ──────────────────────────────────────────────────────────────
 
     private (VirtualTerminal Terminal, TerminaApplication App, McpToolPermissionsViewModel Vm)
-        CreateHeadlessApp(out VirtualInputSource input)
+        CreateHeadlessApp(out VirtualInputSource input, int width = 120, int height = 40)
     {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        McpToolPermissionsViewModel? capturedVm = null;
-
         var configuration = new ConfigurationBuilder().Build();
         var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, _paths);
 
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/mcp-tools", builder =>
-        {
-            builder.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>(
-                "/mcp-tools",
-                _ => new McpToolPermissionsPage(),
-                _ =>
-                {
-                    capturedVm = new McpToolPermissionsViewModel(_paths, daemonApi);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
+        return HeadlessTerminaFixture.Create<McpToolPermissionsPage, McpToolPermissionsViewModel>(
+            "/mcp-tools",
+            () => new McpToolPermissionsPage(),
+            () => new McpToolPermissionsViewModel(_paths, daemonApi),
+            out input,
+            width,
+            height);
     }
 
     private static void AssertLineHasBackground(VirtualTerminal terminal, string text, Color expected)

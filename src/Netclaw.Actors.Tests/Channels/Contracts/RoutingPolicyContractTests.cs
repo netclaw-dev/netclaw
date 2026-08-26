@@ -33,6 +33,7 @@ public enum RoutingIgnoreReason
     NoContent,
     DmNotAllowed,
     DmMentionRequired,
+    ThreadMentionRequired,
     ChannelMentionRequired
 }
 
@@ -66,6 +67,7 @@ public abstract class RoutingPolicyContractTests
         bool mentionOnly,
         bool allowDm,
         bool mentionRequiredInDm,
+        bool mentionRequiredInThread,
         bool isDm,
         bool containsMention,
         bool threadExists,
@@ -79,6 +81,7 @@ public abstract class RoutingPolicyContractTests
             mentionOnly: true,
             allowDm: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
             threadExists: false,
@@ -95,6 +98,7 @@ public abstract class RoutingPolicyContractTests
             mentionOnly: true,
             allowDm: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             isDm: false,
             containsMention: true,
             threadExists: false,
@@ -111,6 +115,7 @@ public abstract class RoutingPolicyContractTests
             mentionOnly: true,
             allowDm: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
             threadExists: true,
@@ -130,6 +135,7 @@ public abstract class RoutingPolicyContractTests
             mentionOnly: true,
             allowDm: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
             threadExists: false,
@@ -137,6 +143,54 @@ public abstract class RoutingPolicyContractTests
             text: "follow up");
 
         Assert.Equal(RoutingVerdict.Route, verdict);
+    }
+
+    [Theory]
+    [InlineData(true, RoutingVerdictKind.ContinueOnly, null)]
+    [InlineData(false, RoutingVerdictKind.Ignore, RoutingIgnoreReason.ThreadMentionRequired)]
+    public void ExistingThread_HonorsMentionRequiredInThread(
+        bool containsMention,
+        RoutingVerdictKind expectedKind,
+        RoutingIgnoreReason? expectedReason)
+    {
+        // With MentionRequiredInThread enabled, follow-ups in a thread with an
+        // active session still need a mention — the active-session bypass is off.
+        var verdict = Evaluate(
+            mentionOnly: true,
+            allowDm: true,
+            mentionRequiredInDm: false,
+            mentionRequiredInThread: true,
+            isDm: false,
+            containsMention: containsMention,
+            threadExists: true,
+            isThreadReply: true,
+            text: "follow up");
+
+        Assert.Equal(new RoutingVerdict(expectedKind, expectedReason), verdict);
+    }
+
+    [Theory]
+    [InlineData(true, RoutingVerdictKind.Route, null)]
+    [InlineData(false, RoutingVerdictKind.Ignore, RoutingIgnoreReason.ThreadMentionRequired)]
+    public void ThreadReplyRehydration_HonorsMentionRequiredInThread(
+        bool containsMention,
+        RoutingVerdictKind expectedKind,
+        RoutingIgnoreReason? expectedReason)
+    {
+        // The daemon-restart rehydration path is gated the same way: an
+        // un-mentioned thread reply must not re-create the session.
+        var verdict = Evaluate(
+            mentionOnly: true,
+            allowDm: true,
+            mentionRequiredInDm: false,
+            mentionRequiredInThread: true,
+            isDm: false,
+            containsMention: containsMention,
+            threadExists: false,
+            isThreadReply: true,
+            text: "follow up");
+
+        Assert.Equal(new RoutingVerdict(expectedKind, expectedReason), verdict);
     }
 
     [Theory]
@@ -155,6 +209,7 @@ public abstract class RoutingPolicyContractTests
             mentionOnly: true,
             allowDm: allowDm,
             mentionRequiredInDm: mentionRequiredInDm,
+            mentionRequiredInThread: false,
             isDm: true,
             containsMention: containsMention,
             threadExists: false,
@@ -173,6 +228,7 @@ public abstract class RoutingPolicyContractTests
             mentionOnly: false,
             allowDm: false,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
             threadExists: false,
@@ -189,6 +245,7 @@ public abstract class RoutingPolicyContractTests
             mentionOnly: false,
             allowDm: true,
             mentionRequiredInDm: false,
+            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
             threadExists: false,

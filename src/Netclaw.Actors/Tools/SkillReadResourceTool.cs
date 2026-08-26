@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillReadResourceTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -53,12 +53,15 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         if (skill is null)
             return $"Skill '{skillName}' not found.";
 
+        if (skill.Source is not FileSkillSource fileSource)
+            return $"Skill '{skillName}' does not expose file resources.";
+
         if (!SkillResourcePath.TryNormalize(args.ResourcePath, out var resourcePath, out var pathError))
             return SkillResourcePath.FormatReadError(pathError);
 
         // Resolve the full path and verify it's within the skill directory
-        var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, resourcePath));
-        var skillDirFull = Path.GetFullPath(skill.SkillDirectory);
+        var fullPath = Path.GetFullPath(Path.Combine(fileSource.SkillDirectory, resourcePath));
+        var skillDirFull = Path.GetFullPath(fileSource.SkillDirectory);
 
         if (!PathUtility.IsWithinRoot(fullPath, skillDirFull))
             return "Resolved path is outside the skill directory.";

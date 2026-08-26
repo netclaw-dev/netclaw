@@ -307,15 +307,13 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         StartFullReset(vm);
         await deleteStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
 
-        using var disposeStarted = new ManualResetEventSlim();
+        var disposeStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var dispose = Task.Run(() =>
         {
-            disposeStarted.Set();
+            disposeStarted.TrySetResult();
             vm.Dispose();
         }, TestContext.Current.CancellationToken);
-        Assert.True(
-            disposeStarted.Wait(TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken),
-            "Dispose did not start.");
+        await disposeStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
 
         releaseDelete.TrySetResult();
         await dispose.WaitAsync(TestContext.Current.CancellationToken);

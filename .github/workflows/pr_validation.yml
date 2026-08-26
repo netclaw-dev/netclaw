@@ -54,6 +54,10 @@ jobs:
       - name: "Restore .NET tools"
         run: dotnet tool restore
 
+      - name: "Validate release notes parser"
+        shell: pwsh
+        run: ./scripts/smoke/release-notes-smoke.ps1
+
       - name: "Update release notes"
         shell: pwsh
         run: |
@@ -61,12 +65,6 @@ jobs:
 
       - name: "dotnet build"
         run: dotnet build -c Release
-
-      # Pre-warm the npm cache so MCP stdio smoke tests don't time out downloading
-      # @modelcontextprotocol/server-everything on the first npx invocation.
-      - name: "Warm npm cache for MCP smoke tests"
-        shell: bash
-        run: npx -y @modelcontextprotocol/server-everything --version || true
 
       # .NET Framework tests can't run reliably on Linux, so we only do .NET 8
 
@@ -146,6 +144,21 @@ jobs:
         shell: pwsh
         run: ./scripts/Add-FileHeaders.ps1 -Verify
 
+  no-bom:
+    name: No UTF-8 BOM
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Verify no .cs file starts with a UTF-8 BOM"
+        shell: bash
+        run: bash scripts/check-no-bom.sh
+
   slopwatch:
     name: Slopwatch
     runs-on: ubuntu-latest
@@ -186,7 +199,7 @@ jobs:
 
       - name: "Install shell integration test dependencies"
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes fish zsh
+        run: bash scripts/smoke/install-shell-test-dependencies.sh
 
       - name: "install.sh smoke test"
         if: runner.os != 'Windows'

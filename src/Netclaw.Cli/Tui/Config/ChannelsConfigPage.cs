@@ -81,7 +81,6 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 {
                     ChannelsConfigScreen.AdapterMenu => BuildAdapterMenu(),
                     ChannelsConfigScreen.ChannelPermissions => BuildChannelPermissions(),
-                    ChannelsConfigScreen.EditAudience => BuildEditAudience(),
                     ChannelsConfigScreen.AddChannel => BuildAddChannel(),
                     ChannelsConfigScreen.AllowedUsers => BuildAllowedUsers(),
                     ChannelsConfigScreen.DirectMessages => BuildDirectMessages(),
@@ -129,7 +128,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
     {
         var layout = Layouts.Vertical()
             .WithChild(Header($"  {ViewModel.ActiveAdapterName} > Channels & Permissions"))
-            .WithChild(Hint("  Configure allowed channels and their audience/trust level."))
+            .WithChild(Hint("  Configure allowed channels, their audience, and thread behavior."))
             .WithChild(Layouts.Empty().Height(1));
 
         var rows = ViewModel.GetChannelRows();
@@ -153,43 +152,51 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 // A channel the live probe could not resolve. It was still saved (inert
                 // allow-list entry), but we mark it red with ✗ so the operator can fix or
                 // remove it. "✗  " keeps the same 3-char width as FocusPrefix.
-                var unresolvedLine = $"✗  {Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}";
+                var unresolvedLine = $"✗  {Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}   {MentionField(row.MentionRequired)}";
                 layout = layout.WithChild(ConfigSelectionRow.Create(unresolvedLine, focused, Color.Red));
                 continue;
             }
 
-            var line = row.IsAction
-                ? $"{FocusPrefix(focused)}{row.DisplayName}"
-                : $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}";
+            // Real channels show the audience cycler plus the arrow-free mention
+            // field (Space toggles it). A DM row is one-to-one, so it shows audience
+            // only; action rows are just their label.
+            string line;
+            if (row.IsAction)
+                line = $"{FocusPrefix(focused)}{row.DisplayName}";
+            else if (row.IsDirectMessage)
+                line = $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}";
+            else
+                line = $"{FocusPrefix(focused)}{Column(row.DisplayName, displayNameWidth)} {AudienceCycle(row.Audience)}   {MentionField(row.MentionRequired)}";
+
             layout = layout.WithChild(Row(line, focused));
         }
 
         return layout
             .WithChild(Layouts.Empty().Height(1))
-            .WithChild(Hint("  Audience controls which tools and data this channel can use."));
+            .WithChild(BuildSelectedChannelDescription(rows));
     }
 
-    private ILayoutNode BuildEditAudience()
+    // Describes the selected row below the list. The removed detail leaf used to
+    // show these details on its own screen; now they follow the cursor so the
+    // list is the single per-channel editor.
+    private ILayoutNode BuildSelectedChannelDescription(IReadOnlyList<ChannelPermissionRow> rows)
     {
-        var label = ViewModel.EditingAudienceLabel ?? "channel";
-        var id = ViewModel.EditingAudienceId ?? string.Empty;
-        var layout = Layouts.Vertical()
-            .WithChild(Header($"  {ViewModel.ActiveAdapterName} > {label}"))
-            .WithChild(Hint(ViewModel.EditingAudienceIsDm ? "  Direct messages" : $"  Channel ID: {id}"))
-            .WithChild(Layouts.Empty().Height(1))
-            .WithChild(new TextNode("  Who is this channel for?").WithForeground(Color.White))
-            .WithChild(Layouts.Empty().Height(1));
+        if (rows.Count == 0)
+            return Hint("  Audience controls which tools and data this channel can use.");
 
-        for (var i = 0; i < ChannelsConfigViewModel.AudienceOptions.Count; i++)
-        {
-            var audience = ChannelsConfigViewModel.AudienceOptions[i];
-            var focused = i == ViewModel.AudienceSelectionIndex;
-            layout = layout.WithChild(Row(
-                $"{FocusPrefix(focused)}{AudienceLabel(audience),-10} {AudienceDescription(audience)}",
-                focused));
-        }
+        var row = rows[Math.Clamp(ViewModel.ChannelRowIndex, 0, rows.Count - 1)];
+        if (row.IsAction)
+            return Hint("  Audience controls which tools and data this channel can use.");
 
-        return layout;
+        var description = Layouts.Vertical()
+            .WithChild(Hint($"  {AudienceLabel(row.Audience)} — {AudienceDescription(row.Audience)}"));
+
+        if (!row.IsDirectMessage)
+            description = description.WithChild(Hint(row.MentionRequired
+                ? "  Require @mention: bot stays quiet until @mentioned, then catches up on the thread."
+                : "  Require @mention off: bot replies to every message in the thread (default)."));
+
+        return description;
     }
 
     private ILayoutNode BuildAddChannel()
@@ -295,8 +302,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
                 var help = ViewModel.Screen.Value switch
                 {
                     ChannelsConfigScreen.AdapterMenu => "  Manage this adapter without re-entering credentials.",
-                    ChannelsConfigScreen.ChannelPermissions => "  Enter edits an audience or activates Done. a adds a channel. Delete removes the selected channel.",
-                    ChannelsConfigScreen.EditAudience => "  Select the audience profile for this channel.",
+                    ChannelsConfigScreen.ChannelPermissions => "  Left/right sets audience. Space toggles Require @mention. Enter on Done finishes. a adds, Delete removes.",
                     ChannelsConfigScreen.AddChannel => "  Enter applies the channel draft. Esc cancels.",
                     ChannelsConfigScreen.AllowedUsers => "  Use comma-separated user IDs. Blank means unrestricted users in allowed channels.",
                     ChannelsConfigScreen.DirectMessages => "  Space toggles DMs. Left/right changes the DM audience.",
@@ -328,8 +334,7 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             var text = ViewModel.Screen.Value switch
                 {
                     ChannelsConfigScreen.AdapterMenu => " [↑/↓] Navigate  [Enter] Select  [Esc] Channels  [Ctrl+Q] Quit",
-                    ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Enter] Edit/Done  [a] Add  [Del] Remove  [Esc] Menu",
-                    ChannelsConfigScreen.EditAudience => " [↑/↓] Navigate  [Enter] Apply  [Esc] Channels  [Ctrl+Q] Quit",
+                    ChannelsConfigScreen.ChannelPermissions => " [↑/↓] Navigate  [←/→] Audience  [Space] @mention  [Enter] Done  [Del] Remove  [Esc] Menu",
                     ChannelsConfigScreen.AddChannel => " [Type] Channel  [Enter] Resolve & add  [Esc] Channels  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.AllowedUsers => " [Enter] Apply  [Esc] Menu  [Ctrl+Q] Quit",
                     ChannelsConfigScreen.DirectMessages => " [↑/↓] Navigate  [Space] Toggle  [←/→] Audience  [Enter] Apply  [Esc] Menu",
@@ -448,9 +453,6 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             case ChannelsConfigScreen.ChannelPermissions:
                 HandleChannelPermissionsKey(keyInfo);
                 break;
-            case ChannelsConfigScreen.EditAudience:
-                HandleEditAudienceKey(keyInfo);
-                break;
             case ChannelsConfigScreen.AddChannel:
                 HandleAddChannelKey(keyInfo);
                 break;
@@ -506,30 +508,17 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
             case ConsoleKey.RightArrow:
                 ViewModel.ChangeSelectedChannelAudience(1);
                 break;
+            case ConsoleKey.Spacebar:
+                ViewModel.ToggleSelectedChannelMentionRequired();
+                break;
             case ConsoleKey.Enter:
-                ViewModel.OpenSelectedChannelAudience();
+                ViewModel.ActivateSelectedChannelRow();
                 break;
             case ConsoleKey.A:
                 ViewModel.BeginAddChannel();
                 break;
             case ConsoleKey.Delete:
                 ViewModel.RemoveSelectedChannel();
-                break;
-        }
-    }
-
-    private void HandleEditAudienceKey(ConsoleKeyInfo keyInfo)
-    {
-        switch (keyInfo.Key)
-        {
-            case ConsoleKey.UpArrow:
-                ViewModel.MoveAudienceSelection(-1);
-                break;
-            case ConsoleKey.DownArrow:
-                ViewModel.MoveAudienceSelection(1);
-                break;
-            case ConsoleKey.Enter:
-                ViewModel.ApplyAudienceSelection();
                 break;
         }
     }
@@ -740,6 +729,9 @@ public sealed class ChannelsConfigPage : ReactivePage<ChannelsConfigViewModel>
     };
 
     private static string AudienceCycle(TrustAudience audience) => $"[◀ {AudienceLabel(audience),-8} ▶]";
+
+    // Arrow-free so it reads as a Space toggle, not a ←/→ cycler like the audience field.
+    private static string MentionField(bool required) => $"Require @mention: {(required ? "On" : "Off")}";
 
     private static string Column(string value, int width)
     {

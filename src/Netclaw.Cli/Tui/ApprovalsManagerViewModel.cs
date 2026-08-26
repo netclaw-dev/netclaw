@@ -38,11 +38,18 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
 {
     private readonly ToolApprovalStore _store;
     private readonly TimeProvider _timeProvider;
+    private bool _reportedMigrationOmissions;
 
     public ApprovalsManagerViewModel(NetclawPaths paths, TimeProvider timeProvider)
     {
         _timeProvider = timeProvider;
-        _store = new ToolApprovalStore(paths.ToolApprovalsPath, timeProvider);
+        var nativeShell = OperatingSystem.IsWindows()
+            ? ApprovalShell.PowerShell
+            : ApprovalShell.Bash;
+        _store = new ToolApprovalStore(
+            paths.ToolApprovalsPath,
+            timeProvider,
+            new ApprovalStoreMigrationContext(nativeShell));
     }
 
     public ReactiveProperty<ApprovalsManagerState> CurrentState { get; } = new(ApprovalsManagerState.Loading);
@@ -62,7 +69,23 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
     public void Refresh()
     {
         DisplayApprovals.Clear();
-        var snapshot = _store.Snapshot();
+        var load = _store.TryLoad();
+        if (load is ApprovalStoreLoadResult.Unavailable unavailable)
+        {
+            StatusMessage.Value = $"Approval store unavailable: {unavailable.Failure}.";
+            CurrentState.Value = ApprovalsManagerState.Empty;
+            StateVersion.Value++;
+            return;
+        }
+
+        if (!_reportedMigrationOmissions && _store.LastMigrationOmittedEntryCount > 0)
+        {
+            StatusMessage.Value =
+                $"Approval store version-2 conversion omitted {_store.LastMigrationOmittedEntryCount} unrepresentable entries.";
+            _reportedMigrationOmissions = true;
+        }
+
+        var snapshot = ((ApprovalStoreLoadResult.Ready)load).Data.Audiences;
         var now = _timeProvider.GetUtcNow();
 
         foreach (var audienceKey in snapshot.Keys.OrderBy(k => k, StringComparer.Ordinal))
@@ -107,10 +130,17 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
             return;
         }
 
-        var removed = _store.RemoveApproval(target.Audience, target.ToolName, target.Entry);
-        StatusMessage.Value = removed
-            ? $"✔ Removed '{target.DisplayText}' from {target.AudienceWire} / {target.ToolName}."
-            : $"⚠ Entry not found (may have been removed elsewhere).";
+        var result = _store.TryRemoveApproval(target.Audience, target.ToolName, target.Entry);
+        StatusMessage.Value = result switch
+        {
+            ApprovalStoreChangeResult.Completed { ChangeCount: > 0 } =>
+                $"✔ Removed '{target.DisplayText}' from {target.AudienceWire} / {target.ToolName}.",
+            ApprovalStoreChangeResult.Completed =>
+                "⚠ Entry not found (it may have been removed elsewhere).",
+            ApprovalStoreChangeResult.Unavailable unavailable =>
+                $"Approval store unavailable: {unavailable.Failure}.",
+            _ => "Approval store unavailable."
+        };
 
         PendingRevoke = null;
         Refresh();

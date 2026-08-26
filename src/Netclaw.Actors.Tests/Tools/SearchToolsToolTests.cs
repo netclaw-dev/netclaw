@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -13,15 +14,21 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public class SearchToolsToolTests
 {
+    private static readonly Netclaw.Tools.ToolExecutionContext PersonalContext =
+        TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal
+        });
+
     [Fact]
     public async Task Search_MatchesByName()
     {
         var registry = CreateRegistryWithMcpTools();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "store"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("memorizer__store", result);
@@ -35,11 +42,11 @@ public class SearchToolsToolTests
             CreateFakeAIFunction("search_memories", "Find stored memories"),
             "memorizer", "search_memories"));
 
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "memories"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("memorizer__search_memories", result);
@@ -49,25 +56,33 @@ public class SearchToolsToolTests
     public async Task Search_NoResults()
     {
         var registry = CreateRegistryWithMcpTools();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "nonexistent_xyz"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("No tools found", result);
     }
 
     [Fact]
+    public void Missing_policy_is_rejected()
+    {
+        var registry = CreateRegistryWithMcpTools();
+
+        Assert.Throws<ArgumentNullException>(() => new SearchToolsTool(registry, null!));
+    }
+
+    [Fact]
     public async Task Search_FiltersServer()
     {
         var registry = CreateRegistryWithMcpTools();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "store", "Server", "github"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         // "github" server has no "store" tool — only memorizer does
@@ -78,11 +93,11 @@ public class SearchToolsToolTests
     public async Task Search_ServerDefault_IsTreatedAsNoFilter()
     {
         var registry = CreateRegistryWithMcpTools();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "store", "Server", "default"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("memorizer__store", result);
@@ -94,11 +109,11 @@ public class SearchToolsToolTests
         var registry = new ToolRegistry();
         registry.Register(CreateFakeToolInRegistry("shell_execute", "Execute shell command"), "shell");
 
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "shell"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         // Without server filter, non-MCP tools are included in search results
@@ -109,7 +124,7 @@ public class SearchToolsToolTests
     public void GrantCategory_IsBuiltin()
     {
         var registry = new ToolRegistry();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         Assert.Equal("builtin", tool.GrantCategory);
     }
@@ -124,10 +139,10 @@ public class SearchToolsToolTests
             AIFunctionFactory.Create((Func<string, int, string>)Navigate, "navigate_page", "Navigate page"),
             "browser", "navigate_page"));
 
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "navigate"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("params: url", result);
@@ -142,17 +157,19 @@ public class SearchToolsToolTests
             "browser_chrome_devtools",
             "navigate_page"));
 
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "navgite pg"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("No exact tools found", result);
         Assert.Contains("Did you mean", result);
         Assert.Contains("browser_chrome_devtools__navigate_page", result);
         Assert.Contains("Suggestions are not loaded yet", result);
+        Assert.Contains("Call load_tool with one of the exact tool names above", result);
+        Assert.DoesNotContain("Call search_tools again", result);
         Assert.DoesNotContain("browser_chrome_devtools__navigate_page —", result);
     }
 
@@ -160,11 +177,11 @@ public class SearchToolsToolTests
     public async Task Search_ServersQuery_ReturnsServerCatalog()
     {
         var registry = CreateRegistryWithMcpTools();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "servers"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("Available MCP servers", result);
@@ -176,11 +193,11 @@ public class SearchToolsToolTests
     public async Task Search_AllWithServerFilter_ListsServerTools()
     {
         var registry = CreateRegistryWithMcpTools();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "all", "Server", "memorizer"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("Found 2 tool(s) in server 'memorizer'", result);
@@ -192,11 +209,11 @@ public class SearchToolsToolTests
     public async Task Search_AllWithoutServerFilter_ReturnsServerCatalogHint()
     {
         var registry = CreateRegistryWithMcpTools();
-        var tool = new SearchToolsTool(registry);
+        var tool = CreateSearchTool(registry);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "all"),
-            TestToolExecutionContext.CreateUnbound(),
+            PersonalContext,
             CancellationToken.None);
 
         Assert.Contains("Available MCP servers", result);
@@ -220,7 +237,9 @@ public class SearchToolsToolTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
@@ -255,7 +274,9 @@ public class SearchToolsToolTests
                     DeploymentPosture.Personal,
                     TrustAudience.Personal,
                     ShellExecutionMode.HostAllowed,
-                    UsedStrictFallback: false)));
+                    UsedStrictFallback: false),
+                new ShellCommandPolicy(),
+                new ToolPathPolicy([])));
 
         var context = TestToolExecutionContext.CreateBound("slack/thread-1", null, new TestToolExecutionContextOptions
         {
@@ -285,6 +306,20 @@ public class SearchToolsToolTests
 
         return registry;
     }
+
+    private static SearchToolsTool CreateSearchTool(ToolRegistry registry) =>
+        new(registry, CreatePersonalPolicy());
+
+    private static ToolAccessPolicy CreatePersonalPolicy() =>
+        new(
+            new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
     private static AIFunction CreateFakeAIFunction(string name, string description)
     {

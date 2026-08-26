@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ModelManagerViewModelTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -27,10 +27,10 @@ public sealed class ModelManagerViewModelTests : IDisposable
     public void Dispose() => _dir.Dispose();
 
     [Fact]
-    public void StartsAtRoleOverview()
+    public void StartsInLoadingState()
     {
         using var vm = CreateViewModel();
-        Assert.Equal(ModelManagerState.RoleOverview, vm.CurrentState.Value);
+        Assert.Equal(ModelManagerState.Loading, vm.CurrentState.Value);
     }
 
     [Fact]

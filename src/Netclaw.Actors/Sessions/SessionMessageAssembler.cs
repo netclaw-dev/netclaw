@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
@@ -187,7 +188,15 @@ public static class SessionMessageAssembler
         }
         else
         {
-            var sessionBlock = $"[session]\nid: {input.SessionId.Value}" + $"\nsession_dir: {sessionDir}";
+            var sessionBlock = $"[session]\nid: {input.SessionId.Value}" +
+                               $"\nsession_dir: {sessionDir}" +
+                               $"\n{ToolChoiceGuidance.StructuredWorkspaceSelection}" +
+                               $"\n{ToolChoiceGuidance.DirectorySelectionOrder}" +
+                               $"\n{ToolChoiceGuidance.ShellCompositionOrder}" +
+                               "\nsession_dir is private scratch for disposable writable non-project artifacts. " +
+                               "Do not substitute platform temporary storage. " +
+                               "Use an explicitly required platform temporary path unchanged. " +
+                               "Netclaw does not automatically clean session scratch yet.";
             parts.Add(sessionBlock);
         }
 

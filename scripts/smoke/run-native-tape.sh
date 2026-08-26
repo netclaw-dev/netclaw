@@ -69,11 +69,13 @@ body="${TAPE_BODY_DIR:-${TAPES_DIR}}/${TAPE_NAME}.tape"
 assertion="${ASSERT_DIR}/${TAPE_NAME}.sh"
 
 requires_assertion=false
-case "$TAPE_NAME" in
-  init-wizard|provider-add|provider-rename|config-*)
-    requires_assertion=true
-    ;;
-esac
+if [[ "${TAPE_BODY_DIR:-${TAPES_DIR}}" == "${TAPES_DIR}" ]]; then
+  case "$TAPE_NAME" in
+    init-wizard|provider-add|provider-rename|config-*)
+      requires_assertion=true
+      ;;
+  esac
+fi
 
 if [[ ! -f "$preamble" ]]; then
   echo "ERROR: preamble not found at $preamble" >&2
@@ -95,10 +97,8 @@ combined="${tmp_dir}/${TAPE_NAME}.tape"
 
 cleanup() {
   # A tape (e.g. init-wizard) may leave a daemon running. Stop it and free
-  # the shared port 5199 so it cannot squat into the next tape/scenario —
-  # `daemon stop` is keyed to this tape's NETCLAW_HOME PID file.
-  NETCLAW_HOME="$NETCLAW_HOME" "$NETCLAW_SMOKE_CLI" daemon stop >/dev/null 2>&1 || true
-  ensure_daemon_port_free || true
+  # the shared port so it cannot affect the next tape or scenario.
+  stop_daemon
   if [[ "${KEEP_TEMP:-0}" == "1" ]]; then
     echo "KEEP_TEMP=1 — combined tape retained at: $combined"
   else

@@ -1,9 +1,10 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpCommand.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Net.Http;
 using System.Net.Http.Json;
 using System.Net.Sockets;
 using System.Text;
@@ -13,6 +14,7 @@ using Netclaw.Cli.Config;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Http;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tools;
 
@@ -46,7 +48,7 @@ internal static class McpCommand
 
         return subcommand switch
         {
-            "add" => RunAdd(args, paths, writer),
+            "add" => await RunAddAsync(args, paths, writer, daemonApi),
             "auth" => await RunAuthAsync(args, paths, daemonApi, writer),
             "list" => await RunListAsync(paths, daemonApi, writer),
             "get" => RunGet(args, paths, writer),
@@ -60,15 +62,20 @@ internal static class McpCommand
         };
     }
 
-    internal static int RunAdd(string[] args, NetclawPaths paths, TextWriter writer)
+    internal static async Task<int> RunAddAsync(
+        string[] args,
+        NetclawPaths paths,
+        TextWriter writer,
+        DaemonApi? daemonApi = null)
     {
-        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... [--grant-all] <name> [command/url] [-- args...]
+        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... [--grant-all] [--auth] <name> [command/url] [-- args...]
         string? transport = null;
         string? oauthClientId = null;
         string? oauthScope = null;
         var envVars = new Dictionary<string, string>();
         var headers = new Dictionary<string, string>();
         var grantAll = false;
+        var runAuth = false;
         string? commandOrUrl = null;
         string[]? commandArgs = null;
 
@@ -93,6 +100,12 @@ internal static class McpCommand
             if (args[i] == "--grant-all")
             {
                 grantAll = true;
+                continue;
+            }
+
+            if (args[i] == "--auth")
+            {
+                runAuth = true;
                 continue;
             }
 
@@ -239,7 +252,49 @@ internal static class McpCommand
             writer.WriteLine("          until you opt in via `netclaw mcp permissions`.");
         }
         writer.WriteLine("Approval defaults: Personal=Auto, Team=Approval, Public=Deny");
-        writer.WriteLine($"Next: run `netclaw mcp permissions` to grant tools and adjust approvals for '{serverName.Value}'.");
+
+        // The daemon owns OAuth discovery (RFC 9728/8414, via McpOAuthClientRegistrar).
+        // The CLI does not probe the endpoint, so it cannot know in advance whether a
+        // given HTTP/SSE server requires OAuth. Print the hint unconditionally for any
+        // HTTP/SSE server that has no explicit Authorization header: stdio servers run
+        // local commands and never use OAuth, and a server with a static Authorization
+        // header is already using its own credentials.
+        var hasAuthorizationHeader = headers.Keys.Any(
+            key => string.Equals(key, "Authorization", StringComparison.OrdinalIgnoreCase));
+        var showOAuthHint = transport is not "stdio" && !hasAuthorizationHeader;
+
+        if (showOAuthHint)
+        {
+            writer.WriteLine();
+            writer.WriteLine("Next steps:");
+            writer.WriteLine($"  - If this server requires OAuth, authorize first: netclaw mcp auth {serverName.Value}");
+            writer.WriteLine("  - Then grant tools: netclaw mcp permissions");
+        }
+        else
+        {
+            writer.WriteLine($"Next: run `netclaw mcp permissions` to grant tools and adjust approvals for '{serverName.Value}'.");
+        }
+
+        if (runAuth && transport is not "stdio")
+        {
+            if (daemonApi is null)
+            {
+                writer.WriteLine();
+                writer.WriteLine("--auth: daemon API not available. Run `netclaw mcp auth "
+                    + $"{serverName.Value}` once the daemon is running.");
+            }
+            else
+            {
+                writer.WriteLine();
+                return await RunAuthAsync(["mcp", "auth", serverName.Value], paths, daemonApi, writer);
+            }
+        }
+        else if (runAuth && transport is "stdio")
+        {
+            writer.WriteLine();
+            writer.WriteLine("--auth ignored: OAuth is only for HTTP/SSE servers.");
+        }
+
         return 0;
     }
 
@@ -866,14 +921,15 @@ internal static class McpCommand
             if (!headers.ContainsKey(NetclawUserAgent.ComponentHeader))
                 headers[NetclawUserAgent.ComponentHeader] = "mcp-probe";
 
-            transport = new HttpClientTransport(new HttpClientTransportOptions
+            var options = new HttpClientTransportOptions
             {
                 Endpoint = new Uri(entry.Url!),
                 Name = serverName.Value,
                 AdditionalHeaders = headers,
                 TransportMode = entry.Transport is "sse"
                     ? HttpTransportMode.Sse : HttpTransportMode.AutoDetect,
-            });
+            };
+            transport = new HttpClientTransport(options, McpHttpClientFactory.Shared);
         }
 
         return await McpClient.CreateAsync(transport, new McpClientOptions
@@ -1153,6 +1209,15 @@ internal static class McpCommand
 
     private static string FormatGrantStatus(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
+        if (profile.McpServersMode == ToolProfileMode.All)
+        {
+            var mode = profile.ApprovalPolicy?.GetEffectiveMode($"{serverName.Value}/{toolName.Value}")
+                ?? ToolApprovalMode.Auto;
+            return mode == ToolApprovalMode.Deny
+                ? "-        "
+                : "✱        ";
+        }
+
         if (profile.McpServerToolGrants is null)
             return "\u2731        "; // ✱ = all (no grants configured)
 
@@ -1190,8 +1255,19 @@ internal static class McpCommand
                 _ => profiles.Personal
             };
 
-            var serverAllowed = profile.McpServersMode == ToolProfileMode.All
-                || profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
+            if (profile.McpServersMode == ToolProfileMode.All)
+            {
+                if (targetAudience is not null)
+                {
+                    writer.WriteLine($"The {audienceName} audience uses the All MCP server mode, which does not use tool grants.");
+                    writer.WriteLine($"Use `netclaw mcp tools {serverName.Value} --revoke <tools> --audience {audienceName.ToLowerInvariant()}` to disable specific tools.");
+                    return 1;
+                }
+
+                continue;
+            }
+
+            var serverAllowed = profile.AllowedMcpServers.Contains(serverName.Value, StringComparer.OrdinalIgnoreCase);
 
             if (!serverAllowed)
             {
@@ -1217,13 +1293,13 @@ internal static class McpCommand
 
         if (updated == 0)
         {
-            writer.WriteLine($"Server '{serverName.Value}' is not allowed by any audience profile. Nothing to snapshot.");
+            writer.WriteLine($"No Allowlist audience permits server '{serverName.Value}'. Nothing to snapshot.");
             return 1;
         }
 
         WriteConfigFile(paths.NetclawConfigPath, config);
         writer.WriteLine($"Snapshot complete: {discoveredTools.Count} tools from '{serverName.Value}' written to McpServerToolGrants for {updated} audience profile(s).");
-        writer.WriteLine("New tools added by the server will not be exposed until you update the grants.");
+        writer.WriteLine("New tools stay hidden from these Allowlist audiences until you update the grants.");
         return 0;
     }
 
@@ -1252,7 +1328,55 @@ internal static class McpCommand
             return 1;
         }
 
-        // Build the updated tool set
+        if (profile.McpServersMode == ToolProfileMode.All)
+        {
+            var (allConfig, _) = LoadConfigFiles(paths);
+            var allToolsSection = GetOrCreateSection(allConfig, "Tools");
+            var allProfilesSection = GetOrCreateSection(allToolsSection, "AudienceProfiles");
+            var allAudienceSection = GetOrCreateSection(allProfilesSection, audienceName);
+            var approvalPolicy = GetOrCreateSection(allAudienceSection, "ApprovalPolicy");
+            var toolOverrides = GetOrCreateSection(approvalPolicy, "ToolOverrides");
+
+            var serverDefaultIsDeny = InheritedServerMode(profile, serverName.Value) == ToolApprovalMode.Deny;
+
+            if (grantTools is not null)
+                foreach (var tool in grantTools)
+                {
+                    var key = $"{serverName.Value}/{tool}";
+                    var aliasKey = $"{serverName.Value}__{tool}";
+                    if (TryGetExactMcpOverride(profile.ApprovalPolicy, serverName.Value, tool, out var currentMode)
+                        && currentMode != ToolApprovalMode.Deny)
+                        continue;
+
+                    if (serverDefaultIsDeny)
+                        toolOverrides[key] = ToolApprovalMode.Approval.ToString();
+                    else
+                        toolOverrides.Remove(key);
+
+                    toolOverrides.Remove(aliasKey);
+                }
+
+            if (revokeTools is not null)
+                foreach (var tool in revokeTools)
+                {
+                    toolOverrides[$"{serverName.Value}/{tool}"] = ToolApprovalMode.Deny.ToString();
+                    toolOverrides.Remove($"{serverName.Value}__{tool}");
+                }
+
+            WriteConfigFile(paths.NetclawConfigPath, allConfig);
+
+            var allChanges = new List<string>();
+            if (grantTools is { Count: > 0 })
+                allChanges.Add($"enabled {grantTools.Count}");
+            if (revokeTools is { Count: > 0 })
+                allChanges.Add($"disabled {revokeTools.Count}");
+
+            writer.WriteLine(
+                $"Updated {audienceName} profile for '{serverName.Value}': {string.Join(", ", allChanges)} tool(s). " +
+                "Disabled tools carry a Deny approval override; every other tool inherits the server default.");
+            return 0;
+        }
+
         HashSet<string> currentTools;
         if (profile.McpServerToolGrants is { } existing
             && existing.TryGetValue(serverName.Value, out var currentList))
@@ -1309,6 +1433,32 @@ internal static class McpCommand
         };
     }
 
+    private static ToolApprovalMode InheritedServerMode(ToolAudienceProfile profile, string serverName)
+    {
+        var approvalPolicy = profile.ApprovalPolicy;
+        if (approvalPolicy is null)
+            return ToolApprovalMode.Auto;
+
+        return approvalPolicy.McpServerDefaults.TryGetValue(serverName, out var serverDefault)
+            ? serverDefault
+            : approvalPolicy.DefaultMode;
+    }
+
+    private static bool TryGetExactMcpOverride(
+        ToolApprovalConfig? policy,
+        string serverName,
+        string toolName,
+        out ToolApprovalMode mode)
+    {
+        if (policy is not null
+            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
+                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            return true;
+
+        mode = default;
+        return false;
+    }
+
     private static ToolConfig LoadToolConfig(NetclawPaths paths)
     {
         if (!File.Exists(paths.NetclawConfigPath))
@@ -1349,7 +1499,13 @@ internal static class McpCommand
         writer.WriteLine("Flags for 'add':");
         writer.WriteLine("  --grant-all  CI escape hatch. Skip the empty-grants writes and leave tool");
         writer.WriteLine("               grants null (legacy \"all pass\" behavior). Approval defaults");
-        writer.WriteLine("               (Personal=Approval, Team=Approval, Public=Deny) are still written.");
+        writer.WriteLine("               (Personal=Auto, Team=Approval, Public=Deny) are still written.");
+        writer.WriteLine("  --auth       Start the OAuth flow immediately after adding (HTTP/SSE only).");
+        writer.WriteLine("  --client-id  Pre-registered OAuth client ID for servers that do not support");
+        writer.WriteLine("               dynamic client registration.");
+        writer.WriteLine();
+        writer.WriteLine("On add, HTTP/SSE servers without an Authorization header print a hint to run");
+        writer.WriteLine("`netclaw mcp auth` first. The daemon detects OAuth requirements at auth time.");
         writer.WriteLine();
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");

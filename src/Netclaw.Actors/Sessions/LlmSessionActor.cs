@@ -90,6 +90,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ModelInputMediaBuffer _mediaBuffer = new();
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
+    private readonly SessionScratchCorrectionState _sessionScratchCorrections = new();
     private bool _processingStateActive;
     private ApprovalTurnState _approvalTurnState = ApprovalTurnState.None;
     private readonly ToolRegistry? _fullRegistry;
@@ -97,6 +98,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly TrustContextDeriver? _trustContextDeriver;
     // Owns the exposed tool list (base + discovered) and lease-based eviction.
     private readonly DiscoveredToolCache _discoveredToolCache = new();
+    private (int Core, int DeferredVisible, int Loaded)? _lastToolExposure;
 
     // Last observed input token count from LLM response (for compaction trigger)
     private long _lastInputTokenCount;
@@ -227,9 +229,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _lifecycleObserver = observability?.LifecycleObserver;
         _clientProvider = services.ClientProvider;
         _chatClient = services.ClientProvider.GetClient(ModelRole.Main);
-        _compactionClient = modelCapabilities.CompactionModelId is not null
-            ? services.ClientProvider.GetClient(ModelRole.Compaction)
-            : _chatClient;
+        // The provider owns role resolution. Its contract states that a role without a
+        // configured model falls back to ModelRole.Main, so the actor must not repeat
+        // that decision here.
+        _compactionClient = services.ClientProvider.GetClient(ModelRole.Compaction);
         _model = modelCapabilities;
         _config = config;
         _promptProvider = services.PromptProvider;
@@ -264,13 +267,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 services.TimeProvider,
                 NoLogger.Instance);
 
-        // Load all non-MCP tools for initial LLM calls.
-        // MCP tools are loaded dynamically via search_tools and can be retained for a
-        // small number of future turns (configurable lease) to reduce rediscovery churn.
+        // Load only the explicit core for initial LLM calls. Deferred first-party and
+        // MCP tools are discovered through search_tools, activated through load_tool,
+        // and share the configured loaded-tool lease.
         _fullRegistry = tools?.ToolRegistry;
         if (_fullRegistry is not null)
         {
-            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetAlwaysLoadedTools());
+            _discoveredToolCache.SeedBaseTools(_fullRegistry.GetCoreTools());
         }
 
         // ── Recovery handlers ──
@@ -576,6 +579,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             const string errorMessage = "I encountered an error executing a tool. Please try again.";
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ToolFailure;
+
+            // A partial parallel-batch failure leaves the tail assistant tool_calls
+            // message with unanswered call(s) — the sibling(s) that faulted. Close
+            // those out with synthetic tool-results BEFORE FailCurrentTurn appends the
+            // "I encountered an error" assistant reply. Otherwise that reply wedges
+            // between the tool_calls message and the rest of its results, which strict
+            // OpenAI-compatible providers (DeepSeek/Qwen/vLLM) reject on every later
+            // turn with 400 "insufficient tool messages following tool_calls".
+            if (ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null)
+            {
+                var abandoned = BuildToolBatchAbandonedEvent(
+                    "Tool call was not completed — the tool run failed.");
+                Persist(abandoned, evt =>
+                {
+                    ApplyToolBatchAbandoned(evt);
+                    FailCurrentTurn(errorMessage, msg.Cause, category);
+                });
+                return;
+            }
+
             FailCurrentTurn(errorMessage, msg.Cause, category);
         });
 
@@ -652,7 +675,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // the failure reaches here, so a failed turn is terminal.
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
 
-            // Evict discovered tools to prevent a poisoned tool set from cascading
+            // Evict loaded Deferred tools to prevent a poisoned tool set from cascading
             // across turns (e.g., oversized Notion schemas causing repeated 502s).
             _discoveredToolCache.EvictAll();
             TurnLog().Info("turn_discovered_tools_evicted — tool list reset to base tools after LLM call failure");
@@ -909,17 +932,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 CallId = toolCallId,
                 ToolName = new ToolName(result.Name ?? "unknown"),
-                Result = result.Content ?? string.Empty
+                Result = result.Content ?? string.Empty,
+                FailureCode = msg.ToolFailureCodes.GetValueOrDefault(toolCallId.Value)
             }, OutputFilter.ToolCalls);
+
+            if (msg.ToolExposureRequests.TryGetValue(toolCallId.Value, out var exposureRequest))
+                TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
         }
 
-        // Processes all results, including failed tool calls. RecentFiles tracks
-        // interaction intent, not successful reads only.
-        var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+        foreach (var change in msg.ScratchCorrectionChanges)
+            _sessionScratchCorrections.Apply(change);
+
+        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipts(
             _state.WorkingContext,
-            _state.History,
             msg.ToolResults,
-            _log);
+            msg.ToolReceipts);
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
 
@@ -934,12 +961,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var result in msg.ToolResults)
         {
-            if (result.Name is not "set_working_directory" || result.Content is null)
+            if (!string.Equals(result.Name, SetWorkingDirectoryTool.ToolName, StringComparison.Ordinal)
+                || result.ToolCallId is not { } callId
+                || !msg.ToolReceipts.TryGetValue(callId.Value, out var receipt)
+                || receipt.Category != ToolInvocationOutcomeCategory.Success
+                || receipt.DeclaredProjectDirectory is not { } projectDir)
+            {
                 continue;
-
-            var projectDir = result.Content.Trim();
-            if (!Path.IsPathRooted(projectDir))
-                continue;
+            }
 
             var next = _state.WorkingContext.WithProjectDirectory(projectDir);
             if (ReferenceEquals(next, _state.WorkingContext))
@@ -1950,16 +1979,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// same dispatch logic — there is no divergent second copy.
     /// </summary>
     /// <param name="oneTimeApprovalPreSeed">
-    /// Optional map of <c>callId → approved patterns</c>. For each entry, the
-    /// pipeline pre-seeds the one-time approval bypass on that call's execution
-    /// context before the first attempt, so an <c>ApprovedOnce</c> re-drive
-    /// skips the approval gate for exactly that call without emitting a second
-    /// approval prompt. Scoped per call id — never widens scope to other calls.
+    /// Optional map of <c>callId → one-time authorization keys</c>. Each value
+    /// binds the approved patterns and exact approval-candidate snapshot. The
+    /// pipeline pre-seeds the bypass before the first attempt, so an
+    /// <c>ApprovedOnce</c> re-drive cannot emit a duplicate prompt or authorize
+    /// a newly unsafe candidate. The keys apply only to that call id.
     /// </param>
     private void DispatchToolBatch(
         List<FunctionCallContent> toolCalls,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
-        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null)
+        IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
+        IReadOnlyDictionary<string, string>? sessionScratchDenialDirectories = null)
     {
         _activeToolBatch.Start(toolCalls);
 
@@ -2008,7 +2038,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // pipeline's deny-path hint logic can run without a policy lookup.
         // The hint is suppressed for audiences that cannot call the tool
         // (Public, audience profiles that explicitly drop it).
-        var setWorkingDirectoryAvailable = IsSetWorkingDirectoryAvailable();
+        var setWorkingDirectoryTool = GetExposedSetWorkingDirectoryTool();
+        var setWorkingDirectoryAvailable = setWorkingDirectoryTool is not null;
 
         CancelAndDisposeToolExecutionCts();
         _activeToolExecutionCts = new CancellationTokenSource();
@@ -2038,11 +2069,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 new ToolExecutionTimeout(Timeout.InfiniteTimeSpan)),
             BackgroundJobs = backgroundJobs,
             SetWorkingDirectoryAvailable = setWorkingDirectoryAvailable,
+            CanDeclareWorkingDirectory = setWorkingDirectoryTool is null
+                ? null
+                : setWorkingDirectoryTool.CanDeclare,
             StreamResults = true,
             OneTimeApprovalPreSeed = oneTimeApprovalPreSeed
                 ?? new Dictionary<string, IReadOnlyList<string>>(),
             DecisionOverrides = decisionOverride
                 ?? new Dictionary<string, ApprovalDecision>(),
+            SessionScratchDenialDirectories = sessionScratchDenialDirectories
+                ?? new Dictionary<string, string>(),
+            ScratchCorrections = _sessionScratchCorrections.Snapshot(),
             CancellationToken = toolExecutionCt
         };
 
@@ -2104,17 +2141,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             MaybeSnapshot();
             MaybeGenerateTitle();
             _activeRecall = recallResult;
-
-            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                SessionId: _sessionId,
-                TurnId: _activeTurnId,
-                TriggerType: Memory.CheckpointTriggerType.TurnComplete,
-                Priority: 40,
-                Payload: SessionMemoryCheckpointFactory.ForTurnComplete(
-                    _sessionId,
-                    evt,
-                    CurrentMemoryBoundary(),
-                    CurrentMemoryAudience())));
 
             _deliveryRetry.MarkEligible(new TurnNumber(_state.TurnCount));
 
@@ -2287,6 +2313,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ContinueIncomingUserMessage(SendUserMessage cmd)
     {
+        _sessionScratchCorrections.Clear();
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         BindTurnTelemetry(cmd.Source);
@@ -2840,6 +2867,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var client = _chatClient;
 
         var exposedTools = ResolveExposedToolsForCurrentTurn();
+        LogToolExposure(exposedTools.Count);
         // Always carry the session id so the session-agnostic chat-client decorators
         // (logging/retry/routing) can correlate LLM diagnostics — including provider
         // failover/outage — back to this session in Seq. Tools are attached only when
@@ -2979,6 +3007,30 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return _toolAccessPolicy.FilterExposedTools(availableTools, _fullRegistry, _currentTrustContext);
     }
 
+    private void LogToolExposure(int exposedCount)
+    {
+        if (_toolAccessPolicy is null || _fullRegistry is null)
+            return;
+
+        var coreCount = _fullRegistry.GetCoreRegistrations().Count(registration =>
+            _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext));
+        var visibleCount = _fullRegistry.GetAllRegistrations().Count(registration =>
+            _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext));
+        var exposure = (
+            Core: coreCount,
+            DeferredVisible: Math.Max(0, visibleCount - coreCount),
+            Loaded: Math.Max(0, exposedCount - coreCount));
+        if (_lastToolExposure == exposure)
+            return;
+
+        _lastToolExposure = exposure;
+        TurnLog().Info(
+            "Session tool exposure core={CoreCount} deferredVisible={DeferredVisibleCount} loaded={LoadedCount}",
+            exposure.Core,
+            exposure.DeferredVisible,
+            exposure.Loaded);
+    }
+
     /// <summary>
     /// Returns true when <c>set_working_directory</c> is exposed to the
     /// current turn's audience profile. Used by the deny-path hint logic in
@@ -2986,14 +3038,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// at the tool, so emitting it on a Public-audience turn that cannot call
     /// the tool would be misleading.
     /// </summary>
-    private bool IsSetWorkingDirectoryAvailable()
+    private SetWorkingDirectoryTool? GetExposedSetWorkingDirectoryTool()
     {
         if (_toolAccessPolicy is null || _fullRegistry is null)
-            return false;
+            return null;
 
         var registration = _fullRegistry.GetRegistrationByToolName(SetWorkingDirectoryTool.ToolName);
-        return registration is not null
-               && _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext);
+        return registration?.Tool is SetWorkingDirectoryTool tool
+               && _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext)
+            ? tool
+            : null;
     }
 
 
@@ -3058,7 +3112,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             errorMsg += hint is not null ? $"  {cmd} {hint}\n" : $"  {cmd}\n";
         }
 
-        EmitOutput(new TextOutput(errorMsg.TrimEnd()) { SessionId = _sessionId }, OutputFilter.Text);
+        return RejectSlashCommand(errorMsg.TrimEnd());
+    }
+
+    private bool RejectSlashCommand(string message)
+    {
+        EmitOutput(new TextOutput(message) { SessionId = _sessionId }, OutputFilter.Text);
         EmitOutput(new TurnCompleted
         {
             SessionId = _sessionId,
@@ -3072,10 +3131,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private bool HandleInlineSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs)
     {
+        if (skill.Source is not FileSkillSource fileSource)
+            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based slash dispatch.");
+
         string skillBody;
         try
         {
-            var content = File.ReadAllText(skill.FilePath);
+            var content = File.ReadAllText(fileSource.FilePath);
             skillBody = Skills.SkillScanner.ExtractBody(content);
         }
         catch (IOException ex)
@@ -3117,6 +3179,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private bool TryHandleRoutedSlashCommand(SkillEntry skill, string remainder, IReadOnlyList<SerializableMediaReference> mediaRefs, string routedSubagent)
     {
+        if (skill.Source is not FileSkillSource fileSource)
+            return RejectSlashCommand($"Skill /{skill.Name} cannot use file-based routed dispatch.");
+
         if (_subAgentRegistry is null || _subAgentSpawner is null)
         {
             EmitOutput(new TextOutput($"Skill '/{skill.Name}' routes to subagent '{routedSubagent}', but subagent routing is not available in this runtime.")
@@ -3174,7 +3239,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         string skillBody;
         try
         {
-            var content = File.ReadAllText(skill.FilePath);
+            var content = File.ReadAllText(fileSource.FilePath);
             skillBody = Skills.SkillScanner.ExtractBody(content);
         }
         catch (IOException ex)
@@ -3401,7 +3466,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     /// <summary>
-    /// Attempt to activate a single discovered tool by name.
+    /// Attempt to activate a single Deferred tool by name.
     /// Checks registry, access policy, and adds to the available tools cache.
     /// </summary>
     private bool TryActivateDiscoveredTool(string toolName)
@@ -3411,10 +3476,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var registration = _fullRegistry.GetRegistrationByToolName(toolName);
         if (registration is null) return false;
 
-        if (_toolAccessPolicy is not null && !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
+        if (_toolAccessPolicy is null || !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
             return false;
 
         var tool = registration.Tool;
+        if (_fullRegistry.IsCoreTool(tool.Name))
+            return true;
+
         // Cache and log under the canonical name regardless of which form
         // the LLM sent (load_tool / search_tools now emit the LLM-facing
         // alias for MCP, but legacy strings may still arrive). Cache key
@@ -3424,7 +3492,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _config.Tuning.DiscoveredToolRetentionTurns,
             _config.Tuning.DiscoveredToolMaxCount);
         if (_discoveredToolCache.AddIfMissing(tool.ToAITool()))
-            _log.Info("Dynamically loaded tool '{ToolName}' into session", canonicalName);
+            _log.Info(
+                "Session deferred tool activated loaded={LoadedCount}",
+                _discoveredToolCache.LoadedToolCount);
         return true;
     }
 
@@ -3520,6 +3590,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
             Candidates = msg.Candidates,
             TurnContext = _currentTurnContext?.ToRecord(),
+            SessionScratchDirectory = dispatch.SessionScratchDirectory,
             RequestedAtMs = NowMs()
         };
 
@@ -3565,7 +3636,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             turnContext,
             restoreFailure,
             evt.OptionKeys,
-            evt.Candidates);
+            evt.Candidates,
+            evt.SessionScratchDirectory);
         _resolvedToolApprovals.Remove(evt.CallId);
 
         if (persistApprovalState && turnContext is not null)
@@ -3605,6 +3677,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ClearApprovalTurnState()
     {
+        _sessionScratchCorrections.Clear();
         _approvalTurnState = ApprovalTurnState.None;
         _currentTurnContext = null;
     }
@@ -4296,16 +4369,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // we abandon the parked batch instead of replaying side effects.
         var preSeed = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         var decisionOverride = new Dictionary<string, ApprovalDecision>(StringComparer.Ordinal);
+        var sessionScratchDenialDirectories = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var call in assistantMessage.ToolCalls)
         {
             if (!_resolvedToolApprovals.TryGetValue(call.CallId.Value, out var resolved))
                 continue;
 
-            if (resolved.Decision == ApprovalDecision.ApprovedOnce)
+            if (resolved.Decision.IsApprovalGrant())
             {
-                // ApprovedOnce has no persisted grant. Pre-seed only this call
-                // so the re-drive skips the gate once without broadening approval.
-                preSeed[call.CallId.Value] = resolved.Pending.Patterns;
+                // Pre-seed the one-time bypass for the just-approved call so the
+                // re-drive runs it once even when its durable grant (if any) does
+                // not cover every candidate verb — e.g. a piped command's standalone
+                // verbs (base64, head) are never persisted directory-scoped.
+                // ApprovedOnce has no durable grant at all; broader scopes still
+                // record their durable grant separately. This only authorizes the
+                // immediate re-drive, matching the live pipeline and the sub-agent.
+                // See https://github.com/netclaw-dev/netclaw/issues/1802.
+                preSeed[call.CallId.Value] = OneTimeApprovalKeys.Create(
+                    resolved.Pending.Patterns,
+                    resolved.Pending.Candidates,
+                    resolved.Pending.Cwd);
             }
 
             if (resolved.Decision is ApprovalDecision.Denied or ApprovalDecision.TimedOut)
@@ -4314,12 +4397,18 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 // history stays well-formed, but the reconstructed dispatch
                 // must not execute the tool or ask for approval again.
                 decisionOverride[call.CallId.Value] = resolved.Decision;
+                if (resolved.Decision == ApprovalDecision.Denied
+                    && resolved.Pending.SessionScratchDirectory is { Length: > 0 } scratchDirectory)
+                {
+                    sessionScratchDenialDirectories[call.CallId.Value] = scratchDirectory;
+                }
             }
         }
 
         return new ApprovalRedrivePlan(
             preSeed.Count == 0 ? null : preSeed,
-            decisionOverride.Count == 0 ? null : decisionOverride);
+            decisionOverride.Count == 0 ? null : decisionOverride,
+            sessionScratchDenialDirectories.Count == 0 ? null : sessionScratchDenialDirectories);
     }
 
     /// <summary>
@@ -4389,7 +4478,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         DispatchToolBatch(
             toolCalls,
             oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
-            decisionOverride: redrivePlan.DecisionOverride);
+            decisionOverride: redrivePlan.DecisionOverride,
+            sessionScratchDenialDirectories: redrivePlan.SessionScratchDenialDirectories);
         return true;
     }
 
@@ -4518,13 +4608,33 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // through here just feeds the filter that drops standalone verbs
         // with no path arg (curl, gh, git status).
         var sessionDirectory = GetSessionDirectory();
+        var grantContext = ApprovalGrantContext.FromDecision(
+            decision,
+            pending.Cwd,
+            sessionDirectory);
+
+        if (_approvalService is IStructuredToolApprovalService structuredApprovalService)
+        {
+            var grants = ApprovalBucketBuilder.BuildGrants(
+                pending.Candidates,
+                grantContext);
+            if (grants.Count > 0)
+            {
+                await structuredApprovalService.RecordApprovalCandidatesAsync(
+                    (ToolApprovalSessionId)_sessionId.Value,
+                    audience,
+                    new ToolName(pending.ToolName),
+                    grants,
+                    persistent,
+                    ct);
+            }
+
+            return;
+        }
 
         var grouping = ApprovalBucketBuilder.Build(
             pending.Candidates,
-            persistent,
-            globalWildcard,
-            pending.Cwd,
-            sessionDirectory);
+            grantContext);
 
         foreach (var (key, verbs) in grouping)
         {
@@ -4565,6 +4675,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ProcessToolCallResult(Pipelines.ToolCallResult result)
     {
+        _sessionScratchCorrections.Apply(result.ScratchCorrectionChange);
         TrackStartedBackgroundJob(result.StartedBackgroundJob);
 
         var emittedRunIds = new HashSet<SubAgentRunId>();
@@ -4644,32 +4755,35 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId,
             CallId = toolCallId,
             ToolName = new ToolName(toolMessage.Name ?? "unknown"),
-            Result = toolMessage.Content ?? string.Empty
+            Result = toolMessage.Content ?? string.Empty,
+            FailureCode = result.FailureCode
         }, OutputFilter.ToolCalls);
 
-        var updatedContext = WorkingContextUpdater.UpdateFromToolResults(
+        if (result.ExposureRequest is { } exposureRequest)
+            TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
+
+        var updatedContext = WorkingContextUpdater.UpdateFromToolReceipt(
             _state.WorkingContext,
-            _state.History,
-            [toolMessage],
-            _log);
+            result.Receipt);
         if (!ReferenceEquals(updatedContext, _state.WorkingContext))
             _state = _state with { WorkingContext = updatedContext };
 
         if (toolMessage.Name is "load_tool" && toolMessage.Content is not null)
             TryActivateDiscoveredTool(toolMessage.Content.Trim());
 
-        if (toolMessage.Name is "set_working_directory" && toolMessage.Content is not null)
-        {
-            var projectDir = toolMessage.Content.Trim();
-            if (Path.IsPathRooted(projectDir))
+        if (string.Equals(toolMessage.Name, SetWorkingDirectoryTool.ToolName, StringComparison.Ordinal)
+            && result.Receipt is
             {
-                var next = _state.WorkingContext.WithProjectDirectory(projectDir);
-                if (!ReferenceEquals(next, _state.WorkingContext))
-                {
-                    _state = _state with { WorkingContext = next };
-                    SetSystemPrompt();
-                    _log.Info("Project directory set to {ProjectDir}", projectDir);
-                }
+                Category: ToolInvocationOutcomeCategory.Success,
+                DeclaredProjectDirectory: { } projectDir
+            })
+        {
+            var next = _state.WorkingContext.WithProjectDirectory(projectDir);
+            if (!ReferenceEquals(next, _state.WorkingContext))
+            {
+                _state = _state with { WorkingContext = next };
+                SetSystemPrompt();
+                _log.Info("Project directory set to {ProjectDir}", projectDir);
             }
         }
 

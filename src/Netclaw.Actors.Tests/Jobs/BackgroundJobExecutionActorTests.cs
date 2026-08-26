@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobExecutionActorTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -9,6 +9,7 @@ using Akka.Hosting.TestKit;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
@@ -18,6 +19,7 @@ namespace Netclaw.Actors.Tests.Jobs;
 [Collection(BackgroundJobProcessCollection.Name)]
 public class BackgroundJobExecutionActorTests : TestKit
 {
+    private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly DisposableTempDir _dir = new();
     private BackgroundJobDefinitionStore _store = null!;
 
@@ -36,8 +38,7 @@ public class BackgroundJobExecutionActorTests : TestKit
         await base.AfterAllAsync();
     }
 
-    private static string LongRunningCommand =>
-        OperatingSystem.IsWindows() ? "ping -n 300 127.0.0.1" : "sleep 300";
+    private static string LongRunningCommand => TestShellEnvironment.LongRunningCommand;
 
     private BackgroundJobDefinition MakeDefinition(string command, int timeoutSeconds = 600) => new()
     {
@@ -53,11 +54,39 @@ public class BackgroundJobExecutionActorTests : TestKit
         TimeoutSeconds = timeoutSeconds
     };
 
-    private IActorRef SpawnExecution(BackgroundJobDefinition definition, IActorRef probe)
+    private IActorRef SpawnExecution(
+        BackgroundJobDefinition definition,
+        IActorRef probe,
+        ShellExecutionEnvironment? environment = null)
     {
         var outputPath = _store.GetOutputLogPath(definition.Id);
-        var props = Props.Create(() => new BackgroundJobExecutionActor(definition, outputPath, TimeProvider.System));
+        var props = Props.Create(() => new BackgroundJobExecutionActor(
+            definition,
+            outputPath,
+            TimeProvider.System,
+            environment ?? ShellEnvironment));
         return Sys.ActorOf(ForwardingParent.Props(props, probe), $"exec-{definition.Id}");
+    }
+
+    [Fact]
+    public async Task Missing_selected_executable_reports_exact_host_without_fallback()
+    {
+        const string missingExecutable = @"C:\missing\pwsh.exe";
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            missingExecutable,
+            ShellSyntaxTree.PwshDialect.PowerShell7);
+        var definition = MakeDefinition("Get-ChildItem");
+        var probe = CreateTestProbe("parent");
+        SpawnExecution(definition, probe, environment);
+
+        var completed = await probe.ExpectMsgAsync<BackgroundJobCompleted>(
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(BackgroundJobStatus.Failed, completed.Status);
+        Assert.Contains(missingExecutable, completed.OutputTail);
+        Assert.DoesNotContain("powershell.exe", completed.OutputTail, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("cmd.exe", completed.OutputTail, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -118,8 +147,8 @@ public class BackgroundJobExecutionActorTests : TestKit
     {
         // The detached-process contract: a job that never exits (dev server)
         // must still have its output readable from the log while it runs.
-        var command = OperatingSystem.IsWindows()
-            ? "echo server-is-up && ping -n 300 127.0.0.1"
+        var command = ShellEnvironment.Grammar == ShellGrammar.PowerShell
+            ? "Write-Output server-is-up; Start-Sleep -Seconds 300"
             : "echo server-is-up && sleep 300";
         var definition = MakeDefinition(command);
         var probe = CreateTestProbe("parent");

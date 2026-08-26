@@ -4,8 +4,10 @@
 ## Skill Management
 
 
-The `netclaw skill` CLI manages skills and skill sources. All subcommands
-are offline — no daemon required.
+The `netclaw skill` CLI manages skills and skill sources. `netclaw skill list`
+needs the running daemon, because it lists the daemon's live registry — the
+only view that includes dynamic MCP prompt skills. Every other subcommand is
+offline — no daemon required.
 
 During an agent session, use `skill_load(name)` to activate guidance and
 `skill_read_resource(name, path)` for bundled files. Skill origin and physical

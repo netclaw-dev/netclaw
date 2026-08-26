@@ -3,12 +3,15 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Tools;
+using Xunit;
 
 namespace Netclaw.Daemon.Tests.Mcp;
 
@@ -23,17 +26,47 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
 {
     private readonly McpOAuthFlowBroker _flowBroker;
 
-    private McpSmokeHarness(McpClientManager manager, McpOAuthFlowBroker flowBroker)
+    private McpSmokeHarness(
+        McpClientManager manager,
+        McpOAuthFlowBroker flowBroker,
+        SkillRegistry skillRegistry,
+        SkillIndexContextLayer skillIndex)
     {
         Manager = manager;
         _flowBroker = flowBroker;
+        SkillRegistry = skillRegistry;
+        SkillIndex = skillIndex;
     }
 
     public McpClientManager Manager { get; }
 
+    /// <summary>
+    /// Asserts that the named MCP server reached the <see cref="McpConnectionState.Connected"/>
+    /// state after <see cref="Manager.StartAsync"/> completed. `StartAsync` awaits the whole
+    /// connect attempt — either tools are published to the registry or a failure status with
+    /// the underlying error is published — so there is nothing to poll: this is the
+    /// deterministic completion signal. Asserting on it turns an intermittent Windows CI
+    /// connect failure (previously a bare `Assert.NotNull` null on the tool lookup) into a
+    /// failure that carries the manager's actual error message.
+    /// </summary>
+    public void AssertConnected(string serverName)
+    {
+        var status = Manager.GetServerStatuses().GetValueOrDefault(new McpServerName(serverName));
+        Assert.NotNull(status);
+        Assert.True(
+            status.State is McpConnectionState.Connected,
+            $"MCP server '{serverName}' failed to connect: state={status.State}, " +
+            $"error={status.ErrorMessage ?? "(none)"}");
+    }
+
+    public SkillRegistry SkillRegistry { get; }
+
+    public SkillIndexContextLayer SkillIndex { get; }
+
     public static McpSmokeHarness Create(
         Dictionary<string, McpServerEntry> serverEntries,
-        ToolRegistry registry)
+        ToolRegistry registry,
+        ITestOutputHelper? output = null)
     {
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString()));
         paths.EnsureDirectoriesExist();
@@ -43,10 +76,14 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             new NullSecretsProtector(),
             NullLogger<McpOAuthCredentialStore>.Instance);
         var flowBroker = new McpOAuthFlowBroker(TimeProvider.System, CancellationToken.None);
+        var dependencies = McpManagerTestDependencies.Create();
         var manager = new McpClientManager(
             serverEntries,
             registry,
-            new ToolConfig(),
+            dependencies.SkillRegistry,
+            dependencies.SkillIndexPublisher,
+            dependencies.ToolAccessPolicy,
+            dependencies.ToolConfig,
             credentials,
             McpOAuthTestDoubles.UnusedRegistrar(),
             flowBroker,
@@ -54,9 +91,49 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             NullNotificationSink.Instance,
             TimeProvider.System,
             new McpClientRuntime(),
-            NullLogger<McpClientManager>.Instance,
+            // Real logger wired to test output: when a connect fails the manager
+            // logs the full exception via ReportConnectionFailure, and NullLogger
+            // was discarding it — leaving only the generic status ErrorMessage.
+            output is null
+                ? NullLogger<McpClientManager>.Instance
+                : new TestOutputLogger<McpClientManager>(output),
             new SessionConfig());
-        return new McpSmokeHarness(manager, flowBroker);
+        return new McpSmokeHarness(
+            manager,
+            flowBroker,
+            dependencies.SkillRegistry,
+            dependencies.SkillIndex);
+    }
+
+    /// <summary>
+    /// Minimal <see cref="ILogger{T}"/> that forwards to xunit test output so
+    /// the manager's own diagnostics (including the full connect-failure
+    /// exception) show up in the CI log when a smoke test fails.
+    /// </summary>
+    private sealed class TestOutputLogger<T> : ILogger<T>
+    {
+        private readonly ITestOutputHelper _output;
+
+        public TestOutputLogger(ITestOutputHelper output) => _output = output;
+
+        public IDisposable? BeginScope<TState>(TState state)
+            where TState : notnull
+            => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            _output.WriteLine($"[{logLevel}] {message}");
+            if (exception is not null)
+                _output.WriteLine(exception.ToString());
+        }
     }
 
     public async ValueTask DisposeAsync()

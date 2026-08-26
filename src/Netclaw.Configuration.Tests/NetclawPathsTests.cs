@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="NetclawPathsTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -56,6 +56,41 @@ public sealed class NetclawPathsTests : IDisposable
         Assert.Equal(Path.Combine(envPath, "netclaw.db"), paths.SqliteDbPath);
         Assert.Equal(Path.Combine(envPath, "logs"), paths.LogsDirectory);
         Assert.Equal(Path.Combine(envPath, "identity"), paths.IdentityDirectory);
+    }
+
+    [Fact]
+    public void Relative_env_var_is_canonicalized_once_for_daemon_reuse()
+    {
+        var relativePath = "netclaw-relative-" + Guid.NewGuid().ToString("N");
+        Environment.SetEnvironmentVariable(EnvVar, relativePath);
+
+        var bootstrapPaths = new NetclawPaths();
+        var reusedPaths = new NetclawPaths(bootstrapPaths.BasePath);
+
+        Assert.Equal(Path.GetFullPath(relativePath), bootstrapPaths.BasePath);
+        Assert.Equal(bootstrapPaths.BasePath, reusedPaths.BasePath);
+        Assert.Equal(bootstrapPaths.RuntimeDirectory, reusedPaths.RuntimeDirectory);
+    }
+
+    [Fact]
+    public void EnsureDirectoriesExist_creates_runtime_directory_idempotently()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-runtime-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = new NetclawPaths(basePath);
+
+            paths.EnsureDirectoriesExist();
+            paths.EnsureDirectoriesExist();
+
+            Assert.Equal(Path.Combine(basePath, "runtime"), paths.RuntimeDirectory);
+            Assert.True(Directory.Exists(paths.RuntimeDirectory));
+        }
+        finally
+        {
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
     }
 
     [Theory]

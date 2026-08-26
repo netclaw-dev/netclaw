@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillToolTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -25,6 +25,7 @@ public class SkillToolTests : IDisposable
     private readonly NetclawPaths _paths;
     private readonly SkillRegistry _registry;
     private readonly SkillIndexContextLayer _indexLayer;
+    private static readonly IMcpPromptSkillLoader PromptLoader = new UnavailablePromptLoader();
 
     /// <summary>
     /// Personal audience context for tests — skill tools require non-Public audience.
@@ -64,7 +65,7 @@ public class SkillToolTests : IDisposable
         ScanSkills();
 
         var publicCtx = TestToolExecutionContext.CreateUnbound();
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "secret-skill"), publicCtx, TestContext.Current.CancellationToken);
 
@@ -88,7 +89,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(),
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader,
             skillSyncConfig: new SkillSyncConfig { Enabled = false });
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "test-skill-disabled"), PersonalCtx, TestContext.Current.CancellationToken);
@@ -111,7 +112,7 @@ public class SkillToolTests : IDisposable
 
         // Audience is non-nullable; Public is the minimum-privilege audience, equivalent to the old null/unset default.
         var badCtx = TestToolExecutionContext.CreateUnbound();
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "guarded-skill"), badCtx, TestContext.Current.CancellationToken);
 
@@ -135,13 +136,78 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "test-skill"), PersonalCtx, TestContext.Current.CancellationToken);
 
         Assert.Contains("Test Skill", result);
         Assert.Contains("Do the thing.", result);
         Assert.Contains("1.0.0", result);
+    }
+
+    [Fact]
+    public async Task SkillLoad_RendersMcpPromptWithArgumentsAndRoles()
+    {
+        var promptSource = new McpPromptSkillSource(
+            "gigatron",
+            "month_over_month",
+            4,
+            [new SkillArgumentDescriptor("property", "Property", true)]);
+        _registry.PublishMcpPromptSkills("gigatron",
+        [
+            new SkillEntry(
+                "mcp__gigatron__month_over_month",
+                "Month over month",
+                "Compare complete months.",
+                promptSource,
+                "mcp")
+            {
+                UserInvocable = false,
+            },
+        ]);
+        var loader = new RecordingPromptLoader(McpPromptSkillLoadResult.Loaded(
+            "Rendered workflow",
+            [
+                new McpPromptSkillMessage("user", "Check freshness."),
+                new McpPromptSkillMessage("assistant", "Use complete months."),
+            ]));
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), loader);
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "Name", "mcp__gigatron__month_over_month",
+                "Arguments", new Dictionary<string, string> { ["property"] = "petabridge-com" }),
+            PersonalCtx,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("petabridge-com", loader.Arguments!["property"]);
+        Assert.Contains("Source: MCP server 'gigatron', prompt 'month_over_month', generation 4", result);
+        Assert.Contains("### user", result);
+        Assert.Contains("Check freshness.", result);
+        Assert.Contains("### assistant", result);
+    }
+
+    [Fact]
+    public async Task SkillLoad_RejectsPromptArgumentsForFileSkill()
+    {
+        WriteSkill("file-skill", """
+            ---
+            name: file-skill
+            description: A file skill.
+            ---
+            # File Skill
+            """);
+        ScanSkills();
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "Name", "file-skill",
+                "Arguments", new Dictionary<string, string> { ["property"] = "value" }),
+            PersonalCtx,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("does not accept MCP prompt arguments", result);
     }
 
     [Fact]
@@ -161,7 +227,7 @@ public class SkillToolTests : IDisposable
         File.WriteAllText(resourcePath, "managed-resource-marker");
         ScanFeedSkills("managed");
 
-        var loadTool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var loadTool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
         var loadResult = await loadTool.ExecuteAsync(
             ToolInput.Create("Name", "feed-skill"), PersonalCtx, TestContext.Current.CancellationToken);
         var resourceTool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
@@ -191,7 +257,7 @@ public class SkillToolTests : IDisposable
         ScanSkills();
 
         var metrics = new FakeMetrics();
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), metrics);
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader, metrics);
 
         await tool.ExecuteAsync(
             ToolInput.Create("Name", "test-skill"), PersonalCtx, TestContext.Current.CancellationToken);
@@ -205,11 +271,46 @@ public class SkillToolTests : IDisposable
     public async Task SkillLoad_ReturnsErrorForUnknownSkill()
     {
         ScanSkills();
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "nonexistent"), PersonalCtx, TestContext.Current.CancellationToken);
 
         Assert.Contains("not found", result);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public async Task SkillLoad_UnknownSkillDoesNotListMcpPromptSkills(TrustAudience audience)
+    {
+        WriteSkill("file-skill", """
+            ---
+            name: file-skill
+            description: A file skill.
+            ---
+            # File Skill
+            """);
+        ScanSkills();
+        _registry.PublishMcpPromptSkills("private-server",
+        [
+            new SkillEntry(
+                "mcp__private-server__secret-workflow",
+                "Secret workflow",
+                "Private server guidance.",
+                new McpPromptSkillSource("private-server", "secret-workflow", 1, []),
+                "mcp"),
+        ]);
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Name", "missing-skill"),
+            TestToolExecutionContext.CreateUnbound(
+                new TestToolExecutionContextOptions { Audience = audience }).Invocation,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("file-skill", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("private-server", result, StringComparison.Ordinal);
+        Assert.DoesNotContain("secret-workflow", result, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -227,7 +328,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillLoadTool(_registry, CreateRegexScanner());
+        var tool = new SkillLoadTool(_registry, CreateRegexScanner(), PromptLoader);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "bad-skill"), PersonalCtx, TestContext.Current.CancellationToken);
 
@@ -251,7 +352,7 @@ public class SkillToolTests : IDisposable
             """);
         ScanSkills();
 
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Name", "routed-skill"),
             PersonalCtx, TestContext.Current.CancellationToken);
@@ -280,9 +381,10 @@ public class SkillToolTests : IDisposable
         var tool = new SkillLoadTool(
             _registry,
             new NoOpSkillContentScanner(),
+            PromptLoader,
             sessionMetrics: null,
-            subAgentRegistry,
-            CreateSubAgentSpawner());
+            subAgentRegistry: subAgentRegistry,
+            subAgentSpawner: CreateSubAgentSpawner());
 
         var result = await tool.ExecuteAsync(ToolInput.Create("Name", "route-missing", "Task", "check health"), PersonalCtx, TestContext.Current.CancellationToken);
 
@@ -318,9 +420,10 @@ public class SkillToolTests : IDisposable
         var tool = new SkillLoadTool(
             _registry,
             new NoOpSkillContentScanner(),
+            PromptLoader,
             sessionMetrics: null,
-            subAgentRegistry,
-            CreateSubAgentSpawner());
+            subAgentRegistry: subAgentRegistry,
+            subAgentSpawner: CreateSubAgentSpawner());
 
         var result = await tool.ExecuteAsync(ToolInput.Create("Name", "route-internal", "Task", "check health"), PersonalCtx, TestContext.Current.CancellationToken);
 
@@ -343,7 +446,7 @@ public class SkillToolTests : IDisposable
         };
         _registry.Register(routed);
 
-        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner());
+        var tool = new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader);
         var result = await tool.ExecuteAsync(ToolInput.Create("Name", "route-bad-meta", "Task", "check health"), PersonalCtx, TestContext.Current.CancellationToken);
 
         Assert.Contains("invalid metadata.subagent", result, StringComparison.OrdinalIgnoreCase);
@@ -894,7 +997,11 @@ public class SkillToolTests : IDisposable
         }
 
         var refresher = new SkillInventoryRefresher(
-            _paths, feeds, [], _registry, _indexLayer);
+            _paths,
+            feeds,
+            [],
+            _registry,
+            new SkillIndexPublisher(_registry, _indexLayer, static (_, _) => true));
         return new SkillManageTool(
             _registry, _paths, scanner ?? new NoOpSkillContentScanner(), refresher);
     }
@@ -909,7 +1016,8 @@ public class SkillToolTests : IDisposable
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         return new SubAgentSpawner(
             new NoOpChatClientProvider(),
@@ -1158,6 +1266,31 @@ public class SkillToolTests : IDisposable
 
         public void RecordSkillLoaded(string skillName, SkillLoadMethod method)
             => SkillLoadedCalls.Add((skillName, method));
+    }
+
+    private sealed class UnavailablePromptLoader : IMcpPromptSkillLoader
+    {
+        public ValueTask<McpPromptSkillLoadResult> LoadAsync(
+            McpPromptSkillSource source,
+            IReadOnlyDictionary<string, string>? arguments,
+            ToolInvocationContext context,
+            CancellationToken cancellationToken)
+            => ValueTask.FromResult(McpPromptSkillLoadResult.Failed("Prompt loading is unavailable in this test."));
+    }
+
+    private sealed class RecordingPromptLoader(McpPromptSkillLoadResult result) : IMcpPromptSkillLoader
+    {
+        public IReadOnlyDictionary<string, string>? Arguments { get; private set; }
+
+        public ValueTask<McpPromptSkillLoadResult> LoadAsync(
+            McpPromptSkillSource source,
+            IReadOnlyDictionary<string, string>? arguments,
+            ToolInvocationContext context,
+            CancellationToken cancellationToken)
+        {
+            Arguments = arguments;
+            return ValueTask.FromResult(result);
+        }
     }
 
     private sealed class NoOpChatClientProvider : IChatClientProvider

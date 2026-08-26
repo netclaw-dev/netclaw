@@ -129,6 +129,56 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
         Assert.Empty(_testActor.ReceivedMessages);
     }
 
+    [Fact]
+    public async Task Operator_GET_status_returns_retry_and_terminal_fields()
+    {
+        var dueTime = _timeProvider.GetUtcNow().AddMinutes(-5);
+        _testActor.StatusResponse = new ReminderStatusResponse(
+            new ReminderId("status-fields"),
+            Found: true,
+            Enabled: false,
+            Executing: false,
+            NextFire: null,
+            ConsecutiveFailures: 5,
+            SkippedDuplicates: 2,
+            TerminalOutcome: ReminderTerminalOutcome.Failed,
+            Occurrence: new ReminderOccurrenceInfo(
+                dueTime,
+                NextAttemptAtUtc: null,
+                AttemptCount: 5,
+                LastFailureReason: "persistence recovery failed",
+                CompletionStatus: "Failed",
+                DeliveryDeadlineUtc: null,
+                AckDeadlineUtc: null,
+                CompletedAtUtc: _timeProvider.GetUtcNow()),
+            RecentHistory:
+            [
+                new HistoryRecord(
+                    dueTime,
+                    Success: false,
+                    DurationMs: 30000,
+                    SessionId: "reminder/status-fields/1",
+                    ErrorMessage: "persistence recovery failed")
+            ]);
+        await using var app = await CreateAppAsync(spoofLoopback: true);
+
+        var response = await app.GetTestClient().GetAsync(
+            "/api/reminders/status-fields/status",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var json = await response.Content.ReadFromJsonAsync<JsonElement>(
+            TestContext.Current.CancellationToken);
+        Assert.False(json.GetProperty("enabled").GetBoolean());
+        Assert.Equal(5, json.GetProperty("consecutiveFailures").GetInt32());
+        Assert.Equal(2, json.GetProperty("skippedDuplicates").GetInt32());
+        Assert.Equal("Failed", json.GetProperty("terminalOutcome").GetString());
+        var occurrence = json.GetProperty("occurrence");
+        Assert.Equal(5, occurrence.GetProperty("attemptCount").GetInt32());
+        Assert.Equal("persistence recovery failed", occurrence.GetProperty("lastFailureReason").GetString());
+        Assert.Single(json.GetProperty("recentHistory").EnumerateArray());
+    }
+
     // ── Test case 4: POST with invalid audience value → 400, no command dispatched ──
 
     [Fact]
@@ -471,6 +521,7 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
     {
         private readonly List<object> _received = [];
         public IReadOnlyList<object> ReceivedMessages => _received;
+        public ReminderStatusResponse? StatusResponse { get; set; }
 
         public void Record(object message) => _received.Add(message);
     }
@@ -543,6 +594,22 @@ public sealed class ReminderEndpointAuthorizationTests : IAsyncDisposable
             {
                 sink.Record(cmd);
                 Sender.Tell(new ReminderStateResponse(cmd.Id, Found: false, Enabled: false));
+            });
+
+            Receive<GetReminderStatusQuery>(query =>
+            {
+                sink.Record(query);
+                Sender.Tell(sink.StatusResponse ?? new ReminderStatusResponse(
+                    query.Id,
+                    Found: false,
+                    Enabled: false,
+                    Executing: false,
+                    NextFire: null,
+                    ConsecutiveFailures: 0,
+                    SkippedDuplicates: 0,
+                    TerminalOutcome: null,
+                    Occurrence: null,
+                    RecentHistory: []));
             });
         }
     }

@@ -1,10 +1,12 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillRegistryTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Skills;
@@ -237,7 +239,8 @@ public class SkillRegistryTests
         var registry = new SkillRegistry();
         registry.Register(MakeEntry("ops", "Operations"));
         registry.Register(new SkillEntry("hidden", "hidden", "Hidden",
-            "/skills/hidden/SKILL.md", "/skills/hidden", null) { UserInvocable = false });
+            "/skills/hidden/SKILL.md", "/skills/hidden", null)
+        { UserInvocable = false });
 
         var commands = registry.GetAvailableSlashCommands();
 
@@ -331,4 +334,127 @@ public class SkillRegistryTests
         Assert.DoesNotContain("SKILL.md", index);
         Assert.DoesNotContain("root", index, StringComparison.OrdinalIgnoreCase);
     }
+
+    [Fact]
+    public void File_refresh_preserves_mcp_prompt_skills()
+    {
+        var registry = new SkillRegistry();
+        registry.PublishMcpPromptSkills("gigatron", [MakePromptEntry("month_over_month")]);
+
+        registry.ReplaceAll([MakeEntry("local-skill")]);
+
+        Assert.NotNull(registry.GetByName("local-skill"));
+        Assert.NotNull(registry.GetByName("mcp__gigatron__month_over_month"));
+    }
+
+    [Fact]
+    public void Mcp_refresh_preserves_file_skills_and_reports_collision()
+    {
+        var registry = new SkillRegistry();
+        registry.ReplaceAll([MakeEntry("mcp__gigatron__summary"), MakeEntry("local-skill")]);
+
+        var conflicts = registry.PublishMcpPromptSkills("gigatron", [MakePromptEntry("summary")]);
+
+        Assert.Equal("mcp__gigatron__summary", Assert.Single(conflicts));
+        Assert.IsType<FileSkillSource>(registry.GetByName("mcp__gigatron__summary")!.Source);
+        Assert.NotNull(registry.GetByName("local-skill"));
+    }
+
+    [Theory]
+    [InlineData("a", "b__c", "a__b", "c")]
+    [InlineData("analytics", "month__summary", "analytics__month", "summary")]
+    public void Mcp_prompt_collision_from_different_servers_rejects_candidate_without_replacing_owner(
+        string firstServer,
+        string firstPrompt,
+        string secondServer,
+        string secondPrompt)
+    {
+        var registry = new SkillRegistry();
+        var first = MakePromptEntry(firstPrompt, firstServer);
+        var second = MakePromptEntry(secondPrompt, secondServer);
+        registry.PublishMcpPromptSkills(firstServer, [first]);
+
+        var conflicts = registry.GetMcpPromptNameConflicts(secondServer, [second]);
+        var error = Assert.Throws<InvalidOperationException>(
+            () => registry.PublishMcpPromptSkills(secondServer, [second]));
+
+        Assert.Equal(first.Name, Assert.Single(conflicts));
+        Assert.Contains(first.Name, error.Message, StringComparison.Ordinal);
+        var published = Assert.Single(registry.GetAll());
+        var source = Assert.IsType<McpPromptSkillSource>(published.Source);
+        Assert.Equal(firstServer, source.ServerName);
+        Assert.Equal(firstPrompt, source.PromptName);
+    }
+
+    [Fact]
+    public void Mcp_prompt_index_includes_compact_argument_hint()
+    {
+        var registry = new SkillRegistry();
+        registry.PublishMcpPromptSkills("gigatron", [MakePromptEntry("month_over_month")]);
+
+        var index = registry.GenerateIndex();
+
+        Assert.Contains("mcp__gigatron__month_over_month <property> [monthsBack]", index);
+    }
+
+    [Fact]
+    public void Skill_index_publisher_filters_mcp_prompts_by_audience()
+    {
+        var registry = new SkillRegistry();
+        registry.ReplaceAll([MakeEntry("local-skill")]);
+        registry.PublishMcpPromptSkills("gigatron", [MakePromptEntry("summary")]);
+        var layer = new SkillIndexContextLayer();
+        var publisher = new SkillIndexPublisher(
+            registry,
+            layer,
+            (skill, audience) => skill.Source is not McpPromptSkillSource || audience == TrustAudience.Personal);
+
+        publisher.Publish();
+
+        Assert.Contains("local-skill", layer.GetContextLayer(TrustAudience.Team));
+        Assert.DoesNotContain("mcp__gigatron__summary", layer.GetContextLayer(TrustAudience.Team));
+        Assert.Contains("mcp__gigatron__summary", layer.GetContextLayer(TrustAudience.Personal));
+    }
+
+    [Fact]
+    public void SkillIndexPublisherUsesMcpServerAudiencePolicy()
+    {
+        var registry = new SkillRegistry();
+        registry.PublishMcpPromptSkills("gigatron", [MakePromptEntry("summary")]);
+        var layer = new SkillIndexContextLayer();
+        var config = new ToolConfig();
+        var policy = new ToolAccessPolicy(
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        new SkillIndexPublisher(registry, layer, policy).Publish();
+
+        Assert.DoesNotContain("mcp__gigatron__summary", layer.GetContextLayer(TrustAudience.Team));
+        Assert.Contains("mcp__gigatron__summary", layer.GetContextLayer(TrustAudience.Personal));
+    }
+
+    private static SkillEntry MakePromptEntry(string promptName, string serverName = "gigatron")
+        => new(
+            $"mcp__{serverName}__{promptName}".ToLowerInvariant(),
+            promptName,
+            "Remote workflow",
+            new McpPromptSkillSource(
+                serverName,
+                promptName,
+                3,
+                [
+                    new SkillArgumentDescriptor("property", "Property name", true),
+                    new SkillArgumentDescriptor("monthsBack", "Month offset", false),
+                ]),
+            "mcp")
+        {
+            UserInvocable = false,
+            ArgumentHint = "<property> [monthsBack]",
+        };
 }

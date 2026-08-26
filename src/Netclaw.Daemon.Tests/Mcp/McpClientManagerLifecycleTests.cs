@@ -7,11 +7,14 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using ModelContextProtocol;
 using ModelContextProtocol.Client;
+using ModelContextProtocol.Protocol;
+using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -248,8 +251,11 @@ public sealed class McpClientManagerLifecycleTests
 
         var toolError = await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
         Assert.Equal("Error: MCP tool 'test/run' reported a failure: declared failure", toolError);
-        var applicationMcpError = await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
-        Assert.Equal("Error: MCP tool 'test/run' failed: application MCP failure", applicationMcpError);
+        // A JSON-RPC error reaches the caller. The adapter, not the manager, turns it into
+        // the tool result, so the tool call also gets a failure receipt.
+        var applicationMcpError = await Assert.ThrowsAsync<McpException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+        Assert.Equal("application MCP failure", applicationMcpError.Message);
         await Assert.ThrowsAsync<InvalidOperationException>(
             () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
 
@@ -257,6 +263,62 @@ public sealed class McpClientManagerLifecycleTests
         Assert.Equal(4, plan.InvocationCount);
         Assert.Equal(0, plan.DisposeCount);
         Assert.Equal(1, harness.Manager.GetSnapshot(ServerName)?.Generation);
+    }
+
+    [Fact]
+    public async Task ThrownToolCall_LogsOneWarningThatNamesTheServerAndTheTool()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(new McpException("application MCP failure")),
+        });
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<McpException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        // The adapter turns the exception into a tool result, so this line is the only
+        // record of the failed call an operator can read in the daemon log.
+        var warning = Assert.Single(
+            harness.Logger.Entries,
+            entry => entry.Contains("invocation failed", StringComparison.Ordinal));
+        Assert.Contains($"'{ServerName.Value}/run'", warning, StringComparison.Ordinal);
+        Assert.Equal(
+            "application MCP failure",
+            Assert.Single(harness.Logger.Exceptions).Message);
+    }
+
+    [Fact]
+    public async Task CallerCancelledToolCall_LogsNoInvocationWarning()
+    {
+        var invocationEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var neverCompletes = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = async (_, ct) =>
+            {
+                invocationEntered.TrySetResult();
+                await neverCompletes.Task.WaitAsync(ct);
+                return "unreachable";
+            },
+        });
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        using var callerCancellation = new CancellationTokenSource();
+        var cancelledCall = InvokeAsync(harness.Manager, callerCancellation.Token);
+        await invocationEntered.Task;
+        await callerCancellation.CancelAsync();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => cancelledCall);
+
+        // A caller that aborts a call did not see a server failure. A Warning here sends
+        // the operator after a healthy server.
+        Assert.DoesNotContain(
+            harness.Logger.Entries,
+            entry => entry.Contains("invocation failed", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -306,6 +368,68 @@ public sealed class McpClientManagerLifecycleTests
         await initial.Disposed.Task;
         Assert.Equal(1, initial.InvocationCount);
         Assert.Equal(1, initial.DisposeCount);
+        Assert.Equal(0, replacement.InvocationCount);
+        Assert.Equal(2, harness.Manager.GetSnapshot(ServerName)?.Generation);
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.InternalServerError)]
+    [InlineData(HttpStatusCode.TooManyRequests)]
+    public async Task ApplicationHttpStatus_ReachesTheCallerWithoutAReconnect(HttpStatusCode status)
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        var plan = runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(
+                new HttpRequestException("boom", null, status)),
+        });
+        // A replacement is queued but must stay unused. Without it a reconnect would fail
+        // inside the runtime before it counts the client, and CreateCount would still
+        // read 1. With it, one reconnect drives CreateCount to 2 and this test fails.
+        var replacement = runtime.Enqueue(new ClientPlan("run"));
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        // A server that answers with a status is reachable. A new session cannot change the
+        // answer, and each reconnect costs about five more requests against a server that
+        // may already enforce a request budget.
+        Assert.Equal(status, error.StatusCode);
+        // The Warning line is the only operator-visible record of a thrown tool call, so it
+        // must name the tool and the status the server sent.
+        var warning = Assert.Single(
+            harness.Logger.Entries,
+            entry => entry.Contains($"{ServerName.Value}/run", StringComparison.Ordinal));
+        Assert.Contains($"(HTTP {(int)status})", warning, StringComparison.Ordinal);
+        Assert.Equal(1, runtime.CreateCount);
+        Assert.Equal(0, plan.DisposeCount);
+        Assert.Null(replacement.Client);
+        Assert.Equal(1, harness.Manager.GetSnapshot(ServerName)?.Generation);
+    }
+
+    [Fact]
+    public async Task SessionExpiryStatus_ReconnectsForLaterCalls()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        var initial = runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromException<object?>(
+                new HttpRequestException("session expired", null, HttpStatusCode.NotFound)),
+        });
+        var replacement = runtime.Enqueue(new ClientPlan("run"));
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(
+            () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
+
+        // Streamable HTTP reports an expired session as 404, so a new session repairs it.
+        Assert.Equal(HttpStatusCode.NotFound, error.StatusCode);
+        // The token makes a missed reconnect fail the run instead of hanging it.
+        await initial.Disposed.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, runtime.CreateCount);
         Assert.Equal(0, replacement.InvocationCount);
         Assert.Equal(2, harness.Manager.GetSnapshot(ServerName)?.Generation);
     }
@@ -487,11 +611,18 @@ public sealed class McpClientManagerLifecycleTests
         IOperationalNotificationSink notificationSink)
         => new(runtime, timeProvider, notificationSink);
 
-    private sealed class ManagerHarness : IAsyncDisposable
+    internal sealed class ManagerHarness : IAsyncDisposable
     {
         private readonly McpOAuthFlowBroker _flowBroker;
         private bool _stopFailureObserved;
         private bool _managerDisposed;
+
+        public ManagerHarness(
+            ControlledMcpClientRuntime runtime,
+            FakeTimeProvider timeProvider)
+            : this(runtime, timeProvider, NullNotificationSink.Instance)
+        {
+        }
 
         public ManagerHarness(
             ControlledMcpClientRuntime runtime,
@@ -507,6 +638,9 @@ public sealed class McpClientManagerLifecycleTests
                 NullLogger<McpOAuthCredentialStore>.Instance);
             _flowBroker = new McpOAuthFlowBroker(timeProvider, CancellationToken.None);
             Registry = new ToolRegistry();
+            var dependencies = McpManagerTestDependencies.Create();
+            SkillRegistry = dependencies.SkillRegistry;
+            SkillIndex = dependencies.SkillIndex;
             Logger = new RecordingLogger<McpClientManager>();
             Manager = new McpClientManager(
                 new Dictionary<string, McpServerEntry>
@@ -519,7 +653,10 @@ public sealed class McpClientManagerLifecycleTests
                     },
                 },
                 Registry,
-                new ToolConfig(),
+                dependencies.SkillRegistry,
+                dependencies.SkillIndexPublisher,
+                dependencies.ToolAccessPolicy,
+                dependencies.ToolConfig,
                 credentials,
                 McpOAuthTestDoubles.UnusedRegistrar(),
                 _flowBroker,
@@ -534,6 +671,10 @@ public sealed class McpClientManagerLifecycleTests
         public McpClientManager Manager { get; }
 
         public ToolRegistry Registry { get; }
+
+        public SkillRegistry SkillRegistry { get; }
+
+        public SkillIndexContextLayer SkillIndex { get; }
 
         public RecordingLogger<McpClientManager> Logger { get; }
 
@@ -555,7 +696,7 @@ public sealed class McpClientManagerLifecycleTests
         }
     }
 
-    private sealed class ControlledMcpClientRuntime : IMcpClientRuntime
+    internal sealed class ControlledMcpClientRuntime : IMcpClientRuntime
     {
         private readonly ConcurrentQueue<ClientPlan> _plans = new();
         private readonly ConcurrentDictionary<McpClient, ClientPlan> _clients = new();
@@ -584,6 +725,10 @@ public sealed class McpClientManagerLifecycleTests
                 throwOnError: true)!;
             var client = (McpClient)RuntimeHelpers.GetUninitializedObject(implementationType);
             plan.Client = client;
+            plan.NotificationHandlers = options.Handlers.NotificationHandlers?.ToDictionary(
+                static pair => pair.Key,
+                static pair => pair.Value,
+                StringComparer.Ordinal) ?? new Dictionary<string, Func<JsonRpcNotification, CancellationToken, ValueTask>>();
             _clients[client] = plan;
             Interlocked.Increment(ref _createCount);
             plan.Created.TrySetResult();
@@ -598,6 +743,73 @@ public sealed class McpClientManagerLifecycleTests
             if (plan.Initialize is not null)
                 await plan.Initialize(cancellationToken);
 
+            var functions = BuildFunctions(plan);
+            return new McpClientInitialization(functions.Values.ToList(), plan.Prompts);
+        }
+
+        public McpCatalogNotificationProfile GetCatalogNotificationProfile(McpClient client)
+            => _clients[client].NotificationProfile;
+
+        public Task ListenForCatalogChangesAsync(
+            McpClient client,
+            RequestId requestId,
+            SubscriptionsListenNotifications notifications,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            Interlocked.Increment(ref plan.ListenCountStorage);
+            plan.ListenRequestId = requestId;
+            plan.ListenNotifications = notifications;
+            plan.ListenStarted.TrySetResult();
+            return plan.Listen is null
+                ? Task.CompletedTask
+                : plan.Listen(cancellationToken);
+        }
+
+        public async ValueTask<IReadOnlyList<AIFunction>> ListToolsAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            var refreshCount = Interlocked.Increment(ref plan.RefreshCountStorage);
+            if (plan.BeforeListTools is not null)
+                await plan.BeforeListTools(refreshCount, cancellationToken);
+            if (plan.ListFailure is not null)
+                throw plan.ListFailure;
+            return BuildFunctions(plan).Values.ToList();
+        }
+
+        public ValueTask<IReadOnlyList<Prompt>> ListPromptsAsync(
+            McpClient client,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            Interlocked.Increment(ref plan.PromptRefreshCountStorage);
+            if (plan.PromptListFailure is not null)
+                return ValueTask.FromException<IReadOnlyList<Prompt>>(plan.PromptListFailure);
+            return ValueTask.FromResult<IReadOnlyList<Prompt>>(plan.Prompts);
+        }
+
+        public ValueTask<GetPromptResult> GetPromptAsync(
+            McpClient client,
+            string promptName,
+            IReadOnlyDictionary<string, string> arguments,
+            CancellationToken cancellationToken)
+        {
+            var plan = _clients[client];
+            Interlocked.Increment(ref plan.PromptInvocationCountStorage);
+            plan.LastPromptName = promptName;
+            plan.LastPromptArguments = new Dictionary<string, string>(arguments, StringComparer.Ordinal);
+            if (plan.GetPromptFailure is not null)
+                return ValueTask.FromException<GetPromptResult>(plan.GetPromptFailure);
+            return plan.GetPromptResult is null
+                ? ValueTask.FromException<GetPromptResult>(
+                    new InvalidOperationException("The controlled prompt result is not configured."))
+                : ValueTask.FromResult(plan.GetPromptResult);
+        }
+
+        private IReadOnlyDictionary<string, AIFunction> BuildFunctions(ClientPlan plan)
+        {
             var functions = new Dictionary<string, AIFunction>(StringComparer.OrdinalIgnoreCase);
             foreach (var name in plan.ToolNames)
             {
@@ -606,7 +818,7 @@ public sealed class McpClientManagerLifecycleTests
                 _functions[function] = plan;
             }
 
-            return new McpClientInitialization(functions.Values.ToList());
+            return functions;
         }
 
         public async ValueTask<object?> InvokeAsync(
@@ -632,20 +844,51 @@ public sealed class McpClientManagerLifecycleTests
         }
     }
 
-    private sealed class ClientPlan(params string[] toolNames)
+    internal sealed class ClientPlan(params string[] toolNames)
     {
-        public string[] ToolNames { get; } = toolNames;
+        public string[] ToolNames { get; set; } = toolNames;
+
+        public IReadOnlyList<Prompt> Prompts { get; set; } = [];
+
+        public GetPromptResult? GetPromptResult { get; set; }
 
         public Func<CancellationToken, Task>? Initialize { get; init; }
 
         public Func<int, CancellationToken, Task<object?>>? Invoke { get; init; }
 
+        public Func<CancellationToken, Task>? Listen { get; init; }
+
+        public Func<int, CancellationToken, Task>? BeforeListTools { get; init; }
+
+        public McpCatalogNotificationProfile NotificationProfile { get; init; } =
+            new("2025-11-25", false, false);
+
         public Exception? DisposeFailure { get; init; }
+
+        public Exception? ListFailure { get; set; }
+
+        public Exception? PromptListFailure { get; set; }
+
+        public Exception? GetPromptFailure { get; set; }
+
+        public string? LastPromptName { get; set; }
+
+        public IReadOnlyDictionary<string, string>? LastPromptArguments { get; set; }
+
+        public IReadOnlyDictionary<string, Func<JsonRpcNotification, CancellationToken, ValueTask>> NotificationHandlers { get; set; } =
+            new Dictionary<string, Func<JsonRpcNotification, CancellationToken, ValueTask>>();
+
+        public RequestId ListenRequestId { get; set; }
+
+        public SubscriptionsListenNotifications? ListenNotifications { get; set; }
 
         public TaskCompletionSource Created { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public TaskCompletionSource Disposed { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource ListenStarted { get; } =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public McpClient? Client { get; set; }
@@ -654,9 +897,36 @@ public sealed class McpClientManagerLifecycleTests
 
         public int DisposeCountStorage;
 
+        public int RefreshCountStorage;
+
+        public int PromptRefreshCountStorage;
+
+        public int PromptInvocationCountStorage;
+
+        public int ListenCountStorage;
+
         public int InvocationCount => Volatile.Read(ref InvocationCountStorage);
 
         public int DisposeCount => Volatile.Read(ref DisposeCountStorage);
+
+        public int RefreshCount => Volatile.Read(ref RefreshCountStorage);
+
+        public int PromptRefreshCount => Volatile.Read(ref PromptRefreshCountStorage);
+
+        public int PromptInvocationCount => Volatile.Read(ref PromptInvocationCountStorage);
+
+        public int ListenCount => Volatile.Read(ref ListenCountStorage);
+
+        public ValueTask NotifyAsync(
+            string method,
+            JsonNode? parameters,
+            CancellationToken cancellationToken = default)
+        {
+            if (!NotificationHandlers.TryGetValue(method, out var handler))
+                throw new InvalidOperationException($"No notification handler is registered for '{method}'.");
+
+            return handler(new JsonRpcNotification { Method = method, Params = parameters }, cancellationToken);
+        }
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink

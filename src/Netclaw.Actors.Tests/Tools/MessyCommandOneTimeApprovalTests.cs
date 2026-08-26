@@ -64,10 +64,17 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
             UsedStrictFallback: false));
         services.AddSingleton<ToolAccessPolicy>(sp => new ToolAccessPolicy(
             sp.GetRequiredService<ToolConfig>(),
-            sp.GetRequiredService<EffectivePolicyDefaults>()));
+            sp.GetRequiredService<EffectivePolicyDefaults>(),
+            new Netclaw.Security.ShellCommandPolicy(),
+            new Netclaw.Security.ToolPathPolicy([])));
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(toolConfig, new NetclawPaths(), new Netclaw.Security.ToolPathPolicy([]), new Netclaw.Security.ShellCommandPolicy());
+        registry.WithFirstPartyTools(
+            toolConfig,
+            new NetclawPaths(),
+            new Netclaw.Security.ToolPathPolicy([]),
+            new Netclaw.Security.ShellCommandPolicy(),
+            toolAccessPolicy: TestToolAccessPolicy.Create(toolConfig));
         services.AddSingleton(registry);
     }
 
@@ -89,12 +96,16 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
         var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
         var executor = new DispatchingToolExecutor(registry, policy, approvalService);
 
-        // bash for-loop is messy — tokenizer refuses to extract verb chains
-        // for control-flow commands, so Patterns is empty.
+        // The runtime iterator is unresolved, so the command remains messy
+        // even though bounded literal loops can now publish authored facts.
         var toolCall = new FunctionCallContent(
             "call-messy-once",
             "shell_execute",
-            ToolInput.Create("Command", "for i in 1 2 3; do echo $i; done"));
+            ToolInput.Create(
+                "Command",
+                "for i in $(printf '1 2 3'); do echo \"$i\"; done",
+                "_rationale",
+                "Verify one-time approval for a complex command."));
 
         var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
         {
@@ -117,7 +128,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
         // patterns list is empty (per ApprovalContext.Patterns above), so
         // the bypass must rely on tool-name match only.
         context.OneTimeApprovedToolName = toolCall.Name;
-        context.SetOneTimeApprovedPatterns(firstAttempt.ApprovalContext.Patterns);
+        context.SetOneTimeApprovedPatterns(OneTimeApprovalKeys.Create(firstAttempt.ApprovalContext));
 
         // The retry must succeed without throwing. Output text varies by
         // environment (bash for-loop expansion); the load-bearing assertion

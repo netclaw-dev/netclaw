@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebFetchTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -19,11 +19,13 @@ namespace Netclaw.Actors.Tools;
 /// For HTML: default format preserves structure; text mode extracts plain text.
 /// For binary content (images, PDFs, etc.): saves raw bytes with correct extension.
 /// For other text content: saves as-is with the URL's file extension preserved.
-/// Returns a summary with the file path so the agent can use file_read,
-/// grep, or attach_file to work with the content.
+/// Returns a summary with the file path so the agent can inspect or deliver
+/// the saved content through an available tool.
 /// </summary>
 [NetclawTool("web_fetch",
-    "Fetch a URL and save its content to a local file. HTML: format='raw' (default) preserves structure, format='text' extracts plain text. Binary (images, PDFs): saves raw bytes with correct extension. Returns file path with preview. Use file_read to examine content or attach_file to send binary files to the user.",
+    "Use for retrieving a known external page or URL. Save content to a local file without shell. " +
+    "HTML raw mode preserves structure; text mode extracts text. Binary content keeps its correct extension. " +
+    "Returns a file path with preview. Use file_read to examine content. Use an available file-delivery tool, or return the saved path to the caller.",
     Grant = "web")]
 public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 {
@@ -264,7 +266,15 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
     {
         Directory.CreateDirectory(directory);
         var sanitized = SanitizeForFilename(uri);
-        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}{extension}";
+
+        // The timestamp is for a human to read and sort, not for uniqueness.
+        // Two fetches of the same URL within one second gave the same
+        // filename, and File.WriteAllBytes/WriteAllText overwrote the first
+        // fetch with no warning. The guid segment gives real uniqueness;
+        // millisecond precision keeps same-second fetches in fetch order
+        // when the directory is sorted by name.
+        var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
+        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}-{uniqueSuffix}{extension}";
         return Path.Combine(directory, filename);
     }
 
@@ -315,7 +325,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         sb.AppendLine($"Saved to: {filePath} ({byteCount:N0} bytes)");
         sb.AppendLine($"Content-Type: {contentType}");
         sb.AppendLine();
-        sb.AppendLine("This is a binary file. Use attach_file to send it to the user, or file_read if the format supports text extraction.");
+        sb.AppendLine("This is a binary file. Use file_read if the format supports text extraction. Use an available file-delivery tool, or return the saved path to the caller.");
         return sb.ToString().TrimEnd();
     }
 

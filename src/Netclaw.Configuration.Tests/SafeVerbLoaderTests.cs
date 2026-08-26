@@ -18,23 +18,36 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("ls"));
         Assert.True(list.Contains("grep"));
         Assert.True(list.Contains("git status"));
-        Assert.True(list.Contains("sed -n"));
+        Assert.False(list.Contains("sed -n"));
         Assert.False(list.Contains("git push"));
         Assert.False(list.Contains("rm"));
 
-        // Read-only system/info verbs and read-only git/gh queries added by
-        // the safe-verb expansion.
-        Assert.True(list.Contains("date"));
+        // Reviewed system and repository diagnostics remain available.
         Assert.True(list.Contains("uname"));
         Assert.True(list.Contains("whoami"));
         Assert.True(list.Contains("git describe"));
-        Assert.True(list.Contains("gh pr view"));
+        Assert.True(list.Contains("git ls-tree"));
         Assert.True(list.Contains("gh run list"));
 
-        // Excluded on purpose: env can prefix an arbitrary command; git fetch
-        // mutates the object store; gh api can issue any HTTP method; printenv
-        // and ps dump environment/process state the safe-space gate cannot
-        // scope; gh auth status --show-token would print the GitHub token.
+        // Each excluded phrase has an accepted argument shape that can mutate,
+        // execute code, or expose ambient secrets.
+        Assert.False(list.Contains("find"));
+        Assert.False(list.Contains("awk"));
+        Assert.False(list.Contains("rg"));
+        Assert.False(list.Contains("sort"));
+        Assert.False(list.Contains("date"));
+        Assert.False(list.Contains("hostname"));
+        Assert.False(list.Contains("tree"));
+        Assert.False(list.Contains("uniq"));
+        Assert.False(list.Contains("git log"));
+        Assert.False(list.Contains("git diff"));
+        Assert.False(list.Contains("git show"));
+        Assert.False(list.Contains("git branch"));
+        Assert.False(list.Contains("git remote"));
+        Assert.False(list.Contains("gh pr view"));
+        Assert.False(list.Contains("gh issue list"));
+        Assert.False(list.Contains("gh run view"));
+        Assert.False(list.Contains("gh repo view"));
         Assert.False(list.Contains("env"));
         Assert.False(list.Contains("git fetch"));
         Assert.False(list.Contains("gh api"));
@@ -49,7 +62,7 @@ public sealed class SafeVerbLoaderTests
         var list = SafeVerbLoader.Load(isWindows: true);
 
         // Spot-check a few entries from the spec's default Windows list.
-        Assert.True(list.Contains("dir"));
+        Assert.True(list.Contains("Get-ChildItem"));
         Assert.True(list.Contains("Get-Content"));
         Assert.True(list.Contains("Test-Path"));
         Assert.True(list.Contains("git status"));
@@ -59,11 +72,16 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("Get-Date"));
         Assert.True(list.Contains("whoami"));
         Assert.True(list.Contains("git describe"));
-        Assert.True(list.Contains("gh pr view"));
+        Assert.True(list.Contains("git ls-tree"));
+        Assert.True(list.Contains("gh run list"));
 
-        // Excluded on purpose: gh api can issue any HTTP method; Get-Process
-        // exposes other processes' state; gh auth status --show-token would
-        // print the GitHub token.
+        // Aliases use the canonical parser token. Other exclusions have an
+        // unsafe accepted argument shape or expose ambient state.
+        Assert.False(list.Contains("dir"));
+        Assert.False(list.Contains("type"));
+        Assert.False(list.Contains("where"));
+        Assert.False(list.Contains("git log"));
+        Assert.False(list.Contains("gh pr view"));
         Assert.False(list.Contains("gh api"));
         Assert.False(list.Contains("Get-Process"));
         Assert.False(list.Contains("gh auth status"));
@@ -82,20 +100,84 @@ public sealed class SafeVerbLoaderTests
     [Fact]
     public void Contains_uses_platform_correct_case_rules()
     {
-        var list = SafeVerbLoader.Load(isWindows: false);
+        var linux = SafeVerbLoader.Load(isWindows: false);
+        var windows = SafeVerbLoader.Load(isWindows: true);
 
-        if (OperatingSystem.IsWindows())
-        {
-            // OrdinalIgnoreCase
-            Assert.True(list.Contains("LS"));
-            Assert.True(list.Contains("ls"));
-        }
-        else
-        {
-            // Ordinal — `LS` is a different binary from `ls` on POSIX.
-            Assert.False(list.Contains("LS"));
-            Assert.True(list.Contains("ls"));
-        }
+        Assert.False(linux.Contains("LS"));
+        Assert.True(linux.Contains("ls"));
+        Assert.True(windows.Contains("GET-CONTENT"));
+        Assert.True(windows.Contains("Get-Content"));
+    }
+
+    [Fact]
+    public void Compatibility_factory_preserves_exact_phrase_text()
+    {
+        var list = SafeVerbList.FromVerbs(ApprovalShell.Bash, ["  git  status  "]);
+
+        Assert.True(list.Contains("git  status"));
+        Assert.False(list.Contains("git status"));
+        Assert.True(list.TryMatchReviewedDiagnostic(
+            ApprovalShell.Bash,
+            ["git", "status", "--short"],
+            out var matchedTokenCount));
+        Assert.Equal(2, matchedTokenCount);
+    }
+
+    [Fact]
+    public void Reviewed_phrase_matches_only_a_canonical_token_prefix_for_its_shell()
+    {
+        var linux = SafeVerbLoader.Load(isWindows: false);
+        var windows = SafeVerbLoader.Load(isWindows: true);
+
+        Assert.True(linux.TryMatchReviewedDiagnostic(
+            ApprovalShell.Bash,
+            ["git", "ls-tree", "feature"],
+            out var linuxTokenCount));
+        Assert.Equal(2, linuxTokenCount);
+        Assert.False(linux.TryMatchReviewedDiagnostic(
+            ApprovalShell.Bash,
+            ["git", "ls-treex", "feature"],
+            out _));
+        Assert.False(linux.TryMatchReviewedDiagnostic(
+            ApprovalShell.PowerShell,
+            ["git", "ls-tree", "feature"],
+            out _));
+        Assert.True(windows.TryMatchReviewedDiagnostic(
+            ApprovalShell.PowerShell,
+            ["get-content", "README.md"],
+            out var windowsTokenCount));
+        Assert.Equal(1, windowsTokenCount);
+        Assert.False(windows.TryMatchReviewedDiagnostic(
+            ApprovalShell.Bash,
+            ["Get-Content", "README.md"],
+            out _));
+    }
+
+    [Fact]
+    public void Reviewed_phrase_match_returns_the_longest_prefix()
+    {
+        var list = SafeVerbList.FromVerbs(
+            ApprovalShell.Bash,
+            ["git", "git status"]);
+
+        Assert.True(list.TryMatchReviewedDiagnostic(
+            ApprovalShell.Bash,
+            ["git", "status", "--short"],
+            out var matchedTokenCount));
+        Assert.Equal(2, matchedTokenCount);
+    }
+
+    [Fact]
+    public void Operand_match_uses_platform_case_rules_and_exact_verb_identity()
+    {
+        var linux = SafeVerbLoader.Load(isWindows: false);
+        var windows = SafeVerbLoader.Load(isWindows: true);
+
+        Assert.True(linux.IsOperandBearingMatch("git ls-tree feature", "git ls-tree"));
+        Assert.False(linux.IsOperandBearingMatch("GIT LS-TREE feature", "git ls-tree"));
+        Assert.True(windows.IsOperandBearingMatch("GIT LS-TREE feature", "git ls-tree"));
+        Assert.False(windows.IsOperandBearingMatch("Get-Content X", "git ls-tree"));
+        Assert.False(windows.IsOperandBearingMatch("gh run list X", "git ls-tree"));
     }
 
     [Fact]

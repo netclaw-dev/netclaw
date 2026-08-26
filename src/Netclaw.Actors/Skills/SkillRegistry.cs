@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillRegistry.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -15,14 +15,27 @@ namespace Netclaw.Actors.Skills;
 public sealed class SkillRegistry
 {
     private readonly object _writeLock = new();
+    private IReadOnlyList<SkillEntry> _fileSkills = [];
+    private readonly Dictionary<string, IReadOnlyList<SkillEntry>> _mcpPromptSkills =
+        new(StringComparer.OrdinalIgnoreCase);
+    private IReadOnlyList<SkillScanIssue> _scanIssues = [];
     private volatile Snapshot _snapshot = Snapshot.Empty;
 
     public void Register(SkillEntry skill)
     {
         lock (_writeLock)
         {
-            var current = _snapshot;
-            _snapshot = Snapshot.Create(current.Skills.Append(skill), current.ScanIssues);
+            if (skill.Source is McpPromptSkillSource promptSource)
+            {
+                var current = _mcpPromptSkills.GetValueOrDefault(promptSource.ServerName) ?? [];
+                _mcpPromptSkills[promptSource.ServerName] = current.Append(skill).ToArray();
+            }
+            else
+            {
+                _fileSkills = _fileSkills.Append(skill).ToArray();
+            }
+
+            PublishCombinedSnapshot();
         }
     }
 
@@ -33,13 +46,69 @@ public sealed class SkillRegistry
     public void Clear()
     {
         lock (_writeLock)
+        {
+            _fileSkills = [];
+            _mcpPromptSkills.Clear();
+            _scanIssues = [];
             _snapshot = Snapshot.Empty;
+        }
     }
 
     public void ReplaceAll(IEnumerable<SkillEntry> skills, IReadOnlyList<SkillScanIssue>? issues = null)
     {
+        var fileSkills = skills.ToArray();
+        if (fileSkills.Any(static skill => skill.Source is not FileSkillSource))
+            throw new ArgumentException("The file skill inventory can contain only file skills.", nameof(skills));
+
         lock (_writeLock)
-            _snapshot = Snapshot.Create(skills, issues ?? []);
+        {
+            _fileSkills = fileSkills;
+            _scanIssues = issues ?? [];
+            PublishCombinedSnapshot();
+        }
+    }
+
+    public IReadOnlyList<string> PublishMcpPromptSkills(string serverName, IEnumerable<SkillEntry> skills)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverName);
+        var promptSkills = ValidateMcpPromptSkills(serverName, skills);
+
+        lock (_writeLock)
+        {
+            var remoteConflicts = FindMcpPromptNameConflicts(serverName, promptSkills);
+            if (remoteConflicts.Count > 0)
+            {
+                throw new InvalidOperationException(
+                    $"MCP server '{serverName}' cannot publish ambiguous logical skill name(s): "
+                    + string.Join(", ", remoteConflicts));
+            }
+
+            if (promptSkills.Length == 0)
+                _mcpPromptSkills.Remove(serverName);
+            else
+                _mcpPromptSkills[serverName] = promptSkills;
+
+            var fileNames = new HashSet<string>(_fileSkills.Select(static skill => skill.Name),
+                StringComparer.OrdinalIgnoreCase);
+            var conflicts = promptSkills
+                .Where(skill => fileNames.Contains(skill.Name))
+                .Select(static skill => skill.Name)
+                .Order(StringComparer.Ordinal)
+                .ToArray();
+            PublishCombinedSnapshot();
+            return conflicts;
+        }
+    }
+
+    public IReadOnlyList<string> GetMcpPromptNameConflicts(
+        string serverName,
+        IEnumerable<SkillEntry> skills)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(serverName);
+        var promptSkills = ValidateMcpPromptSkills(serverName, skills);
+
+        lock (_writeLock)
+            return FindMcpPromptNameConflicts(serverName, promptSkills);
     }
 
     public IReadOnlyList<SkillEntry> GetAll() => _snapshot.Skills;
@@ -92,12 +161,15 @@ public sealed class SkillRegistry
     /// (they remain invokable via slash commands).
     /// </summary>
     public string GenerateIndex()
+        => GenerateIndex(static _ => true);
+
+    public string GenerateIndex(Func<SkillEntry, bool> isVisible)
     {
         var skills = _snapshot.Skills;
         if (skills.Count == 0)
             return string.Empty;
 
-        var visible = skills.Where(static s => !s.DisableModelInvocation).ToList();
+        var visible = skills.Where(s => !s.DisableModelInvocation && isVisible(s)).ToList();
         if (visible.Count == 0)
             return string.Empty;
 
@@ -119,7 +191,10 @@ public sealed class SkillRegistry
             foreach (var skill in group.OrderBy(static s => s.Name, StringComparer.Ordinal))
             {
                 var desc = TruncateDescription(skill.Description, maxLength: 120);
-                sb.AppendLine($"|  {skill.Name}: {desc}");
+                var signature = string.IsNullOrWhiteSpace(skill.ArgumentHint)
+                    ? skill.Name
+                    : $"{skill.Name} {skill.ArgumentHint}";
+                sb.AppendLine($"|  {signature}: {desc}");
             }
         }
 
@@ -136,6 +211,55 @@ public sealed class SkillRegistry
             return description;
 
         return description[..(maxLength - 3)] + "...";
+    }
+
+    private void PublishCombinedSnapshot()
+    {
+        var fileNames = new HashSet<string>(_fileSkills.Select(static skill => skill.Name),
+            StringComparer.OrdinalIgnoreCase);
+        var remoteSkills = _mcpPromptSkills
+            .OrderBy(static pair => pair.Key, StringComparer.Ordinal)
+            .SelectMany(static pair => pair.Value)
+            .Where(skill => !fileNames.Contains(skill.Name));
+        _snapshot = Snapshot.Create(_fileSkills.Concat(remoteSkills), _scanIssues);
+    }
+
+    private static SkillEntry[] ValidateMcpPromptSkills(
+        string serverName,
+        IEnumerable<SkillEntry> skills)
+    {
+        var promptSkills = skills.ToArray();
+        foreach (var skill in promptSkills)
+        {
+            if (skill.Source is not McpPromptSkillSource source
+                || !string.Equals(source.ServerName, serverName, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new ArgumentException(
+                    $"Skill '{skill.Name}' is not an MCP prompt from server '{serverName}'.",
+                    nameof(skills));
+            }
+        }
+
+        return promptSkills;
+    }
+
+    private IReadOnlyList<string> FindMcpPromptNameConflicts(
+        string serverName,
+        IReadOnlyList<SkillEntry> promptSkills)
+    {
+        var otherServerNames = _mcpPromptSkills
+            .Where(pair => !string.Equals(pair.Key, serverName, StringComparison.OrdinalIgnoreCase))
+            .SelectMany(static pair => pair.Value)
+            .Select(static skill => skill.Name)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+        return promptSkills
+            .Select(static skill => skill.Name)
+            .GroupBy(static name => name, StringComparer.OrdinalIgnoreCase)
+            .Where(group => group.Count() > 1 || otherServerNames.Contains(group.Key))
+            .Select(static group => group.Key)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
     }
 
 
@@ -193,7 +317,8 @@ public sealed class SkillRegistry
             foreach (var skill in skillList)
             {
                 byName[skill.Name] = skill;
-                byFile[Path.GetFullPath(skill.FilePath)] = skill;
+                if (skill.Source is FileSkillSource fileSource)
+                    byFile[Path.GetFullPath(fileSource.FilePath)] = skill;
                 if (skill.UserInvocable)
                     slashCommands[skill.Name] = skill;
             }

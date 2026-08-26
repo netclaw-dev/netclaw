@@ -119,7 +119,8 @@ public sealed class PublicAudienceFileAccessPolicyTests : IDisposable
         var policy = new ScopedFileAccessPolicy(toolConfig, _paths);
         var publicContext = CreateContext(TrustAudience.Public);
 
-        var allowed = policy.TryResolveWritePath("/some/path", publicContext, out _, out var error);
+        var path = Path.Combine(Path.GetTempPath(), "netclaw-public-denied.txt");
+        var allowed = policy.TryResolveWritePath(path, publicContext, out _, out var error);
 
         Assert.False(allowed);
         Assert.Contains("Public", error);

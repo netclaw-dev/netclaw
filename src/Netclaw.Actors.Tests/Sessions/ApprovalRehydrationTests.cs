@@ -201,8 +201,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         // Idle timeout with the recovered approval still pending: the session
         // passivates (approval state is journaled) instead of deferring forever.
         var escapedId = Uri.EscapeDataString(sessionId.Value);
+        // The resolve budget bounds the session spawn and recovery under a
+        // starved CI scheduler. It does not measure correctness.
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
-            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            .ResolveOne(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Watch(child);
         child.Tell(new LeaveSession(rejoinProbe) { SessionId = sessionId });
         child.Tell(ReceiveTimeout.Instance);
@@ -1283,6 +1285,74 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Cold_recovered_denied_scratch_retry_preserves_session_directory_hint()
+    {
+        const string callId = "call-shell-scratch-denied";
+        const string scratchDirectory = "/home/user/.netclaw/sessions/example";
+        _toolExecutor.GatedTools.Add("shell_execute");
+        _toolExecutor.SessionScratchRetryTools["shell_execute"] = scratchDirectory;
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(callId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+
+        var sessionId = new SessionId("test-channel/scratch-denied-redrive");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("scratch-denied-redrive-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await ColdRespawnAsync(sessionId);
+
+        var subscriberB = CreateTestProbe("scratch-denied-redrive-sub-b");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriberB)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+            SenderId = new SenderId("local-user")
+        }, ActorRefs.Nobody);
+
+        var toolResult = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriberB.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains("approval_denied_by_user", toolResult.Result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(scratchDirectory, toolResult.Result, StringComparison.Ordinal);
+        Assert.DoesNotContain("set_working_directory", toolResult.Result, StringComparison.Ordinal);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+    }
+
+    [Fact]
     public async Task Cold_recovered_redrive_restores_boundary_and_channel_support_flags()
     {
         const string callId = "call-shell-trust-context";
@@ -1448,8 +1518,10 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
 
         var escapedId = Uri.EscapeDataString(sessionId.Value);
+        // The resolve budget bounds the session spawn and recovery under a
+        // starved CI scheduler. It does not measure correctness.
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
-            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            .ResolveOne(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Watch(child);
 
         // Drop the subscriber and force the idle timeout so the session enters
@@ -1482,8 +1554,13 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     private async Task ColdRespawnAsync(SessionId sessionId)
     {
         var escapedId = Uri.EscapeDataString(sessionId.Value);
+        // The resolve waits for the session child to finish its spawn and its
+        // Akka.Persistence recovery. The budget bounds that multi-hop startup
+        // under a starved CI scheduler. It does not measure correctness. About
+        // twenty cold-respawn tests call this helper, so a short budget makes
+        // the whole group flake at once.
         var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
-            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            .ResolveOne(TimeSpan.FromSeconds(15), TestContext.Current.CancellationToken);
         Watch(child);
         Sys.Stop(child);
         await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
@@ -1532,6 +1609,8 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
     /// <summary>Tool names that require interactive approval before execution.</summary>
     public HashSet<string> GatedTools { get; } = [];
 
+    public Dictionary<string, string> SessionScratchRetryTools { get; } = new(StringComparer.Ordinal);
+
     /// <summary>
     /// Audience on the execution context of the most recent successful
     /// execution. A cold-recovered re-drive must run at the original turn's
@@ -1568,7 +1647,7 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
 
             if (!hasOneTimeGrant)
             {
-                throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                var approvalContext = new ToolApprovalContext(
                     toolCall.Name,
                     $"Tool {toolCall.Name} requires approval",
                     Patterns: [toolCall.Name],
@@ -1582,7 +1661,17 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
                     ],
                     Cwd: null,
                     IsMessy: false,
-                    Candidates: [new Netclaw.Security.ApprovalCandidate(toolCall.Name, Directory: null)]));
+                    Candidates: [new Netclaw.Security.ApprovalCandidate(toolCall.Name, Directory: null)]);
+                if (SessionScratchRetryTools.TryGetValue(toolCall.Name, out var scratchDirectory))
+                {
+                    approvalContext = approvalContext with
+                    {
+                        IsSessionScratchRetry = true,
+                        SessionScratchDirectory = scratchDirectory
+                    };
+                }
+
+                throw new ToolApprovalRequiredException(approvalContext);
             }
         }
 

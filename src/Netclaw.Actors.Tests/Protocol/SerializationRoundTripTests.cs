@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SerializationRoundTripTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -149,6 +149,24 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.Equal(original.SourceReminderId, result.SourceReminderId);
         Assert.Equal(original.SourceBackgroundJobId, result.SourceBackgroundJobId);
+    }
+
+    [Fact]
+    public void Tool_result_failure_code_round_trips_through_the_transport_DTO()
+    {
+        var original = new ToolResultOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            CallId = new ToolCallId("call-rejected"),
+            ToolName = new ToolName("search"),
+            Result = "The tool was not executed.",
+            FailureCode = "invalid_rationale"
+        };
+
+        var result = Assert.IsType<ToolResultOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(original)));
+
+        Assert.Equal("invalid_rationale", result.FailureCode);
     }
 
     [Fact]
@@ -806,10 +824,15 @@ public sealed class SerializationRoundTripTests : TestKit
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U-observer"],
             Cwd = "/home/user/project",
+            SessionScratchDirectory = "/home/user/.netclaw/sessions/example",
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
             [
-                new Netclaw.Security.ApprovalCandidate("git", "/home/user/project"),
+                new Netclaw.Security.ApprovalCandidate("git", "/home/user/project")
+                {
+                    Shell = Netclaw.Configuration.ApprovalShell.Bash,
+                    VerbTokens = Array.AsReadOnly(["git", "push"]),
+                },
                 new Netclaw.Security.ApprovalCandidate("ls", null)
             ],
             TurnContext = new TurnContextRecord
@@ -860,12 +883,17 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.HasThirdPartyAdoptedContext, result.HasThirdPartyAdoptedContext);
         Assert.Equal(wrapped.AdoptedSpeakerIds, result.AdoptedSpeakerIds);
         Assert.Equal(wrapped.Cwd, result.Cwd);
+        Assert.Equal(wrapped.SessionScratchDirectory, result.SessionScratchDirectory);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);
         Assert.Equal("git", result.Candidates[0].Verb);
         Assert.Equal("/home/user/project", result.Candidates[0].Directory);
+        Assert.Equal(Netclaw.Configuration.ApprovalShell.Bash, result.Candidates[0].Shell);
+        Assert.Equal(["git", "push"], result.Candidates[0].VerbTokens);
         Assert.Equal("ls", result.Candidates[1].Verb);
         Assert.Null(result.Candidates[1].Directory);
+        Assert.Null(result.Candidates[1].Shell);
+        Assert.Null(result.Candidates[1].VerbTokens);
         Assert.NotNull(result.TurnContext);
         Assert.Equal(wrapped.TurnContext.SessionId, result.TurnContext.SessionId);
         Assert.Equal(wrapped.TurnContext.TurnId, result.TurnContext.TurnId);

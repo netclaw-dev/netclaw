@@ -114,185 +114,73 @@ SHALL be able to add or remove patterns via configuration.
 
 ### Requirement: Shell command pattern matching
 
-The system SHALL extract verb-chain prefix patterns from shell commands
-using tokenization. The verb chain SHALL consist of non-flag tokens from
-the start of the command until the first flag (`-`), path, URL, or
-call-specific value argument. A token SHALL be classified as a
-call-specific value iff it is not a flag, not path-shaped, and contains
-a digit — one morphological rule, not a taxonomy of value shapes.
-Extraction is greedy: bare-word operands that are neither flags, paths,
-URLs, nor digit-bearing values (all-alpha subcommands, remote names,
-branch names, refs) SHALL remain in the verb chain — the extractor SHALL
-NOT attempt to distinguish all-alpha subcommands from positional
-operands.
+The system SHALL derive one candidate from every complete canonical
+`ShellSyntaxTree.CommandOccurrence`. Candidate identity SHALL use the static
+authored verb tokens reported by ShellSyntaxTree. Netclaw SHALL NOT parse an
+executable's private subcommands, flags, options, or operands.
 
-> **Why digit-bearing tokens are excluded:** Tokens containing digits
-> (`123`, `8080`, `0.4.2`, `v0.4.2`, `aa211dcb`, `feature2`) are
-> overwhelmingly call-specific values — ticket IDs, ports, timeouts,
-> versions, SHAs, refs — that vary between invocations of the same verb
-> chain. Baking them into the pattern produces overly-specific approval
-> entries that do not generalize: `git tag v0.4.2` vs `git tag v0.5.0`
-> would create two unrelated entries, forcing separate approval for each
-> release. This generalizes the earlier bare-integer rule (issue #1331).
-> All-alpha operands are intentionally NOT classified: no shape rule can
-> distinguish a branch name (`dev`) from a subcommand (`worktree`), and
-> mis-stripping a subcommand would silently widen a grant. Flags are
-> exempt (`-3`, `--max-count=10` carry invocation intent); path-shaped
-> tokens are exempt so digit-bearing paths still reach directory scoping.
+Every candidate SHALL retain its occurrence, redirects, effective and authored
+value facts, real scope, and optional intent scope. Pipelines, lists, and loops
+SHALL NOT hide later occurrences. Incomplete identity or unknown policy-relevant
+facts SHALL remain strict.
 
-Where greedy extraction has folded a trailing value token into the verb
-chain (e.g. `git tag v0.4.2`, where `v0.4.2` is lowercase-leading and
-therefore verb-like to the parser), the system SHALL trim trailing
-call-specific value tokens from the chain, always retaining at least the
-command word. Trimming SHALL be trailing-only: mid-chain digit-bearing
-tokens (`aws s3 ls`) SHALL NOT be removed. Trimming SHALL apply
-identically on the gate (candidate) path and the persisted/display
-pattern path so the two normalize to the same verb chain.
+Stored token-prefix phrases SHALL compare whole tokens with the selected
+shell's case rule. Raw string prefix SHALL NOT authorize. Same-language wrapper
+occurrences reported by ShellSyntaxTree SHALL remain visible. Cross-language
+payloads SHALL remain arguments to the native host command.
 
-A multi-line argument — one containing an embedded line break (LF or
-CR), which can only arise inside quoting — SHALL also terminate pattern
-extraction, excluding the argument and everything after it (issue
-#1402). Multi-line quoted strings are call-specific content (message
-bodies, inline scripts) that varies between invocations of the same
-verb chain, and an embedded line break corrupts the stored pattern's
-display and the approval store's formatting; a lone CR additionally
-permits cursor-repositioning spoofing in terminal-rendered prompts. A
-preceding flag (e.g. `--message`) SHALL be retained in the pattern — it
-carries invocation intent. The same termination rule SHALL apply to
-redirect targets: a quoted redirect target carrying an embedded line
-break (e.g. `>> "$LOGDIR⏎file"`) terminates the redirect walk so the
-break never reaches the stored pattern.
+Display and persistence SHALL keep existing spoof protections. Raw source SHALL
+remain verbatim in the prompt only. CR, LF, bidi controls, malformed quoting,
+and multiword free-text SHALL NOT enter a stored phrase. Path evidence SHALL
+remain available to directory policy. Candidate normalization SHALL be the same
+for actor match, prompt options, and persistence.
 
-For shell approval units, `&&`, `||`, and `;` SHALL split into separate
-units, while `|` SHALL remain inside the current unit. For `bash -c` or
-`sh -c` wrappers, the inner command SHALL be extracted and scanned
-recursively.
+#### Scenario: Token-prefix grant covers a greedy candidate
 
-When `ShellTokenizer.SplitCompoundCommand` detects bash control-flow
-tokens or unbalanced quotes/brackets, it SHALL return an empty
-verb-chain list. The approval gate SHALL then offer only `Once` and
-`Deny`. See the "Pattern extraction refuses bash control-flow"
-requirement for details.
+- **GIVEN** a Bash token-prefix grant `git push`
+- **AND** ShellSyntaxTree reports tokens `git`, `push`, `upstream`
+- **WHEN** actor matching compares them
+- **THEN** the grant covers the candidate
+- **AND** no Git-specific remote rule runs
 
-The matcher SHALL operate on `ApprovalEntry` records keyed by
-`(verb, directory)`. The "is this string a verb chain or a directory
-root?" inspection logic of v1 SHALL NOT be present in the v2 matcher.
+#### Scenario: Prefix collision does not match
 
-Approval persistence SHALL store one `ApprovalEntry` per extracted verb
-chain. Compound commands SHALL produce N entries from one user click on
-`Always here` or `Always anywhere`.
+- **GIVEN** a grant with tokens `git`, `push`
+- **WHEN** the candidate tokens are `git`, `push-force`
+- **THEN** the grant does not match
 
-#### Scenario: Verb chain extracted from simple command
+#### Scenario: All occurrences remain visible
 
-- **GIVEN** the command `git push origin main`
-- **WHEN** the pattern is extracted
-- **THEN** the pattern is `git push origin main`
-- **AND** the all-alpha operands `origin` and `main` remain in the verb
-  chain because greedy extraction does not strip positional operands
+- **WHEN** source is `inspect && head file; wc file`
+- **THEN** candidates exist for `inspect`, `head`, and `wc`
+- **AND** coverage for one cannot hide another
 
-#### Scenario: Verb chain strips bare integer positional argument
+#### Scenario: Same-language wrapper exposes inner occurrences
 
-- **GIVEN** the command `freshdesk ticket get 123`
-- **WHEN** the pattern is extracted
-- **THEN** the pattern is `freshdesk ticket get`
-- **AND** the digit-bearing token `123` is excluded because it is
-  call-specific
+- **WHEN** ShellSyntaxTree reports a static `bash -c` inner occurrence
+- **THEN** that occurrence receives its own candidate and deny evaluation
+- **AND** Netclaw does not decode the wrapper itself
 
-#### Scenario: Verb chain generalizes across different integer values
+#### Scenario: Cross-language payload stays external data
 
-- **GIVEN** commands `nc host 8080` and `nc host 9090`
-- **WHEN** patterns are extracted for both
-- **THEN** both produce the same pattern `nc host`
-- **AND** approval granted for one integer value covers all values of the same verb chain
+- **GIVEN** the canonical shell is Bash
+- **WHEN** Bash invokes `pwsh -Command 'Get-Content ./a.txt'`
+- **THEN** `pwsh` is the Bash external-command candidate
+- **AND** the inline payload is not parsed as native PowerShell
 
-#### Scenario: Verb chain terminates at value token (not just skips it)
+#### Scenario: Multi-line or bidi content cannot persist
 
-- **GIVEN** the command `timeout 30 curl http://example.com`
-- **WHEN** the pattern is extracted
-- **THEN** the pattern is `timeout`
-- **AND** everything after the value token (including wrapped subcommands like `curl`) is dropped from the pattern
+- **WHEN** a candidate contains multi-line, carriage-return, or bidi-controlled
+  authored content
+- **THEN** that content is excluded from the normalized grant phrase
+- **AND** the prompt retains a separately escaped verbatim display
+- **AND** no reusable option is offered if a clean phrase cannot be formed
 
-#### Scenario: Digit-bearing operand terminates the pattern
+#### Scenario: Dynamic identity stays one-time
 
-- **GIVEN** the command `docker run --name test123 --port=8080`
-- **WHEN** the pattern is extracted
-- **THEN** the pattern is `docker run --name`
-- **AND** the digit-bearing operand `test123` and everything after it are
-  excluded because digit-bearing non-flag, non-path tokens are
-  call-specific values
-- **AND** the flag `--name` is retained because flags are exempt from
-  value classification
-
-#### Scenario: Version arguments normalize to one verb chain regardless of prefix
-
-- **GIVEN** commands `git tag v0.4.2` and `git tag 0.4.2`
-- **WHEN** candidate verbs and patterns are extracted for both
-- **THEN** both produce the verb chain `git tag`
-- **AND** a standing `git tag` grant auto-approves both forms
-- **AND** the lowercase-leading form is handled by trimming the trailing
-  value token the greedy walk folded into the chain
-
-#### Scenario: Multi-line quoted argument terminates the pattern
-
-- **GIVEN** the command `freshdesk ticket reply --message "Hi,⏎Thanks."`
-  where the quoted argument spans two lines
-- **WHEN** the pattern is extracted
-- **THEN** the pattern is `freshdesk ticket reply --message`
-- **AND** the multi-line body and everything after it are excluded
-  because multi-line arguments are call-specific content
-- **AND** the flag `--message` is retained because flags carry
-  invocation intent
-
-#### Scenario: Digit-bearing ref folded into the chain is trimmed
-
-- **GIVEN** the command `git show aa211dcb`
-- **WHEN** the candidate verb is extracted
-- **THEN** the verb chain is `git show`
-- **AND** the alpha-leading SHA normalizes the same way as a
-  digit-leading SHA (`git show 1234abcd`)
-
-#### Scenario: Trailing-only trim never removes mid-chain tokens
-
-- **GIVEN** the command `aws s3 ls`
-- **WHEN** the candidate verb is extracted
-- **THEN** the verb chain is `aws s3 ls`
-- **AND** the mid-chain digit-bearing token `s3` is untouched because
-  only trailing value tokens are trimmed
-
-#### Scenario: Verb chain stops at flag
-
-- **GIVEN** the command `ls -la /tmp`
-- **WHEN** the pattern is extracted
-- **THEN** the pattern is `ls`
-- **AND** the flag and path are not part of the persisted verb chain
-
-#### Scenario: Multi-level verb chain
-
-- **GIVEN** the command `docker compose up -d`
-- **WHEN** the pattern is extracted
-- **THEN** the pattern is `docker compose up`
-
-#### Scenario: Control operators create separate approval units
-
-- **GIVEN** the command `git add . && git commit -m "fix" && git push`
-- **WHEN** approval is checked
-- **THEN** `git add`, `git commit`, and `git push` are checked as
-  separate approval units against the v2 matcher
-
-#### Scenario: Compound segments batched in one prompt
-
-- **GIVEN** none of `git add`, `git commit`, `git push` are approved
-- **WHEN** the command `git add . && git commit -m "fix" && git push`
-  is checked
-- **THEN** a single approval prompt lists all three verbs as bullets
-- **AND** one click on `Always here` persists three `(verb, cwd)` entries
-
-#### Scenario: bash -c inner command scanned recursively
-
-- **GIVEN** the command `bash -c "git push --force"`
-- **WHEN** approval and hard deny are checked
-- **THEN** the inner command `git push --force` is extracted and scanned
-- **AND** verb chain `git push` is checked through the v2 matcher
+- **WHEN** source is `"$1" --version`
+- **THEN** no stored phrase or safe policy covers the identity
+- **AND** only one-time approval and deny are offered
 
 ### Requirement: IToolApprovalMatcher extension point
 
@@ -484,141 +372,106 @@ context remains quoted, non-executable background.
 ### Requirement: Persistent approval storage
 
 The system SHALL store persistent approvals in
-`~/.netclaw/config/tool-approvals.json` using a `version: 2` typed
-schema. Each entry SHALL be an `ApprovalEntry` with a required `verb`
-field (the verb chain, e.g. `git remote`) and an optional `directory`
-field (an absolute path, or `null` for the global wildcard). The file
-SHALL contain per-audience sections with per-tool `ApprovalEntry` lists.
-The file SHALL NOT be monitored by `ConfigWatcherService`.
+`~/.netclaw/config/tool-approvals.json` using version 3. New shell entries SHALL
+contain canonical shell, match kind, immutable verb-token array, optional
+absolute directory, and creation timestamp. Null directory SHALL mean global.
 
-When the daemon reads a `tool-approvals.json` file that does not have
-`version: 2`, the file SHALL be quarantined to
-`tool-approvals.json.v1.bak` and an empty v2 store SHALL be returned.
-The daemon SHALL write the empty v2 store on the next persist call. No
-automatic translation of v1 entries SHALL be performed.
+On first successful version-2 load, the daemon SHALL back up the original file.
+Every valid version-2 shell phrase SHALL migrate as an exact-only legacy
+phrase. No migrated phrase SHALL gain token-prefix authority. A valid v2 entry whose
+phrase contains controls or cannot be represented safely SHALL be omitted with
+a bounded migration diagnostic and SHALL NOT authorize. A structurally invalid
+v2 file SHALL fail as a whole. The version-3 write SHALL be atomic.
 
-The matcher SHALL approve a candidate invocation when there exists an
-`ApprovalEntry` whose `verb` equals the candidate's extracted verb
-chain AND (`directory` is `null` OR the candidate's cwd is under
-`directory`).
+The daemon SHALL observe valid operator edits on the next approval check. CLI
+list, add, and revoke SHALL understand both token-prefix and legacy-exact
+entries. It SHALL NOT silently downgrade a version-3 file.
 
-The file SHALL also be operator-editable via the `netclaw approvals`
-CLI (see the `netclaw-cli` capability). The daemon SHALL pick up
-out-of-band edits — whether made by direct file editing or by the
-CLI — on the next approval check, without requiring a restart.
+An absent file SHALL be a valid empty store. An absent-version or version-1
+file SHALL follow the existing quarantine path and become an empty version-3
+store only after a successful atomic write. Malformed JSON, partial version-3
+corruption, invalid enum or token values, and unsupported future versions SHALL
+make the store unavailable: no entry SHALL authorize and an
+approval-dependent call SHALL terminate deny with `ApprovalStoreUnavailable`.
+A future-version file SHALL remain untouched.
 
-#### Scenario: Always here persists typed (verb, directory) entries
+Failure to create the v2 backup SHALL abort migration and leave v2 untouched.
+Failure of atomic replacement SHALL retain v2 and any completed backup, make
+the store unavailable for that check, and permit a later load to retry. The
+loader SHALL NOT salvage individual grants from a partially corrupt version-3
+or structurally invalid version-2 file.
 
-- **GIVEN** the user clicks `Always here` for verbs `git remote` and
-  `git rev-parse` in cwd `~/repos/foo/`
-- **WHEN** the approval is processed
-- **THEN** `tool-approvals.json` contains
-  `[{"verb":"git remote","directory":"~/repos/foo/"},
-    {"verb":"git rev-parse","directory":"~/repos/foo/"}]`
-- **AND** the daemon does NOT restart
+#### Scenario: New global entry stores tokens
 
-#### Scenario: Always anywhere persists null-directory entry
+- **WHEN** the user approves `git push` everywhere under native Bash
+- **THEN** version 3 stores shell `Bash`, match `TokenPrefix`, tokens
+  `["git", "push"]`, and null directory
 
-- **GIVEN** the user clicks `Always anywhere` for verb `freshdesk`
-- **WHEN** the approval is processed
-- **THEN** `tool-approvals.json` contains
-  `{"verb":"freshdesk","directory":null}`
+#### Scenario: Ambiguous v2 phrase remains exact
 
-#### Scenario: v1 file quarantined on first read
+- **GIVEN** a v2 verb contains quoting or an escape
+- **WHEN** migration runs
+- **THEN** the entry becomes `LegacyExact`
+- **AND** it does not gain token-prefix authority
 
-- **GIVEN** `tool-approvals.json` exists without a `version` field
-  (or with `version` other than `2`)
-- **WHEN** the daemon loads the file
-- **THEN** the file is moved to `tool-approvals.json.v1.bak`
-- **AND** `Load()` returns an empty v2 store
-- **AND** no v1 entries are translated to v2
+#### Scenario: Invalid migrated entry cannot authorize
 
-#### Scenario: Matcher approves under directory entry
+- **GIVEN** a v2 entry contains controls or cannot be represented safely
+- **WHEN** migration runs
+- **THEN** the entry is omitted with a bounded migration diagnostic
+- **AND** no candidate matches it
 
-- **GIVEN** `tool-approvals.json` contains
-  `{"verb":"git remote","directory":"~/repos/foo/"}`
-- **WHEN** the agent invokes `git remote -v` with cwd `~/repos/foo/`
-- **THEN** the matcher returns approved
-- **AND** no prompt is rendered
+#### Scenario: Revocation is visible without restart
 
-#### Scenario: Matcher approves under null-directory entry
+- **WHEN** an operator revokes a version-3 entry through the CLI
+- **THEN** the next actor snapshot excludes it
+- **AND** a later call prompts if no other coverage exists
 
-- **GIVEN** `tool-approvals.json` contains
-  `{"verb":"freshdesk","directory":null}`
-- **WHEN** the agent invokes `freshdesk --since=24h` with cwd
-  `~/.netclaw/sessions/<id>/`
-- **THEN** the matcher returns approved regardless of cwd
+#### Scenario: Future schema fails closed without modification
 
-#### Scenario: Matcher rejects when cwd is outside entry directory
+- **GIVEN** `tool-approvals.json` declares a version newer than 3
+- **WHEN** an approval-dependent shell call is checked
+- **THEN** no persisted entry authorizes
+- **AND** the call is denied with `ApprovalStoreUnavailable`
+- **AND** the file is not rewritten or quarantined
 
-- **GIVEN** `tool-approvals.json` contains
-  `{"verb":"git remote","directory":"~/repos/foo/"}`
-- **WHEN** the agent invokes `git remote -v` with cwd `~/repos/bar/`
-- **THEN** the matcher returns not-approved
-- **AND** the approval gate prompts the user
+#### Scenario: Backup failure preserves version 2
 
-#### Scenario: Approve once is retry-scoped only
-
-- **GIVEN** the user clicks `Once` for command `docker build`
-- **WHEN** the approval is processed
-- **THEN** the blocked `docker build` call is retried immediately
-- **AND** a later `docker build` call in the same session prompts again
-- **AND** `tool-approvals.json` is NOT modified
-
-#### Scenario: Operator-applied revocation visible without restart
-
-- **GIVEN** the daemon is running with a persisted entry
-  `{"verb":"git push","directory":null}`
-- **WHEN** an operator removes that entry via `netclaw approvals revoke`
-- **AND** a new approval check evaluates `git push`
-- **THEN** the daemon re-loads the file and observes the entry is gone
-- **AND** the user is prompted for approval again
-- **AND** the daemon was not restarted
+- **GIVEN** a valid version-2 store
+- **AND** creation of `.v2.bak` fails
+- **WHEN** migration is attempted
+- **THEN** the version-2 source remains byte-identical
+- **AND** no version-3 replacement is attempted
+- **AND** the approval-dependent call fails closed
 
 ### Requirement: Global grant precedence over folder-scoped grants
 
-A persisted global `ApprovalEntry` (`directory: null`) SHALL authorize its
-verb in every directory. When both a global entry and one or more
-folder-scoped entries exist for the same verb within the same audience and
-tool, the global entry SHALL be sufficient for approval in any directory;
-the folder-scoped entries become redundant for matching but SHALL be
-retained on disk. Adding a global grant SHALL NOT remove, supersede, or
-rewrite existing folder-scoped grants for the same verb — retaining them
-preserves the operator's ability to revoke the global grant and fall back
-to the narrower folder-scoped grants.
+A persisted global version-3 phrase (`directory: null`) SHALL authorize every
+candidate matched by the phrase in its declared audience, tool, and canonical
+shell. When both a global entry and folder-scoped entries exist for the same
+typed phrase identity, the global entry SHALL be sufficient regardless of real
+cwd. Folder-scoped entries SHALL remain on disk so revoking the global entry
+restores the narrower authority.
 
-The matcher SHALL evaluate a candidate against every persisted
-`ApprovalEntry` for the verb and approve when any entry matches. It SHALL
-NOT stop at the first verb-matching entry whose directory check fails.
+The matcher SHALL evaluate every persisted entry whose canonical shell, match
+kind, and phrase identity can cover the candidate. It SHALL NOT stop at the
+first phrase match whose directory check fails. Adding a global entry SHALL
+NOT remove, supersede, or rewrite a folder entry.
 
-#### Scenario: Global grant approves verb in an unrelated directory
+#### Scenario: Global token phrase wins outside folder scope
 
-- **GIVEN** `tool-approvals.json` contains both
-  `{"verb":"dotnet","directory":"~/repos/foo/"}` and
-  `{"verb":"dotnet","directory":null}`
-- **WHEN** the agent invokes `dotnet --info` with cwd `~/repos/bar/`
-- **THEN** the matcher returns approved via the global entry
+- **GIVEN** version 3 contains folder and global `TokenPrefix` entries with
+  Bash tokens `["dotnet"]`
+- **WHEN** Bash invokes `dotnet --info` outside the folder
+- **THEN** the global entry covers the candidate
 - **AND** no prompt is rendered
 
-#### Scenario: Adding a global grant retains folder-scoped grants
+#### Scenario: Adding global phrase retains narrower phrase
 
-- **GIVEN** `tool-approvals.json` contains
-  `{"verb":"dotnet","directory":"~/repos/foo/"}`
-- **WHEN** the user clicks `Always anywhere` for verb `dotnet`
-- **THEN** `tool-approvals.json` contains both the existing folder-scoped
-  entry and a new `{"verb":"dotnet","directory":null}` entry
-- **AND** the folder-scoped entry is NOT removed or rewritten
-
-#### Scenario: Revoking a global grant restores folder-scoped scope
-
-- **GIVEN** `tool-approvals.json` contains both
-  `{"verb":"dotnet","directory":"~/repos/foo/"}` and
-  `{"verb":"dotnet","directory":null}`
-- **WHEN** an operator removes the `{"verb":"dotnet","directory":null}`
-  entry via `netclaw approvals revoke`
-- **THEN** `dotnet` invocations with cwd under `~/repos/foo/` still
-  auto-approve via the retained folder-scoped entry
-- **AND** `dotnet` invocations outside `~/repos/foo/` prompt again
+- **GIVEN** version 3 contains a folder-scoped Bash phrase `["dotnet"]`
+- **WHEN** the user approves the same phrase everywhere
+- **THEN** both entries remain on disk with their original timestamps
+- **AND** revoking the global entry restores folder-only matching
 
 ### Requirement: Channel approval capability
 
@@ -667,182 +520,281 @@ rich interaction surface is unavailable or not configured.
 
 ### Requirement: Directory-root approvals for shell_execute
 
-For `shell_execute`, persistent approvals SHALL be stored as typed
-`(verb, directory)` `ApprovalEntry` records, NOT as separate verb
-patterns and directory-root entries. The matcher SHALL approve a
-candidate invocation when an `ApprovalEntry` exists whose `verb` matches
-the candidate's verb chain AND (`directory` is `null` OR the candidate's
-cwd is under `directory`).
+Global token phrases SHALL not require an exact cwd. Folder phrases SHALL
+require the candidate's real exact scope under the stored directory, with
+normalization, boundary-safe containment, minimum-depth, traversal, and symlink
+checks. Intent scope SHALL never satisfy a folder grant.
 
-`Once` SHALL retry only the blocked call; it SHALL NOT create any
-session or persistent approval.
+`Once` SHALL retry only the blocked request. `This chat` SHALL create typed
+session entries. `Always here` SHALL persist one clean version-3 entry per
+persistable candidate at the real prompt scope. `Always anywhere` SHALL persist
+global entries. Unknown or synthetic-only scope SHALL omit `Always here`.
 
-`This chat` SHALL store `(verb, prompt's directory)` entries in
-session-scoped memory only.
+#### Scenario: Global grant works with unknown cwd
 
-`Always here` SHALL persist `(verb, prompt's directory)` entries to
-`tool-approvals.json`.
+- **GIVEN** a global token phrase covers a static candidate
+- **WHEN** its joined cwd is unknown and path facts are otherwise strict-safe
+- **THEN** the actor may cover the candidate globally
 
-`Always anywhere` SHALL persist `(verb, null)` entries to
-`tool-approvals.json` — the global wildcard.
+#### Scenario: Folder grant rejects synthetic-only scope
 
-The system SHALL enforce path normalization, boundary-safe containment,
-path traversal checks, and `ToolPathPolicy` as the safety backstop.
-`ToolPathPolicy` SHALL resolve symlinks along every component of a
-candidate path so that a planted symlink under an approved directory
-cannot be used to reach a protected path that lies outside that
-directory.
+- **GIVEN** a folder grant under `/work/project`
+- **AND** only intent scope is `/work/project`
+- **WHEN** the real candidate scope is unknown
+- **THEN** the folder grant remains a near miss
 
-The minimum-depth check from v1 (rejecting roots like `/` or `/etc/`)
-SHALL still apply to the directory portion of `(verb, directory)`
-entries: `Always here` SHALL NOT persist a directory shallower than
-two path segments. When the prompt's directory is too shallow, the
-prompt SHALL omit the `Always here` button (only `Once`, `This chat`,
-`Always anywhere`, `Deny` remain), so the user cannot accidentally
-write a too-shallow root.
+#### Scenario: One persistent click stores each clean candidate
 
-#### Scenario: Once retries only the blocked call
+- **GIVEN** three candidates are clean and persistable
+- **WHEN** the user selects a persistent option
+- **THEN** one typed entry is stored for each candidate
+- **AND** no uncovered candidate is silently omitted
 
-- **GIVEN** a shell command `cat ~/repos/foo/notes.md` requires approval
-- **WHEN** the user clicks `Once`
-- **THEN** only the current blocked call is retried
-- **AND** no `ApprovalEntry` is recorded
-- **AND** a later `cat ~/repos/foo/other.md` prompts again
+#### Scenario: Symlink cannot widen folder authority
 
-#### Scenario: Always here stores (verb, directory) entry
+- **GIVEN** a path under a folder grant crosses a symlink to protected space
+- **WHEN** policy evaluates it
+- **THEN** folder coverage fails
+- **AND** protected-path policy denies when applicable
 
-- **GIVEN** a shell command `grep -l "timeout" daemon.log` with cwd
-  `~/.netclaw/logs/`
-- **WHEN** the user clicks `Always here`
-- **THEN** `{"verb":"grep","directory":"~/.netclaw/logs/"}` is written
-  to `tool-approvals.json`
-- **AND** a future `wc -l app.log` with cwd `~/.netclaw/logs/` does NOT
-  match this entry (different verb)
-- **AND** a future `grep "info" archive.log` with cwd
-  `~/.netclaw/logs/` is auto-approved (same verb, same directory)
+### Requirement: Reviewed diagnostic auto-allow in declared safe spaces
 
-#### Scenario: Always anywhere stores (verb, null) entry
+The system SHALL load an embedded immutable per-platform policy catalog.
+`ReviewedDiagnostic` SHALL classify only the shell-authored invocation.
+Runtime user overrides SHALL NOT widen the catalog.
 
-- **GIVEN** a shell command `freshdesk --since=24h` requires approval
-- **WHEN** the user clicks `Always anywhere`
-- **THEN** `{"verb":"freshdesk","directory":null}` is written to
-  `tool-approvals.json`
-- **AND** a scheduled task firing `freshdesk` in any cwd is
-  auto-approved on next invocation
+No accepted authored argument shape SHALL select a child executable, select a
+caller-authored output file, request destructive persistent state, or request
+a remote mutation. Tool-private metadata or cache refresh SHALL remain outside
+this claim. Ambient executable configuration and executable-discovered paths
+SHALL also remain outside this claim.
 
-#### Scenario: Boundary-safe matching prevents prefix collisions
+Redirects, parser-owned filesystem values, provider paths, and unknown shell
+expansions SHALL remain separate strict effects. Bounded shell-local output
+variables MAY remain eligible. Any unresolved later use SHALL remain strict.
 
-- **GIVEN** `{"verb":"cat","directory":"/home/user/"}` is approved
-- **WHEN** the agent runs `cat data.txt` with cwd `/home/usersecret/`
-- **THEN** the candidate does NOT match the entry
-- **AND** the approval gate prompts the user
+Safe policy SHALL refine only uncovered candidates. It SHALL require reviewed
+phrase coverage, an allowed real or eligible intent scope, no symlink segment,
+no writing redirect, and no unknown explicit path fact. Hard deny and protected
+paths SHALL run first. Personal and Team safe roots SHALL be session directory
+plus declared project directory. Public SHALL use session directory only.
 
-#### Scenario: Symlink in cwd breaks the approval match
+`find`, `awk`, `rg`, and `sort` SHALL not be reviewed-safe. Production policy
+code SHALL contain no executable-specific flag exceptions. PowerShell provider
+paths SHALL retain existing strict checks.
 
-- **GIVEN** `{"verb":"cat","directory":"/home/user/safe/"}` is approved
-- **AND** `/home/user/safe/leak` is a directory symlink resolving
-  to `/etc`
-- **WHEN** the agent runs `cat passwd` with cwd `/home/user/safe/leak/`
-- **THEN** the symlink-segment check breaks the auto-approval
-- **AND** `ToolPathPolicy.CommandReferencesDeniedPath` blocks execution
-  if the canonical path is protected
+Reviewed-safe phrase identity SHALL use canonical ShellSyntaxTree token
+prefixes. Legacy display and compatibility strings SHALL NOT establish
+reviewed-safe coverage.
 
-#### Scenario: Shallow directory prevents Always here
+An authored argument before the matched phrase completes SHALL prevent
+reviewed-safe coverage. The check SHALL use parser-owned element order.
 
-- **GIVEN** an approval prompt for `cat /etc/passwd` (cwd `/etc/`)
-- **WHEN** the prompt is rendered
-- **THEN** the `Always here` button is omitted
-- **AND** only `Once`, `This chat`, `Always anywhere`, `Deny` are shown
+A known `AuthoredPathShape` SHALL be conservative negative evidence only.
+Every represented authored value SHALL resolve beneath an eligible safe root.
+Unknown or unsupported domains SHALL prevent reviewed-safe coverage. A lexical
+path shape SHALL NOT create filesystem authority.
 
-### Requirement: Safe-verb auto-allow short-circuit in declared safe spaces
+An `Exact` or `FiniteSet` ShellSyntaxTree 0.3.5
+`AuthoredNonFileSystemValue` SHALL suppress weaker path interpretations for
+that argument only. It SHALL NOT grant authority. Other arguments, redirects,
+effects, and `AuthoredFileSystemValue` facts SHALL remain independent. Unknown,
+unsupported, or contradictory domains SHALL keep reviewed-safe policy strict.
 
-The system SHALL maintain a per-OS curated list of demonstrably read-only
-verb chains (`safe-verbs.linux.json` and `safe-verbs.windows.json`) shipped
-with the daemon and overridable at `~/.netclaw/config/safe-verbs.<os>.json`.
-A `ScopedShellSafeVerbPolicy` SHALL evaluate each shell invocation against
-the safe-verbs list AND the audience-aware safe-space roots resolved by
-`ToolAudienceProfileResolver`. When the candidate verb chain is on the
-safe-verbs list AND the candidate's cwd resolves under at least one
-safe-space root AND the path contains no symlink segments
-(`ContainsSymlinkSegment` returns false), the approval gate SHALL
-short-circuit to "approved" with no user prompt. Otherwise the existing
-approval gate SHALL apply.
+#### Scenario: Reviewed diagnostic in project scope is covered
 
-Safe-space roots SHALL be:
+- **GIVEN** `head` is reviewed safe
+- **AND** its real scope is under a Personal project root
+- **WHEN** every earlier stage passes
+- **THEN** safe policy covers that candidate
 
-- For Personal and Team audiences: `session_dir` (always) plus
-  `project_dir` from `WorkingContext` (when set).
-- For Public audience: `session_dir` only. Public sessions SHALL NOT
-  expand their safe space via `project_dir`, mirroring the read-roots
-  restriction `ScopedFileAccessPolicy` enforces for file_read.
+#### Scenario: Global argument before a reviewed phrase stays strict
 
-The hard-deny list (layer 1) SHALL apply unchanged. The safe-verb
-short-circuit SHALL only relax the interactive approval gate (layer 2).
-`ToolPathPolicy.CommandReferencesDeniedPath` SHALL still block execution
-if a denied path is referenced.
+- **GIVEN** `git status` is a reviewed diagnostic phrase
+- **WHEN** the authored command is `git -c include.path=/tmp/config status`
+- **THEN** reviewed-safe policy does not cover the candidate
+- **AND** Netclaw does not parse Git's private option grammar
 
-#### Scenario: Read-only verb in project directory auto-runs
+#### Scenario: Hidden option path outside the safe root stays strict
 
-- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
-- **AND** `grep` is on the Linux safe-verbs list
-- **WHEN** the agent invokes `shell_execute` with command
-  `grep -r "error" .` and cwd `~/repos/foo/`
-- **THEN** the approval gate short-circuits to "approved"
-- **AND** no prompt is rendered to the user
-- **AND** `tool-approvals.json` is NOT modified
+- **GIVEN** `grep` is a reviewed diagnostic phrase
+- **AND** ShellSyntaxTree marks `/tmp/patterns` with a POSIX path shape
+- **WHEN** the authored command is `grep -f /tmp/patterns ./safe.txt`
+- **THEN** reviewed-safe policy does not cover the candidate
+- **AND** lexical path shape creates no new authority
 
-#### Scenario: Read-only verb in session directory auto-runs
+#### Scenario: Path-shaped data beneath the safe root can remain eligible
 
-- **GIVEN** a Personal session with no `project_dir` set
-- **AND** `cat` is on the safe-verbs list
-- **WHEN** the agent invokes `shell_execute` with command
-  `cat inbox/notes.md` and cwd `~/.netclaw/sessions/<id>/`
-- **THEN** the approval gate short-circuits to "approved"
-- **AND** no prompt is rendered
+- **GIVEN** a reviewed diagnostic receives `example/project` as data
+- **AND** its possible local-path interpretation stays beneath the safe root
+- **WHEN** all stronger shell facts pass
+- **THEN** lexical path shape alone does not reject the candidate
 
-#### Scenario: Read-only verb outside safe spaces still prompts
+#### Scenario: Audited tr data does not create a false path scope
 
-- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
-- **AND** `grep` is on the safe-verbs list
-- **WHEN** the agent invokes `shell_execute` with cwd `/etc/`
-- **THEN** the approval gate prompts the user
-- **AND** the prompt body shows `/etc/` as the directory header
+- **GIVEN** `tr` is a reviewed diagnostic
+- **AND** ShellSyntaxTree reports `Exact("\\n")` as authored non-filesystem data
+- **WHEN** Bash evaluates `tr -d '\n'`
+- **THEN** the lexical Windows path shape does not create a `/n` scope
+- **AND** reviewed-safe policy may cover `tr` after every other guard passes
 
-#### Scenario: Mutating verb in safe space still prompts
+#### Scenario: Unknown command keeps path-shaped data strict
 
-- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
-- **AND** `git push` is NOT on the safe-verbs list
-- **WHEN** the agent invokes `shell_execute` with command
-  `git push origin main` and cwd `~/repos/foo/`
-- **THEN** the approval gate prompts the user
-- **AND** the user can grant `(git push, ~/repos/foo/)` via "Always here"
+- **GIVEN** an unknown command receives `\n`
+- **WHEN** no positive authored non-filesystem fact exists
+- **THEN** the lexical path interpretation remains strict
 
-#### Scenario: Public audience cannot use project_dir as safe space
+#### Scenario: Unproved glob semantics stay strict
 
-- **GIVEN** a Public session with `project_dir` set to `~/repos/foo/`
-- **AND** `grep` is on the safe-verbs list
-- **WHEN** the agent invokes `shell_execute` with cwd `~/repos/foo/`
-- **THEN** the approval gate prompts the user
-- **AND** Public's only safe space remains `session_dir`
+- **GIVEN** Bash evaluates `tr *.txt x`
+- **AND** no positive authored non-filesystem fact exists for the glob
+- **THEN** reviewed-safe policy does not cover `tr`
 
-#### Scenario: Symlink under safe-space root cannot extend safe scope
+#### Scenario: Independent redirect remains strict
 
-- **GIVEN** a Personal session with `project_dir` set to `~/repos/foo/`
-- **AND** `~/repos/foo/leak` is a symlink resolving to `/etc`
-- **WHEN** the agent invokes `shell_execute` with cwd `~/repos/foo/leak/`
-  and command `cat passwd`
-- **THEN** the safe-verb short-circuit SHALL NOT apply
-  (`ContainsSymlinkSegment` returns true)
-- **AND** the approval gate prompts the user (or `ToolPathPolicy`
-  hard-denies if the resolved path is protected)
+- **GIVEN** Bash evaluates `tr -d '\n' > /external/out`
+- **WHEN** the data argument has a positive non-filesystem fact
+- **THEN** the output redirect still prevents reviewed-safe coverage
 
-#### Scenario: User-overridden safe-verbs file extends defaults
+### Requirement: Guidance distinguishes file operations from shell semantics
 
-- **GIVEN** the user has written
-  `~/.netclaw/config/safe-verbs.linux.json` containing the verb `eza`
-- **WHEN** the daemon loads safe-verbs configuration
-- **THEN** `eza` is treated as a safe verb in addition to the shipped defaults
-- **AND** `eza` invocations in safe spaces auto-run without prompting
+Team and Personal guidance SHALL prefer first-party file tools for known file
+reads, directory listings, and edits. It SHALL avoid shell for those operations
+unless shell behavior is requested. Shell guidance SHALL retain
+`shell_execute` for local repository search, builds, tests, VCS, and process
+semantics. External discovery SHALL use built-in `web_search`. Page retrieval
+SHALL use built-in `web_fetch`, not a shell HTTP client.
+
+#### Scenario: Known file content avoids shell approval
+
+- **GIVEN** the agent knows the target file or directory
+- **WHEN** it needs content, a listing, or an edit
+- **THEN** guidance prefers the matching first-party file tool
+- **AND** it does not teach the agent to compose `cat`, `sed`, or `ls` chains
+- **AND** deliberate shell-behavior requests remain shell work
+
+#### Scenario: Shell workflows retain their execution tool
+
+- **GIVEN** the task requires local repository search, build, test, VCS, or process semantics
+- **WHEN** the agent selects a tool
+- **THEN** guidance retains `shell_execute` for that work
+- **AND** no approval-policy exception is added
+
+#### Scenario: External search avoids the local shell
+
+- **GIVEN** the task requires information from external sources
+- **WHEN** the agent selects a search tool
+- **THEN** guidance prefers built-in `web_search`
+- **AND** page retrieval uses built-in `web_fetch`
+- **AND** shell HTTP clients are not used for either operation
+- **AND** it does not classify web search as local shell work
+
+#### Scenario: Exact path scope does not declare a safe root
+
+- **GIVEN** an agent has no declared project root for a user-named project
+- **WHEN** a shell candidate contains an absolute path beneath that project
+- **THEN** the path can provide the candidate's exact policy scope
+- **AND** it does not add that project as a safe-space root
+- **AND** model guidance tells the agent to call `set_working_directory` before
+  the first shell or file tool call in that project
+- **AND** guidance declares a named path before probing it with another tool
+- **AND** guidance does not replace the first named path with its parent
+- **AND** a rejected declaration precedes a user-provided fallback declaration
+- **AND** the same rule applies when a subagent's exposed tools include
+  `set_working_directory` and its inherited project differs
+- **AND** the rule is absent when that tool is unavailable
+
+#### Scenario: Undeclared project scope returns an agent correction
+
+- **GIVEN** every shell candidate has a reviewed-safe phrase
+- **AND** every effective directory is beneath the exact shell cwd
+- **AND** the cwd is outside the declared session and project roots
+- **AND** the cwd is not the platform temporary root
+- **AND** `set_working_directory` is available to the agent
+- **AND** the same filesystem policy used by `set_working_directory` accepts
+  the exact cwd without substitution
+- **WHEN** policy would otherwise request user approval
+- **THEN** the system returns a scope-declaration correction to the agent
+- **AND** it does not execute the command or request user approval
+- **AND** the correction tells the agent to declare the exact cwd and retry the
+  exact command unchanged
+
+#### Scenario: Subagent scope correction precedes parent approval
+
+- **GIVEN** a subagent submits eligible reviewed-safe shell work beneath an
+  undeclared cwd
+- **AND** its registered `set_working_directory` tool accepts that exact cwd
+- **WHEN** policy would otherwise open the parent approval bridge
+- **THEN** the subagent returns the same scope-declaration correction as a
+  parent session
+- **AND** it does not execute the shell command or request parent approval
+- **AND** the authored tool call remains unchanged in model history
+
+#### Scenario: Subagent declaration applies to the unchanged retry
+
+- **GIVEN** a subagent received a scope-declaration correction
+- **WHEN** it calls `set_working_directory` with the exact suggested cwd
+- **THEN** the child replaces its local project-scope snapshot
+- **AND** it reloads project instructions before the next model call
+- **AND** an unchanged eligible shell retry uses the declared child scope
+- **AND** the child does not replace the parent project directory
+
+#### Scenario: Headless subagent declaration does not grant authority
+
+- **GIVEN** a headless subagent received a scope-declaration correction
+- **AND** it successfully declared the exact suggested cwd
+- **WHEN** it retries the unchanged shell call
+- **THEN** the declared child scope prevents another correction
+- **AND** the retry follows ordinary headless authority rules
+- **AND** the declaration does not grant reviewed-safe, session, or persistent
+  authority
+
+#### Scenario: Subagent keeps the approval bridge when scope cannot change
+
+- **GIVEN** a subagent submits eligible reviewed-safe shell work beneath an
+  undeclared cwd
+- **AND** `set_working_directory` is absent or rejects that cwd
+- **WHEN** policy requires approval
+- **THEN** the scope-declaration correction does not apply
+- **AND** the existing parent approval bridge handles the request
+
+#### Scenario: Scope correction cannot hide unsafe work
+
+- **GIVEN** any candidate lacks reviewed-safe phrase coverage
+- **OR** any effective directory is outside the exact shell cwd
+- **OR** the audience is Public
+- **OR** the cwd is the platform temporary root
+- **OR** `set_working_directory` is unavailable
+- **OR** `set_working_directory` policy would reject or substitute the cwd
+- **WHEN** policy evaluates the call
+- **THEN** the scope-declaration correction does not apply in a parent session
+  or subagent
+- **AND** the normal approval or deny result remains
+
+#### Scenario: Unsafe argument surface excludes whole phrase
+
+- **GIVEN** any accepted argument can write or execute
+- **WHEN** maintainers audit the catalog phrase
+- **THEN** the phrase is excluded entirely
+- **AND** no private flag branch compensates for it
+
+#### Scenario: File redirect remains separate
+
+- **WHEN** reviewed `head` writes through a shell redirect
+- **THEN** safe policy does not cover the occurrence
+- **AND** redirect path policy still applies
+
+#### Scenario: Public project directory is not safe
+
+- **GIVEN** a Public session has a project directory
+- **WHEN** a reviewed diagnostic candidate runs only there
+- **THEN** safe policy does not cover it
+
+#### Scenario: PowerShell environment provider stays strict
+
+- **WHEN** native PowerShell submits `Get-Content Env:SECRET`
+- **THEN** the provider is not treated as filesystem safe space
+- **AND** the call requires explicit authority or denial
 
 ### Requirement: Five-button approval prompt with verb-and-directory framing
 
@@ -869,14 +821,12 @@ text in single-line code fences, and dumping a multi-line quoted blob
 verbatim corrupts the prompt layout. When the parser cannot decompose
 the command, line breaks SHALL be flattened to spaces.
 
-Commands containing heredocs or subshell groupings SHALL NOT be
-display-reconstructed: the parser drops heredoc bodies from the tree
-(only the `<<EOF` marker survives as a redirect target), so a
-reconstruction would silently omit executable content the approver must
-see — and subshell grouping does not survive the flat clause list, so a
-reconstruction would misstate which statements a pipe or `&&` guard
-applies to. Both fall back to the flattened raw command — ugly but
-fully disclosed.
+Commands with heredocs, here strings, or subshell groups SHALL NOT use the
+compatibility-clause reconstruction. The formatter SHALL detect heredocs and
+here strings from their typed v0.3 redirect operations. It SHALL encode each
+raw line break as a visible `⏎` marker so the display keeps each redirect
+operator, data body, and execution boundary. Subshell groups SHALL use the same
+fallback because a flat clause sequence cannot preserve their grouping.
 
 Button semantics:
 
@@ -885,8 +835,8 @@ Button semantics:
   for the rest of the session, stored in session-scoped memory only.
 - `Always here` SHALL persist `(verb, prompt's directory)` entries to
   `tool-approvals.json` for each extracted verb.
-- `Always anywhere` SHALL persist `(verb, null)` entries for each
-  extracted verb — the global wildcard.
+- `Always anywhere` SHALL persist `(verb, null)` entries for each extracted
+  verb — the global wildcard.
 - `Deny` SHALL refuse this call only. Denying a verb SHALL NOT ban it
   for future invocations.
 
@@ -946,6 +896,28 @@ Button semantics:
   `freshdesk ticket reply 605 --message (2 lines, 42 chars)`
 - **AND** the display text contains no newline characters
 
+#### Scenario: Heredoc display keeps the full raw command
+
+- **GIVEN** a multi-line command contains a complete heredoc
+- **WHEN** the approval prompt formats the command
+- **THEN** the single-line display keeps the `<<` operator and body text
+- **AND** the formatter does not rebuild the command from compatibility clauses
+
+#### Scenario: Here-string display keeps the authored operator
+
+- **GIVEN** a multi-line command contains a complete `<<<` redirect
+- **WHEN** the approval prompt formats the command
+- **THEN** the single-line display keeps the `<<<` operator and data text
+- **AND** each authored line break renders as a visible `⏎` marker
+- **AND** the formatter does not replace `<<<` with `<`
+
+#### Scenario: Heredoc display keeps a following command boundary
+
+- **GIVEN** a complete heredoc is followed by another command after its terminator
+- **WHEN** the approval prompt formats the command
+- **THEN** the single-line display places a visible `⏎` marker between the terminator and the following command
+- **AND** the following command does not appear to be part of the heredoc body
+
 ### Requirement: Resolution message single-line format
 
 After an approval response is processed, the channel SHALL render a
@@ -975,138 +947,95 @@ scope. Permitted formats:
 
 ### Requirement: Pattern extraction refuses bash control-flow
 
-`ShellTokenizer.SplitCompoundCommand` SHALL detect bash control-flow
-tokens (`for`, `while`, `do`, `done`, `then`, `fi`, `case`, `esac`) and
-unbalanced quotes/brackets. When detected, the tokenizer SHALL return an
-empty verb-chain list. The approval gate SHALL respond by offering only
-the `Once` and `Deny` buttons (no `This chat`, `Always here`, or
-`Always anywhere`) and the prompt body SHALL show a hint: "complex
-command — only one-shot approval available". No persistent grant SHALL
-be possible for unparseable commands.
+Authorization SHALL use canonical ShellSyntaxTree completeness rather than a
+second control-flow tokenizer. Supported static loops SHALL expose candidates.
+Unsupported branches and runtime-generated loops SHALL remain strict.
 
-#### Scenario: For-loop produces empty verb-chain list
+An effective finite argument SHALL enter path policy when the parser-owned
+`Argument.IsPath` role is true. ShellSyntaxTree 0.3.3 `Exact` and `FiniteSet`
+`AuthoredFileSystemValue` facts SHALL also enter path policy. Unknown and all
+other alternatives SHALL stay strict. `AuthoredPathShape` SHALL NOT substitute
+for the stronger fact or create file authority.
 
-- **GIVEN** the command
-  `for pid in $(pgrep netclawd); do echo "$pid"; done`
-- **WHEN** `ShellTokenizer.SplitCompoundCommand` runs
-- **THEN** the returned verb-chain list is empty
+A legacy scanner MAY add a denial when canonical analysis is incomplete. It
+SHALL NOT allow, create candidates, create persistent options, or widen scope.
 
-#### Scenario: Approval prompt for messy command offers only Once and Deny
+#### Scenario: ShellSyntaxTree 0.3.2 keeps D14 path coverage strict
 
-- **GIVEN** the agent invokes `shell_execute` with the for-loop above
-  and cwd outside any safe space
-- **WHEN** the approval prompt is rendered
-- **THEN** only `Once` and `Deny` buttons are present
-- **AND** the body shows the "complex command" hint
+- **GIVEN** ShellSyntaxTree 0.3.2 reports D14 finite authored values
+- **AND** its effective argument has `Argument.IsPath` false
+- **WHEN** the maintainer-approved authored-source policy evaluates it
+- **THEN** the authored values do not create file authority
+- **AND** lexical `AuthoredPathShape` does not cover the candidate
 
-#### Scenario: Unbalanced quotes treated as messy
+#### Scenario: ShellSyntaxTree 0.3.3 unlocks finite D14 path checks
 
-- **GIVEN** the command `echo "unterminated`
-- **WHEN** the tokenizer runs
-- **THEN** the verb-chain list is empty
-- **AND** the approval gate offers only `Once` and `Deny`
+- **GIVEN** ShellSyntaxTree 0.3.3 reports a finite D14
+  `AuthoredFileSystemValue`
+- **WHEN** the maintainer-approved authored-source policy evaluates it
+- **THEN** each finite `cat` path passes `ToolPathPolicy`
+- **AND** the presence of `for` alone does not force a prompt
+
+#### Scenario: Runtime iterator stays one-time
+
+- **WHEN** an iterator depends on command substitution output
+- **THEN** the call offers only one-time approval and deny
+- **AND** policy does not execute the substitution
+
+#### Scenario: Deny-only scanner cannot authorize
+
+- **GIVEN** canonical analysis is incomplete
+- **WHEN** a legacy scan finds no deny pattern
+- **THEN** the call remains unresolved
+- **AND** it does not receive grant or safe coverage
 
 ### Requirement: Approval entry creation timestamp
 
-`ApprovalEntry` SHALL carry an optional `createdAt` field — a
-`DateTimeOffset` serialized as the ISO-8601 JSON property `createdAt` —
-recording when the grant was first persisted. The field SHALL be
-populated by `ToolApprovalStore.AddApproval` at write time using an
-injected `TimeProvider` (`TimeProvider.System` in production), so the
-daemon and the operator CLI stamp grants identically.
+Each version-3 approval entry SHALL carry optional ISO-8601 `createdAt` and
+SHALL be stamped on first persistence using injected `TimeProvider`. Timestamp
+SHALL NOT participate in equality. Phrase identity for idempotency SHALL be
+canonical shell, match kind, token array or legacy-exact value, and directory.
 
-The `createdAt` field SHALL be additive and optional on disk. Reading a
-`tool-approvals.json` file whose entries lack `createdAt` SHALL succeed
-and yield entries with a `null` timestamp. The on-disk schema version
-SHALL remain `2`; adding `createdAt` SHALL NOT bump the version and
-SHALL NOT cause an existing file to be quarantined.
+Adding an equivalent entry SHALL preserve the existing entry and its original
+timestamp. Version-2 migration SHALL preserve an existing timestamp exactly;
+a missing timestamp SHALL remain null. Migration SHALL NOT restamp grants.
 
-`createdAt` SHALL NOT participate in approval-entry equality. Two
-entries with the same verb and directory but different (or absent)
-timestamps SHALL still be considered the same grant by
-`ToolApprovalEntryComparer`. `AddApproval` SHALL remain idempotent: when
-an equivalent grant already exists, the existing entry — and therefore
-its original `createdAt` — SHALL be left in place and SHALL NOT be
-restamped.
+#### Scenario: New version-3 grant receives one timestamp
 
-#### Scenario: New grant is stamped with the current time
+- **GIVEN** a deterministic `TimeProvider`
+- **WHEN** a new typed phrase is persisted
+- **THEN** `createdAt` equals the provider time
+- **AND** re-adding the same phrase and directory does not change it
 
-- **GIVEN** a `ToolApprovalStore` constructed with a `TimeProvider`
-- **WHEN** `AddApproval` persists a new `(verb, directory)` entry
-- **THEN** the stored entry's `createdAt` equals the provider's current
-  time
-- **AND** the serialized JSON includes a `createdAt` property
+#### Scenario: Migration preserves timestamp absence
 
-#### Scenario: Legacy entry without a timestamp reads back as null
-
-- **GIVEN** a `version: 2` `tool-approvals.json` whose entries have no
-  `createdAt` property
-- **WHEN** the store loads the file
-- **THEN** each entry's `createdAt` is `null`
-- **AND** the file is NOT quarantined to `tool-approvals.json.v1.bak`
-- **AND** the store's schema version remains `2`
-
-#### Scenario: Idempotent re-grant preserves the original timestamp
-
-- **GIVEN** a persisted entry `(git push, /home/user/repos/foo)` stamped
-  at time T1
-- **WHEN** `AddApproval` is called again for the same verb and directory
-  at a later time T2
-- **THEN** `AddApproval` reports no new entry was appended
-- **AND** the stored entry's `createdAt` is still T1
-
-#### Scenario: Timestamp does not affect matching or equality
-
-- **GIVEN** a persisted entry `(git push, null)` stamped at any time
-- **WHEN** the agent invokes `git push` and the matcher evaluates the
-  entry
-- **THEN** the match result is identical to the result for an entry with
-  a `null` `createdAt`
-- **AND** `ToolApprovalEntryComparer.Equals` treats the two entries as
-  equal
+- **GIVEN** a valid version-2 entry without `createdAt`
+- **WHEN** it migrates to a version-3 phrase
+- **THEN** its `createdAt` remains null
+- **AND** phrase equality remains independent of time
 
 ### Requirement: Approval-gate near-miss diagnostics
 
-The approval gate SHALL log a near-miss diagnostic when it marks a
-candidate pattern unapproved AND at least one persisted `ApprovalEntry`
-exists for the same audience and tool whose `verb` equals the
-candidate's verb chain. The diagnostic SHALL explain why each same-verb
-grant failed to match and SHALL identify the grant (verb, directory
-scope, and `createdAt`) and the reason it did not match — for example
-the candidate's effective directory is not under the grant's directory,
-a symlink segment lies along the path between the grant directory and
-the effective directory, or the verbs differ only by case.
+Near-miss diagnostics SHALL project only from the actor match trace. A near miss
+SHALL identify candidate ID, grant kind, creation timestamp, and enum reason
+such as token mismatch, shell mismatch, outside directory, or symlink. It SHALL
+not include raw arguments, raw paths, or secrets and SHALL not rescan grants.
 
-The diagnostic SHALL be emitted to the daemon log only. It SHALL NOT
-appear in the approval prompt body and SHALL NOT alter the gate's
-decision — it is read-only instrumentation. When no persisted entry
-shares the candidate's verb, no near-miss diagnostic SHALL be emitted
-(a first-time prompt has nothing to diagnose).
+Diagnostics SHALL be operator-log-only and SHALL not alter the prompt or final
+decision.
 
-#### Scenario: Directory-scoped near-miss is logged
+#### Scenario: Folder near miss uses actor evidence
 
-- **GIVEN** a persisted entry `(git push, /home/user/repos/foo)`
-- **WHEN** the agent invokes `git push` with cwd
-  `/home/user/repos/bar` and the gate marks it unapproved
-- **THEN** the daemon logs a near-miss diagnostic naming the grant, its
-  `createdAt`, and the reason the cwd is not under the grant directory
-- **AND** the approval prompt body is unchanged
+- **GIVEN** a token phrase matches but folder scope does not
+- **WHEN** the actor returns uncovered coverage
+- **THEN** its trace contains `OutsideDirectory`
+- **AND** logging uses that row without another store read
 
-#### Scenario: First-time prompt emits no near-miss diagnostic
+#### Scenario: First-time prompt has no fabricated near miss
 
-- **GIVEN** no persisted entry exists whose verb equals `terraform apply`
-- **WHEN** the agent invokes `terraform apply` and the gate marks it
-  unapproved
-- **THEN** no near-miss diagnostic is logged
-- **AND** the approval prompt is emitted normally
-
-#### Scenario: Diagnostic does not change the gate decision
-
-- **GIVEN** a persisted entry whose verb matches the candidate but whose
-  directory does not
-- **WHEN** the gate evaluates the candidate
-- **THEN** the candidate remains unapproved
-- **AND** the user is still prompted
+- **GIVEN** no grant was considered for a candidate
+- **WHEN** it remains uncovered
+- **THEN** no grant near-miss row is emitted
 
 ### Requirement: Sub-agent approval bridge preserves prompt correlation
 
@@ -1202,74 +1131,57 @@ Approval response authorization SHALL use the requester and principal from the p
 
 ### Requirement: Subagent approval evaluation uses the inherited parent cwd
 
-The approval gate SHALL treat a subagent's `shell_execute` invocation as
-having the cwd inherited from the parent session at spawn time, captured per
-the `session-cwd` capability's "Resolved shell cwd flows to spawned subagents
-as read-only snapshot" requirement. Persisted folder-scoped grants whose
-directory contains the inherited cwd SHALL therefore auto-approve the
-subagent invocation under the same rules as the parent session. Persisted
-global grants (`directory: null`) SHALL continue to auto-approve regardless
-of cwd, including when the inherited cwd is `null`. The matcher SHALL NOT
-introduce a new short-circuit that bypasses persisted grants when the
-inherited cwd is `null`; the existing
-`ApprovalPatternMatching.MatchesShellApproval` semantics apply.
+The approval gate SHALL use the parent session cwd snapshot for a subagent
+`shell_execute` call. A folder grant SHALL cover the subagent when its real cwd
+is under the grant directory. The same containment rule SHALL apply to parent
+and child calls.
 
-#### Scenario: Folder-scoped parent grant covers subagent invocation
+A global typed phrase SHALL cover a candidate when the inherited cwd is null.
+A null cwd SHALL not bypass persistent global checks. A folder phrase SHALL
+not match a null cwd. Near-miss output SHALL use the actor snapshot and the
+typed phrase that failed its scope check.
 
-- **GIVEN** `tool-approvals.json` contains
-  `{"verb":"dotnet build","directory":"/home/user/repos/foo/"}`
-- **AND** the parent session's resolved cwd at subagent spawn is
-  `/home/user/repos/foo/`
-- **WHEN** the spawned subagent invokes `dotnet build` with no explicit
-  `WorkingDirectory` argument
-- **THEN** the matcher returns approved
-- **AND** no approval prompt is rendered to the user
+#### Scenario: Folder phrase covers a child call
 
-#### Scenario: Global grant covers subagent invocation with null cwd
+- **GIVEN** version 3 has Bash token prefix `dotnet`, `build`
+- **AND** its directory is `/work/repo`
+- **AND** the parent cwd snapshot is `/work/repo`
+- **WHEN** the child invokes `dotnet build` with no explicit directory
+- **THEN** the persistent phrase covers the candidate
+- **AND** no approval prompt appears
 
-- **GIVEN** `tool-approvals.json` contains
-  `{"verb":"netclaw stats","directory":null}`
-- **AND** the spawned subagent has no inherited cwd (the parent had none
-  either)
-- **WHEN** the subagent invokes `netclaw stats`
-- **THEN** the matcher returns approved regardless of the null cwd
-- **AND** no approval prompt is rendered
+#### Scenario: Global phrase covers a child call with null cwd
 
-#### Scenario: Folder-scoped parent grant does not match subagent with null cwd
+- **GIVEN** version 3 has global Bash token prefix `status-report`
+- **AND** the child has a null inherited cwd
+- **WHEN** the child invokes `status-report`
+- **THEN** the persistent phrase covers the candidate
+- **AND** no approval prompt appears
 
-- **GIVEN** `tool-approvals.json` contains
-  `{"verb":"dotnet build","directory":"/home/user/repos/foo/"}`
-- **AND** the spawned subagent has no inherited cwd
-- **WHEN** the subagent invokes `dotnet build` with no explicit
-  `WorkingDirectory` argument
-- **THEN** the folder-scoped grant SHALL NOT match (no effective directory)
-- **AND** the approval gate prompts the user with the header form
-  `Approve dotnet build in (no working directory)?` as documented in this
-  capability's "Five-button approval prompt with verb-and-directory framing"
-  requirement
-- **AND** the daemon log SHALL emit an `approval_near_miss` diagnostic with
-  reason `NoCandidateDirectory` so the operator can see why the grant did
-  not match
+#### Scenario: Folder phrase does not cover null cwd
+
+- **GIVEN** version 3 has Bash token prefix `dotnet`, `build`
+- **AND** its directory is `/work/repo`
+- **AND** the child has a null inherited cwd
+- **WHEN** the child invokes `dotnet build`
+- **THEN** the folder phrase does not cover the candidate
+- **AND** the approval gate prompts with no directory
+- **AND** the trace has reason `NoCandidateDirectory`
 
 ### Requirement: Subagent inherits parent session-scoped approvals
 
-The approval gate SHALL walk from a subagent's scope id toward its parent
-session and SHALL treat any session-scoped approval (a `This chat` click)
-recorded against the parent session id as also authorizing the subagent's
-verbs. The subagent scope id has the form
-`{parentSessionId}/subagent/{name}/{runId}`; the walk SHALL terminate at the
-first non-`/subagent/` segment so unrelated sessions never share
-session-scoped approvals. This requirement codifies the existing
-`ToolApprovalActor.IsSessionApproved` scope-walk behavior so future
-refactors SHALL NOT regress it; it does not introduce a new code path.
+The approval actor SHALL walk a child scope toward its parent session using the
+existing bounded `/subagent/` scope rule. Typed session phrases from the parent
+SHALL cover matching child candidates. Unrelated sessions SHALL never share
+coverage. The batch actor request SHALL perform this walk within the same
+atomic snapshot as persistent matching.
 
-#### Scenario: This-chat grant in parent authorizes subagent invocation
+#### Scenario: Parent session phrase covers child candidate
 
-- **GIVEN** the parent session granted `This chat` for verb `gh pr view` in
-  the current chat
-- **WHEN** a spawned subagent in that chat invokes `gh pr view 123`
-- **THEN** the matcher returns approved via the session-scoped grant
-- **AND** no approval prompt is rendered
+- **GIVEN** the parent chat has a typed session grant for `gh pr view`
+- **WHEN** its child submits a matching candidate
+- **THEN** the actor returns Session coverage
+- **AND** no separate parent-grant scan runs
 
 ### Requirement: Approval evaluation uses admitted turn authority
 
@@ -1288,3 +1200,1162 @@ Tool approval evaluation SHALL receive the same required admitted `TurnContext` 
 - **WHEN** a child tool requires approval
 - **THEN** approval evaluation uses the explicitly inherited turn authority
 - **AND** no audience or source fallback is inferred
+
+### Requirement: Shell policy uses the canonical grammar and dialect
+
+The system SHALL select Bash only for native Bash execution and PowerShell only
+for native Windows PowerShell execution. Bash invoking `pwsh` SHALL remain one
+Bash external command. Every authorization stage SHALL share one canonical
+ShellSyntaxTree analysis.
+
+PowerShell SHALL use the selected dialect and `PwshInitialStateMode.Unknown`.
+Netclaw SHALL use effective values for runtime and deny policy. It MAY use
+authored values only for the approved approval perspective. It SHALL route
+ShellSyntaxTree 0.3.3 authored filesystem values through path policy. Unknown
+policy-relevant values SHALL not create reusable or safe coverage.
+
+Netclaw SHALL consume ShellSyntaxTree 0.3.4 working-directory effects for the
+bounded Bash causal projection. It SHALL NOT derive equivalent effects from
+command names or executable-private grammar.
+
+Deny-only defensive scans MAY deny incomplete input but SHALL never authorize
+it.
+
+#### Scenario: PowerShell pipeline evaluates every occurrence
+
+- **WHEN** native Windows PowerShell submits a pipeline
+- **THEN** every stage receives a candidate or strict finding
+- **AND** one covered stage cannot hide an uncovered stage
+
+#### Scenario: Bash does not cross-parse PowerShell payload
+
+- **WHEN** native Bash submits `pwsh -Command 'Get-Content ./a.txt'`
+- **THEN** policy evaluates the Bash `pwsh` occurrence
+- **AND** it does not create a native PowerShell child candidate
+
+#### Scenario: Authored facts do not replace effective deny facts
+
+- **GIVEN** an argument has finite `AuthoredValue` but unknown effective value
+- **WHEN** hard deny or runtime path policy evaluates it
+- **THEN** those stages retain the effective uncertainty
+- **AND** authored facts are limited to the approved matching perspective
+
+### Requirement: Shell policy coordinator preserves actor ownership
+
+The system SHALL evaluate a shell call through one coordinator with three
+phases: synchronous preflight, one asynchronous approval-actor batch match, and
+deterministic completion.
+
+Preflight SHALL snapshot the existing `ToolExecutionContext` and exact
+`ToolApprovalAttempt.OneTimeApprovedPatterns` set. Those legacy-named strings
+SHALL remain `OneTimeApprovalKeys` binding filtered phrase and effective
+directory. Preflight SHALL build one canonical
+`ShellCommandAnalysis`, apply hard deny and protected paths, resolve approval
+mode, build candidates, and preserve the existing noninteractive trust-zone
+gate. If preflight is not terminal, `DispatchingToolExecutor` SHALL send
+exactly one typed batch request to `ToolApprovalActor`.
+
+`ToolApprovalActor` SHALL atomically snapshot inherited session and persistent
+grants. It SHALL return one match result per stable candidate ID. It SHALL NOT
+own or inspect one-time approval state. The coordinator SHALL import actor
+coverage, apply safe policy to still-uncovered candidates, validate the
+invocation-owned one-time set exactly, and SHALL NOT rescan grants.
+
+Reviewed-safe phrase coverage SHALL cover a candidate only when the run has
+interactive approval capability. A run without that capability SHALL require
+explicit one-time, session, or persistent authority for every candidate that
+is not an approval-exempt side effect.
+
+The actor result SHALL include typed persistent-store status. An absent store
+file SHALL be ready with an empty snapshot. Expected corruption or migration
+failure SHALL be unavailable. Completion SHALL allow a call fully covered by
+one-time, session, approval-exempt side effects, or, for an interactive run,
+reviewed-safe phrase coverage without persistent state. If any candidate
+remains uncovered and persistent state was unavailable, completion SHALL
+return terminal `ApprovalStoreUnavailable` instead of a prompt.
+
+`ToolApprovalAttempt` SHALL remain owner of one-time invocation state.
+`ToolApprovalActor` SHALL remain owner of session and persistent grants. The
+session pipeline SHALL remain owner of pending requests, response validation,
+stale-response rejection, and recovery.
+
+The implementation SHALL reuse current execution, decision, candidate, match,
+and prompt-context types when they can carry the required fact. It SHALL remove
+superseded overlap. A new type SHALL exist only for the actor batch protocol or
+a fact that no current type represents.
+
+#### Scenario: One actor snapshot covers every candidate
+
+- **GIVEN** a compound command has four candidates
+- **WHEN** preflight completes without a terminal result
+- **THEN** the executor sends one batch request containing four stable IDs
+- **AND** the actor returns one result from one grant snapshot
+- **AND** no synchronous policy service reads the approval store directly
+
+#### Scenario: Independent coverage survives unavailable persistence
+
+- **GIVEN** the persistent store is unavailable
+- **AND** interactive approval capability is available
+- **AND** session and reviewed-safe coverage jointly cover every candidate
+- **WHEN** completion evaluates the actor result
+- **THEN** the call is allowed
+- **AND** no persisted grant is assumed
+
+#### Scenario: Reviewed-safe policy does not grant headless authority
+
+- **GIVEN** interactive approval capability is unavailable
+- **AND** a complete candidate is in the reviewed-safe catalog
+- **WHEN** no one-time, session, or persistent grant covers that candidate
+- **THEN** the candidate remains uncovered
+- **AND** the caller follows the current unsupported-channel denial path
+
+#### Scenario: Explicit grant covers a headless candidate
+
+- **GIVEN** interactive approval capability is unavailable
+- **AND** a session or persistent grant covers a complete candidate
+- **WHEN** completion evaluates the call
+- **THEN** the explicit grant covers that candidate
+- **AND** reviewed-safe policy adds no authority
+
+#### Scenario: Uncovered candidate fails closed when persistence is unavailable
+
+- **GIVEN** the persistent store is unavailable
+- **AND** one candidate remains uncovered after one-time, session, and safe
+  coverage
+- **WHEN** completion evaluates the call
+- **THEN** it denies with `ApprovalStoreUnavailable`
+- **AND** it does not offer an approval prompt
+
+#### Scenario: Hard deny terminates before actor match
+
+- **GIVEN** a stored grant could match a command phrase
+- **AND** canonical analysis matches hard deny
+- **WHEN** preflight evaluates the call
+- **THEN** it returns terminal deny
+- **AND** the executor sends no grant-match request
+
+#### Scenario: Noninteractive trust zone precedes approval matching
+
+- **GIVEN** interactive approval is unavailable
+- **AND** a stored grant covers the command phrase
+- **WHEN** canonical path facts fall outside the configured trust zone
+- **THEN** preflight returns terminal deny
+- **AND** neither the stored grant nor safe policy can override it
+
+#### Scenario: Recovery re-evaluates the original request
+
+- **GIVEN** a pending approval is recovered after daemon restart
+- **WHEN** the response resumes the request
+- **THEN** policy re-evaluates the original source and immutable context
+- **AND** it obtains a current actor snapshot before execution
+- **AND** it does not replay a stale allow result
+
+### Requirement: Candidate coverage composes authorization sources
+
+Every ShellSyntaxTree command occurrence SHALL receive a stable call-local
+candidate ID. Coverage SHALL begin `Uncovered` and MAY transition once to
+OneTime, Session, PersistentGlobal, PersistentFolder, ReviewedSafePolicy, or
+Denied.
+
+A stage SHALL refine only uncovered candidates. A denial SHALL be terminal.
+The coordinator SHALL allow only when every candidate has non-deny coverage and
+every call-level invariant passes.
+
+Expected unresolved shell syntax MAY produce a one-time prompt without
+reusable choices. An internal exception, invalid enum, duplicate candidate ID,
+mismatched actor result, or impossible transition SHALL produce terminal deny.
+
+#### Scenario: Grants and safe policy compose
+
+- **GIVEN** a command has `cd`, `gh api`, `wc`, and `head` candidates
+- **AND** global grants cover `cd` and `gh api`
+- **AND** reviewed safe policy covers `wc` and `head`
+- **WHEN** the coordinator completes policy
+- **THEN** every candidate has coverage
+- **AND** the call is allowed without a prompt
+
+#### Scenario: One uncovered candidate prompts
+
+- **GIVEN** three candidates are covered and one remains uncovered
+- **WHEN** no strict call-level invariant denies the call
+- **THEN** the call requires one interactive prompt
+- **AND** the prompt identifies the uncovered candidate
+
+#### Scenario: Internal evaluator failure denies
+
+- **WHEN** any policy stage throws or returns an invalid typed result
+- **THEN** the final result is terminal deny with `InternalPolicyFailure`
+- **AND** no approval prompt can override it
+- **AND** the shell does not execute
+
+#### Scenario: One-time approval requires the exact approval-key set
+
+- **GIVEN** the invocation attempt contains one-time approval keys
+- **WHEN** the current phrase-and-effective-directory key set differs by any
+  missing or extra key
+- **THEN** one-time coverage is not applied
+- **AND** actor-owned session or persistent coverage is unaffected
+
+### Requirement: Causal approval intent is separate from execution scope
+
+The system SHALL keep canonical execution facts unchanged. For Bash only, it
+MAY derive approval intent from a leading ShellSyntaxTree 0.3.4 occurrence.
+That occurrence SHALL publish `ChangesOnSuccess(Exact(target))`. Its next
+top-level action SHALL be success-gated with `&&`.
+
+Intent MAY continue through later top-level diagnostic statements until a
+later directory mutation, differing control-flow join, alternate branch,
+subshell/group boundary, dynamic flow, or unsupported region invalidates it. An
+exact later success-gated `ChangesOnSuccess` effect SHALL replace intent.
+`Unchanged` SHALL preserve intent. `Unknown` or a non-exact change target SHALL
+invalidate intent. Causal and temporary-scope policy SHALL NOT identify
+directory-transition verbs.
+
+An intent target SHALL be eligible only when exact, absolute, normalized, and
+allowed by protected-path policy. It SHALL contain no symlink segment. Every
+possible fallback directory SHALL meet the same rule. A captured platform
+temporary alias and its descendants MAY map to its canonical root. POSIX hosts
+MAY also capture the conventional `/tmp` alias. No other symlink target SHALL
+be eligible. The directory-transition candidate and first non-navigation
+action on its success edge SHALL already have one-time, session, or
+stored-grant coverage. Safe policy alone SHALL NOT create causal intent.
+
+Only a reviewed diagnostic candidate without a file-writing
+redirect MAY consume eligible intent. Hard deny, protected paths, folder
+grants, noninteractive authority, and process execution SHALL use real facts.
+The system SHALL NOT rewrite source, arguments, cwd, or model history.
+
+Native PowerShell SHALL remain strict in this slice and SHALL NOT derive causal
+scope from `Set-Location`.
+
+#### Scenario: Exact D03 chain composes under intended tmp scope
+
+- **GIVEN** global grants cover `cd` and `gh api`
+- **AND** `wc` and `head` are reviewed diagnostic entries
+- **WHEN** the agent submits
+  `cd /tmp && gh api repos/example/project/actions/jobs/123456/logs > slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log`
+- **THEN** real redirect and path facts pass deny policy
+- **AND** the exact protected-path-safe `/tmp` target is eligible approval
+  intent for `wc` and `head`
+- **AND** all four candidate coverages compose to allow
+
+#### Scenario: Later unknown directory mutation invalidates intent
+
+- **GIVEN** intent is `/tmp`
+- **WHEN** a later `cd "$1"` precedes a diagnostic tail
+- **THEN** the tail has unknown intent
+- **AND** safe policy cannot use the earlier `/tmp` intent
+
+#### Scenario: Parser-owned wrappers establish and replace intent
+
+- **WHEN** Bash reports `ChangesOnSuccess(Exact("/tmp"))` for `command cd /tmp`
+- **THEN** the effect can establish causal intent
+- **AND** no Netclaw command-name rule is consulted
+
+#### Scenario: Directory-stack effect invalidates intent
+
+- **GIVEN** intent is `/tmp`
+- **WHEN** a later `pushd` or `popd` occurrence reports `Unknown`
+- **THEN** no later diagnostic receives the earlier intent
+
+#### Scenario: Failure-only transition shape does not create intent
+
+- **WHEN** Bash reports `Unchanged` for `cd /tmp extra`
+- **THEN** no causal intent is created
+- **AND** Netclaw does not reinterpret the command's private arguments
+
+#### Scenario: Arbitrary symlink target cannot create intent
+
+- **GIVEN** `/work/alias` is a symlink to another directory
+- **WHEN** source starts with `cd /work/alias && inspect`
+- **THEN** no causal approval intent is eligible
+- **AND** the captured platform temporary alias remains a separate bounded
+  exception
+
+#### Scenario: Earlier symlink target cannot become a fallback
+
+- **GIVEN** an earlier exact intent target crosses a symlink
+- **WHEN** a later eligible transition replaces intent
+- **THEN** the earlier target fails fallback eligibility
+- **AND** no later diagnostic receives reviewed-safe intent coverage
+
+#### Scenario: Protected fallback denial stays terminal
+
+- **GIVEN** an earlier fallback alias resolves into a protected directory
+- **WHEN** a later intent candidate also fails symlink eligibility
+- **THEN** protected-path policy denies before the eligibility check
+- **AND** the system does not offer a one-time approval prompt
+
+#### Scenario: Conventional macOS tmp alias remains eligible
+
+- **GIVEN** the host runtime temp root differs from `/tmp`
+- **AND** the POSIX `/tmp` alias resolves to `/private/tmp`
+- **WHEN** intent targets `/tmp` or one of its safe descendants
+- **THEN** causal policy validates the canonical `/private/tmp` path
+- **AND** arbitrary POSIX symlink aliases remain strict
+
+#### Scenario: Session and folder grants use real prerequisite scope
+
+- **GIVEN** session or persistent-folder authority covers each prerequisite
+- **WHEN** causal policy checks a diagnostic tail
+- **THEN** prerequisite coverage can establish intent
+- **AND** a folder grant matches only the prerequisite's real scope
+- **AND** intent scope cannot convert a folder near miss into coverage
+
+#### Scenario: Alternate branch does not leak intent
+
+- **WHEN** source is `cd /tmp && inspect || recover; head result.log`
+- **THEN** the joined intent before `head` is unknown
+- **AND** real execution facts still control path policy
+
+#### Scenario: Subshell intent does not escape
+
+- **WHEN** source is `(cd /tmp && inspect); head result.log`
+- **THEN** `/tmp` intent applies only inside the subshell
+- **AND** it does not cover the outer `head`
+
+#### Scenario: Native PowerShell stays strict
+
+- **WHEN** native Windows PowerShell analyzes
+  `Set-Location C:\\Temp; Get-Content result.log`
+- **THEN** no synthetic causal scope is created
+- **AND** existing real-scope and provider rules decide the call
+
+### Requirement: Shell approval decision trace is bounded and redacted
+
+The coordinator SHALL return one ordered trace. Rows SHALL contain only enum
+stage, enum outcome, enum reason, call-local candidate ID, bounded executable
+basename, coverage kind, scope relation, and grant timestamp.
+
+The trace SHALL NOT contain full commands, argument values, environment values,
+redirect bodies, raw paths, tokens, secrets, or model content. It SHALL contain
+at most one row per stage per candidate and 256 rows total. Text fields SHALL
+contain at most 128 UTF-16 code units. Control, newline, bidi, and invalid
+Unicode SHALL be escaped. Secret-pattern redaction SHALL run before logging.
+
+Trace overflow SHALL add one `TraceTruncated` row without changing the decision.
+The trace SHALL not enter prompts or session persistence. Near-miss diagnostics
+SHALL project from the trace without another grant scan.
+
+#### Scenario: Grant and safe coverage produce one trace
+
+- **WHEN** actor grants and safe policy jointly cover a call
+- **THEN** the trace contains one coverage row for each candidate
+- **AND** the final row is `Allow(AllCandidatesCovered)`
+
+#### Scenario: Malicious text cannot forge trace lines
+
+- **GIVEN** authored input contains CR, LF, bidi controls, or a token-like secret
+- **WHEN** a strict result is logged
+- **THEN** controls are escaped and secrets are redacted
+- **AND** no authored text creates an additional log row
+
+#### Scenario: Trace overflow does not widen authority
+
+- **WHEN** trace evidence exceeds a configured bound
+- **THEN** later detail is replaced by `TraceTruncated`
+- **AND** candidate coverage and the final decision are unchanged
+
+### Requirement: Exact sanitized beta approval catalog
+
+The change SHALL contain `evidence/approval-matrix.json` with exact sanitized
+D01-D18 commands, observed responses, classifications, owners, parser facts,
+and policy outcomes. It SHALL match the paired ShellSyntaxTree artifact
+byte-for-byte.
+
+The shared catalog SHALL NOT imply structured trace fields through prose.
+Netclaw SHALL also contain `evidence/netclaw-policy-fixtures.json` with exact
+candidate IDs, typed phrases, scopes, available grants and safe entries,
+expected per-candidate coverage, ordered trace rows, and final outcome for the
+policy-owned acceptance cases. Tests SHALL load those fields directly and
+SHALL NOT branch on Dxx identifiers to manufacture expected results.
+
+Fixture defaults SHALL explicitly provide:
+
+- tool name, audience, and approval mode;
+- interactive capability;
+- session identity and safe root;
+- project safe root and inherited cwd;
+- persistent-store status; and
+- a fixed clock.
+
+Each case SHALL provide canonical shell environment and initial cwd. Parser facts SHALL use
+command indexes. Policy facts SHALL use stable candidate IDs. Every stored
+grant SHALL carry a canonical shell tag. D02, D03, D07, D08, D09, D10, D11,
+D14, D17, and D18 SHALL be exact executable fixtures. Tests SHALL deserialize
+the schema through source-generated `System.Text.Json` metadata and reject
+unknown members.
+
+Additional adversarial rows SHALL cover dynamic identity, deny-only wrappers,
+redirects, protected paths, prefix collisions, runtime iterators, PowerShell
+providers, and unsafe catalog entries.
+
+#### Scenario: Every harvested prompt appears once
+
+- **WHEN** the catalog loads
+- **THEN** IDs D01 through D18 each occur exactly once
+- **AND** each classification is correct prompt, Netclaw policy defect,
+  ShellSyntaxTree fact gap, or irreducibly dynamic
+
+#### Scenario: Catalog contains no source identity
+
+- **WHEN** the PII audit scans the change
+- **THEN** it finds no local username, private repository, channel, thread,
+  host, email, token, or secret
+
+#### Scenario: Unsafe catalog counterexamples stay strict
+
+- **WHEN** policy evaluates `find . -exec rm {} +`,
+  `awk 'BEGIN { system("touch marker") }'`, `rg --pre helper pattern .`, and
+  `sort -o output input`
+- **THEN** none receives reviewed safe-policy coverage
+
+### Requirement: Executable post-1952 live approval regression corpus
+
+The shell-policy evidence catalog SHALL contain one executable live regression
+for each representative post-1952 evidence case T01 through T21. Each
+regression SHALL identify its source evidence file and source evidence ID. It
+SHALL retain the source classification and intended policy outcome.
+
+Executable commands SHALL be identity-free and SHALL preserve the
+policy-relevant shell grammar of the source shape. Display-only redactions that
+would become shell operators SHALL NOT be executed as literal fixture input.
+
+The real shell policy coordinator SHALL evaluate every regression. Each row
+SHALL assert the final outcome, deny reason, approval candidates, messy status,
+approval option keys, and approval-actor contact count that are applicable to
+that outcome. Evidence classifications SHALL NOT grant authority.
+
+#### Scenario: Every representative post-1952 case executes once
+
+- **WHEN** the live regression fixture loads
+- **THEN** source evidence IDs T01 through T21 each occur exactly once
+- **AND** policy case IDs L12 through L32 each occur exactly once
+- **AND** every case executes through the real coordinator
+
+#### Scenario: Source evidence remains exactly linked
+
+- **WHEN** the evidence contract validates a live regression
+- **THEN** its source file and evidence ID resolve to one harvested case
+- **AND** its digest includes the harvested command shape
+- **AND** its classification equals the harvested classification
+- **AND** its target outcome equals its executable policy expectation
+
+#### Scenario: Display redaction does not change executable grammar
+
+- **WHEN** a harvested command shape contains a display-only placeholder
+- **THEN** the executable fixture uses an identity-free shell literal
+- **AND** it preserves the original command chain, path boundary, redirect,
+  or dynamic construct under test
+- **AND** it does not interpret an angle-bracket placeholder as a redirect
+
+#### Scenario: Current fact gaps remain strict
+
+- **WHEN** the coordinator evaluates the curated default-GET `gh api` cases
+  or the static Bash arithmetic echo case
+- **THEN** it requires approval under the current parser facts
+- **AND** Netclaw does not infer executable-private operation semantics
+
+#### Scenario: Agent-alignment cases do not gain authority
+
+- **WHEN** the coordinator evaluates a case classified as
+  `AgentAlignmentDebt`
+- **THEN** the classification does not provide candidate coverage
+- **AND** the current call remains approval-gated
+
+#### Scenario: Executable evidence drift is explicit
+
+- **WHEN** a source shape, executable command, evidence link, classification,
+  expected outcome, correction, approval shape, or actor-contact count changes
+- **THEN** the locked live-regression digest changes
+- **AND** the evidence contract fails until the new artifact is reviewed and
+  deliberately accepted
+
+#### Scenario: Corpus contains no source identity
+
+- **WHEN** the PII contract scans the added executable fixtures
+- **THEN** it finds no local username, private repository, channel, thread,
+  host, email, token, or secret
+
+### Requirement: Delegated scratch alignment is verified without prescribing the answer
+
+The headless eval suite SHALL include delegated disposable shell work in which the parent request and child task do not name `session_dir`, a platform temporary path, a working directory, or `set_working_directory`. The child SHALL pass its announced private session directory as the exact `WorkingDirectory` of each disposable shell call. The eval SHALL reject omission and inspect the child tool calls and completion rather than relying on response prose.
+
+This eval SHALL measure model alignment only. It SHALL NOT claim that session scratch grants authority or that a headless run exercised interactive approval.
+
+#### Scenario: Delegated disposable work selects session scratch
+
+- **GIVEN** a Personal headless child receives its exact private session directory in context
+- **AND** its task requests disposable multi-command diagnostic work without prescribing a path
+- **WHEN** the child authors shell calls
+- **THEN** every shell call passes the announced session directory as its exact `WorkingDirectory`
+- **AND** no call uses the shared platform temporary root
+- **AND** the child completes successfully with the expected diagnostic result
+
+#### Scenario: Parent task cannot supply the scratch answer
+
+- **GIVEN** the delegated scratch alignment eval
+- **WHEN** the parent calls `spawn_agent`
+- **THEN** the child task contains no session path, platform temporary path, cwd instruction, or project declaration instruction
+- **AND** the eval fails if those hints appear
+
+#### Scenario: Guidance does not confer headless authority
+
+- **GIVEN** a headless child knows its private session directory
+- **WHEN** it authors a shell call that lacks existing noninteractive authority
+- **THEN** ordinary headless policy denies the call
+- **AND** knowledge of `session_dir` does not create reviewed-safe, one-time, session, folder, or persistent coverage
+
+#### Scenario: Explicit platform temporary task remains strict
+
+- **GIVEN** a headless child task explicitly requires the platform temporary directory
+- **WHEN** the child authors that exact path
+- **THEN** Netclaw preserves the authored path
+- **AND** existing noninteractive authorization decides the outcome
+- **AND** the eval does not treat path preservation as a scratch-guidance failure
+
+### Requirement: Version 3 approval store wire contract
+
+The system SHALL write a root object. It SHALL contain integer `version` equal
+to `3` and an `audiences` object. It SHALL have no other root members.
+
+The system SHALL reject duplicate JSON members at any level. It SHALL reject a
+duplicate audience key or tool key. It SHALL reject an unknown audience key.
+It SHALL reject null maps, null entry arrays, and null entries. A tool key
+SHALL be nonempty and canonical. A persisted string SHALL contain only valid
+Unicode scalar values. It SHALL have no control or bidi character.
+
+Each entry SHALL have one closed form:
+
+- A token-prefix shell entry SHALL contain `shell`, `match`, `verbTokens`,
+  `directory`, and `createdAt`. `match` SHALL equal `TokenPrefix`. The entry
+  SHALL NOT contain `verb`.
+- A legacy shell entry SHALL contain `shell`, `match`, `verb`, `directory`,
+  and `createdAt`. `match` SHALL equal `LegacyExact`. The entry SHALL NOT
+  contain `verbTokens`.
+- A non-shell entry SHALL contain `verb`, `directory`, and `createdAt`. The
+  entry SHALL NOT contain `shell`, `match`, or `verbTokens`.
+
+The writer SHALL emit `directory` for each shell entry. JSON null SHALL mean a
+global scope. `createdAt` MAY be JSON null. A directory value SHALL be an
+absolute canonical path.
+
+The reader SHALL reject an unknown entry member or enum. `verbTokens` SHALL
+have at least one token. The reader SHALL reject an empty token or a token with
+whitespace or controls. It SHALL reject a mixed
+entry form, a relative directory, and a bad timestamp. A `verb` value SHALL be
+nonempty. Whitespace at the start or end of a `verb` SHALL fail the file. Each
+token, verb, tool key, and directory SHALL meet the persisted-string rule. One
+bad value SHALL make the whole store unavailable. No entry from that file
+SHALL authorize.
+
+#### Scenario: New Bash token grant has one form
+
+- **WHEN** Netclaw stores a global Bash grant for tokens `git` and `push`
+- **THEN** its entry equals
+  `{"shell":"Bash","match":"TokenPrefix","verbTokens":["git","push"],"directory":null,"createdAt":<timestamp>}`
+- **AND** the entry has no `verb` member
+
+#### Scenario: Legacy shell grant has one form
+
+- **WHEN** Netclaw stores a global Bash legacy phrase `git push`
+- **THEN** its entry equals
+  `{"shell":"Bash","match":"LegacyExact","verb":"git push","directory":null,"createdAt":<timestamp>}`
+- **AND** the entry has no `verbTokens` member
+
+#### Scenario: Non-shell entry keeps its form
+
+- **WHEN** Netclaw stores a non-shell approval
+- **THEN** the entry contains `verb`, `directory`, and `createdAt`
+- **AND** the entry has no shell phrase member
+
+#### Scenario: Duplicate member fails closed
+
+- **GIVEN** a version-3 entry has two `match` members
+- **WHEN** the daemon loads the store
+- **THEN** the persistent store status is unavailable
+- **AND** no entry from the file can authorize
+
+#### Scenario: Unknown audience fails closed
+
+- **GIVEN** a version-3 store has audience key `guest`
+- **WHEN** the daemon loads the store
+- **THEN** the persistent store status is unavailable
+
+#### Scenario: Spoof character fails closed
+
+- **GIVEN** a tool key, verb, token, or directory has a bidi control
+- **WHEN** the daemon loads the store
+- **THEN** the persistent store status is unavailable
+- **AND** no entry from the file can authorize
+
+#### Scenario: Empty token array fails closed
+
+- **GIVEN** a token-prefix entry has an empty `verbTokens` array
+- **WHEN** the daemon loads the store
+- **THEN** the persistent store status is unavailable
+- **AND** no entry from the file can authorize
+
+### Requirement: Exact-authority version 2 migration
+
+The system SHALL get the canonical native shell from its caller. It SHALL not
+guess a shell. On the first valid version-2 load, it SHALL check the whole file
+before a file-system change.
+
+The system SHALL convert each valid `shell_execute` entry to `LegacyExact` for
+that shell. It SHALL keep the version-2 `verb` text exactly. It SHALL keep
+`createdAt`, audience, and tool. It SHALL NOT add token-prefix authority.
+
+For a non-null v2 directory, conversion SHALL use `Path.GetFullPath`. It SHALL
+preserve a canonical filesystem root, such as `/` or `C:\`. For another path,
+it SHALL remove end separators as the current matcher does. The result SHALL be
+nonempty and absolute. Conversion SHALL preserve significant path whitespace.
+It SHALL never trim a path or map a non-null directory to global null. A null
+v2 directory SHALL remain global null.
+
+The system SHALL keep a valid non-shell entry without shell members. It SHALL
+omit a control phrase or a shell phrase with no safe representation. It SHALL
+emit one bounded diagnostic count for all such omissions.
+
+A version-2 verb with whitespace at its start or end has no version-3 form.
+The system SHALL omit it. It SHALL not trim it into new authority.
+
+Each store access SHALL use one exclusive cross-process lock. The lock SHALL
+cover read, check, backup, write, replace, and cache update. It SHALL use a
+bounded wait. A timeout SHALL make the store unavailable.
+
+The system SHALL reject a symbolic link at the active, lock, backup, or
+temporary path. It SHALL create each new sibling file with exclusive access.
+It SHALL compare the active source bytes again before replace.
+
+The system SHALL copy the source bytes to `.v2.bak` before replace. It SHALL
+flush the temporary version-3 file. It SHALL then replace the active file on
+the same file system. It SHALL not replace a prior backup with different bytes.
+
+A backup error SHALL leave the source in place. A replace error SHALL keep the
+source and completed backup. Each error SHALL make the store unavailable for
+that load. A later load MAY try again.
+
+#### Scenario: Plain version-2 shell phrase stays exact
+
+- **GIVEN** a version-2 Bash entry has `verb` equal to `git push`
+- **WHEN** conversion succeeds
+- **THEN** the version-3 entry uses `LegacyExact`
+- **AND** it matches only `git push`
+- **AND** it does not match `git push upstream`
+
+#### Scenario: Folder and time survive conversion
+
+- **GIVEN** a version-2 shell entry has an absolute directory and timestamp
+- **WHEN** conversion succeeds
+- **THEN** the legacy entry has the same normalized directory
+- **AND** it has the same timestamp
+
+#### Scenario: Backup keeps the source bytes
+
+- **GIVEN** a valid version-2 approval file
+- **WHEN** conversion succeeds
+- **THEN** the `.v2.bak` bytes equal the original bytes
+- **AND** the active file is valid version 3
+
+#### Scenario: Different backup stops conversion
+
+- **GIVEN** `.v2.bak` exists with different bytes
+- **WHEN** the system tries to convert version 2
+- **THEN** the store status is unavailable
+- **AND** neither file changes
+
+#### Scenario: Other process changes the source
+
+- **GIVEN** a writer that does not use the lock changes the active source
+- **WHEN** the source comparison runs before replace
+- **THEN** replace does not occur
+- **AND** the store status is unavailable
+
+#### Scenario: Bad version-2 file gives no authority
+
+- **GIVEN** one version-2 entry is structurally bad
+- **WHEN** the daemon loads the store
+- **THEN** conversion does not replace the source
+- **AND** no entry from the file can authorize
+
+#### Scenario: Control phrase is not legacy authority
+
+- **GIVEN** a valid version-2 entry has a control in its phrase
+- **WHEN** conversion succeeds for the rest of the file
+- **THEN** that entry is absent from version 3
+- **AND** it is not `LegacyExact`
+
+#### Scenario: Padded phrase does not gain authority
+
+- **GIVEN** a version-2 entry has verb text ` git push`
+- **WHEN** conversion succeeds for the rest of the file
+- **THEN** that entry is absent from version 3
+- **AND** no `git push` authority is created
+
+#### Scenario: Path space does not widen folder authority
+
+- **GIVEN** a POSIX v2 directory is `/work ` with a final space
+- **WHEN** conversion succeeds
+- **THEN** the version-3 directory remains `/work `
+- **AND** it does not become `/work`
+
+#### Scenario: Empty directory does not become global
+
+- **GIVEN** a v2 entry has non-null empty directory text
+- **WHEN** conversion succeeds for the rest of the file
+- **THEN** that entry is absent from version 3
+- **AND** no global grant is created
+
+#### Scenario: POSIX root keeps root scope
+
+- **GIVEN** a v2 directory is `/`
+- **WHEN** conversion succeeds
+- **THEN** the version-3 directory is `/`
+- **AND** it is not empty or global null
+
+#### Scenario: Windows drive root keeps root scope
+
+- **GIVEN** a v2 directory is `C:\`
+- **WHEN** conversion succeeds on Windows
+- **THEN** the version-3 directory is `C:\`
+- **AND** it is not `C:` or global null
+
+### Requirement: Canonical trust-verb phrase creation
+
+For `shell_execute`, `trust-verb` SHALL use the selected ShellSyntaxTree parser.
+It SHALL create `TokenPrefix` from one complete static command phrase. It SHALL
+use the canonical verb tokens from the parser. It SHALL reject dynamic,
+compound, or incomplete shell input.
+
+The one occurrence SHALL have no parser-classified argument, flag, assignment,
+redirect, cwd effect, substitution, or control-flow effect. The input text
+SHALL equal the canonical token phrase with one space between tokens. The CLI
+SHALL not reduce extra authored text to a broader stored phrase. Netclaw SHALL
+not reinterpret a parser-classified verb token through executable-private
+grammar.
+
+For any other tool, `trust-verb` SHALL keep the compatible non-shell exact
+entry. It SHALL support the current arbitrary `--tool` value. It SHALL not add
+shell members to that entry.
+
+For an abstract PowerShell request, the parser SHALL try PowerShell 7 and
+Windows PowerShell 5.1. It SHALL use a valid PowerShell 7 result first. It SHALL
+use a valid Windows PowerShell 5.1 result only when the preferred result is
+invalid. A resolved runtime environment SHALL use only its selected dialect.
+
+#### Scenario: Static shell phrase creates tokens
+
+- **WHEN** an operator trusts `git push` for `shell_execute` under Bash
+- **THEN** the new entry has Bash token prefix `git`, `push`
+
+#### Scenario: PowerShell 7 valid result has preference
+
+- **GIVEN** PowerShell 7 accepts the exact canonical phrase
+- **WHEN** an operator trusts the phrase under abstract PowerShell
+- **THEN** the new entry uses the PowerShell 7 canonical tokens
+
+#### Scenario: Windows PowerShell result provides a fallback
+
+- **GIVEN** PowerShell 7 rejects the exact phrase
+- **AND** Windows PowerShell 5.1 accepts the exact canonical phrase
+- **WHEN** an operator trusts the phrase under abstract PowerShell
+- **THEN** the new entry uses the Windows PowerShell 5.1 canonical tokens
+
+#### Scenario: Compound shell phrase is rejected
+
+- **WHEN** an operator trusts `git status; rm file` for `shell_execute`
+- **THEN** the command exits with a user error
+- **AND** the approval store does not change
+
+#### Scenario: Flag is not reduced to a phrase
+
+- **WHEN** an operator trusts `git push --force` for `shell_execute`
+- **THEN** the command exits with a user error
+- **AND** no `git push` grant is stored
+
+#### Scenario: Parser-owned phrase keeps every token
+
+- **WHEN** an operator trusts `git push origin` for `shell_execute`
+- **AND** ShellSyntaxTree returns canonical tokens `git`, `push`, and `origin`
+- **THEN** the stored token prefix has all three tokens
+- **AND** no broader `git push` grant is stored
+
+#### Scenario: Redirect is not reduced to a phrase
+
+- **WHEN** an operator trusts `git push >out` for `shell_execute`
+- **THEN** the command exits with a user error
+- **AND** the approval store does not change
+
+#### Scenario: Assignment is not reduced to a phrase
+
+- **WHEN** an operator trusts `MODE=safe git push` for `shell_execute`
+- **THEN** the command exits with a user error
+- **AND** the approval store does not change
+
+#### Scenario: Non-shell tool stays exact
+
+- **WHEN** an operator trusts `create-page` for a non-shell tool
+- **THEN** the new entry uses the non-shell exact form
+- **AND** the entry has no `shell` member
+
+### Requirement: Version 3 recovery boundary
+
+The system SHALL treat an absent approval file as a ready empty store. It SHALL
+treat malformed JSON and a partly bad version-3 file as unavailable. It SHALL
+also reject a bad enum, bad token array, or future schema version.
+
+A future-version file SHALL stay byte-identical. The system SHALL NOT
+quarantine it. The daemon and CLI SHALL not provide an automatic downgrade.
+
+The operator SHALL stop the daemon before manual recovery. The operator can
+restore `.v2.bak` as the active file. The current daemon can convert it again.
+A version-2 binary is outside this compatibility promise.
+
+#### Scenario: Absent store is ready and empty
+
+- **GIVEN** the approval file does not exist
+- **WHEN** the daemon requests a persistent snapshot
+- **THEN** the store status is ready
+- **AND** the snapshot has no entries
+
+#### Scenario: Future store stays untouched
+
+- **GIVEN** the approval file declares a version greater than 3
+- **WHEN** the daemon or CLI tries to load it
+- **THEN** the store status is unavailable
+- **AND** the file stays byte-identical
+
+#### Scenario: Operator restores the backup
+
+- **GIVEN** version-3 conversion completed and `.v2.bak` exists
+- **WHEN** an operator stops the daemon and restores the backup
+- **THEN** the current daemon can convert that version-2 file again
+
+### Requirement: Bounded Bash stdin data has a constrained receiver grammar
+
+Netclaw SHALL treat Bash heredoc and here-string data as resolved only when all
+required receiver and data facts are complete. The initial receiver grammar
+SHALL accept only argument-free `cat`. It SHALL require a complete literal
+heredoc or an exact or finite here-string target.
+
+The grammar SHALL use the heredoc expansion mode and authored body provenance.
+It SHALL use `RedirectAnalysis.Target` for here strings. It SHALL reject
+expanding heredocs, unknown domains, incomplete redirects, path-relevant
+redirects, non-stdin source descriptors, authored arguments, receiver wrappers,
+and every other receiver. A complete direct shell dispatch MAY expose its inner
+receiver through Netclaw's established recursive analysis.
+
+Netclaw SHALL evaluate every other redirect on the occurrence independently.
+Stored approval SHALL NOT bypass an unresolved stdin redirect.
+
+#### Scenario: Exact here string to cat can use the trusted scope
+
+- **GIVEN** an argument-free `cat` command in a trusted project directory
+- **WHEN** its complete here string has exact data
+- **THEN** the stdin redirect does not require a separate approval
+- **AND** the normal safe-verb and path rules decide the command
+
+#### Scenario: Literal heredoc to cat can use the trusted scope
+
+- **GIVEN** an argument-free `cat` command in a trusted project directory
+- **WHEN** its complete literal heredoc has complete authored body provenance
+- **THEN** the stdin redirect does not require a separate approval
+- **AND** the normal safe-verb and path rules decide the command
+
+#### Scenario: Unknown here-string data stays strict
+
+- **GIVEN** `cat <<< "$value"` in a trusted project directory
+- **WHEN** the parser cannot prove the data value
+- **THEN** Netclaw requires one-shot approval or deny
+- **AND** Netclaw offers no persistent approval candidate
+
+#### Scenario: Interpreter stdin stays strict
+
+- **GIVEN** an interpreter receives a complete literal heredoc or here string
+- **WHEN** Netclaw evaluates the redirect
+- **THEN** Netclaw requires one-shot approval or deny
+- **AND** an existing interpreter grant does not bypass the stdin decision
+
+### Requirement: Bash command-resolution mutation stays strict
+
+Netclaw SHALL use the pinned ShellSyntaxTree result as the structural authority.
+An unparseable command-resolution mutation or reserved execution form SHALL
+produce no persistent approval candidate.
+
+This rule SHALL cover unsupported `exec`, mutating `hash`, alias changes,
+shell-option changes, builtin-enable changes, `time`, negation, coprocesses, and
+current-shell brace groups.
+
+#### Scenario: Command-resolution mutation cannot reuse a grant
+
+- **GIVEN** a command changes command resolution before another occurrence
+- **AND** stored grants cover each visible command name
+- **WHEN** ShellSyntaxTree marks the full command unparseable
+- **THEN** Netclaw requires one-shot approval or deny
+- **AND** Netclaw offers no persistent approval candidate
+
+#### Scenario: Reserved execution form cannot flatten into a safe command
+
+- **GIVEN** an unsupported reserved execution form contains a safe verb
+- **WHEN** ShellSyntaxTree marks the full command unparseable
+- **THEN** Netclaw does not authorize the visible safe verb
+- **AND** Netclaw offers no persistent approval candidate
+
+### Requirement: Platform temporary scope receives a session-scratch correction
+
+After tool exposure, hard deny, protected-path, and shell-analysis checks, the system SHALL return a typed session-scratch correction instead of immediately requesting approval when a Personal shell call explicitly authors the platform temporary root through the typed `WorkingDirectory` or an eligible Bash leading directory transition, every policy-relevant occurrence remains within that root, the session directory is a valid nonempty normalized path, interactive approval is available, and the ordinary result would otherwise request approval. The session directory SHALL NOT need to exist before the correction because replacement execution owns its creation. An inherited project, session, subagent, or default cwd SHALL NOT establish this authored intent. The correction SHALL identify the exact session directory and ask the agent to author a replacement call there. It SHALL execute nothing, record no grant, change no working context, and SHALL NOT rewrite the original call. Team and Public shell calls SHALL retain their existing earlier denial boundary and SHALL NOT receive this correction or the private session path.
+
+An internal immutable policy value SHALL capture the platform temporary root once when shell approval policy is constructed, using the resolved shell environment's path style. Matching SHALL use platform path rules and SHALL NOT use executable-specific parsing. This capability SHALL NOT add a public `ShellExecutionEnvironment` member.
+
+For Bash causal-directory advice, the system SHALL consume ShellSyntaxTree's exact leading `IsCwdAttribution` and `CommandOccurrence.WorkingDirectory` facts directly. Because the correction grants and executes nothing, it SHALL NOT require the parent causal-approval intent's pre-existing grant coverage. Actual execution, safe-policy coverage, and folder-grant decisions SHALL retain those authority preconditions, and Netclaw SHALL NOT add a second `cd` parser. Native PowerShell causal directory mutation remains ineligible.
+
+The system SHALL resolve the captured platform temporary root to its final filesystem target at startup. Every relevant cwd and authored filesystem path SHALL remain beneath that canonical target without a descendant symbolic link, junction, or reparse point. An attribute or target-resolution failure SHALL suppress the correction.
+
+Platform-temp correction SHALL take precedence over undeclared-project correction. The undeclared-project correction SHALL treat the platform temporary root as ineligible, and one shell attempt SHALL return at most one correction.
+
+#### Scenario: Explicit POSIX temporary working directory receives correction
+
+- **GIVEN** the platform temporary root is `/tmp`
+- **AND** the session directory is `/home/user/.netclaw/sessions/example`
+- **WHEN** a complete shell call requests `WorkingDirectory=/tmp`
+- **AND** ordinary policy would request user approval
+- **THEN** the agent receives a `SessionScratchSuggested` correction before the user approval surface
+- **AND** the correction names `/home/user/.netclaw/sessions/example`
+- **AND** the original call is not executed or rewritten
+
+#### Scenario: Fresh session scratch need not exist yet
+
+- **GIVEN** a fresh session has a valid normalized session-directory path
+- **AND** that directory has not yet been created on disk
+- **WHEN** its first shell call explicitly authors the platform temporary root
+- **AND** every other correction condition passes
+- **THEN** the system emits `SessionScratchSuggested`
+- **AND** replacement shell execution creates the session directory through the existing shell cwd path
+
+#### Scenario: Static causal directory change receives correction
+
+- **GIVEN** the platform temporary root is `/tmp`
+- **WHEN** the agent authors `cd /tmp && diagnostic-command > result.log && head result.log`
+- **AND** every policy-relevant effective directory remains `/tmp`
+- **AND** ordinary policy would request approval
+- **THEN** the correction asks the agent to author the temporary-artifact operation under the session directory
+- **AND** no executable-specific rule for `diagnostic-command` or `head` is required
+- **AND** the advice does not require prior grant coverage for `cd` or the first action
+- **AND** later execution still requires ordinary authority
+
+#### Scenario: Windows temporary working directory receives correction
+
+- **GIVEN** the native Windows shell environment captured `C:\\Users\\user\\AppData\\Local\\Temp` as its platform temporary root
+- **WHEN** a complete PowerShell call requests that exact working directory
+- **AND** ordinary policy would request approval
+- **THEN** the agent receives the same typed correction with its Windows session-directory path
+
+#### Scenario: Native PowerShell causal directory remains strict
+
+- **GIVEN** the native Windows shell is PowerShell
+- **WHEN** the agent authors `Set-Location $env:TEMP; diagnostic-command` or `cd $env:TEMP; diagnostic-command`
+- **THEN** the system does not emit the session-scratch correction
+- **AND** normal approval or deny behavior remains
+
+#### Scenario: Platform temp is never proposed as project scope
+
+- **GIVEN** a reviewed-safe shell call whose exact cwd is the platform temporary root
+- **AND** both scope-correction predicates would otherwise be eligible
+- **WHEN** policy selects an agent correction
+- **THEN** it returns only `SessionScratchSuggested`
+- **AND** it does not recommend `set_working_directory` for the platform temporary root
+
+#### Scenario: Dynamic temporary directory remains strict
+
+- **WHEN** the parser cannot prove the effective directory for `cd "$TMPDIR" && diagnostic-command`
+- **THEN** the system does not emit the session-scratch correction
+- **AND** normal approval or deny behavior remains
+
+#### Scenario: Dynamic identity remains on ordinary path
+
+- **WHEN** an authored call is `cd /tmp && "$tool"`
+- **OR** command substitution controls command identity or flow
+- **THEN** the system does not emit the session-scratch correction
+- **AND** normal approval or deny behavior remains
+
+#### Scenario: Unresolved redirect remains on ordinary path
+
+- **WHEN** an authored platform-temp call has a redirect target the parser cannot resolve
+- **THEN** the system does not emit the session-scratch correction
+- **AND** normal approval or deny behavior remains
+
+#### Scenario: Complete prompt-worthy work may receive advice
+
+- **GIVEN** every command identity, control-flow edge, cwd, and redirect is complete and static
+- **AND** the call would prompt because it writes, mutates, or performs a network action
+- **WHEN** its explicitly authored execution scope is the platform temporary root
+- **THEN** it may receive the advice-only session-scratch correction
+- **AND** a replacement or intentional retry still receives complete ordinary authorization
+
+#### Scenario: Mixed incomplete batch remains on ordinary path
+
+- **GIVEN** one candidate is reviewed safe
+- **AND** another candidate has incomplete identity, control flow, cwd, or redirect facts
+- **WHEN** policy evaluates the batch
+- **THEN** it does not emit the session-scratch correction
+- **AND** the incomplete candidate cannot hide behind the reviewed-safe candidate
+
+#### Scenario: Public parent and subagent retain path redaction
+
+- **GIVEN** a Public parent agent or subagent
+- **WHEN** it submits a platform-temp shell call
+- **THEN** the system does not emit `SessionScratchSuggested`
+- **AND** it does not disclose the private session-directory path
+- **AND** normal Public policy remains
+
+#### Scenario: Inherited temp project does not imply authored intent
+
+- **GIVEN** a recovered parent session has `ProjectDirectory=/tmp`
+- **OR** a subagent inherits `/tmp` as its cwd
+- **WHEN** it submits a shell call without an explicit `WorkingDirectory` or Bash leading transition
+- **THEN** the system does not emit `SessionScratchSuggested`
+- **AND** normal policy evaluates the inherited scope
+
+#### Scenario: External authored path prevents correction
+
+- **GIVEN** a call runs under the platform temporary root
+- **AND** an authored absolute path resolves outside that root
+- **WHEN** policy evaluates the call
+- **THEN** the system does not emit the session-scratch correction
+- **AND** normal approval or deny behavior remains
+
+#### Scenario: POSIX symlink escape prevents correction
+
+- **GIVEN** `/tmp/outside` is a symbolic link to `/etc`
+- **WHEN** a platform-temp call references `/tmp/outside/passwd` or redirects to `/tmp/outside/result`
+- **THEN** the system does not emit the session-scratch correction
+- **AND** normal approval or deny behavior remains
+
+#### Scenario: Windows reparse escape prevents correction
+
+- **GIVEN** a descendant of the Windows temporary root is a junction or reparse point outside that root
+- **WHEN** a platform-temp call references that descendant
+- **THEN** the system does not emit the session-scratch correction
+
+#### Scenario: Link inspection failure prevents correction
+
+- **WHEN** the system cannot resolve the platform temporary root or inspect a relevant descendant's attributes
+- **THEN** it does not emit the session-scratch correction
+
+#### Scenario: Hard deny and protected path retain precedence
+
+- **GIVEN** a shell call runs under the platform temporary root
+- **WHEN** the call triggers hard deny or protected-path policy
+- **THEN** the system denies the call
+- **AND** it does not emit the session-scratch correction
+
+#### Scenario: Replacement receives full authorization
+
+- **GIVEN** the agent receives a session-scratch correction
+- **WHEN** it authors a replacement call under the named session directory
+- **THEN** the system evaluates the replacement as a new call through every normal authorization stage
+- **AND** the correction does not guarantee automatic execution
+
+#### Scenario: Headless execution retains existing temporary-directory behavior
+
+- **GIVEN** a headless, scheduled, webhook, benchmark, or other noninteractive run
+- **WHEN** an authored shell call requires the platform temporary root or an absolute path beneath it
+- **THEN** the system does not emit the session-scratch correction
+- **AND** it does not rewrite or remove the authored temporary path
+- **AND** the existing noninteractive authorization result remains unchanged
+
+#### Scenario: Personal or Team headless model guidance prefers session scratch
+
+- **GIVEN** a Personal or Team headless session announces its exact session directory as scratch
+- **AND** a task requests disposable artifacts without requiring a platform path
+- **WHEN** the agent authors its shell call
+- **THEN** it uses the announced session directory rather than the platform temporary root
+- **AND** no interactive correction or approval prompt is involved
+
+#### Scenario: Public headless context retains path redaction
+
+- **GIVEN** a Public headless session
+- **WHEN** its working context is assembled
+- **THEN** the exact private session path is not disclosed
+- **AND** the platform-temp correction is not emitted
+
+#### Scenario: Headless task with explicit temp requirement preserves intent
+
+- **GIVEN** a headless or benchmark task explicitly requires the platform temporary directory
+- **WHEN** the agent authors its shell call
+- **THEN** it preserves the required platform-temp path
+- **AND** Netclaw does not redirect, defer, or prompt
+- **AND** existing noninteractive policy decides allow or deny
+
+### Requirement: Intentional platform-temp retry reaches ordinary approval
+
+The system SHALL prevent correction loops with actor-owned, non-persistent correction keys for the active user turn. A key SHALL cover canonical shell, command text, explicit working-directory presence and value, resolved temporary scope, background mode, and timeout. It SHALL deliberately exclude rationale because rationale does not alter execution. The actor SHALL arm a key only after the correction result is committed to model history. Identical calls in one parallel batch SHALL all remain first attempts. A later equivalent tool iteration SHALL atomically consume one armed key, suppress that correction once, and expose exactly `Once` and `Deny`. The system SHALL NOT offer session, folder, or global persistence for this retry and SHALL NOT write it to an actor grant or approval store.
+
+The actor SHALL clear keys on turn completion, cancellation, failure, passivation or recovery, and before a new user turn. A consumed key SHALL NOT suppress an unlimited sequence of retries.
+
+#### Scenario: Equivalent retry requests one-time approval
+
+- **GIVEN** the agent received a session-scratch correction for a platform-temp call
+- **WHEN** the agent repeats an equivalent call unchanged during the active turn
+- **THEN** the system does not repeat the same correction
+- **AND** it requests ordinary user approval when that is the underlying policy result
+- **AND** the approval choices are exactly `Once` and `Deny`
+- **AND** approval executes the agent-authored call exactly
+- **AND** no session or persistent grant is recorded
+
+#### Scenario: Parallel duplicate first attempts all receive correction
+
+- **GIVEN** one model batch contains two equivalent eligible platform-temp calls
+- **WHEN** the parent or subagent pipeline evaluates them concurrently
+- **THEN** both calls receive first-attempt corrections
+- **AND** neither call reaches approval based on the other call's uncommitted result
+
+#### Scenario: Later iteration consumes correction key once
+
+- **GIVEN** a correction result is committed to model history
+- **WHEN** a later tool iteration repeats the equivalent call
+- **THEN** the actor consumes the armed key and exposes `Once` and `Deny`
+- **AND** a subsequent equivalent attempt has no residual execution or grant authority
+
+#### Scenario: Execution-meta change is not an unchanged retry
+
+- **GIVEN** a correction key was armed for a foreground call with one timeout
+- **WHEN** a later call changes background mode, timeout, command text, or explicit cwd presence or value
+- **THEN** it does not consume that correction key
+- **AND** it receives a complete first-attempt policy evaluation
+
+#### Scenario: Rationale-only change remains equivalent
+
+- **GIVEN** a correction key was armed for a platform-temp call
+- **WHEN** a later call changes only `_rationale`
+- **THEN** rationale does not prevent equivalence
+- **AND** the execution semantics still receive the bounded retry behavior
+
+#### Scenario: Correction key does not persist
+
+- **GIVEN** a platform-temp correction occurred in an earlier turn
+- **WHEN** a later turn submits the same call
+- **THEN** no persisted correction key grants authority or bypasses policy
+- **AND** the call receives the current turn's complete policy evaluation
+
+#### Scenario: Lifecycle boundaries clear correction keys
+
+- **WHEN** a turn completes, cancels, fails, passivates, recovers, or a new user turn begins
+- **THEN** every armed or consumed scratch-correction key from the prior lifecycle is cleared
+
+### Requirement: Parent and subagent scratch corrections are equivalent
+
+The parent session pipeline and subagent pipeline SHALL consume the same typed session-scratch correction before they invoke their respective user or parent approval bridges.
+
+#### Scenario: Parent agent is corrected before user prompt
+
+- **WHEN** a parent agent submits an eligible platform-temp call
+- **THEN** it receives the correction before a user approval prompt is created
+
+#### Scenario: Subagent is corrected before parent bridge
+
+- **WHEN** a subagent submits an eligible platform-temp call
+- **THEN** it receives the same correction before a parent approval request is created
+- **AND** the parent user is not prompted for that first attempt
+

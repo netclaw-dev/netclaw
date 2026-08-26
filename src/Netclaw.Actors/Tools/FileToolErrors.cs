@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="FileToolErrors.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -14,6 +14,6 @@ internal static class FileToolErrors
            + "(e.g. `netclaw doctor --fix`, `netclaw secrets set`) or edit the file directly.";
 
     public static string CredentialReadDenied(string path)
-        => $"Error: Access denied: '{path}' contains credentials or keys "
-           + "and cannot be read by agent tools.";
+        => $"Error: Access denied: '{path}' is a protected Netclaw file "
+           + "(credentials, keys, secrets, or control-plane state) and cannot be read by agent tools.";
 }

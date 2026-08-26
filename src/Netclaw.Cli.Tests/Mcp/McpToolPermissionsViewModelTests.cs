@@ -1,9 +1,11 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpToolPermissionsViewModelTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
@@ -11,6 +13,7 @@ using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using R3;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Mcp;
@@ -71,6 +74,72 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
 
         Assert.Empty(vm.Servers);
         Assert.Contains("Could not read MCP server statuses", vm.StatusMessage.Value);
+    }
+
+    [Fact]
+    public async Task SelectServer_EntersLoadingStateAndIgnoresReentrantSelection()
+    {
+        var requestStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releaseResponse = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var configuration = new ConfigurationBuilder().Build();
+        var httpClientFactory = new GatedToolsHttpClientFactory(requestStarted, releaseResponse.Task);
+        var daemonApi = new DaemonApi(
+            httpClientFactory,
+            configuration,
+            _paths);
+        using var vm = new McpToolPermissionsViewModel(_paths, daemonApi);
+        var toolGridReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = vm.CurrentState.Subscribe(state =>
+        {
+            if (state == ToolPermissionsState.ToolGrid)
+                toolGridReached.TrySetResult();
+        });
+
+        vm.CurrentState.Value = ToolPermissionsState.ServerList;
+        vm.SelectServer(new McpServerName("notion"));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await requestStarted.Task.WaitAsync(cts.Token);
+        Assert.Equal(ToolPermissionsState.Loading, vm.CurrentState.Value);
+        Assert.Equal("Loading tools for notion...", vm.StatusMessage.Value);
+
+        vm.SelectServer(new McpServerName("notion"));
+        Assert.Equal(1, httpClientFactory.RequestCount);
+
+        releaseResponse.TrySetResult();
+        await toolGridReached.Task.WaitAsync(cts.Token);
+
+        Assert.Equal(ToolPermissionsState.ToolGrid, vm.CurrentState.Value);
+        Assert.Equal(["record-tasks"], vm.DiscoveredTools);
+
+        vm.SelectServer(new McpServerName("notion"));
+        Assert.Equal(1, httpClientFactory.RequestCount);
+        Assert.Equal(ToolPermissionsState.ToolGrid, vm.CurrentState.Value);
+    }
+
+    [Fact]
+    public async Task SelectServer_ToolRequestThrows_ReturnsToServerListWithError()
+    {
+        // A failed tool request must not strand the user on the Loading screen: the state
+        // must fall back to the server list so Esc / GoBack has somewhere to go.
+        var configuration = new ConfigurationBuilder().Build();
+        var daemonApi = new DaemonApi(new ThrowingToolsHttpClientFactory(), configuration, _paths);
+        using var vm = new McpToolPermissionsViewModel(_paths, daemonApi);
+        var serverListReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var subscription = vm.CurrentState.Subscribe(state =>
+        {
+            if (state == ToolPermissionsState.ServerList)
+                serverListReached.TrySetResult();
+        });
+
+        vm.CurrentState.Value = ToolPermissionsState.ServerList;
+        vm.SelectServer(new McpServerName("notion"));
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await serverListReached.Task.WaitAsync(cts.Token);
+
+        Assert.Equal(ToolPermissionsState.ServerList, vm.CurrentState.Value);
+        Assert.Contains("Error loading tools", vm.StatusMessage.Value);
     }
 
     public static TheoryData<bool, ToolApprovalMode[]> ServerDefaultCycles => new()
@@ -233,6 +302,53 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
+    public void ToggleServerAccess_FirstEnableReplacesAStoredPartialGrantSet()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Team": {
+                    "McpServersMode": "Allowlist",
+                    "AllowedMcpServers": [],
+                    "McpServerToolGrants": {
+                      "notion": ["search"]
+                    }
+                  }
+                }
+              }
+            }
+            """);
+
+        var vm = CreateVm();
+        var tools = new[] { "create-pages", "search", "list-databases" };
+        vm.InitializeForTests(new McpServerName("notion"), tools);
+        vm.SetSelectedAudienceForTests(TrustAudience.Team);
+
+        Assert.False(vm.IsServerAllowedForSelectedAudience());
+
+        vm.ToggleServerAccess();
+
+        Assert.True(vm.IsServerAllowedForSelectedAudience());
+        foreach (var tool in tools)
+            Assert.True(vm.IsToolGranted(new ToolName(tool)));
+
+        vm.ToggleServerAccess();
+
+        Assert.False(vm.IsServerAllowedForSelectedAudience());
+        foreach (var tool in tools)
+            Assert.False(vm.IsToolGranted(new ToolName(tool)));
+
+        vm.ToggleServerAccess();
+
+        Assert.True(vm.IsServerAllowedForSelectedAudience());
+        foreach (var tool in tools)
+            Assert.True(vm.IsToolGranted(new ToolName(tool)));
+    }
+
+    [Fact]
     public void ToggleServerAccess_DisablingClearsGrantedTools()
     {
         var vm = CreateVm();
@@ -362,6 +478,121 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         Assert.Equal("Allowlist", GetAudienceProfile(doc, "Personal").GetProperty("McpServersMode").GetString());
     }
 
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_UncheckPersistsDenyOverrideNotGrantAllowlist()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy", "delete" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.True(vm.IsToolGranted(new ToolName("delete")));
+
+        vm.ToggleTool(new ToolName("delete"));
+        Assert.False(vm.IsToolGranted(new ToolName("delete")));
+        Assert.Equal(ToolApprovalMode.Deny, vm.GetEffectiveMode(new ToolName("delete")).Mode);
+
+        Assert.True(vm.Save());
+
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        Assert.Equal(
+            "Deny",
+            personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides").GetProperty("dropbox/delete").GetString());
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_ReCheckClearsDenyOverride()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+
+        Assert.True(vm.Save());
+
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        Assert.False(
+            personal.TryGetProperty("ApprovalPolicy", out var ap)
+            && ap.TryGetProperty("ToolOverrides", out var overrides)
+            && overrides.TryGetProperty("dropbox/copy", out _));
+    }
+
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_RespectsAliasDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox__copy": "Deny" } }
+          } } }
+        }
+        """);
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+        Assert.True(vm.Save());
+
+        var personal = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Personal");
+        var overrides = personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/copy", out _));
+        Assert.False(overrides.TryGetProperty("dropbox__copy", out _));
+    }
+
+    [Fact]
+    public void ToggleTool_AllMcpServersMode_EnablesOverDefaultDeny()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "DefaultMode": "Deny" }
+          } } }
+        }
+        """);
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("dropbox"), new[] { "copy" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.False(vm.IsToolGranted(new ToolName("copy")));
+
+        vm.ToggleTool(new ToolName("copy"));
+        Assert.True(vm.IsToolGranted(new ToolName("copy")));
+        Assert.Equal(ToolApprovalMode.Approval, vm.GetEffectiveMode(new ToolName("copy")).Mode);
+    }
+
+    [Fact]
+    public void ToggleTool_AllowlistMcpServersMode_StillWritesGrantAllowlist()
+    {
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages", "search" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Team);
+
+        vm.ToggleServerAccess();
+        vm.ToggleTool(new ToolName("search"));
+        Assert.True(vm.IsToolGranted(new ToolName("create-pages")));
+        Assert.False(vm.IsToolGranted(new ToolName("search")));
+
+        Assert.True(vm.Save());
+
+        var team = GetAudienceProfile(JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath)), "Team");
+        var grants = team.GetProperty("McpServerToolGrants").GetProperty("notion")
+            .EnumerateArray().Select(static e => e.GetString()).ToList();
+        Assert.Contains("create-pages", grants);
+        Assert.DoesNotContain("search", grants);
+    }
+
     private static void CycleServerDefault(McpToolPermissionsViewModel vm, bool reverse)
     {
         if (reverse)
@@ -406,6 +637,59 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
             protected override Task<HttpResponseMessage> SendAsync(
                 HttpRequestMessage request, CancellationToken cancellationToken)
                 => Task.FromResult(new HttpResponseMessage { Content = new StringContent(body) });
+        }
+    }
+
+    // Fails every request so GetMcpToolNamesAsync throws, exercising the catch path in
+    // LoadToolsForServerAsync.
+    private sealed class ThrowingToolsHttpClientFactory : IHttpClientFactory
+    {
+        public HttpClient CreateClient(string name) => new(new ThrowingHandler());
+
+        private sealed class ThrowingHandler : HttpMessageHandler
+        {
+            protected override Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request, CancellationToken cancellationToken)
+                => throw new HttpRequestException("connection refused");
+        }
+    }
+
+    private sealed class GatedToolsHttpClientFactory : IHttpClientFactory
+    {
+        private readonly TaskCompletionSource _requestStarted;
+        private readonly Task _releaseResponse;
+        private int _requestCount;
+
+        public GatedToolsHttpClientFactory(TaskCompletionSource requestStarted, Task releaseResponse)
+        {
+            _requestStarted = requestStarted;
+            _releaseResponse = releaseResponse;
+        }
+
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
+        public HttpClient CreateClient(string name) => new(new GatedToolsHttpHandler(
+            _requestStarted,
+            _releaseResponse,
+            () => Interlocked.Increment(ref _requestCount)));
+
+        private sealed class GatedToolsHttpHandler(
+            TaskCompletionSource requestStarted,
+            Task releaseResponse,
+            Action onRequest) : HttpMessageHandler
+        {
+            protected override async Task<HttpResponseMessage> SendAsync(
+                HttpRequestMessage request,
+                CancellationToken cancellationToken)
+            {
+                onRequest();
+                requestStarted.TrySetResult();
+                await releaseResponse.WaitAsync(cancellationToken);
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("[\"record-tasks\"]", Encoding.UTF8, "application/json")
+                };
+            }
         }
     }
 }

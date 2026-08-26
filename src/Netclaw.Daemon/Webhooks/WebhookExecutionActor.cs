@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebhookExecutionActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -51,6 +51,7 @@ internal sealed class WebhookExecutionActor : ReceiveActor
 
         Receive<ExecutionStarted>(_ => { });
         Receive<ExecutionOutput>(HandleOutput);
+        Receive<OutputStreamTerminated>(HandleOutputStreamTerminated);
         Receive<ReceiveTimeout>(_ =>
         {
             _log.Warning(
@@ -74,7 +75,7 @@ internal sealed class WebhookExecutionActor : ReceiveActor
         {
             var self = Self;
             var routeAudience = _invocation.Route.Config.Audience;
-            var inputQueue = await _handle.InitializeWithQueueAsync(
+            var inputWriter = await _handle.InitializeWithChannelAsync(
                 Context,
                 _invocation.SessionId,
                 new SessionPipelineOptions
@@ -83,9 +84,10 @@ internal sealed class WebhookExecutionActor : ReceiveActor
                     Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls,
                     PromptOverlay = _invocation.Route.BuildPromptOverlay()
                 },
-                output => self.Tell(new ExecutionOutput(output)));
+                output => self.Tell(new ExecutionOutput(output)),
+                (_, failure) => self.Tell(new OutputStreamTerminated(failure)));
 
-            await inputQueue.OfferAsync(new ChannelInput
+            await inputWriter.WriteAsync(new ChannelInput
             {
                 SenderId = new SenderId($"webhook:{_invocation.Route.Name}"),
                 ChannelId = _invocation.Route.Name,
@@ -105,7 +107,7 @@ internal sealed class WebhookExecutionActor : ReceiveActor
                 RequestedDeliveryTarget = _invocation.Route.BuildNotificationDeliveryTarget()
             });
 
-            inputQueue.Complete();
+            inputWriter.Complete();
         }
         catch (Exception ex)
         {
@@ -123,18 +125,27 @@ internal sealed class WebhookExecutionActor : ReceiveActor
         switch (action)
         {
             case OutputAction.TurnCompleted:
-            {
-                var hasNotify = !string.IsNullOrWhiteSpace(_invocation.Route.BuildDefaultNotifyInstructions())
-                    || !string.IsNullOrWhiteSpace(_invocation.Route.Config.NotifyInstructions);
-                var deliveryRequired = _invocation.Route.Config.DeliveryRequired;
-                var failureMsg = _accumulator.BuildNotifyFailureMessage(hasNotify, deliveryRequired);
-                ReportAndStop(failureMsg is null, failureMsg);
-                break;
-            }
+                {
+                    var hasNotify = !string.IsNullOrWhiteSpace(_invocation.Route.BuildDefaultNotifyInstructions())
+                        || !string.IsNullOrWhiteSpace(_invocation.Route.Config.NotifyInstructions);
+                    var deliveryRequired = _invocation.Route.Config.DeliveryRequired;
+                    var failureMsg = _accumulator.BuildNotifyFailureMessage(hasNotify, deliveryRequired);
+                    ReportAndStop(failureMsg is null, failureMsg);
+                    break;
+                }
             case OutputAction.Error:
                 ReportAndStop(false, _accumulator.LastErrorMessage);
                 break;
         }
+    }
+
+    private void HandleOutputStreamTerminated(OutputStreamTerminated terminated)
+    {
+        if (_completed)
+            return;
+
+        var reason = terminated.Failure?.Message ?? "Session output ended without a terminal result.";
+        ReportAndStop(false, reason);
     }
 
     private void ReportAndStop(bool success, string? errorMessage)
@@ -182,4 +193,5 @@ internal sealed class WebhookExecutionActor : ReceiveActor
 
     private sealed record ExecutionStarted;
     private sealed record ExecutionOutput(SessionOutput Output);
+    private sealed record OutputStreamTerminated(Exception? Failure);
 }

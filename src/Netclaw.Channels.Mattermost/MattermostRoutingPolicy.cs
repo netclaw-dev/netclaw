@@ -12,6 +12,7 @@ internal static class MattermostRoutingPolicy
         bool mentionOnly,
         bool allowDirectMessages,
         bool mentionRequiredInDm,
+        bool mentionRequiredInThread,
         bool threadExists,
         bool containsBotMention)
     {
@@ -29,13 +30,21 @@ internal static class MattermostRoutingPolicy
         }
 
         if (threadExists)
+        {
+            if (mentionRequiredInThread && !containsBotMention)
+                return MattermostRoutingDecision.Ignore(MattermostRoutingIgnoreReason.ThreadMentionRequired);
             return MattermostRoutingDecision.ContinueOnly;
+        }
 
         // Thread reply where the actor was lost (e.g. daemon restart):
         // the message has a root_id, so re-create the session binding
         // and continue the persisted session.
         if (!message.RootPostId.IsEmpty)
+        {
+            if (mentionRequiredInThread && !containsBotMention)
+                return MattermostRoutingDecision.Ignore(MattermostRoutingIgnoreReason.ThreadMentionRequired);
             return MattermostRoutingDecision.StartOrContinue;
+        }
 
         if (!mentionOnly)
             return MattermostRoutingDecision.StartOrContinue;
@@ -58,6 +67,7 @@ internal enum MattermostRoutingIgnoreReason
     NoContent,
     DmNotAllowed,
     DmMentionRequired,
+    ThreadMentionRequired,
     ChannelMentionRequired
 }
 
@@ -80,6 +90,7 @@ internal sealed record MattermostRoutingDecision(
             MattermostRoutingIgnoreReason.NoContent => "routing_policy_ignore:NoContent",
             MattermostRoutingIgnoreReason.DmNotAllowed => "routing_policy_ignore:DmNotAllowed",
             MattermostRoutingIgnoreReason.DmMentionRequired => "routing_policy_ignore:DmMentionRequired",
+            MattermostRoutingIgnoreReason.ThreadMentionRequired => "routing_policy_ignore:ThreadMentionRequired",
             MattermostRoutingIgnoreReason.ChannelMentionRequired => "routing_policy_ignore:ChannelMentionRequired",
             _ => "routing_policy_ignore",
         };

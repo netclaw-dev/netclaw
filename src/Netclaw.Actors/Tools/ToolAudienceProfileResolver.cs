@@ -102,11 +102,8 @@ internal sealed class ToolAudienceProfileResolver
     }
 
     /// <summary>
-    /// Checks whether a specific tool from an MCP server is allowed for the given audience.
-    /// Returns true if:
-    /// - The profile has no <see cref="ToolAudienceProfile.McpServerToolGrants"/> (null), or
-    /// - The server has no entry in the grants dictionary, or
-    /// - The tool name appears in the server's grant list.
+    /// Checks whether an MCP tool passes the audience profile.
+    /// Per-tool grants apply only when the profile uses <see cref="ToolProfileMode.Allowlist"/>.
     /// </summary>
     public bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, TrustAudience audience)
     {
@@ -174,6 +171,9 @@ internal sealed class ToolAudienceProfileResolver
 
     private static bool IsMcpToolAllowed(McpServerName serverName, ToolName toolName, ToolAudienceProfile profile)
     {
+        if (profile.McpServersMode == ToolProfileMode.All)
+            return true;
+
         if (profile.McpServerToolGrants is not { } grants)
             return true;
 

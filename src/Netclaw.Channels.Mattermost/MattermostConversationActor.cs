@@ -71,6 +71,7 @@ internal sealed class MattermostConversationActor : ChannelConversationActor<Mat
             _dependencies.Options.MentionOnly,
             _dependencies.Options.AllowDirectMessages,
             _dependencies.Options.MentionRequiredInDm,
+            _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value),
             threadExists,
             message.ContainsBotMention);
 

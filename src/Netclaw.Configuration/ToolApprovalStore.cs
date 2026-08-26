@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 
@@ -14,67 +15,54 @@ namespace Netclaw.Configuration;
 /// by <see cref="ConfigWatcherService"/> — writes do not trigger daemon restart.
 /// Thread-safe for concurrent reads and writes.
 ///
-/// The on-disk schema is version 2: a typed <see cref="ApprovalEntry"/> list
-/// per (audience, tool). Files lacking <c>"version": 2</c> at the root are
-/// treated as legacy v1 and quarantined to <see cref="V1QuarantinePath"/>; an
-/// empty v2 store is returned in their place. Files that fail to parse as
-/// JSON at all are quarantined to <see cref="MalformedQuarantinePath"/>. In
-/// both cases the daemon fails closed (no approvals) instead of silently
-/// dropping every persisted grant.
+/// The on-disk schema is version 3: a typed <see cref="ApprovalEntry"/> list
+/// per (audience, tool). A version-2 file receives a byte-identical backup
+/// before conversion. A version-1 file moves to a quarantine sibling and an
+/// empty version-3 file replaces it. Invalid and future files stay untouched,
+/// and the store reports that no persistent authority is available.
 /// </summary>
 public sealed class ToolApprovalStore
 {
     /// <summary>
-    /// On-disk schema version emitted by <see cref="Save"/> and required by
-    /// <see cref="Load"/>. Files with any other value (including absent) are
-    /// quarantined to <see cref="V1QuarantinePath"/> on first read.
+    /// On-disk schema version emitted by writes and required by
+    /// <see cref="Load"/> after any supported conversion.
     /// </summary>
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     private readonly string _filePath;
     private readonly TimeProvider _timeProvider;
+    private readonly ApprovalStoreMigrationContext? _migrationContext;
+    private readonly TimeSpan _lockTimeout;
+    private readonly IApprovalStoreFileAccess _fileAccess;
     private readonly object _lock = new();
 
-    // Cache state guarded by _lock. `_cachedData` is the live in-memory
-    // instance returned to callers; writers (AddApproval, RemoveApproval,
-    // RemoveAllForTool) mutate it under the lock and then Save() refreshes
-    // the mtime/size to keep it authoritative. External writes (CLI, TUI in
-    // a separate process) invalidate the cache via the mtime+size check at
-    // the top of Load(); same-process writes that don't change size within
-    // the filesystem's mtime resolution are caught by the internal version
-    // counter bumped on every Save.
+    // Cache state is guarded by _lock. The byte snapshot prevents stale
+    // authority when another process writes same-size content within a coarse
+    // file-system timestamp interval. A cache hit avoids JSON parsing.
     private ToolApprovalData? _cachedData;
-    private DateTime _cachedMtime;
-    private long _cachedSize;
-    private int _internalVersion;
+    private byte[]? _cachedSourceBytes;
 
     /// <summary>
-    /// Path to the malformed-file quarantine sibling, used when the file
-    /// cannot be parsed as JSON at all. Distinct from
-    /// <see cref="V1QuarantinePath"/> so operators can tell a corrupted file
-    /// apart from a legacy-version file.
+    /// Retained compatibility path for an older malformed-file quarantine.
+    /// Version 3 leaves malformed input at the active path for manual repair.
     /// </summary>
     public string MalformedQuarantinePath => _filePath + ".invalid";
 
     /// <summary>
-    /// Path to the legacy-v1 quarantine sibling, used when the file parses as
-    /// JSON but does not declare schema version 2. The v1 file is preserved
-    /// here untouched so operators who hand-curated v1 entries can mine them
-    /// for ideas before writing fresh v2 grants.
+    /// Path to the legacy version-1 quarantine sibling. The original file is
+    /// preserved here before an empty version-3 store replaces it.
     /// </summary>
     public string V1QuarantinePath => _filePath + ".v1.bak";
 
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        WriteIndented = true,
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        // Operator-editable file: tolerate JSON5-ish niceties so a stray
-        // comment or trailing comma doesn't trigger the malformed-quarantine
-        // path and silently drop every grant.
-        ReadCommentHandling = JsonCommentHandling.Skip,
-        AllowTrailingCommas = true
-    };
+    /// <summary>
+    /// Byte-identical version-2 backup created before conversion.
+    /// </summary>
+    public string V2BackupPath => _filePath + ".v2.bak";
+
+    /// <summary>
+    /// Cross-process lock path for approval-store access.
+    /// </summary>
+    public string LockPath => _filePath + ".lock";
 
     /// <param name="filePath">Path to <c>tool-approvals.json</c>.</param>
     /// <param name="timeProvider">
@@ -83,145 +71,231 @@ public sealed class ToolApprovalStore
     /// production; tests pass a fake to assert on timestamps.
     /// </param>
     public ToolApprovalStore(string filePath, TimeProvider? timeProvider = null)
+        : this(filePath, timeProvider, migrationContext: null, lockTimeout: null)
     {
-        _filePath = filePath;
-        _timeProvider = timeProvider ?? TimeProvider.System;
     }
 
     /// <summary>
-    /// Loads all persistent approvals. Returns an empty store when the file
-    /// does not exist, parses as JSON but lacks <c>"version": 2</c> (the file
-    /// is moved aside to <see cref="V1QuarantinePath"/>), or fails to parse
-    /// as JSON at all (the file is moved aside to
-    /// <see cref="MalformedQuarantinePath"/>).
+    /// Creates a version-3 store with the native shell context needed for
+    /// version-2 conversion.
+    /// </summary>
+    public ToolApprovalStore(
+        string filePath,
+        TimeProvider? timeProvider,
+        ApprovalStoreMigrationContext? migrationContext,
+        TimeSpan? lockTimeout = null)
+        : this(
+            filePath,
+            timeProvider,
+            migrationContext,
+            lockTimeout,
+            ApprovalStoreFileAccess.Instance)
+    {
+    }
+
+    internal ToolApprovalStore(
+        string filePath,
+        TimeProvider? timeProvider,
+        ApprovalStoreMigrationContext? migrationContext,
+        TimeSpan? lockTimeout,
+        IApprovalStoreFileAccess fileAccess)
+    {
+        _filePath = filePath;
+        _timeProvider = timeProvider ?? TimeProvider.System;
+        _migrationContext = migrationContext;
+        _lockTimeout = lockTimeout ?? TimeSpan.FromSeconds(2);
+        _fileAccess = fileAccess ?? throw new ArgumentNullException(nameof(fileAccess));
+    }
+
+    /// <summary>
+    /// Loads one complete persistent approval snapshot. An absent file is a
+    /// ready empty store. Invalid or unsupported files fail closed.
     /// </summary>
     /// <remarks>
-    /// The result is cached and reused while the file's last-write time and
-    /// size are unchanged so per-tool-call gate evaluations don't pay the
-    /// disk-read + JSON-parse cost. Same-process writes via
-    /// <see cref="AddApproval"/> and friends mutate the cached instance
-    /// under the lock and Save refreshes the cache metadata, so live
-    /// approvals are visible on the next Load without re-reading the file.
+    /// The result is cached and reused while the file bytes are unchanged, so
+    /// per-tool-call gate evaluations do not pay the JSON parse cost.
+    /// Same-process writes use a private copy under the lock. A successful
+    /// save replaces the cache, so the next load sees the new authority.
     /// Cross-process writes (CLI <c>netclaw approvals add</c>, TUI revokes)
-    /// are detected by the mtime+size check and trigger a fresh read.
+    /// are detected by exact source-byte comparison.
     ///
-    /// Callers SHOULD NOT mutate the returned <see cref="ToolApprovalData"/>
-    /// outside the store's lock — the store hands back its live instance to
-    /// keep the hot read path allocation-free.
+    /// The method returns a detached copy. Caller changes cannot alter the
+    /// private cache.
     /// </remarks>
     public ToolApprovalData Load()
     {
         lock (_lock)
         {
-            if (!File.Exists(_filePath))
-            {
-                _cachedData = null;
-                return new ToolApprovalData();
-            }
-
-            // Capture metadata up front: if LoadFromDisk quarantines the file
-            // (malformed JSON, wrong schema) it gets moved aside and a later
-            // FileInfo lookup would throw FileNotFoundException. The captured
-            // metadata becomes the cache key for the quarantine-empty result
-            // we return — harmless because the next Load() observes
-            // File.Exists == false and skips the cache check entirely.
-            var info = new FileInfo(_filePath);
-            var mtime = info.LastWriteTimeUtc;
-            var size = info.Length;
-
-            if (_cachedData is not null && mtime == _cachedMtime && size == _cachedSize)
-                return _cachedData;
-
-            var data = LoadFromDisk();
-            _cachedData = data;
-            _cachedMtime = mtime;
-            _cachedSize = size;
-            return data;
+            using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+            return CloneData(LoadLocked());
         }
     }
 
-    private ToolApprovalData LoadFromDisk()
+    /// <summary>
+    /// Loads a typed store status without exposing an exception to the actor.
+    /// </summary>
+    public ApprovalStoreLoadResult TryLoad()
     {
-        var json = File.ReadAllText(_filePath);
-
-        // Parse once via JsonDocument so we can both (a) check schema version
-        // on the root element and (b) deserialize the typed model from the
-        // already-parsed DOM via RootElement.Deserialize. Three failure modes
-        // are distinguished:
-        //   (1) unparseable JSON → quarantine to .invalid
-        //   (2) parseable JSON but wrong schema version → quarantine to .v1.bak
-        //   (3) parseable v2 JSON with deserialization error → quarantine to .invalid
         try
         {
-            using var document = JsonDocument.Parse(json);
-            if (!IsCurrentSchema(document.RootElement))
+            return new ApprovalStoreLoadResult.Ready(CreateSnapshot(Load()));
+        }
+        catch (ApprovalStoreException ex)
+        {
+            return new ApprovalStoreLoadResult.Unavailable(ex.Failure);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new ApprovalStoreLoadResult.Unavailable(ApprovalStoreFailure.IoFailure);
+        }
+    }
+
+    /// <summary>
+    /// Count of unrepresentable entries omitted by the last successful v2
+    /// conversion. Grant text is not retained.
+    /// </summary>
+    public int LastMigrationOmittedEntryCount { get; private set; }
+
+    private ToolApprovalData LoadLocked()
+    {
+        if (!File.Exists(_filePath))
+        {
+            _cachedData = null;
+            _cachedSourceBytes = null;
+            return new ToolApprovalData();
+        }
+
+        _fileAccess.EnsureNotLink(_filePath);
+        var sourceBytes = _fileAccess.ReadAllBytes(_filePath);
+        if (_cachedData is not null &&
+            _cachedSourceBytes is not null &&
+            sourceBytes.AsSpan().SequenceEqual(_cachedSourceBytes))
+        {
+            return _cachedData;
+        }
+
+        ToolApprovalData data;
+        var sourceIsCurrentVersion = false;
+        try
+        {
+            using var document = JsonDocument.Parse(sourceBytes);
+            var versionMemberCount = CountVersionMembers(document.RootElement);
+            if (versionMemberCount == 0)
             {
-                QuarantineV1File();
-                return new ToolApprovalData();
+                QuarantineV1File(sourceBytes);
+                data = new ToolApprovalData();
+                SaveLocked(data);
+                return data;
             }
 
-            try
+            if (versionMemberCount != 1)
             {
-                return document.RootElement.Deserialize<ToolApprovalData>(JsonOptions)
-                    ?? new ToolApprovalData();
+                throw new ApprovalStoreException(
+                    ApprovalStoreFailure.InvalidData,
+                    "The approval store must contain one version member.");
             }
-            catch (JsonException ex)
+
+            var version = ApprovalStoreCodec.ReadVersion(document.RootElement);
+            sourceIsCurrentVersion = version == CurrentSchemaVersion;
+            data = version switch
             {
-                QuarantineMalformedFile(ex);
-                return new ToolApprovalData();
-            }
+                CurrentSchemaVersion => ApprovalStoreCodec.ReadVersion3(
+                    document.RootElement,
+                    _migrationContext?.ShellToolName ?? "shell_execute"),
+                2 => ConvertVersion2(document.RootElement, sourceBytes),
+                1 => ConvertVersion1(sourceBytes),
+                > CurrentSchemaVersion => throw new ApprovalStoreException(
+                    ApprovalStoreFailure.UnsupportedVersion,
+                    "The approval store uses a newer schema version."),
+                _ => throw new ApprovalStoreException(
+                    ApprovalStoreFailure.InvalidData,
+                    "The approval store version is invalid."),
+            };
+        }
+        catch (ApprovalStoreException)
+        {
+            throw;
         }
         catch (JsonException ex)
         {
-            QuarantineMalformedFile(ex);
-            return new ToolApprovalData();
+            throw new ApprovalStoreException(
+                ApprovalStoreFailure.InvalidData,
+                "The approval store contains invalid JSON.",
+                ex);
         }
+
+        if (sourceIsCurrentVersion)
+        {
+            UpdateCache(data, sourceBytes);
+        }
+        return data;
     }
 
-    private static bool IsCurrentSchema(JsonElement root)
+    private ToolApprovalData ConvertVersion2(JsonElement root, byte[] sourceBytes)
+    {
+        var data = ApprovalStoreCodec.ConvertVersion2(
+            root,
+            _migrationContext,
+            out var omittedEntries);
+        var contents = ApprovalStoreCodec.Serialize(data);
+        _fileAccess.ReplaceVersion2(
+            _filePath,
+            V2BackupPath,
+            sourceBytes,
+            contents);
+        LastMigrationOmittedEntryCount = omittedEntries;
+        UpdateCache(data, Encoding.UTF8.GetBytes(contents));
+        return data;
+    }
+
+    private ToolApprovalData ConvertVersion1(byte[] sourceBytes)
+    {
+        QuarantineV1File(sourceBytes);
+        var data = new ToolApprovalData();
+        SaveLocked(data);
+        return data;
+    }
+
+    private static int CountVersionMembers(JsonElement root)
     {
         if (root.ValueKind != JsonValueKind.Object)
-            return false;
+        {
+            return 0;
+        }
 
-        if (!root.TryGetProperty("version", out var versionElem))
-            return false;
+        var count = 0;
+        foreach (var property in root.EnumerateObject())
+        {
+            if (property.NameEquals("version"))
+            {
+                count++;
+            }
+        }
 
-        if (versionElem.ValueKind != JsonValueKind.Number)
-            return false;
-
-        return versionElem.TryGetInt32(out var version) && version == CurrentSchemaVersion;
+        return count;
     }
 
-    private void QuarantineMalformedFile(JsonException cause)
+    private void QuarantineV1File(byte[] sourceBytes)
     {
-        try
+        _fileAccess.EnsureNotLink(V1QuarantinePath);
+        if (File.Exists(V1QuarantinePath))
         {
-            if (File.Exists(MalformedQuarantinePath))
-                File.Delete(MalformedQuarantinePath);
-            File.Move(_filePath, MalformedQuarantinePath);
-        }
-        catch (Exception moveEx)
-        {
-            throw new InvalidDataException(
-                $"Tool approvals file at '{_filePath}' is malformed and could not be quarantined to '{MalformedQuarantinePath}'. Inspect the file manually before restarting.",
-                new AggregateException(cause, moveEx));
-        }
-    }
+            if (!File.ReadAllBytes(V1QuarantinePath).AsSpan().SequenceEqual(sourceBytes))
+            {
+                throw new ApprovalStoreException(
+                    ApprovalStoreFailure.MigrationFailed,
+                    "The version-1 backup differs from the active source.");
+            }
 
-    private void QuarantineV1File()
-    {
-        try
-        {
-            if (File.Exists(V1QuarantinePath))
-                File.Delete(V1QuarantinePath);
-            File.Move(_filePath, V1QuarantinePath);
+            File.Delete(_filePath);
+            _cachedData = null;
+            _cachedSourceBytes = null;
+            return;
         }
-        catch (Exception moveEx)
-        {
-            throw new InvalidDataException(
-                $"Tool approvals file at '{_filePath}' uses a legacy schema and could not be quarantined to '{V1QuarantinePath}'. Inspect the file manually before restarting.",
-                moveEx);
-        }
+
+        File.Move(_filePath, V1QuarantinePath);
+        _cachedData = null;
+        _cachedSourceBytes = null;
     }
 
     /// <summary>
@@ -240,12 +314,26 @@ public sealed class ToolApprovalStore
     /// duplicate check.
     /// </returns>
     public bool AddApproval(TrustAudience audience, string toolName, ApprovalEntry entry)
+        => AddApprovals(audience, toolName, [entry]) > 0;
+
+    /// <summary>
+    /// Adds one reviewed batch under one lock and one atomic file replace.
+    /// </summary>
+    public int AddApprovals(
+        TrustAudience audience,
+        string toolName,
+        IReadOnlyList<ApprovalEntry> entriesToAdd)
     {
-        var normalized = ToolApprovalEntryComparer.Normalize(entry);
+        ArgumentNullException.ThrowIfNull(entriesToAdd);
+        ApprovalStoreCodec.ValidateToolName(toolName);
+        var normalizedEntries = entriesToAdd
+            .Select(entry => NormalizeForVersion3(toolName, entry))
+            .ToArray();
 
         lock (_lock)
         {
-            var data = Load();
+            using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+            var data = CloneData(LoadLocked());
             var audienceKey = audience.ToWireValue();
 
             if (!data.Audiences.TryGetValue(audienceKey, out var audienceApprovals))
@@ -260,25 +348,46 @@ public sealed class ToolApprovalStore
                 audienceApprovals[toolName] = entries;
             }
 
-            foreach (var existing in entries)
+            var added = 0;
+            foreach (var normalized in normalizedEntries)
             {
-                if (ToolApprovalEntryComparer.Equals(existing, normalized))
-                    return false;
+                if (entries.Any(existing => ToolApprovalEntryComparer.Equals(existing, normalized)))
+                {
+                    continue;
+                }
+
+                // Stamp creation time on a new grant only. An equivalent grant
+                // keeps its original CreatedAt.
+                var stamped = normalized.CreatedAt is null
+                    ? normalized with { CreatedAt = _timeProvider.GetUtcNow() }
+                    : normalized;
+
+                entries.Add(stamped);
+                added++;
             }
 
-            // Stamp creation time on the new grant only. An equivalent grant
-            // already on disk returns above without restamping, so re-granting
-            // an existing approval preserves its original CreatedAt. A non-null
-            // incoming CreatedAt (e.g. a hand-edited file) is left untouched.
-            var stamped = normalized.CreatedAt is null
-                ? normalized with { CreatedAt = _timeProvider.GetUtcNow() }
-                : normalized;
+            if (added > 0)
+            {
+                SaveLocked(data);
+            }
 
-            entries.Add(stamped);
-            Save(data);
-            return true;
+            return added;
         }
     }
+
+    /// <summary>Adds one entry and returns a typed store status.</summary>
+    public ApprovalStoreChangeResult TryAddApproval(
+        TrustAudience audience,
+        string toolName,
+        ApprovalEntry entry) => TryChange(
+        () => AddApproval(audience, toolName, entry) ? 1 : 0);
+
+    /// <summary>Adds one reviewed batch and returns a typed store status.</summary>
+    public ApprovalStoreChangeResult TryAddApprovals(
+        TrustAudience audience,
+        string toolName,
+        IReadOnlyList<ApprovalEntry> entries) => TryChange(
+        () => AddApprovals(audience, toolName, entries));
 
     /// <summary>
     /// Returns the approved entries for a specific tool and audience.
@@ -307,11 +416,13 @@ public sealed class ToolApprovalStore
     /// <returns><c>true</c> if an entry was removed; <c>false</c> otherwise.</returns>
     public bool RemoveApproval(TrustAudience audience, string toolName, ApprovalEntry entry)
     {
-        var normalized = ToolApprovalEntryComparer.Normalize(entry);
+        ApprovalStoreCodec.ValidateToolName(toolName);
+        var normalized = NormalizeForVersion3(toolName, entry);
 
         lock (_lock)
         {
-            var data = Load();
+            using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+            var data = CloneData(LoadLocked());
             var audienceKey = audience.ToWireValue();
 
             if (!data.Audiences.TryGetValue(audienceKey, out var audienceApprovals))
@@ -335,10 +446,17 @@ public sealed class ToolApprovalStore
 
             entries.RemoveAt(index);
             CleanupEmptySections(data, audienceKey, toolName);
-            Save(data);
+            SaveLocked(data);
             return true;
         }
     }
+
+    /// <summary>Removes one entry and returns a typed store status.</summary>
+    public ApprovalStoreChangeResult TryRemoveApproval(
+        TrustAudience audience,
+        string toolName,
+        ApprovalEntry entry) => TryChange(
+        () => RemoveApproval(audience, toolName, entry) ? 1 : 0);
 
     /// <summary>
     /// Removes every approval entry for a tool in the given audience.
@@ -346,9 +464,11 @@ public sealed class ToolApprovalStore
     /// </summary>
     public int RemoveAllForTool(TrustAudience audience, string toolName)
     {
+        ApprovalStoreCodec.ValidateToolName(toolName);
         lock (_lock)
         {
-            var data = Load();
+            using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+            var data = CloneData(LoadLocked());
             var audienceKey = audience.ToWireValue();
 
             if (!data.Audiences.TryGetValue(audienceKey, out var audienceApprovals))
@@ -363,10 +483,16 @@ public sealed class ToolApprovalStore
 
             entries.Clear();
             CleanupEmptySections(data, audienceKey, toolName);
-            Save(data);
+            SaveLocked(data);
             return removed;
         }
     }
+
+    /// <summary>Removes all entries for one tool and returns a typed store status.</summary>
+    public ApprovalStoreChangeResult TryRemoveAllForTool(
+        TrustAudience audience,
+        string toolName) => TryChange(
+        () => RemoveAllForTool(audience, toolName));
 
     /// <summary>
     /// Returns a read-only snapshot of the current store contents, keyed by
@@ -399,39 +525,180 @@ public sealed class ToolApprovalStore
             data.Audiences.Remove(audienceKey);
     }
 
-    private void Save(ToolApprovalData data)
+    private static ApprovalStoreChangeResult TryChange(Func<int> change)
+    {
+        try
+        {
+            return new ApprovalStoreChangeResult.Completed(change());
+        }
+        catch (ApprovalStoreException ex)
+        {
+            return new ApprovalStoreChangeResult.Unavailable(ex.Failure);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            return new ApprovalStoreChangeResult.Unavailable(ApprovalStoreFailure.IoFailure);
+        }
+    }
+
+    private void SaveLocked(ToolApprovalData data)
     {
         data.Version = CurrentSchemaVersion;
+        var json = ApprovalStoreCodec.Serialize(data);
+        _fileAccess.WriteAtomic(_filePath, json, _cachedSourceBytes);
+        UpdateCache(data, Encoding.UTF8.GetBytes(json));
+    }
 
-        var dir = Path.GetDirectoryName(_filePath);
-        if (!string.IsNullOrEmpty(dir))
-            Directory.CreateDirectory(dir);
-
-        var json = JsonSerializer.Serialize(data, JsonOptions);
-        File.WriteAllText(_filePath, json);
-
-        // Refresh cache from the file we just wrote: the in-memory `data` is
-        // already authoritative (callers mutated it under the lock) so keep it
-        // cached and just sync the metadata. Bumping `_internalVersion`
-        // guarantees that a same-process write within the filesystem's mtime
-        // resolution still invalidates against any hypothetical concurrent
-        // reader holding stale (mtime,size) markers.
-        var info = new FileInfo(_filePath);
+    private void UpdateCache(ToolApprovalData data, byte[] sourceBytes)
+    {
         _cachedData = data;
-        _cachedMtime = info.LastWriteTimeUtc;
-        _cachedSize = info.Length;
-        _internalVersion++;
+        _cachedSourceBytes = sourceBytes;
+    }
+
+    private static ToolApprovalData CloneData(ToolApprovalData source)
+    {
+        var clone = new ToolApprovalData { Version = source.Version };
+        foreach (var (audience, tools) in source.Audiences)
+        {
+            var toolClone = new Dictionary<string, List<ApprovalEntry>>(StringComparer.Ordinal);
+            foreach (var (tool, entries) in tools)
+            {
+                toolClone[tool] = [.. entries];
+            }
+
+            clone.Audiences[audience] = toolClone;
+        }
+
+        return clone;
+    }
+
+    private static ApprovalStoreSnapshot CreateSnapshot(ToolApprovalData source)
+    {
+        var audiences = new Dictionary<string, IReadOnlyDictionary<string, IReadOnlyList<ApprovalEntry>>>(
+            StringComparer.Ordinal);
+        foreach (var (audience, tools) in source.Audiences)
+        {
+            var toolSnapshot = new Dictionary<string, IReadOnlyList<ApprovalEntry>>(StringComparer.Ordinal);
+            foreach (var (tool, entries) in tools)
+            {
+                toolSnapshot[tool] = Array.AsReadOnly(entries.ToArray());
+            }
+
+            audiences[audience] = new System.Collections.ObjectModel.ReadOnlyDictionary<
+                string,
+                IReadOnlyList<ApprovalEntry>>(toolSnapshot);
+        }
+
+        return new ApprovalStoreSnapshot(
+            new System.Collections.ObjectModel.ReadOnlyDictionary<
+                string,
+                IReadOnlyDictionary<string, IReadOnlyList<ApprovalEntry>>>(audiences));
+    }
+
+    private ApprovalEntry NormalizeForVersion3(string toolName, ApprovalEntry entry)
+    {
+        ArgumentNullException.ThrowIfNull(entry);
+        var isShellTool = string.Equals(
+            toolName,
+            _migrationContext?.ShellToolName ?? "shell_execute",
+            StringComparison.Ordinal);
+        if (isShellTool && entry.Shell is null)
+        {
+            throw new ApprovalStoreException(
+                ApprovalStoreFailure.InvalidData,
+                "A new shell approval requires a typed token phrase.");
+        }
+        else if (!isShellTool && entry.Shell is not null)
+        {
+            throw new ArgumentException(
+                "A non-shell tool requires a non-shell approval entry.",
+                nameof(entry));
+        }
+
+        var directory = NormalizeVersion3Directory(entry.Directory, entry.Shell);
+        var normalized = string.Equals(directory, entry.Directory, StringComparison.Ordinal)
+            ? entry
+            : entry with { Directory = directory };
+        ApprovalEntryValidation.ValidateVersion3(normalized);
+        return normalized;
+    }
+
+    private static string? NormalizeVersion3Directory(
+        string? directory,
+        ApprovalShell? shell)
+    {
+        if (directory is null)
+        {
+            return null;
+        }
+
+        ApprovalEntryValidation.ValidatePersistedString(
+            directory,
+            "directory",
+            allowWhitespace: true);
+        if (shell == ApprovalShell.PowerShell)
+        {
+            var windowsDirectory = directory.Replace('/', '\\');
+            if (windowsDirectory.Length > 3 &&
+                !windowsDirectory.StartsWith("\\\\", StringComparison.Ordinal))
+            {
+                windowsDirectory = windowsDirectory.TrimEnd('\\');
+            }
+
+            if (!ApprovalEntryValidation.IsCanonicalWindowsAbsolutePath(windowsDirectory))
+            {
+                throw new ArgumentException("The directory must be a canonical Windows path.", nameof(directory));
+            }
+
+            return windowsDirectory;
+        }
+
+        if (shell == ApprovalShell.Bash)
+        {
+            var posixDirectory = directory == "/"
+                ? directory
+                : directory.TrimEnd('/');
+            if (!ApprovalEntryValidation.IsCanonicalPosixAbsolutePath(posixDirectory))
+            {
+                throw new ArgumentException("The directory must be a canonical POSIX path.", nameof(directory));
+            }
+
+            return posixDirectory;
+        }
+
+        if (directory.Length == 0 || !Path.IsPathFullyQualified(directory))
+        {
+            throw new ArgumentException("The directory must be a nonempty absolute path.", nameof(directory));
+        }
+
+        var fullPath = Path.GetFullPath(directory);
+        var root = Path.GetPathRoot(fullPath);
+        if (string.Equals(fullPath, root, ToolApprovalEntryComparer.Comparison))
+        {
+            return fullPath;
+        }
+
+        var normalized = fullPath.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+        if (normalized.Length == 0)
+        {
+            throw new ArgumentException("The directory has no canonical path.", nameof(directory));
+        }
+
+        return normalized;
     }
 }
 
 /// <summary>
-/// Serialization model for <c>tool-approvals.json</c>.
+/// Serialization model for <c>tool-approvals.json</c> version 2 and an
+/// in-memory model for the version-3 codec.
 /// </summary>
 public sealed class ToolApprovalData
 {
     /// <summary>
     /// On-disk schema version. Set to <see cref="ToolApprovalStore.CurrentSchemaVersion"/>
-    /// by <see cref="ToolApprovalStore.Save"/>. Files lacking this value are
+    /// by the store writer. Files that lack this value are
     /// quarantined as legacy on first read.
     /// </summary>
     [JsonPropertyName("version")]

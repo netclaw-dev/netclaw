@@ -3,7 +3,7 @@ name: search-citation
 description: "REQUIRED when the user asks you to search, look up, verify, buy, shop, compare, price-check, find current info, or check facts online. Contains citation format rules for web_search and web_fetch."
 metadata:
   author: netclaw
-  version: "1.1.0"
+  version: "1.1.1"
 ---
 
 ## Critical Rules Summary
@@ -74,7 +74,7 @@ clickable links, not an academic paper.
 | Link all sources | When multiple sources were found, link each one inline where relevant — recommend one if you have a basis |
 | Prefer specific pages | Link to the product page, restaurant page, or listing — not to a search results or category page |
 | No URL, no fact | Do not present specific claims (prices, ratings, availability) without a source URL |
-| Unlinkable content | If a source cannot be linked directly (form-post navigation, JS-rendered content), use browser automation to capture a screenshot and attach it via `attach_file` — a screenshot beats no source |
+| Unlinkable content | If a source cannot be linked directly, capture a screenshot. Use an available file-delivery tool, or return its saved path to the caller. |
 
 ## When Search Is Not Available
 

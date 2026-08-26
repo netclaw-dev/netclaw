@@ -81,6 +81,14 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
+        // The stock single-expect-default is 3 seconds. That value measures
+        // scheduler load on a starved CI runner. It does not measure the
+        // correctness of the parameterless ExpectMsgAsync<ProactiveThreadAck>
+        // wait below (line ~728). The ack sits behind actor spawn, Akka.Persistence
+        // recovery, and stream materialization. Production allows 30 seconds for
+        // the same ack — see ProactiveSendFormatting.ProactiveThreadAckTimeout.
+        builder.AddHocon("akka.test.single-expect-default = 15s", HoconAddMode.Prepend);
+
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
@@ -979,6 +987,103 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
         var mergedText = string.Join("", user.Contents.OfType<TextContent>().Select(t => t.Text));
         Assert.Contains("attachment rejected", mergedText, StringComparison.OrdinalIgnoreCase);
         Assert.Contains("category not allowed", mergedText, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Tap_on_mention_re_hydrates_on_the_same_live_actor()
+    {
+        // With MentionRequiredInThread on for the channel, a second mention on the
+        // SAME live binding actor re-runs thread-history hydration to catch up on
+        // the gap the tap held — unlike the default once-per-runtime path
+        // (Backfill_runs_once_per_runtime...), where the second live inbound is
+        // fetch-free. fetchCount goes 1 → 2 with no restart.
+        var pipeline = Host.Services.GetRequiredService<SessionPipeline>();
+        var httpClient = new HttpClient(_httpHandler);
+
+        var fetchCount = 0;
+        var countingFetcher = new SlackThreadHistoryFetcher(
+            (channelId, threadTs, limit, cursor, ct) =>
+            {
+                Interlocked.Increment(ref fetchCount);
+                return FakeRepliesFetcher(channelId, threadTs, limit, cursor, ct);
+            },
+            new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
+            httpClient,
+            new NullContentScanner(),
+            new NetclawPaths(Path.GetTempPath()),
+            ToolAudienceProfileDefaults.CreateProfiles(),
+            TestSlackGatewayDeps.DefaultVisionCapableModel,
+            NullLogger<SlackThreadHistoryFetcher>.Instance);
+
+        var deps = new SlackGatewayDependencies(
+            Pipeline: pipeline,
+            IngressGate: null,
+            ActorSystem: Sys,
+            TimeProvider: TimeProvider.System,
+            Options: new SlackChannelOptions
+            {
+                Enabled = true,
+                MentionOnly = true,
+                AllowedChannelIds = ["C_TAP"],
+                MentionRequiredInThreadByChannel = new(StringComparer.Ordinal) { ["C_TAP"] = true },
+                BotToken = new SensitiveString("xoxb-fake-token")
+            },
+            BotUserId: new SlackUserId("UBOT"),
+            DefaultChannelId: null,
+            ChannelRegistry: TestSlackGatewayDeps.DefaultChannelRegistry,
+            ReplyClient: _replyClient,
+            ContentScanner: new NullContentScanner(),
+            HttpClient: httpClient,
+            ThreadHistoryFetcher: countingFetcher,
+            AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
+            ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
+            Paths: _paths,
+            PromptInjectionDetector: SafePromptInjectionDetector.Instance);
+
+        var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-tap-rehydrate");
+
+        // First mention — the actor materializes and runs one-shot hydration (fetch #1).
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.AppMention,
+            EventId: new SlackEventId("C_TAP:9000.5"),
+            ChannelId: new SlackChannelId("C_TAP"),
+            ThreadTs: new SlackThreadTs("9000.0"),
+            EventTs: new SlackEventTs("9000.5"),
+            UserId: new SlackUserId("U_MENTIONER"),
+            BotId: null,
+            Text: "<@UBOT> first",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false));
+
+        // Wait for the first turn to reply, so its cursor clears before the second
+        // mention — the re-hydration guard requires no in-flight turn.
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_replyClient.PostedMessages.Count >= 1, "Expected the first turn to post a reply");
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, fetchCount);
+
+        // Second mention on the SAME live actor. With the tap on, it re-arms
+        // hydration and re-fetches the gap (fetch #2) — no restart needed.
+        gateway.Tell(new SlackInboundMessage(
+            Kind: SlackInboundKind.AppMention,
+            EventId: new SlackEventId("C_TAP:9000.9"),
+            ChannelId: new SlackChannelId("C_TAP"),
+            ThreadTs: new SlackThreadTs("9000.0"),
+            EventTs: new SlackEventTs("9000.9"),
+            UserId: new SlackUserId("U_MENTIONER"),
+            BotId: null,
+            Text: "<@UBOT> second",
+            Subtype: null,
+            Hidden: false,
+            IsDirectMessage: false));
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(2, fetchCount);
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
     }
 
     // --- Fake replies fetcher ---

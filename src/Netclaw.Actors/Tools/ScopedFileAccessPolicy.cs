@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ScopedFileAccessPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -11,6 +11,14 @@ namespace Netclaw.Actors.Tools;
 
 internal sealed class ScopedFileAccessPolicy
 {
+    internal enum PathResolutionFailure
+    {
+        None,
+        InvalidInput,
+        AccessDenied,
+        MissingBase
+    }
+
     private readonly ToolAudienceProfileResolver _profileResolver;
     private readonly Lazy<IReadOnlyList<string>> _cachedGlobalReadRoots;
     private readonly Lazy<string?> _cachedWorkspacesRoot;
@@ -36,11 +44,72 @@ internal sealed class ScopedFileAccessPolicy
     public bool TryResolveReadPath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error);
 
+    internal bool TryResolveReadPath(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error, out failure);
+
+    /// <summary>
+    /// Resolves a path for <c>set_working_directory</c>. Deliberately does NOT
+    /// grant interactive Personal shell-equivalent reach: the working directory
+    /// becomes the safe-verb auto-approve zone and feeds project identity files
+    /// into the system prompt, so it is clamped to the autonomous zone (session
+    /// dir + project dir + global read roots) in every mode, even the default
+    /// <c>Mode.All</c> Personal profile.
+    /// </summary>
+    public bool TryResolveWorkingDirectory(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
+        => TryResolvePath(rawPath, context, AccessKind.Read, out fullPath, out error, allowInteractivePersonalReach: false);
+
+    internal bool TryResolveWorkingDirectory(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(
+            rawPath,
+            context,
+            AccessKind.Read,
+            out fullPath,
+            out error,
+            out failure,
+            allowInteractivePersonalReach: false);
+
+    /// <summary>
+    /// True when an interactive Personal-audience session gets shell-equivalent
+    /// file reach: read and attach tools resolve outside the configured roots,
+    /// matching the approval-gated shell surface. Autonomous sessions, Team,
+    /// and Public audiences are never granted this — they keep their
+    /// roots-scoped or fail-closed behavior.
+    /// </summary>
+    internal static bool HasInteractivePersonalReach(ToolInvocationContext context)
+        => context.Audience == TrustAudience.Personal
+           && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available;
+
     public bool TryResolveWritePath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Write, out fullPath, out error);
 
+    internal bool TryResolveWritePath(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(rawPath, context, AccessKind.Write, out fullPath, out error, out failure);
+
     public bool TryResolveAttachPath(string rawPath, ToolInvocationContext context, out string fullPath, out string error)
         => TryResolvePath(rawPath, context, AccessKind.Attach, out fullPath, out error);
+
+    internal bool TryResolveAttachPath(
+        string rawPath,
+        ToolInvocationContext context,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure)
+        => TryResolvePath(rawPath, context, AccessKind.Attach, out fullPath, out error, out failure);
 
     public IReadOnlyList<string> GetRootsForContext(ToolInvocationContext context, AccessKind accessKind)
     {
@@ -54,21 +123,83 @@ internal sealed class ScopedFileAccessPolicy
         ToolInvocationContext context,
         AccessKind accessKind,
         out string fullPath,
-        out string error)
+        out string error,
+        bool allowInteractivePersonalReach = true)
+        => TryResolvePath(
+            rawPath,
+            context,
+            accessKind,
+            out fullPath,
+            out error,
+            out _,
+            allowInteractivePersonalReach);
+
+    private bool TryResolvePath(
+        string rawPath,
+        ToolInvocationContext context,
+        AccessKind accessKind,
+        out string fullPath,
+        out string error,
+        out PathResolutionFailure failure,
+        bool allowInteractivePersonalReach = true)
     {
         try
         {
-            fullPath = Path.GetFullPath(rawPath);
+            if (string.IsNullOrWhiteSpace(rawPath) || rawPath.Any(char.IsControl))
+            {
+                fullPath = string.Empty;
+                error = "Error: Invalid path.";
+                failure = PathResolutionFailure.InvalidInput;
+                return false;
+            }
+
+            if (Path.IsPathFullyQualified(rawPath))
+            {
+                fullPath = Path.GetFullPath(rawPath);
+            }
+            else if (Path.IsPathRooted(rawPath))
+            {
+                fullPath = string.Empty;
+                error = "Error: Invalid path: partially qualified paths are not supported.";
+                failure = PathResolutionFailure.InvalidInput;
+                return false;
+            }
+            else
+            {
+                var baseResult = TryGetRelativePathBase(context, accessKind, out var baseDirectory);
+                if (baseResult == RelativePathBaseResult.Safe)
+                {
+                    fullPath = Path.GetFullPath(rawPath, baseDirectory);
+                }
+                else
+                {
+                    fullPath = string.Empty;
+                    if (baseResult == RelativePathBaseResult.Unsafe)
+                    {
+                        error = "Error: The project or session directory contains an unsafe filesystem link.";
+                        failure = PathResolutionFailure.AccessDenied;
+                    }
+                    else
+                    {
+                        error = "Error: invalid_context: No project or session directory is available.";
+                        failure = PathResolutionFailure.MissingBase;
+                    }
+
+                    return false;
+                }
+            }
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
             fullPath = string.Empty;
             error = $"Error: Invalid path: {ex.Message}";
+            failure = PathResolutionFailure.InvalidInput;
             return false;
         }
 
         var profile = _profileResolver.ResolveProfile(context);
         var access = GetAccessProfile(profile, accessKind);
+        var audience = context.Audience;
 
         if (access.Mode == ToolFilesystemMode.All)
         {
@@ -78,21 +209,48 @@ internal sealed class ScopedFileAccessPolicy
             // granted blanket filesystem access. Interactive channels keep the
             // blanket grant — the live approval gate is their backstop. This is the
             // single seam that covers shell (via TryResolveWritePath) and every file
-            // tool at once.
-            if (context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
-                return TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
+            // tool at once. set_working_directory opts out (allowInteractivePersonalReach
+            // == false) and is clamped to the autonomous zone even for default
+            // Mode.All profiles: its declaration widens the safe-verb auto-approve
+            // zone and feeds project identity files into the system prompt.
+            if (!allowInteractivePersonalReach
+                || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
+            {
+                var allowed = TryResolveWithinAutonomousZone(fullPath, context, accessKind, out error);
+                failure = allowed ? PathResolutionFailure.None : PathResolutionFailure.AccessDenied;
+                return allowed;
+            }
 
             error = string.Empty;
+            failure = PathResolutionFailure.None;
             return true;
         }
 
-        var audience = context.Audience;
         var label = GetAudienceLabel(audience);
 
         if (access.Mode == ToolFilesystemMode.None)
         {
             error = $"Error: {label} trust context does not allow {accessKind.ToString().ToLowerInvariant()} access to local files.";
+            failure = PathResolutionFailure.AccessDenied;
             return false;
+        }
+
+        // Interactive Personal-audience reads are shell-equivalent: shell reaches
+        // any path in an interactive session (approval gate + ToolPathPolicy hard
+        // deny), so read/attach tools do too. This kills the shell-workaround
+        // (cat, cp-into-session) for legitimate out-of-roots files. The hard deny
+        // surface still applies inside the tools via ToolPathPolicy.IsReadDenied
+        // (file_read, file_list, attach_file), and autonomous sessions never reach
+        // this branch — InteractiveApproval is Unavailable there, so they clamp to
+        // the zone or fail closed below. set_working_directory opts out via
+        // TryResolveWorkingDirectory because its reach widens the safe-verb zone.
+        if (allowInteractivePersonalReach
+            && accessKind is (AccessKind.Read or AccessKind.Attach)
+            && HasInteractivePersonalReach(context))
+        {
+            error = string.Empty;
+            failure = PathResolutionFailure.None;
+            return true;
         }
 
         var roots = ResolveAndMergeRoots(access, context, audience, accessKind);
@@ -100,6 +258,7 @@ internal sealed class ScopedFileAccessPolicy
         if (roots.Count == 0)
         {
             error = $"Error: {label} trust context does not have any configured local file roots for {accessKind.ToString().ToLowerInvariant()} access.";
+            failure = PathResolutionFailure.AccessDenied;
             return false;
         }
 
@@ -111,17 +270,136 @@ internal sealed class ScopedFileAccessPolicy
             if (PathUtility.ContainsSymlinkSegment(root, fullPath))
             {
                 error = $"Error: {label} trust context may not access files through symlinked paths inside the current session directory or configured roots.";
+                failure = PathResolutionFailure.AccessDenied;
                 return false;
             }
 
             error = string.Empty;
+            failure = PathResolutionFailure.None;
             return true;
         }
 
         error = audience == TrustAudience.Public
             ? $"Error: {label} trust context may only access files inside the current session directory."
             : $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
+        failure = PathResolutionFailure.AccessDenied;
         return false;
+    }
+
+    private RelativePathBaseResult TryGetRelativePathBase(
+        ToolInvocationContext context,
+        AccessKind accessKind,
+        out string baseDirectory)
+    {
+        var projectResult = TryNormalizeAbsoluteBase(
+            context.ProjectDirectory,
+            requireExistingDirectory: true,
+            out baseDirectory);
+        if (projectResult == RelativePathBaseResult.Safe)
+        {
+            var authorityRoot = GetProjectAuthorityRootResult(baseDirectory, context, accessKind);
+            if (authorityRoot == ProjectAuthorityRootResult.Safe
+                || (authorityRoot == ProjectAuthorityRootResult.Unavailable
+                    && HasInteractivePersonalReach(context)))
+            {
+                return RelativePathBaseResult.Safe;
+            }
+
+            baseDirectory = string.Empty;
+            return RelativePathBaseResult.Unsafe;
+        }
+
+        if (projectResult == RelativePathBaseResult.Unsafe)
+            return RelativePathBaseResult.Unsafe;
+
+        return TryNormalizeAbsoluteBase(context.SessionDirectory, requireExistingDirectory: false, out baseDirectory);
+    }
+
+    private ProjectAuthorityRootResult GetProjectAuthorityRootResult(
+        string projectDirectory,
+        ToolInvocationContext context,
+        AccessKind accessKind)
+    {
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
+            roots.Add(context.SessionDirectory);
+
+        var profile = _profileResolver.ResolveProfile(context);
+        roots.AddRange(_profileResolver.ResolveRoots(profile.ReadFiles, context));
+        roots.AddRange(_cachedGlobalReadRoots.Value);
+        if (accessKind is not AccessKind.Read && _cachedWorkspacesRoot.Value is { } workspacesRoot)
+            roots.Add(workspacesRoot);
+
+        foreach (var candidate in roots)
+        {
+            string root;
+            try
+            {
+                root = Path.GetFullPath(candidate);
+            }
+            catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+            {
+                continue;
+            }
+
+            if (!PathUtility.IsWithinRoot(projectDirectory, root))
+                continue;
+
+            return PathUtility.ContainsSymlinkSegment(root, projectDirectory)
+                ? ProjectAuthorityRootResult.Unsafe
+                : ProjectAuthorityRootResult.Safe;
+        }
+
+        return ProjectAuthorityRootResult.Unavailable;
+    }
+
+    private static RelativePathBaseResult TryNormalizeAbsoluteBase(
+        string? candidate,
+        bool requireExistingDirectory,
+        out string baseDirectory)
+    {
+        baseDirectory = string.Empty;
+        if (string.IsNullOrWhiteSpace(candidate)
+            || candidate.Any(char.IsControl)
+            || !Path.IsPathFullyQualified(candidate))
+            return RelativePathBaseResult.Unavailable;
+
+        try
+        {
+            var normalized = Path.GetFullPath(candidate);
+            if (requireExistingDirectory && !Directory.Exists(normalized))
+                return RelativePathBaseResult.Unavailable;
+            if (Directory.Exists(normalized)
+                && (File.GetAttributes(normalized) & FileAttributes.ReparsePoint) != 0)
+            {
+                return RelativePathBaseResult.Unsafe;
+            }
+
+            baseDirectory = normalized;
+            return RelativePathBaseResult.Safe;
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or NotSupportedException
+                                   or PathTooLongException
+                                   or IOException
+                                   or UnauthorizedAccessException)
+        {
+            return RelativePathBaseResult.Unsafe;
+        }
+    }
+
+    private enum RelativePathBaseResult
+    {
+        Unavailable,
+        Safe,
+        Unsafe
+    }
+
+    private enum ProjectAuthorityRootResult
+    {
+        Unavailable,
+        Safe,
+        Unsafe
     }
 
     private static ToolFilesystemAccessProfile GetAccessProfile(ToolAudienceProfile profile, AccessKind accessKind) =>

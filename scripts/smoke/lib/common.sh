@@ -9,13 +9,11 @@
 #
 # Environment knobs:
 #   START_TIMEOUT_SECONDS  daemon start/health timeout (default: 180)
-#   STOP_TIMEOUT_SECONDS   daemon stop timeout         (default: 90)
 #   STEP_TIMEOUT_SECONDS   per-command timeout         (default: 120)
 #   DAEMON_BASE_URL        health endpoint base        (default loopback:56199)
 #   DAEMON_PORT            daemon listen port          (default: port from DAEMON_BASE_URL or 56199)
 
 START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-180}"
-STOP_TIMEOUT_SECONDS="${STOP_TIMEOUT_SECONDS:-90}"
 STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-120}"
 DAEMON_BASE_URL="${DAEMON_BASE_URL:-http://127.0.0.1:56199}"
 DAEMON_PORT="${DAEMON_PORT:-${DAEMON_BASE_URL##*:}}"
@@ -217,13 +215,18 @@ wait_for_health() {
   return 1
 }
 
-# stop_daemon — best-effort daemon stop. Never fails the caller.
+# stop_daemon — stop smoke-owned daemon processes. Never fail the caller.
 stop_daemon() {
-  : "${NETCLAW_SMOKE_CLI:?NETCLAW_SMOKE_CLI must be set}"
-  run_timed "$STOP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" daemon stop >/dev/null 2>&1 || true
-  # `daemon stop` only signals the PID in this NETCLAW_HOME's PID file; make
-  # sure the listening socket is actually released before the next daemon
-  # tries to bind it.
+  local holders
+  holders="$(lsof -ti "tcp:${DAEMON_PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+  local pid
+  for pid in $holders; do
+    if pid_is_smoke_daemon "$pid"; then
+      log "stopping smoke daemon (pid=${pid})."
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+
   ensure_daemon_port_free || true
 }
 

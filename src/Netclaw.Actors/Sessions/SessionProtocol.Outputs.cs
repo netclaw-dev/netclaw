@@ -88,6 +88,9 @@ public static partial class SessionProtocol
         public required ToolName ToolName { get; init; }
 
         public required string Result { get; init; }
+
+        /// <summary>The stable preflight failure code, or null after execution.</summary>
+        public string? FailureCode { get; init; }
     }
 
     /// <summary>

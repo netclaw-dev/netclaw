@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillLoadTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -27,6 +27,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 {
     private readonly SkillRegistry _skillRegistry;
     private readonly ISkillContentScanner _scanner;
+    private readonly IMcpPromptSkillLoader _mcpPromptLoader;
     private readonly ISessionMetrics? _sessionMetrics;
     private readonly SubAgentDefinitionRegistry? _subAgentRegistry;
     private readonly SubAgentSpawner? _subAgentSpawner;
@@ -40,11 +41,14 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         [property: Description("Optional task used when the skill routes via metadata.subagent. Required for routed skill execution.")]
         string? Task = null,
         [property: Description("Optional runtime context passed to the routed subagent for this invocation.")]
-        string? Context = null);
+        string? Context = null,
+        [property: Description("Optional argument values for an MCP prompt skill. Use the names from the skill index.")]
+        IReadOnlyDictionary<string, string>? Arguments = null);
 
     public SkillLoadTool(
         SkillRegistry skillRegistry,
         ISkillContentScanner scanner,
+        IMcpPromptSkillLoader mcpPromptLoader,
         ISessionMetrics? sessionMetrics = null,
         SubAgentDefinitionRegistry? subAgentRegistry = null,
         SubAgentSpawner? subAgentSpawner = null,
@@ -54,6 +58,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
     {
         _skillRegistry = skillRegistry;
         _scanner = scanner;
+        _mcpPromptLoader = mcpPromptLoader;
         _sessionMetrics = sessionMetrics;
         _subAgentRegistry = subAgentRegistry;
         _subAgentSpawner = subAgentSpawner;
@@ -74,11 +79,35 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
         if (skill is null)
         {
-            var available = _skillRegistry.GetAll().Select(s => s.Name).ToList();
-            return available.Count > 0
-                ? $"Skill '{name}' not found. Available skills: {string.Join(", ", available)}"
-                : $"Skill '{name}' not found. No skills are currently registered.";
+            // The fallback still lists only FILE skills by name: MCP prompt visibility
+            // is audience-filtered, and enumerating names here could reveal an MCP server
+            // or prompt the session is denied. But it must NOT imply MCP prompts are
+            // unavailable — a lookup miss on a file skill is not "no such capability".
+            // The pointer at the [skills] index is UNCONDITIONAL on purpose: gating it on
+            // the registry would leak whether any MCP prompts exist to a session whose
+            // audience is denied all of them, and the session's own index is already the
+            // audience-correct source of truth.
+            var fileSkills = _skillRegistry.GetAll()
+                .Where(static candidate => candidate.Source is FileSkillSource)
+                .Select(static candidate => candidate.Name)
+                .ToList();
+
+            var message = fileSkills.Count > 0
+                ? $"Skill '{name}' not found. Available file skills: {string.Join(", ", fileSkills)}."
+                : $"Skill '{name}' not found. No file skills are currently registered.";
+            return message
+                + " If your [skills] index lists MCP prompt skills (mcp__<server>__<prompt>), "
+                + "load them by that exact name.";
         }
+
+        if (skill.Source is McpPromptSkillSource promptSource)
+            return await LoadMcpPromptAsync(skill, promptSource, args.Arguments, context, ct);
+
+        if (args.Arguments is { Count: > 0 })
+            return $"Skill '{name}' is file-backed and does not accept MCP prompt arguments.";
+
+        if (skill.Source is not FileSkillSource fileSource)
+            return $"Skill '{name}' has an unsupported content source.";
 
         var decision = SkillActivationRouter.Resolve(skill);
         if (decision.IsError)
@@ -109,7 +138,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
             string routedBody;
             try
             {
-                routedContent = File.ReadAllText(skill.FilePath);
+                routedContent = File.ReadAllText(fileSource.FilePath);
                 routedBody = SkillScanner.ExtractBody(routedContent);
             }
             catch (IOException ex)
@@ -141,7 +170,7 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         string content;
         try
         {
-            content = File.ReadAllText(skill.FilePath);
+            content = File.ReadAllText(fileSource.FilePath);
             body = SkillScanner.ExtractBody(content);
         }
         catch (IOException ex)
@@ -179,5 +208,35 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
         }
 
         return sb.ToString();
+    }
+
+    private async Task<string> LoadMcpPromptAsync(
+        SkillEntry skill,
+        McpPromptSkillSource source,
+        IReadOnlyDictionary<string, string>? arguments,
+        ToolInvocationContext context,
+        CancellationToken cancellationToken)
+    {
+        var result = await _mcpPromptLoader.LoadAsync(source, arguments, context, cancellationToken);
+        if (!result.Success)
+            return result.Error ?? $"MCP prompt skill '{skill.Name}' failed without an error message.";
+
+        _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SkillLoadTool);
+        _logger?.LogInformation("turn_skill_loaded skill={SkillName} method=skill_load", skill.Name);
+
+        var output = new StringBuilder();
+        output.AppendLine($"## {skill.DisplayName}");
+        output.AppendLine($"Source: MCP server '{source.ServerName}', prompt '{source.PromptName}', generation {source.Generation}");
+        if (!string.IsNullOrWhiteSpace(result.Description))
+            output.AppendLine($"Description: {result.Description}");
+
+        foreach (var message in result.Messages)
+        {
+            output.AppendLine();
+            output.AppendLine($"### {message.Role}");
+            output.AppendLine(message.Text);
+        }
+
+        return output.ToString();
     }
 }

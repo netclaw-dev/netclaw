@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackChannelOptions.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -31,6 +31,22 @@ public sealed class SlackChannelOptions : IRemoteChatChannelOptions
     /// Only applies when <see cref="AllowDirectMessages"/> is true.
     /// </summary>
     public bool MentionRequiredInDm { get; init; } = false;
+
+    /// <summary>
+    /// Per-channel opt-in for the thread mention rule. Keys are channel IDs.
+    /// When a channel's value is <c>true</c>, a thread reply requires a bot
+    /// mention even when the thread already has an active session. A channel
+    /// with no entry defaults to <c>false</c> — follow-up replies in an active
+    /// thread are processed without a mention.
+    /// </summary>
+    public Dictionary<string, bool> MentionRequiredInThreadByChannel { get; init; } = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// Resolves the effective thread mention rule for a channel: the per-channel
+    /// value, or <c>false</c> when the channel has no entry.
+    /// </summary>
+    public bool MentionRequiredInThreadFor(string channelId)
+        => MentionRequiredInThreadByChannel.TryGetValue(channelId, out var required) && required;
 
     public string[] AllowedChannelIds { get; init; } = [];
 

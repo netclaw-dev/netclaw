@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderManagerActorTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -9,6 +9,7 @@ using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
 using Akka.Reminders;
 using Akka.Reminders.Sharding;
+using Akka.Streams;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
@@ -16,18 +17,23 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Hosting;
 using Netclaw.Configuration;
+using Netclaw.Tests.Utilities;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Actors.Tests.Reminders;
 
+[Collection(ReminderActorTestCollection.Name)]
 public class ReminderManagerActorTests : TestKit
 {
     private readonly string _basePath = Path.Combine(Path.GetTempPath(), $"netclaw-reminder-tests-{Guid.NewGuid():N}");
     private readonly FakeTimeProvider _timeProvider = new(TimeProvider.System.GetUtcNow());
+    private readonly TestShardRegionResolver _sharedResolver = new();
     private ReminderDefinitionStore _definitionStore = null!;
     private TestNotificationSink _notificationSink = null!;
+    private readonly FailingReminderSessionPipeline _sessionPipeline =
+        new("persistence recovery failed");
 
     public ReminderManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
@@ -47,41 +53,47 @@ public class ReminderManagerActorTests : TestKit
         var historyStore = new ReminderHistoryStore(paths);
 
         // Wire local reminders with in-memory storage
-        var sharedResolver = new TestShardRegionResolver();
         builder.WithLocalReminders(reminders =>
         {
             reminders.WithInMemoryStorage();
-            reminders.WithResolver(_ => sharedResolver);
+            reminders.WithResolver(_ => _sharedResolver);
+            reminders.WithSettings(new ReminderSettings
+            {
+                AckTimeout = TimeSpan.FromMinutes(70),
+                RetryBackoffBase = TimeSpan.FromMilliseconds(25),
+                MaxRetryBackoff = TimeSpan.FromMilliseconds(25),
+                MaxDeliveryAttempts = 10
+            });
         });
 
         builder.StartActors((system, registry, _) =>
         {
-            // Create a minimal SessionPipeline stub — manager needs it but
-            // we won't actually execute reminders in these tests.
             registry.Register<SessionManagerActorKey>(system.DeadLetters);
 
-            var pipeline = new SessionPipeline(
-                system,
-                new RequiredActor<SessionManagerActorKey>(ActorRegistry.For(system)),
-                new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}")));
-
-            var defaults = new EffectivePolicyDefaults(
-                DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
             var reminderManager = system.ActorOf(
-                Props.Create(() => new ReminderManagerActor(
-                    pipeline,
-                    defaults,
-                    new SchedulingConfig(),
-                    _timeProvider,
-                    definitionStore,
-                    historyStore,
-                    _notificationSink,
-                    NullReminderChannelNotifier.Instance)),
+                CreateManagerProps(definitionStore, historyStore),
                 "reminder-manager-test");
 
             registry.Register<ReminderManagerActorKey>(reminderManager);
-            sharedResolver.RegisterShardRegion(ReminderManagerActor.ShardRegionName, reminderManager);
+            _sharedResolver.RegisterShardRegion(ReminderManagerActor.ShardRegionName, reminderManager);
         });
+    }
+
+    private Props CreateManagerProps(
+        ReminderDefinitionStore definitionStore,
+        ReminderHistoryStore historyStore)
+    {
+        var defaults = new EffectivePolicyDefaults(
+            DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
+        return Props.Create(() => new ReminderManagerActor(
+            _sessionPipeline,
+            defaults,
+            new SchedulingConfig(),
+            _timeProvider,
+            definitionStore,
+            historyStore,
+            _notificationSink,
+            NullReminderChannelNotifier.Instance));
     }
 
     private async Task<IActorRef> GetManagerAsync()
@@ -216,7 +228,101 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Reconcile_deletes_zombie_oneshot_reminders()
+    public async Task Status_query_reads_durable_failure_count_after_store_reload()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("durable-status", "Check status") with
+        {
+            ConsecutiveFailures = 3
+        };
+        _definitionStore.Save(definition);
+
+        var status = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(status.Found);
+        Assert.Equal(3, status.ConsecutiveFailures);
+    }
+
+    [Fact]
+    public async Task Failed_enable_keeps_terminal_diagnostics()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("failed-enable", "Failed enable") with
+        {
+            Enabled = false,
+            ConsecutiveFailures = 5,
+            TerminalOutcome = ReminderTerminalOutcome.Failed,
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = TimeProvider.System.GetUtcNow().AddMinutes(-1)
+            }
+        };
+        _definitionStore.Save(definition);
+
+        var response = await manager.Ask<ReminderStateResponse>(
+            new EnableReminderCommand(definition.Id),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(response.Found);
+        Assert.False(response.Enabled);
+        Assert.NotNull(response.ErrorMessage);
+        var stored = _definitionStore.Get(definition.Id);
+        Assert.NotNull(stored);
+        Assert.False(stored!.Enabled);
+        Assert.Equal(5, stored.ConsecutiveFailures);
+        Assert.Equal(ReminderTerminalOutcome.Failed, stored.TerminalOutcome);
+    }
+
+    [Fact]
+    public async Task Manager_restart_preserves_definition_and_occurrence_state()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("restart-state", "Restart state") with
+        {
+            ConsecutiveFailures = 3
+        };
+        var saved = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(saved.Success, saved.ErrorMessage);
+
+        Watch(manager);
+        Sys.Stop(manager);
+        await ExpectTerminatedAsync(
+            manager,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var paths = new NetclawPaths(_basePath);
+        var restarted = Sys.ActorOf(
+            CreateManagerProps(
+                new ReminderDefinitionStore(paths),
+                new ReminderHistoryStore(paths)),
+            "reminder-manager-restarted");
+        ActorRegistry.For(Sys).Register<ReminderManagerActorKey>(restarted, overwrite: true);
+        _sharedResolver.RegisterShardRegion(ReminderManagerActor.ShardRegionName, restarted);
+
+        var status = await restarted.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(status.Found);
+        Assert.True(status.Enabled);
+        Assert.Equal(3, status.ConsecutiveFailures);
+        Assert.NotNull(status.NextFire);
+        Assert.Equal("Pending", status.Occurrence?.CompletionStatus);
+    }
+
+    [Fact]
+    public async Task Reconcile_deletes_completed_oneshot_and_retains_ambiguous_or_failed_oneshots()
     {
         var manager = await GetManagerAsync();
         var now = TimeProvider.System.GetUtcNow();
@@ -252,6 +358,27 @@ public class ReminderManagerActorTests : TestKit
             UpdatedAt = now.AddHours(-2)
         };
         _definitionStore.Save(zombie);
+        var historyStore = new ReminderHistoryStore(new NetclawPaths(_basePath));
+        await historyStore.AppendAsync(
+            zombie.Id,
+            new HistoryRecord(now.AddMinutes(-30), false, 100, "session-1", "recovery failed"));
+        var completed = zombie with
+        {
+            Id = new ReminderId("completed-old"),
+            Enabled = false,
+            TerminalOutcome = ReminderTerminalOutcome.Completed
+        };
+        var failed = zombie with
+        {
+            Id = new ReminderId("failed-old"),
+            Enabled = false,
+            ConsecutiveFailures = ReminderManagerActor.FailurePauseThreshold,
+            TerminalOutcome = ReminderTerminalOutcome.Failed
+        };
+        _definitionStore.Save(completed);
+        _definitionStore.Save(failed);
+        await historyStore.AppendAsync(completed.Id, new HistoryRecord(now, true, 100, "session-1", null));
+        await historyStore.AppendAsync(failed.Id, new HistoryRecord(now, false, 100, "session-1", "failed"));
 
         // Confirm it shows up as scheduled
         var healthBefore = await manager.Ask<ReminderHealthResponse>(
@@ -261,11 +388,19 @@ public class ReminderManagerActorTests : TestKit
         // Trigger reconciliation and wait for completion ack
         var reconcileResult = await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
             ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(30), TestContext.Current.CancellationToken);
-        Assert.Equal(1, reconcileResult.DeletedOneShots);
+        Assert.Equal(0, reconcileResult.SoftDeletedOneShots);
 
-        // Verify definition has been deleted from the store
+        // The missing occurrence status is ambiguous. Reconciliation must keep
+        // the definition and its history for operator review. See issue #1803.
         var afterReconcile = _definitionStore.Get(new ReminderId("zombie-oneshot"));
-        Assert.Null(afterReconcile);
+        Assert.NotNull(afterReconcile);
+        Assert.True(afterReconcile!.Enabled);
+        Assert.Null(afterReconcile.TerminalOutcome);
+        Assert.Single(await historyStore.ReadAsync(zombie.Id, 10));
+        Assert.Null(_definitionStore.Get(completed.Id));
+        Assert.Empty(await historyStore.ReadAsync(completed.Id, 10));
+        Assert.NotNull(_definitionStore.Get(failed.Id));
+        Assert.Single(await historyStore.ReadAsync(failed.Id, 10));
     }
 
     [Theory]
@@ -416,9 +551,10 @@ public class ReminderManagerActorTests : TestKit
     [Fact]
     public async Task Startup_emits_alert_for_legacy_reminder_missing_trust_fields()
     {
+        using var directory = new DisposableTempDir();
         const string reminderId = "legacy-reminder-alert";
         var now = TimeProvider.System.GetUtcNow();
-        var paths = new NetclawPaths(_basePath);
+        var paths = new NetclawPaths(directory.Path);
         paths.EnsureDirectoriesExist();
         var filePath = Path.Combine(paths.RemindersDirectory, $"{Uri.EscapeDataString(reminderId)}.json");
         File.WriteAllText(filePath, $$"""
@@ -440,7 +576,7 @@ public class ReminderManagerActorTests : TestKit
         var pipeline = new SessionPipeline(
             Sys,
             new RequiredActor<SessionManagerActorKey>(ActorRegistry.For(Sys)),
-            new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-test-{Guid.NewGuid():N}")));
+            paths);
         var defaults = new EffectivePolicyDefaults(
             DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
 
@@ -456,15 +592,6 @@ public class ReminderManagerActorTests : TestKit
                 NullReminderChannelNotifier.Instance)),
             "legacy-reminder-alert-manager");
 
-        // The legacy-schema alert is emitted synchronously inside PreStart, and
-        // an actor processes mailbox messages only AFTER PreStart completes — so
-        // a successful health reply is a deterministic signal that PreStart (and
-        // the emit) has run. Awaiting that signal replaces a wall-clock
-        // AwaitAssertAsync(5s) poll that flaked under heavy parallel CI load: when
-        // the shared ThreadPool is saturated, PreStart can be scheduled later than
-        // a fixed 5s budget, leaving the sink empty when the poll gives up. The
-        // generous Ask timeout absorbs that scheduling latency without polling —
-        // it returns as soon as the actor is ready.
         await manager.Ask<ReminderHealthResponse>(
             GetReminderHealthQuery.Instance,
             TimeSpan.FromSeconds(30),
@@ -562,7 +689,7 @@ public class ReminderManagerActorTests : TestKit
         // gateway via ActorRegistry, and issued the Ask. The probe's
         // CommandAck reply + the subsequent _client.AckAsync path is
         // exercised end-to-end here too (execution actor didn't crash
-        // or report a failure up to the manager's _failureCounts); any
+        // or persist a failure on the reminder definition); any
         // failure in that tail would surface as a reminder execution
         // failure alert via the notification sink, which this test would
         // see on the next Ask to the manager if it happened.
@@ -634,20 +761,11 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
         try
         {
-            var gatewayProbe = CreateTestProbe("current-session-timeout-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-current-session-timeout");
-            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition("current-session-timeout", deliveryRequired: true);
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
+            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
+                manager,
+                "current-session-timeout-gateway",
+                "auto-ack-current-session-timeout",
+                "current-session-timeout");
             Assert.NotNull(delivered.Source.ReminderId);
 
             await AwaitAssertAsync(async () =>
@@ -681,20 +799,11 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(30);
         try
         {
-            var gatewayProbe = CreateTestProbe("current-session-failed-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-current-session-failed");
-            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition("current-session-failed", deliveryRequired: true);
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
+            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
+                manager,
+                "current-session-failed-gateway",
+                "auto-ack-current-session-failed",
+                "current-session-failed");
             Assert.NotNull(delivered.Source.ReminderId);
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
@@ -764,20 +873,11 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
         try
         {
-            var gatewayProbe = CreateTestProbe("current-session-observed-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-current-session-observed");
-            ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition("current-session-observed", deliveryRequired: true);
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
+            var (_, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<SlackGatewayActorKey>(
+                manager,
+                "current-session-observed-gateway",
+                "auto-ack-current-session-observed",
+                "current-session-observed");
             Assert.NotNull(delivered.Source.ReminderId);
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
@@ -794,10 +894,7 @@ public class ReminderManagerActorTests : TestKit
                     TimeSpan.FromSeconds(3),
                     TestContext.Current.CancellationToken);
 
-                Assert.Equal(0, health.FailedCount);
-                Assert.DoesNotContain(_notificationSink.Alerts, alert =>
-                    alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id.Value);
+                Assert.Equal(0, health.ActiveExecutions);
             }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
@@ -904,7 +1001,7 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Deferred_expired_recurring_reminder_is_disabled_before_execution()
+    public async Task Recurring_occurrence_starts_even_while_other_reminders_are_running()
     {
         var manager = await GetManagerAsync();
 
@@ -914,49 +1011,50 @@ public class ReminderManagerActorTests : TestKit
         await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
             ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        var gatewayProbe = CreateTestProbe("deferred-expiry-gateway");
+        var gatewayProbe = CreateTestProbe("capacity-gateway");
         var autoAckRef = Sys.ActorOf(
             Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-            "auto-ack-deferred-expiry");
+            "auto-ack-capacity");
         ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(autoAckRef);
 
+        // Fill three in-flight executions (the historical capacity limit).
         // Save before dispatch so filesystem latency cannot consume any test
         // timing window while execution slots are being filled.
-        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+        for (var i = 0; i < 3; i++)
         {
             var id = $"blocking-{i}";
             _definitionStore.Save(CreateCurrentSessionDefinition(id, deliveryRequired: true));
         }
 
-        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+        for (var i = 0; i < 3; i++)
             manager.Tell(CreateEnvelope($"blocking-{i}"));
 
-        var blockers = new List<DeliverTrustedSessionTurn>();
-        for (var i = 0; i < ReminderManagerActor.MaxConcurrentExecutions; i++)
+        for (var i = 0; i < 3; i++)
         {
             var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
                 TimeSpan.FromSeconds(5),
                 cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(delivered.Source.ReminderId);
             Assert.NotNull(delivered.Source.DeliveryObserver);
-            blockers.Add(delivered);
         }
 
-        var now = _timeProvider.GetUtcNow();
-        var expiringId = "queued-expiring";
-        var expiringReminder = new ReminderDefinition
+        var invocationCount = _sessionPipeline.InvocationCount;
+        var now = TimeProvider.System.GetUtcNow();
+        var recurringId = "concurrent-recurring";
+        var recurringReminder = new ReminderDefinition
         {
-            Id = new ReminderId(expiringId),
-            Title = "Queued expiring reminder",
-            Instructions = "Should not execute after expiry",
+            Id = new ReminderId(recurringId),
+            Title = "Concurrent recurring reminder",
+            Instructions = "Must start even while other reminders are executing",
             Delivery = new ReminderDelivery { Kind = DeliveryKind.None },
             Schedule = new ReminderSchedule
             {
                 Type = ReminderScheduleType.Interval,
-                Interval = TimeSpan.FromMinutes(30),
-                FireAt = now.AddMinutes(30)
+                // Must exceed the 1h execution timeout + settlement margin,
+                // otherwise the safe-execution-lease check skips the occurrence.
+                Interval = TimeSpan.FromHours(2),
+                FireAt = now.AddMilliseconds(100)
             },
-            ExpiresAt = now.AddMinutes(1),
             Audience = TrustAudience.Team,
             Boundary = TrustBoundary.Team,
             Enabled = true,
@@ -964,38 +1062,31 @@ public class ReminderManagerActorTests : TestKit
             CreatedAt = now,
             UpdatedAt = now
         };
-        _definitionStore.Save(expiringReminder);
-
-        // The query comes from the same sender as the fire, so its reply is a
-        // mailbox-order barrier proving the fire was handled while all three
-        // blockers were still active.
-        var controlProbe = CreateTestProbe("deferred-expiry-control");
-        controlProbe.Send(manager, CreateEnvelope(expiringId));
-        controlProbe.Send(manager, GetReminderHealthQuery.Instance);
-        var health = await controlProbe.ExpectMsgAsync<ReminderHealthResponse>(
+        var saved = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                recurringReminder,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
             TimeSpan.FromSeconds(5),
-            cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal(ReminderManagerActor.MaxConcurrentExecutions, health.ActiveExecutions);
+            TestContext.Current.CancellationToken);
+        Assert.True(saved.Success, saved.ErrorMessage);
 
-        _timeProvider.Advance(TimeSpan.FromMinutes(2));
-
-        var blocker = blockers[0];
-        blocker.Source.DeliveryObserver!.Tell(new ReminderDeliveryResult(
-            blocker.Source.ReminderId!.Value,
-            ChannelType.Slack,
-            Delivered: true,
-            ObservedAtMs: _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()));
-
-        await AwaitAssertAsync(() =>
+        await AwaitAssertAsync(async () =>
         {
-            var stored = _definitionStore.Get(new ReminderId(expiringId));
-            Assert.NotNull(stored);
-            Assert.False(stored!.Enabled);
+            var status = await manager.Ask<ReminderStatusResponse>(
+                new GetReminderStatusQuery(recurringReminder.Id),
+                TimeSpan.FromSeconds(3),
+                TestContext.Current.CancellationToken);
+            // The historical capacity gate would have skipped this occurrence
+            // (SkippedDuplicates == 1) without starting an execution. With the
+            // cap removed the occurrence must be dispatched, not skipped.
+            Assert.Equal(0, status.SkippedDuplicates);
+            Assert.True(_sessionPipeline.InvocationCount > invocationCount,
+                "Expected the recurring reminder to be executed by the pipeline.");
         }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
 
-        Assert.DoesNotContain(_notificationSink.Alerts, alert =>
-            alert.Category == AlertType.ReminderExecutionFailed
-            && alert.Source == expiringId);
+        var stored = _definitionStore.Get(recurringReminder.Id);
+        Assert.NotNull(stored);
+        Assert.True(stored!.Enabled);
     }
 
     [Fact]
@@ -1007,24 +1098,13 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromMilliseconds(250);
         try
         {
-            var gatewayProbe = CreateTestProbe("discord-current-session-timeout-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-discord-current-session-timeout");
-            ActorRegistry.For(Sys).Register<DiscordGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition(
+            var (definition, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<DiscordGatewayActorKey>(
+                manager,
+                "discord-current-session-timeout-gateway",
+                "auto-ack-discord-current-session-timeout",
                 "discord-current-session-timeout",
-                deliveryRequired: true,
                 originChannelType: ChannelType.Discord,
                 sessionId: "129847561203948576/130111223344556677");
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(delivered.Source.ReminderId);
 
             await AwaitAssertAsync(async () =>
@@ -1056,24 +1136,13 @@ public class ReminderManagerActorTests : TestKit
         ReminderExecutionActor.DeliveryObservedTimeout = TimeSpan.FromSeconds(2);
         try
         {
-            var gatewayProbe = CreateTestProbe("discord-current-session-observed-gateway");
-            var autoAckRef = Sys.ActorOf(
-                Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
-                "auto-ack-discord-current-session-observed");
-            ActorRegistry.For(Sys).Register<DiscordGatewayActorKey>(autoAckRef);
-
-            var definition = CreateCurrentSessionDefinition(
+            var (_, delivered) = await RegisterGatewayAndDeliverCurrentSessionReminderAsync<DiscordGatewayActorKey>(
+                manager,
+                "discord-current-session-observed-gateway",
+                "auto-ack-discord-current-session-observed",
                 "discord-current-session-observed",
-                deliveryRequired: true,
                 originChannelType: ChannelType.Discord,
                 sessionId: "129847561203948576/130111223344556677");
-            _definitionStore.Save(definition);
-
-            manager.Tell(CreateEnvelope(definition.Id.Value));
-
-            var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
-                TimeSpan.FromSeconds(5),
-                cancellationToken: TestContext.Current.CancellationToken);
             Assert.NotNull(delivered.Source.ReminderId);
             Assert.NotNull(delivered.Source.DeliveryObserver);
 
@@ -1090,10 +1159,7 @@ public class ReminderManagerActorTests : TestKit
                     TimeSpan.FromSeconds(3),
                     TestContext.Current.CancellationToken);
 
-                Assert.Equal(0, health.FailedCount);
-                Assert.DoesNotContain(_notificationSink.Alerts, alert =>
-                    alert.Category == AlertType.ReminderExecutionFailed
-                    && alert.Source == definition.Id.Value);
+                Assert.Equal(0, health.ActiveExecutions);
             }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         }
         finally
@@ -1103,7 +1169,79 @@ public class ReminderManagerActorTests : TestKit
     }
 
     [Fact]
-    public async Task Second_fire_of_executing_reminder_is_skipped_as_duplicate()
+    public async Task Channel_failure_retries_and_fifth_failure_disables_reminder()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("retry-poison", "Run the briefing") with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = _timeProvider.GetUtcNow().AddMilliseconds(100)
+            }
+        };
+
+        var saved = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(saved.Success, saved.ErrorMessage);
+
+        await AwaitAssertAsync(() =>
+        {
+            var stored = _definitionStore.Get(definition.Id);
+            Assert.NotNull(stored);
+            Assert.False(stored!.Enabled);
+            Assert.Equal(ReminderManagerActor.FailurePauseThreshold, stored.ConsecutiveFailures);
+            Assert.Equal(ReminderTerminalOutcome.Failed, stored.TerminalOutcome);
+            Assert.Equal(ReminderManagerActor.FailurePauseThreshold, _sessionPipeline.InvocationCount);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Successful_retry_deletes_oneshot_definition_and_history()
+    {
+        var manager = await GetManagerAsync();
+        var gatewayProbe = CreateTestProbe("retry-success-gateway");
+        var gateway = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-retry-success-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(gateway);
+
+        var definition = CreateCurrentSessionDefinition("retry-success", deliveryRequired: false) with
+        {
+            ConsecutiveFailures = 3,
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.OneShot,
+                FireAt = _timeProvider.GetUtcNow().AddMilliseconds(100)
+            }
+        };
+
+        var saved = await manager.Ask<ReminderSavedResponse>(
+            new SaveReminderCommand(
+                definition,
+                Authorization: new ReminderAudienceAuthorizationContext(TrustAudience.Team, "test")),
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        Assert.True(saved.Success, saved.ErrorMessage);
+
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(async () =>
+        {
+            Assert.Null(_definitionStore.Get(definition.Id));
+            var historyStore = new ReminderHistoryStore(new NetclawPaths(_basePath));
+            Assert.Empty(await historyStore.ReadAsync(definition.Id, 10));
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Exact_active_delivery_attempt_is_ignored()
     {
         var manager = await GetManagerAsync();
 
@@ -1120,20 +1258,19 @@ public class ReminderManagerActorTests : TestKit
         var definition = CreateCurrentSessionDefinition("dup-guard-test", deliveryRequired: false);
         _definitionStore.Save(definition);
 
-        var envelope1 = CreateEnvelope(definition.Id.Value);
-        var envelope2 = CreateEnvelope(definition.Id.Value);
+        var envelope = CreateEnvelope(definition.Id.Value);
 
         // Both envelopes go into the actor's mailbox before either is processed,
         // so the second always arrives while the first execution is still in flight.
-        manager.Tell(envelope1);
-        manager.Tell(envelope2);
+        manager.Tell(envelope);
+        manager.Tell(envelope);
 
         // Exactly one delivery should reach the gateway.
         await deliveryProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await deliveryProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
 
-        // Health reflects one active execution — the duplicate was dropped, not queued.
+        // The active execution remains the sole settlement owner.
         var health = await manager.Ask<ReminderHealthResponse>(
             GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Equal(1, health.ActiveExecutions);
@@ -1141,6 +1278,112 @@ public class ReminderManagerActorTests : TestKit
         // No failure alert — duplicate skip is silent from an alert standpoint.
         Assert.DoesNotContain(_notificationSink.Alerts, a =>
             a.Category == AlertType.ReminderExecutionFailed && a.Source == definition.Id.Value);
+    }
+
+    /// <summary>
+    /// Regression test for the duplicate-ack over-alert: when the same occurrence
+    /// is delivered and settled twice (e.g. redelivered after the first ack),
+    /// the second <c>AckAsync</c> returns <c>NotFound</c> because the occurrence
+    /// is no longer awaiting ack. That is an idempotent no-op — it must NOT emit
+    /// a <c>reminder.settlement.failed</c> alert.
+    /// </summary>
+    [Fact]
+    public async Task Duplicate_ack_of_already_settled_occurrence_does_not_emit_settlement_failed_alert()
+    {
+        var manager = await GetManagerAsync();
+
+        var gatewayProbe = CreateTestProbe("dup-settlement-gateway");
+        var gateway = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            "auto-ack-dup-settlement-gateway");
+        ActorRegistry.For(Sys).Register<SlackGatewayActorKey>(gateway);
+
+        // Interval schedule so the definition survives the first successful
+        // settlement (OneShot definitions are deleted on success). Using the
+        // shared helper with deliveryRequired: false so the execution actor
+        // settles on CommandAck without waiting for a delivery result.
+        var now = _timeProvider.GetUtcNow();
+        var definition = CreateCurrentSessionDefinition("dup-settlement", deliveryRequired: false) with
+        {
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Interval,
+                FireAt = now.AddMinutes(5),
+                IntervalTicks = TimeSpan.FromMinutes(5).Ticks
+            }
+        };
+        _definitionStore.Save(definition);
+
+        var envelope = new ReminderEnvelope<ReminderPayload>(
+            entity: new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            key: new ReminderKey(definition.Id.Value),
+            dueTimeUtc: now,
+            deadline: ReminderDeadline.Infinite,
+            message: new ReminderPayload { Id = definition.Id });
+
+        // First delivery settles normally: the occurrence is awaiting ack and
+        // AckAsync returns Success.
+        manager.Tell(envelope);
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Wait until the first settlement is fully complete (the manager's
+        // AckAsync has returned, so the scheduler no longer awaits an ack for
+        // this occurrence). Health shows zero active executions once the
+        // settlement's finally block has run.
+        await AwaitAssertAsync(async () =>
+        {
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.ActiveExecutions);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        // Replay the exact same occurrence. The scheduler has already settled it,
+        // so the second AckAsync returns NotFound. This must not raise an alert.
+        // Advance the fake clock so the second execution actor gets a unique name
+        // (StartExecution derives the actor name from startedAt).
+        _timeProvider.Advance(TimeSpan.FromSeconds(1));
+        manager.Tell(envelope);
+        await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(async () =>
+        {
+            var health = await manager.Ask<ReminderHealthResponse>(
+                GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            Assert.Equal(0, health.ActiveExecutions);
+        }, duration: TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderExecutionFailed
+            && a.Source == definition.Id.Value
+            && a.Summary.Contains("settlement", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task Unsafe_acknowledgement_lease_does_not_start_execution()
+    {
+        var manager = await GetManagerAsync();
+        var definition = CreateDefinition("unsafe-lease", "Unsafe lease");
+        _definitionStore.Save(definition);
+        var invocationCount = _sessionPipeline.InvocationCount;
+        var now = TimeProvider.System.GetUtcNow();
+        var envelope = new ReminderEnvelope<ReminderPayload>(
+            new ReminderEntity(ReminderManagerActor.ShardRegionName, ReminderManagerActor.EntityId),
+            new ReminderKey(definition.Id.Value),
+            now,
+            new ReminderDeadline(now.AddMinutes(60)),
+            new ReminderPayload { Id = definition.Id });
+        var controlProbe = CreateTestProbe("unsafe-lease-control");
+
+        controlProbe.Send(manager, envelope);
+        controlProbe.Send(manager, GetReminderHealthQuery.Instance);
+        var health = await controlProbe.ExpectMsgAsync<ReminderHealthResponse>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, health.ActiveExecutions);
+        Assert.Equal(invocationCount, _sessionPipeline.InvocationCount);
     }
 
     /// <summary>
@@ -1162,6 +1405,31 @@ public class ReminderManagerActorTests : TestKit
         }
     }
 
+    private sealed class FailingReminderSessionPipeline(string reason) : ISessionPipeline
+    {
+        private int _invocationCount;
+
+        public int InvocationCount => Volatile.Read(ref _invocationCount);
+
+        public Task<MaterializedSession> CreateAsync(
+            SessionId sessionId,
+            SessionPipelineOptions options,
+            IMaterializer? materializer = null,
+            CancellationToken cancellationToken = default)
+        {
+            Interlocked.Increment(ref _invocationCount);
+            throw new InvalidOperationException(reason);
+        }
+
+        public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default) =>
+            Task.CompletedTask;
+
+        public Task<ISessionResponse> SendFeedbackAndWaitAsync(
+            IWithSessionId feedback,
+            CancellationToken ct = default) =>
+            Task.FromResult<ISessionResponse>(CommandAck.For(feedback.SessionId));
+    }
+
     /// <summary>
     /// Accepts <see cref="DeliverTrustedSessionTurn"/> messages and forwards them
     /// to a probe, but never replies to <c>Sender</c>. Keeps the execution actor's
@@ -1173,6 +1441,145 @@ public class ReminderManagerActorTests : TestKit
         {
             Receive<DeliverTrustedSessionTurn>(msg => probe.Tell(msg));
         }
+    }
+
+    // ── Scheduling-failure surfacing (Tier 1 hardening) ──
+    //
+    // A syntactically valid cron that never occurs (Feb 30) drives a deterministic
+    // scheduling failure through the "no future occurrence" branch — no host, clock,
+    // or timezone dependency. Definitions are written straight to the store to
+    // simulate a persisted reminder whose schedule became unschedulable, then
+    // reconcile is asked to restore it.
+
+    private static async Task DrainStartupReconcileAsync(IActorRef manager)
+    {
+        // ActorOf can return before PreStart queues its reconcile.
+        // Two ordered barriers drain both possible startup orderings.
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance,
+            TimeSpan.FromSeconds(5),
+            TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Reconcile_surfaces_scheduling_failure_and_counts_it()
+    {
+        var manager = await GetManagerAsync();
+
+        await DrainStartupReconcileAsync(manager);
+
+        var definition = CreateCronDefinition("sched-fail", "0 0 30 2 *");
+        _definitionStore.Save(definition);
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var after = _definitionStore.Get(definition.Id);
+        Assert.NotNull(after);
+        Assert.Equal(1, after!.ConsecutiveFailures);
+        Assert.True(after.Enabled); // one failure is well below the threshold
+        Assert.Contains(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderScheduleFailed && a.Source == definition.Id.Value);
+    }
+
+    [Fact]
+    public async Task Consecutive_scheduling_failures_auto_disable_and_alert_critical()
+    {
+        var manager = await GetManagerAsync();
+
+        await DrainStartupReconcileAsync(manager);
+
+        // One below threshold; the next scheduling failure crosses it.
+        var definition = CreateCronDefinition(
+            "sched-disable", "0 0 30 2 *",
+            consecutiveFailures: ReminderManagerActor.FailurePauseThreshold - 1);
+        _definitionStore.Save(definition);
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var after = _definitionStore.Get(definition.Id);
+        Assert.NotNull(after);
+        Assert.Equal(ReminderManagerActor.FailurePauseThreshold, after!.ConsecutiveFailures);
+        Assert.False(after.Enabled);
+        Assert.Equal(ReminderTerminalOutcome.Failed, after.TerminalOutcome);
+        Assert.Contains(_notificationSink.Alerts, a =>
+            a.Category == AlertType.ReminderAutoDisabled
+            && a.Source == definition.Id.Value
+            && a.Severity == AlertSeverity.Critical);
+    }
+
+    [Fact]
+    public async Task Scheduling_failure_installs_no_timer()
+    {
+        // Anti-pattern guard: a reminder that cannot compute an occurrence must
+        // install no schedule. It never silently falls back to a bogus fire time.
+        var manager = await GetManagerAsync();
+
+        await DrainStartupReconcileAsync(manager);
+
+        var definition = CreateCronDefinition("sched-none", "0 0 30 2 *");
+        _definitionStore.Save(definition);
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var status = await manager.Ask<ReminderStatusResponse>(
+            new GetReminderStatusQuery(definition.Id), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.True(status.Found);
+        Assert.Null(status.NextFire); // no timer installed
+        Assert.True(status.ConsecutiveFailures >= 1);
+    }
+
+    [Fact]
+    public async Task Health_failed_count_includes_scheduling_failures()
+    {
+        var manager = await GetManagerAsync();
+
+        await DrainStartupReconcileAsync(manager);
+
+        _definitionStore.Save(CreateCronDefinition("sched-health", "0 0 30 2 *"));
+
+        await manager.Ask<ReminderManagerActor.ReconcileCompleted>(
+            ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var health = await manager.Ask<ReminderHealthResponse>(
+            GetReminderHealthQuery.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, health.FailedCount);
+    }
+
+    private static ReminderDefinition CreateCronDefinition(
+        string name, string cron, int consecutiveFailures = 0)
+    {
+        var id = new ReminderId($"{name}-{Guid.NewGuid():N}"[..20]);
+        var now = TimeProvider.System.GetUtcNow();
+
+        return new ReminderDefinition
+        {
+            Id = id,
+            Title = name,
+            Instructions = "Cron scheduling-failure test",
+            Delivery = new ReminderDelivery { Kind = DeliveryKind.Channel, Transport = "slack", Address = "#general" },
+            DeliveryInstructions = "Reply in-thread with concise status.",
+            Schedule = new ReminderSchedule
+            {
+                Type = ReminderScheduleType.Cron,
+                CronExpression = cron
+            },
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            Enabled = true,
+            ConsecutiveFailures = consecutiveFailures,
+            CreatedBy = "test",
+            CreatedAt = now,
+            UpdatedAt = now
+        };
     }
 
     private static ReminderDefinition CreateDefinition(string name, string instructions)
@@ -1199,6 +1606,44 @@ public class ReminderManagerActorTests : TestKit
             CreatedAt = now,
             UpdatedAt = now
         };
+    }
+
+    // Shared arrange for the CurrentSession delivery tests: registers an
+    // auto-acking gateway probe under the given key, saves a CurrentSession
+    // definition, fires it, and waits for the DeliverTrustedSessionTurn.
+    // Callers keep their own assertions and any follow-up delivery-result
+    // signaling — this only extracts the identical setup+dispatch prefix.
+    // (The probe itself is not returned: no call site needs it after the
+    // initial delivery is observed.)
+    private async Task<(ReminderDefinition Definition, DeliverTrustedSessionTurn Delivered)>
+        RegisterGatewayAndDeliverCurrentSessionReminderAsync<TGatewayKey>(
+            IActorRef manager,
+            string probeName,
+            string actorName,
+            string reminderId,
+            ChannelType originChannelType = ChannelType.Slack,
+            string? sessionId = null)
+    {
+        var gatewayProbe = CreateTestProbe(probeName);
+        var autoAckRef = Sys.ActorOf(
+            Props.Create(() => new AutoAckTrustedGateway(gatewayProbe.Ref)),
+            actorName);
+        ActorRegistry.For(Sys).Register<TGatewayKey>(autoAckRef);
+
+        var definition = CreateCurrentSessionDefinition(
+            reminderId,
+            deliveryRequired: true,
+            originChannelType: originChannelType,
+            sessionId: sessionId);
+        _definitionStore.Save(definition);
+
+        manager.Tell(CreateEnvelope(definition.Id.Value));
+
+        var delivered = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        return (definition, delivered);
     }
 
     private static ReminderDefinition CreateCurrentSessionDefinition(

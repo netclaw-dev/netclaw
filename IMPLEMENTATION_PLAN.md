@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-06-01
+Last updated: 2026-08-21
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -109,6 +109,459 @@ the smallest repeatable manual script plus expected output.
 - Testing: `docs/spec/SPEC-010-testing-and-smoke-strategy.md`, `TOOLING.md`
 
 ## NOW
+
+### Priority: Keep MCP HTTP Protocol Fallback Deterministic
+
+**PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/specs/netclaw-mcp/spec.md`
+**Surface area:** MCP HTTP transport, daemon connections, CLI probes
+**Verification:** L1 plus the existing HTTP MCP smoke tests
+
+The MCP SDK can retain its discovery protocol version when probe cancellation
+selects the initialize fallback. Netclaw must not send that stale version in an
+initialize request.
+
+Done when:
+
+- [x] Daemon connections and CLI probes remove a retained protocol-version
+  header only from the initialize request.
+- [x] Discovery and established-session requests keep their protocol-version
+  header.
+- [x] Tests prove the header correction and preserve unrelated headers.
+
+### Priority: Preserve The Daemon Working Directory
+
+**PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
+**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+**Surface area:** daemon lifecycle, path normalization, shell authorization
+**Verification:** L1 plus a live daemon restart
+
+The daemon process directory must survive routine system temporary-directory
+cleanup. Absolute path validation must not depend on that process directory.
+
+Done when:
+
+- [x] The daemon uses a durable runtime directory below the Netclaw home.
+- [x] Absolute path normalization does not read the process working directory.
+- [x] Focused tests and the full repository quality gates pass.
+- [ ] An installed daemon restart confirms the live process uses the durable directory.
+
+### Priority: Complete Tool Remediation
+
+**PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/changes/complete-tool-remediation/`
+**Surface area:** internal tool receipts and model-facing tool results
+**Verification:** L2
+
+The receipt must drive the next action. The model must not depend on duplicated
+handwritten guidance or an unchecked string code.
+
+Done when:
+
+- [x] Every `RecoverableCorrection` receipt carries one defined internal code.
+- [x] Parent and child paths use one presenter before result delivery.
+- [x] Hidden tools are not named by remediation.
+- [x] Approval authority, scratch retry state, durable messages, and public APIs remain unchanged.
+- [ ] The stacked follow-up handles `attach_file` exposure and native-tool shell mistakes separately.
+
+### Priority: Prevent Native-Tool Shell Mistakes
+
+**Stack parent:** PR #2046 (`fix/repair-tool-rollout-contracts`).
+
+- [x] Specify `attach_file` as a policy-filtered Core tool that accepts the authorized source path directly.
+- [x] Specify parser-owned exact executable matching without executable-private argument parsing.
+- [x] Return a typed correction before shell approval or execution and expose one deferred schema actor-locally.
+- [x] Prove parent/child, hard-deny, hidden-tool, and eventual-authorization boundaries.
+- [x] Refresh deterministic and hosted PII-free behavioral evidence.
+- [x] Complete Release, OpenSpec, header, formatting, Slopwatch, and adversarial-review gates before opening the stacked PR.
+
+### Priority: Reduce Shell Approval Fatigue
+
+**PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/specs/tool-approval-gates/spec.md`
+**Surface area:** shell authorization, approval matching, security corpus
+**Verification:** L2
+
+The user promoted this work into `NOW`. The work must reduce repeat prompts
+without allowing an incomplete or unknown shell form.
+
+Done when:
+
+- [x] The sanitized v0.26.0-beta.3 approval window has 18 classified cases in
+  the linked ShellSyntaxTree and Netclaw OpenSpec changes.
+- [x] `openspec/changes/archive/2026-08-15-structure-shell-approval-policy/` defines the typed
+  coordinator and actor protocol, per-candidate coverage, real and intent
+  scopes, token-boundary grants, reviewed policy catalog, bounded trace,
+  migration, and validation tasks.
+- [x] The maintainer approves the ShellSyntaxTree 0.3.1 API names and the
+  use of separate authored-source facts for approval matching before
+  implementation.
+- [x] The maintainer approves whether simple v2 grants gain token-prefix
+  authority during schema-3 migration or remain exact until re-approved.
+- [x] Approval-store schema 3 uses closed shell token-prefix, shell legacy-exact,
+  and non-shell exact forms. Version-2 conversion keeps prior shell authority
+  exact, creates a byte-identical backup, and fails closed on invalid data or
+  storage errors.
+- [x] New reusable shell grants use ShellSyntaxTree token facts with explicit
+  Bash or PowerShell identity. Distinct command occurrences remain visible
+  through actor checks, one-time keys, persisted events, and subagent prompts.
+- [x] CLI and TUI list and revoke typed phrases with unambiguous labels. The
+  native approvals tape proves version-2 conversion, non-shell label display,
+  and revoke behavior against a published binary.
+- [ ] The policy pipeline replaces the shell branches in `ToolAccessPolicy`
+  and `ShellApprovalMatcher`; any retained legacy scan is deny-only and cannot
+  authorize, create candidates, or widen scope.
+  The preliminary complete-footprint audit after PR #1947 found 1,484 added
+  production lines and 52 added control-flow lines. Later slices reduced the
+  post-corpus footprint from 10,085 lines and 663 control-flow lines to 9,693
+  and 634. Control-flow is now below the frozen 635-line baseline. The final
+  audit must justify the remaining 721-line delta through tested security or
+  compatibility obligations instead of deleting required distinctions.
+- [x] Shell calls pass through one coordinator. It snapshots immutable parser
+  and run-scope facts, requests one typed actor batch, and composes grant and
+  reviewed-safe coverage per candidate before one final result.
+- [x] The actor response preserves stable candidate IDs and typed persistent
+  store status. Duplicate IDs, mismatched facts, impossible grant states, and
+  internal stage faults deny without a prompt.
+- [x] The shell coordinator returns a typed operator trace with at most 256
+  rows. Each row uses enum facts, a call-local candidate ID, a redacted
+  executable basename, grant scope, and grant time. The actor derives a match
+  or one near miss from one store snapshot pass. Raw paths, command text,
+  arguments, secrets, prompts, and session events never receive trace data.
+- [x] The approval runbook documents the complete parser-fact-to-policy flow,
+  bounded status and finite-loop examples, partial candidate coverage, and a
+  trace-first operator diagnostic procedure. The source-generated fixture
+  replay pins current D02, D10, and D14 coordinator behavior.
+- [x] The bundled reviewed-diagnostic catalog constrains shell-authored argv.
+  Parser-owned prefix order and lexical path-shape guards remain required.
+  Redirect, filesystem-value, provider, and unknown-expansion checks stay
+  separate.
+- [x] The `git ls-tree` production special case is removed. Token-boundary
+  policy match handles longer parser phrases without private command grammar.
+- [x] A synthetic workload corpus covers ordinary search, read, pipeline,
+  redirect, and file-change commands without production command text.
+- [x] Sanitized post-swap evidence classifies 51 prompts across 202 shell calls.
+  Eleven executable live cases pin the intended allow and prompt boundaries.
+- [x] Post-1952 live evidence froze 285 shell calls and 69 prompts.
+  Twenty-one sanitized cases sample expected, guidance, and ShellSyntaxTree gaps.
+  The coordinator executes one identity-free regression for each sampled case.
+  Each regression locks its evidence source, approval shape, and actor contact.
+- [x] A safe pipeline stage can compose with a stored grant for each stage that
+  still requires approval.
+- [x] A prompt excludes a safe stage from the approval candidates that the user
+  can persist.
+- [x] A prompt excludes candidates that existing session or persistent grants
+  already cover, while it preserves exact directory-scoped occurrences.
+- [x] Reviewed-safe phrases grant no implicit authority to a headless, reminder,
+  or webhook run. Unattended candidates need explicit one-time or stored-grant
+  authority; approval-exempt shell side effects retain their bounded exception.
+- [x] A one-time retry is bound to the exact prompted candidate set, including
+  each effective directory, across live, sub-agent, and redrive paths.
+- [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
+  keep their strict behavior.
+- [x] Bash causal approval intent composes exact stored grants for an initial
+  exact ShellSyntaxTree 0.3.4 directory change with reviewed diagnostic tails.
+  Execution facts, folder grants, protected paths, headless authority, and
+  PowerShell remain strict. Each possible fallback passes the same symlink
+  check. POSIX `/tmp` aliases map through host path facts. The exact D03 fixture
+  must pass on Linux, macOS, and native Windows CI.
+  PR #1967 added exact PowerShell 7 and Windows PowerShell 5.1 strict-scope
+  rows. Both rows required approval despite matching stored grants. Workflow
+  `31859321334` passed Ubuntu, macOS, and Windows.
+- [x] Directory operands preserve dotted directory names without weakening the
+  external-path or symlink checks.
+- [x] Reviewed-safe policy matches canonical ShellSyntaxTree token prefixes.
+  It does not rewrite a variable `git ls-tree` operand or any other command.
+- [x] Tool schemas and always-loaded guidance distinguish a persistent project
+  root from one-command `WorkingDirectory` scope, prevent redundant project
+  switches, and preserve `cd` when directory mutation is the requested shell
+  behavior.
+- [x] Always-loaded guidance, shell metadata, and the operations skill prefer
+  first-party file tools for known reads, listings, and edits. Local repository
+  search, builds, tests, VCS, and process workflows remain shell use cases.
+  External discovery and retrieval remain routed through built-in `web_search`
+  and `web_fetch`. Five-run unaided evals passed 5/5 for read, listing, edit,
+  and local search. Web search passed 4/5 at the required 0.80 threshold.
+- [x] Reviewed-safe shell work beneath an undeclared cwd returns the same
+  `set_working_directory` correction in parent sessions and subagents before
+  any user prompt. The original tool call remains unchanged. The registered
+  tool must accept the exact non-temp cwd; unsafe phrases, outside paths,
+  Public sessions, and unavailable scope tools retain normal approval behavior.
+  A successful child declaration updates only the child scope, reloads its
+  project instructions, and leaves the parent project unchanged. Headless
+  declarations prevent repeated corrections but do not grant execution
+  authority.
+- [x] Bounded non-path `IntegerRange` and `Concatenation` data do not make a
+  complete shell command complex. Unknown values, identities, paths, and
+  redirects stay strict.
+- [x] Sanitized behavioral eval cases cover early project declaration,
+  one-command typed scope, failed-path recovery, and deliberate inline `cd`.
+- [x] Two naturalistic cases now test a child checkout beneath a declared
+  parent project. The prompts do not name a tool, `WorkingDirectory`, or `cd`.
+  Against `deepseek-v4-flash-dspark`, the worktree status baseline passed 1/5.
+  Three failures used `git -C`, and one failure used inline `cd`. The source
+  inspection baseline passed 0/5. Each run read the named file, then tried
+  shell search before `file_list`.
+- [x] The shell schema and always-loaded rules now separate `Command` from
+  one-call directory selection. The rules do not name an executable syntax.
+  The unchanged worktree status case passed 4/5. Direct typed scope and the
+  deliberate inline-directory case each passed 5/5.
+- [x] The unchanged source-inspection case passed 1/5. Four runs used shell
+  search after `file_read`. This result tracks a separate first-party recursive
+  file-search gap.
+- [x] A sanitized subagent eval proves that a different user-named project is
+  declared before the child's first multi-command shell inspection. Absolute
+  path operands remain exact scopes, but do not create a safe-space root. The
+  configured `deepseek-v4-flash-dspark` endpoint passed 4/5 runs. The assertion
+  orders declaration before two exact successful shell calls and verifies the
+  reported layout and build file. One run used one-shot scope without declaring
+  the project and failed as intended.
+- [x] The session-scratch model-guidance eval passed 4/5 against the configured
+  `deepseek-v4-flash-dspark` endpoint. This measures headless path preference;
+  deterministic actor tests own interactive correction and approval proof.
+- [x] Post-0.26.0 live evidence in
+  `openspec/changes/archive/2026-08-15-structure-shell-approval-policy/evidence/post-1952-live-approval-harvest.json`
+  classifies 69 prompts across 285 shell calls. The largest avoidable cluster
+  is 15 read-heavy prompts from one headless subagent working beneath shared
+  platform temp even though its execution scope already owns private session
+  scratch.
+- [x] Personal and Team subagents now receive the exact bound `session_dir` in
+  their volatile working context before the first model call. Public context
+  remains redacted, and prompt-worthy headless shell work remains denied
+  without explicit authority. The first delegated eval result was invalidated:
+  all 5/5 runs omitted `WorkingDirectory` and passed through the existing shell
+  fallback. After the exact assertion and guidance were corrected, the fresh
+  `a1077feb-6bd7-413c-8a90-c651aa5a03df` run passed 4/5 against
+  `deepseek-v4-flash-dspark`. Four children passed the exact bound session
+  directory on both Git diagnostics; one omitted it and failed as intended.
+- [x] Removing the prescribed answer from the existing parent-only disposable
+  output eval produced 3/5 path-aligned runs. All five completed through the
+  private session directory, and all recovered from denied shell writes with
+  first-party file tools, but two first attempted `/tmp` or `mktemp`. This is
+  retained as alignment evidence rather than reported as a passing gate.
+- [x] Explicit `WorkingDirectory=/tmp` and deliberate inline `cd /tmp` evals
+  remain in the corpus so a platform-temp requirement is not rewritten.
+- [x] Eligible interactive Personal shell work at the shared platform-temp root
+  receives a typed session-scratch correction before parent or subagent
+  approval. The original call remains in history. One exact later retry offers
+  only Once or Deny and creates no reusable temp authority. Headless behavior,
+  Team/Public denial, hard-deny rules, dynamic syntax, protected paths, and
+  native PowerShell causal scope stay strict.
+- [x] Seven sanitized tool-friction cases replay through registration, policy,
+  dispatch, typed outcomes, and success-owned working context. Structured
+  search, batch read, JSON selection, image metadata, and spill continuation
+  need no shell approval. Representative interpreter fallbacks still prompt.
+  Parent and child diagnostics report counts and outcome categories only.
+- [x] The hosted PR 7 comparison ran five trials per selected scenario. Search,
+  batch read, JSON selection, image metadata, and deferred discovery passed
+  25/25 with the intended structured tools and no shell fallback. Spill
+  continuation passed 0/5: all five runs used shell, none loaded or called
+  `tool_output_read`, and one run searched the catalog. Keep this failure as a
+  rollout finding; do not weaken its assertion.
+- [x] Complete native platform CI, stack merge, binary swap, and a new
+  sanitized live traffic harvest.
+- [ ] Define automated session-directory cleanup in a separate OpenSpec before
+  adding retention or deletion behavior.
+- [ ] A constrained executable grammar proves any future safe `sed` form. The
+  `-n` option alone is not proof because a `sed` program can write files or
+  execute commands.
+- [ ] Audited ShellSyntaxTree bindings prove bounded `grep` pattern operands,
+  including escaped BRE alternation, are non-filesystem data. File-bearing
+  options and unresolved patterns remain strict.
+- [x] Netclaw consumes ShellSyntaxTree 0.3.0-alpha command occurrences and
+  explicit Bash redirect facts for the existing grammar.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0` through its corrected
+  closed analysis API. The consumer uses joined arguments, value-domain type
+  patterns, redirect alternatives, and redirect-source alternatives. The
+  unchanged 225-test Bash, PowerShell 7, and Windows PowerShell 5.1 approval
+  matrix passes locally.
+- [x] Netclaw resolves ShellSyntaxTree `0.3.2` for the separate authored-source
+  and path-shape facts introduced in 0.3.1. This store-v3 slice preserves those parser token facts
+  without executable-private command rules; later parent tasks consume the new
+  value-domain facts in the coordinator.
+- [x] Netclaw consumes public ShellSyntaxTree `0.3.3` for the parser-owned
+  authored filesystem domain. Local code accepts only `Exact` and `FiniteSet`.
+  It checks each value through path policy and keeps unsafe transforms strict.
+  The Release build and all 7,138 runnable tests pass. The suite reports 15
+  expected platform or opt-in skips. Adversarial review and all required CI
+  checks passed before merge.
+- [x] Netclaw consumes public ShellSyntaxTree `0.3.4` for parser-owned
+  working-directory effects. The causal policy does not recognize command
+  names or private executable grammar. Native platform CI remains required.
+- [x] Netclaw consumes public ShellSyntaxTree `0.3.5` for positive authored
+  non-filesystem values. Only that argument's compatibility and lexical path
+  interpretations are omitted. Other arguments, redirects, effects, dynamic
+  values, and unknown commands remain strict. The sanitized live `tr -d '\\n'`
+  loop reuses its existing `gh run view` grant without creating a `/n` scope.
+- [x] Parent, child, schemas, skills, and always-loaded rules share one
+  directory order and one shell-composition order. Approval-required shell
+  variants do not receive authority from that guidance.
+- [x] ShellSyntaxTree 0.3.5 already publishes complete facts for the ten new
+  sanitized fresh-session samples. Sixteen focused tests and one corpus entry
+  pin current occurrence, cwd, redirect, argument, and dynamic boundaries.
+- [x] A fixed leaf-glob root may contain an existing in-root final alias.
+  Broken, external, or uninspectable aliases remain strict. The exact
+  recursive-search pipeline now produces reusable candidates without private
+  executable parsing.
+- [x] Five changed runs per eight cases used the baseline model and
+  configuration. Structured guardrails remained 15/15. Four alignment cases
+  stayed below threshold. Prompt equivalents fell from 32 to 25, while the
+  explicit directory-transition shell attempts fell from 24 to 12. These
+  variable results remain recorded, not converted into weaker assertions.
+  See `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-guidance-fresh-session-eval-results.json`.
+- [x] PR #1982 merged as `9d02d19efd75fe871c8603e151e3e7169a9d9433`.
+  The live daemon preserved a rollback binary, swapped to that exact commit,
+  recovered its session catalog, and passed five natural fixed-pipeline runs
+  without an approval or complex marker.
+- [x] Forty-five post-swap fresh sessions are frozen in
+  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-9d02d19-binary-swap-eval-results.json`.
+  The original eight workloads improved from 17/40 to 23/40 behavior passes;
+  the added fixed-pipeline case passed 5/5. Observed prompt equivalents fell
+  from 25 to 2, but 446 historical grants make that prompt delta non-causal.
+  Fifteen retained trust-zone denials exposed redundant file verification,
+  disposable redirects, child absolute paths, and retry-after-denial debt.
+- [x] PR #1983 merged as `7efa7fd0f711696343cd7d5e3d2abf75d20707d6`.
+  The exact binary was swapped into the live daemon with the prior binary kept
+  for rollback. Fifteen fresh affected sessions then improved from 2/15 to
+  14/15 behavior passes, and shell attempts fell from 25 to 6. Known-file edit
+  and disposable-output cases passed 10/10 without shell. All five requested
+  external directory transitions remained denied; one fallback-model run made
+  one additional shell call after denial. The initial controlled DeepSeek run
+  was blocked by provider billing, so the live comparison is operational
+  deployment evidence rather than a same-model causal estimate. See
+  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-7efa7fd-followup-live-eval-results.json`.
+- [x] After billing resumed, an isolated same-model rerun of the exact merged
+  image passed known-file and disposable-output cases 10/10, but the terminal
+  directory-denial case passed only 3/5. Both failures followed stale inherited
+  guidance by calling `set_working_directory` after `Tool access denied:`.
+- [x] The pending correction removes that contradictory recovery rule and pins
+  denial versus deferred-correction behavior. On one DeepSeek image, all three
+  affected cases passed 15/15. Structured-file cases used no shell. All five
+  external directory transitions produced exactly one hard denial, no scope
+  correction, and no retry. See
+  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-terminal-denial-guidance-eval-results.json`.
+- [x] The terminal-denial guidance correction merged in PR #1985. The exact
+  merged binary was swapped into the live daemon. Five fresh live sessions
+  retained all five required denials. Three stopped without a substitute call;
+  one made a safe call before denial, and one made a safe call after denial.
+- [x] Issue #1892 now has a seeded Git project and natural project-scope evals.
+  The final direct-provider image declared the project before project tools in
+  5/5 runs, avoided declarations for unrelated prompts in 5/5, and recovered
+  from a rejected named path in 5/5. The fix is
+  guidance-only: it declares the task's first path before probing, then uses a
+  user-provided fallback after rejection. It adds no shell authority.
+- [x] A post-#1990 live sample found four approvals among ten shell calls. All
+  four calls joined independent diagnostics, and one also used inline `cd`.
+  The strict direct-provider baseline passed 3/5 and contained one prompted
+  compound run. Generic independent-operation guidance raised the exact
+  committed image to 5/5. It produced five successful single-operation shell
+  calls and no approval equivalent. See
+  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-independent-operation-guidance-eval-results.json`.
+- [x] The initial follow-up disposable eval was discarded. Its prompt requested
+  a diagnostic command but omitted the exact content required by its assertion.
+  The corrected case names the disposable file effect and exact content without
+  prescribing a tool.
+- [x] Pre-delivery fresh-session evals passed the strengthened guidance boundary:
+  disposable file tools passed 5/5, terminal trust-zone denial passed 5/5
+  without a scope change or retry, and known file edit passed 4/5 at threshold.
+  The fifth edit run ended before model behavior with a provider 402 response.
+  An earlier denial run was discarded because its assertion expected a CLI log
+  shape that JSON mode does not emit; the corrected assertion binds the daemon's
+  exact authorization outcome.
+- [x] The current live mixed-read chain is complex with inline `cd`. Supplying
+  the typed working directory makes the prompt reusable and exposes only the
+  unproved `sed` and escaped-`grep` pattern candidates.
+- [x] The expanded 247-test matrix covers command-substitution and PowerShell
+  execution-region behavior. Known command-owned regions reuse independently
+  matched host and body grants after Netclaw accounts for the parsed body.
+  Unknown receivers and incomplete region facts remain prompt-only.
+- [x] Unknown occurrences, cwd facts, wrappers, and redirects stay prompt-only.
+  Static descriptor redirects no longer appear dynamic.
+- [x] The resolved POSIX `/dev/null` device does not create an approval
+  directory after host symlink checks. Other device paths and dynamic redirect
+  targets stay strict.
+- [x] Netclaw consumes ShellSyntaxTree `0.3.0-alpha.1` and promotes Bash
+  command-resolution mutation and reserved execution forms into the strict
+  181-case review matrix.
+- [x] ShellSyntaxTree `0.3.0-alpha.2` introduced one temporary POSIX PowerShell
+  child wrapper. Native-host activation removed that transitional consumer
+  behavior: Bash treats `pwsh` as an external command, and only a native
+  PowerShell host uses `PwshParser`.
+- [x] The shell approval review table separates Bash, PowerShell 7, and Windows
+  PowerShell 5.1 rows. Cross-language payloads remain ordinary external-command
+  arguments; same-language static children use parser-returned occurrences.
+- [x] A constrained stdin grammar allows a complete literal heredoc or bounded
+  here string only for argument-free `cat`. Unknown data, expanding heredocs,
+  arguments, wrappers, interpreters, and stored grants stay strict.
+- [x] Netclaw interprets bounded non-path loop arguments through
+  ShellSyntaxTree 0.3.2's separate authored-source projection for approval
+  analysis. Effective runtime values retain priority, and path-bearing loop
+  arguments remain strict.
+  - [x] The approval matrix pins inherited and same-language child loops as
+    complex under the canonical unknown-state contract for Bash, PowerShell 7,
+    and Windows PowerShell 5.1. It also proves that a stored command grant
+    cannot cover an unproved loop-dependent argument.
+  - [x] Netclaw adopts bounded non-path `AuthoredValue`, status concatenation,
+    and the typed consumer boundary. Positive authored path evidence remains a
+    separate strict-policy task.
+
+### Priority: Use Native PowerShell on Windows
+
+**PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
+**Specs:** `openspec/changes/archive/2026-08-10-native-windows-powershell-host/`
+**Surface area:** shell execution, parsing, approval policy, model context
+**Verification:** L2 plus native Windows L3
+
+This work replaces `cmd.exe` with a native PowerShell host on Windows. Netclaw
+prefers a compatible PowerShell 7.6 host and falls back to Windows PowerShell
+5.1. It keeps Bash and PowerShell as separate host languages.
+
+The additive foundation pins ShellSyntaxTree `0.3.0-alpha.5` and defines the
+immutable environment, strict host probe, and process arguments. Runtime
+activation now routes execution, policy, approval, background jobs, and model
+context through the same resolved environment. PR #1848 auto-merged after
+adversarial review and green native Windows CI. The canonical specifications
+now contain the delivered contract. The OpenSpec change is archived.
+
+Local validation on 2026-08-10 passed restore, the zero-warning Release build,
+the full solution test suite, changed-file format verification, headers,
+Slopwatch, `git diff --check`, and strict OpenSpec validation. The shell-platform
+behavioral evaluation was unavailable because the required
+`NETCLAW_EVAL_PROVIDER_TYPE`, `NETCLAW_EVAL_PROVIDER_ENDPOINT`, and
+`NETCLAW_EVAL_MODEL_ID` settings were absent. This result is blocked evidence,
+not an evaluation pass.
+
+Native Windows workflow run `31381580072` passed the zero-warning Release build,
+the complete security, actor, and daemon test suites, package staging, and CLI
+smoke tests. The production resolver and deterministic dialect matrix cover
+PowerShell 7.6 and Windows PowerShell 5.1. The Windows suite also executed the
+explicit Windows PowerShell 5.1 host test.
+
+The final OpenSpec verification mapped all 7 requirements and 24 scenarios to
+runtime code and named tests. The focused verification passed 320 security
+tests, 29 daemon tests, and 315 actor tests. One Windows-only actor test skipped
+locally and passed in native Windows workflow run `31381580072`. Strict
+validation passed all 78 OpenSpec items with no failures.
+
+Done when:
+
+- [x] One immutable shell environment selects the absolute executable path,
+  grammar, path style, process arguments, and PowerShell dialect for the daemon
+  lifetime.
+- [x] Windows selects `pwsh.exe` only for versions from 7.6.4 through 7.6.x. It
+  falls back to `powershell.exe` 5.1 and fails clearly if neither host matches.
+- [x] Execution, parsing, hard deny, approval matching, prompt display, and
+  model context use the same selected environment.
+- [x] Bash treats `pwsh` as an external command. PowerShell treats `bash` as an
+  external command. Only same-language child hosts can recurse.
+- [x] Unknown or incomplete facts cannot produce a stored approval candidate
+  or a safe-verb pass. Stored approval cannot bypass hard deny.
+- [x] Personal sessions state the platform, executable, grammar, and dialect,
+  including sessions that have no project directory.
+- [x] Native Windows tests cover PowerShell 7.6 and Windows PowerShell 5.1.
+  The security review table covers direct, child, retry, and background paths.
+- [x] Consumer guidance and canonical specs match the delivered behavior. The
+  OpenSpec change passes verification, is synchronized, and is archived.
 
 ### Priority: Simplify Tool Execution Context Architecture
 

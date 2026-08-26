@@ -4,6 +4,15 @@
 * text=auto
 *.csv -text
 
+# Verify snapshot files must stay LF on every platform. Windows checkout
+# otherwise produces CRLF and Verify throws VerifiedLineEndingException.
+*.verified.* text eol=lf working-tree-encoding=UTF-8
+*.received.* text eol=lf working-tree-encoding=UTF-8
+
+# Cross-repository evidence uses a canonical byte hash. Keep its checkout
+# bytes stable when Git runs on Windows with automatic CRLF conversion.
+openspec/changes/**/evidence/*.json text eol=lf working-tree-encoding=UTF-8
+
 ###############################################################################
 # Set default behavior for command prompt diff.
 #

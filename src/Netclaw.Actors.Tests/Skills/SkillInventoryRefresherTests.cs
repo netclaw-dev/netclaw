@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillInventoryRefresherTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -31,7 +31,7 @@ public sealed class SkillInventoryRefresherTests : IDisposable
         {
             Feeds = [new SkillFeedSource { Name = "managed" }]
         };
-        var refresher = new SkillInventoryRefresher(_paths, feeds, [], _registry, _index);
+        var refresher = CreateRefresher(feeds, []);
 
         Assert.Empty(refresher.Refresh().AcceptedSkills);
 
@@ -60,7 +60,7 @@ public sealed class SkillInventoryRefresherTests : IDisposable
         {
             new ResolvedExternalSource("external", [externalRoot], AllowSymlinks: false)
         };
-        var refresher = new SkillInventoryRefresher(_paths, feeds, external, _registry, _index);
+        var refresher = CreateRefresher(feeds, external);
 
         refresher.Refresh();
         WriteSkill(_paths.SkillsDirectory, "new-native", "created by mutation");
@@ -121,4 +121,14 @@ public sealed class SkillInventoryRefresherTests : IDisposable
         if (Directory.Exists(_home))
             Directory.Delete(_home, recursive: true);
     }
+
+    private SkillInventoryRefresher CreateRefresher(
+        SkillFeedsConfig feeds,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
+        => new(
+            _paths,
+            feeds,
+            externalSources,
+            _registry,
+            new SkillIndexPublisher(_registry, _index, static (_, _) => true));
 }

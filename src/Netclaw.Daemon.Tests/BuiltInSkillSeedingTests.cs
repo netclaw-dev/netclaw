@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BuiltInSkillSeedingTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -50,6 +50,56 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
 
         var refFiles = Directory.GetFiles(refsDir, "*.md");
         Assert.True(refFiles.Length >= 3, $"Expected at least 3 reference files, found {refFiles.Length}");
+    }
+
+    [Fact]
+    public void Operations_skill_and_project_reference_share_tool_and_directory_order()
+    {
+        var skillDirectory = Path.Combine(AppContext.BaseDirectory, "BuiltInSkills", "netclaw-operations");
+        var skill = File.ReadAllText(Path.Combine(skillDirectory, "SKILL.md"));
+        var projects = File.ReadAllText(Path.Combine(skillDirectory, "references", "projects.md"));
+
+        Assert.Contains("use `file_read` for a known local file read", skill, StringComparison.Ordinal);
+        Assert.Contains("use `web_search` for external discovery", skill, StringComparison.Ordinal);
+        Assert.Contains("use `shell_execute` for local search", skill, StringComparison.Ordinal);
+        Assert.Contains("Do not delegate a known file operation", skill, StringComparison.Ordinal);
+        Assert.Contains("do not use shell only to verify", skill, StringComparison.Ordinal);
+        Assert.Contains("do not attempt a shell redirect first", skill, StringComparison.Ordinal);
+        Assert.Contains("Start with the smallest single shell operation", skill, StringComparison.Ordinal);
+        Assert.Contains("Use one operation per call", skill, StringComparison.Ordinal);
+        Assert.Contains("Keep independent searches and diagnostics separate", skill, StringComparison.Ordinal);
+        Assert.Contains("do not join them with separators or labels", skill, StringComparison.Ordinal);
+        Assert.Contains("Add a pipeline only when the requested result requires it", skill, StringComparison.Ordinal);
+        Assert.Contains("disposable writable work outside a project", skill, StringComparison.Ordinal);
+        Assert.Contains("do not substitute platform temporary storage", skill, StringComparison.Ordinal);
+        Assert.Contains("After an approval-required result", skill, StringComparison.Ordinal);
+        Assert.Contains("A `Tool access denied:` result is terminal", skill, StringComparison.Ordinal);
+        Assert.Contains("Do not probe a named project path before declaring it", skill, StringComparison.Ordinal);
+        Assert.Contains("user-provided fallback before other tools", skill, StringComparison.Ordinal);
+        Assert.Contains("Use the task's first project path exactly", skill, StringComparison.Ordinal);
+        Assert.Contains("Use `load_tool` directly for a known exact tool name", skill, StringComparison.Ordinal);
+        Assert.Contains("Use `search_tools` when the capability is known", skill, StringComparison.Ordinal);
+
+        var statements = new[]
+        {
+            "For declared-project work, omit `WorkingDirectory`",
+            "For one call in a named child directory",
+            "Use `session_dir` for disposable writable work outside a project",
+            "Use an inline directory change only when",
+            "Start with the smallest single shell operation",
+            "Use one operation per call",
+            "Keep independent searches and diagnostics separate",
+            "do not join them with separators or labels",
+            "Add a pipeline only when the requested result requires it",
+            "After an approval-required result",
+            "A `Tool access denied:` result is terminal",
+            "Apply one `Tool execution deferred:` correction unchanged"
+        };
+        foreach (var statement in statements)
+        {
+            Assert.Contains(statement, skill, StringComparison.Ordinal);
+            Assert.Contains(statement, projects, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

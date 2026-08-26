@@ -9,6 +9,7 @@ using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -68,6 +69,8 @@ public sealed class ToolIndexUpdaterTests
                 TrustAudience.Public,
                 ShellExecutionMode.Off,
                 UsedStrictFallback: true),
+            shellCommandPolicy: new ShellCommandPolicy(),
+            toolPathPolicy: new ToolPathPolicy([]),
             featureGates: new FeatureGates(SubAgentsEnabled: false, SchedulingEnabled: false));
         var registry = new ToolRegistry();
         registry.Register(AIFunctionFactory.Create(() => "ok", "file_read"), "file");
@@ -97,7 +100,8 @@ public sealed class ToolIndexUpdaterTests
         await updater.StartAsync(TestContext.Current.CancellationToken);
 
         var publicIndex = toolIndexLayer.GetContextLayer(TrustAudience.Public);
-        Assert.Contains("file: file_read", publicIndex);
+        Assert.Contains("[deferred first-party tools", publicIndex);
+        Assert.Contains("file_read:", publicIndex);
         Assert.DoesNotContain("set_reminder", publicIndex);
         Assert.DoesNotContain("memorizer", publicIndex);
     }

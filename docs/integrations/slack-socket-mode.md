@@ -65,6 +65,7 @@ Supported Slack settings:
 - `DefaultChannelId` - optional hard filter to one channel ID
 - `DefaultChannelName` - optional channel name resolved at startup
 - `MentionOnly` - if `true`, plain `message` events require bot mention
+- `MentionRequiredInThreadByChannel` - per-channel map (channel ID → bool); when `true` for a channel, thread replies there require a bot mention even in an active thread, and a mention re-reads the messages held since the last reply; unset channels default to `false`
 - `AllowDirectMessages` - defaults to `false` (secure by default)
 - `AllowedChannelIds` - defaults to empty array (`[]`), so no channels are allowed until explicitly configured
 - `AllowedUserIds` - defaults to empty array (`[]`), meaning no user filter is applied beyond channel/DM policy

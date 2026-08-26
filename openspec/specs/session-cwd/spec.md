@@ -5,6 +5,56 @@ declares it via `set_working_directory`. The project directory is the
 load-bearing input to the approval gate's safe-space root set: declaring
 it expands the trust boundary for shell invocations under that tree.
 ## Requirements
+
+### Requirement: Relative first-party filesystem paths use session-owned bases
+
+First-party filesystem tools SHALL resolve a relative path against the declared
+project directory when one exists. Otherwise, they SHALL use the immutable
+session directory. If neither base exists, they SHALL return an
+`invalid_context` correction. They SHALL NOT use the daemon process current
+directory. The canonical path SHALL pass existing scope and protected-path
+policies.
+
+#### Scenario: Relative read uses declared project
+
+- **GIVEN** a project directory `/workspace/project` and session `/session/current`
+- **WHEN** `file_read` receives `src/App.cs`
+- **THEN** it authorizes and reads `/workspace/project/src/App.cs`
+- **AND** it does not use the daemon current directory
+
+#### Scenario: Relative write falls back to session scratch
+
+- **GIVEN** no declared project and session directory `/session/current`
+- **WHEN** `file_write` receives `notes/result.md`
+- **THEN** it resolves `/session/current/notes/result.md`
+- **AND** the existing session write policy decides authorization
+
+#### Scenario: Traversal receives no implicit authority
+
+- **GIVEN** project directory `/workspace/project`
+- **WHEN** a file tool receives `../../outside.txt`
+- **THEN** it canonicalizes the result before policy evaluation
+- **AND** it denies the call when the path is outside authorized roots
+
+#### Scenario: Missing base returns correction
+
+- **GIVEN** a tool context has no project or session directory
+- **WHEN** a first-party filesystem tool receives a relative path
+- **THEN** it returns `invalid_context`
+- **AND** it performs no filesystem access
+
+### Requirement: Failed filesystem operations do not change project context
+
+A denied or failed `set_working_directory` or filesystem call SHALL NOT change
+the project directory or recent-file context. Only a validated successful
+project declaration SHALL replace the project and reload its instructions.
+
+#### Scenario: Denied declaration leaves prior project intact
+
+- **GIVEN** a session declares `/workspace/old`
+- **WHEN** `set_working_directory` is denied for `/workspace/new`
+- **THEN** the project directory remains `/workspace/old`
+- **AND** project instructions are not loaded from the denied path
 ### Requirement: Session-scoped project directory
 
 Each session SHALL maintain a mutable `ProjectDirectory` in `WorkingContext`
@@ -54,7 +104,13 @@ The tool SHALL validate that the target path is a real directory,
 resolve it to an absolute path, and validate it against the audience
 trust profile's read-allowed roots. The tool SHALL be profile-managed
 so that audiences without directory navigation privileges (Public,
-Team by default) cannot use it.
+Team by default) cannot use it. The working-directory declaration is
+deliberately NOT granted interactive Personal shell-equivalent reach
+(netclaw-dev/netclaw#1724): it SHALL be clamped to the autonomous zone
+(session directory, project directory, and configured global read
+roots) in every audience and mode, because declaring a working
+directory widens the shell safe-verb auto-approve zone and loads
+project identity files into the system prompt.
 
 The tool description visible to the model SHALL frame the tool as
 "declare your project root and expand your trusted scope so shell
@@ -92,11 +148,17 @@ approval friction depends on doing so when the work is project-scoped.
 - **THEN** the project directory remains unchanged
 - **AND** the tool returns an error indicating the directory does not exist
 
-#### Scenario: Personal audience allows any valid directory
+#### Scenario: Personal audience clamps to the autonomous zone
 
 - **GIVEN** a session with personal audience (`ToolFilesystemMode.All`)
-- **WHEN** the agent invokes `set_working_directory` with any valid directory
-- **THEN** the project directory is updated
+- **AND** the target directory is outside the autonomous zone
+  (session directory, project directory, and configured global read roots)
+- **WHEN** the agent invokes `set_working_directory` with that valid directory
+- **THEN** the project directory is NOT updated
+- **AND** the tool returns an error indicating the target is outside the
+  session, project, or configured autonomous roots
+- **AND** `file_read` / `file_list` / `attach_file` on the same path still
+  resolve (interactive Personal shell-equivalent reach, netclaw-dev/netclaw#1724)
 
 #### Scenario: set_working_directory not exposed to public audience
 
@@ -164,38 +226,46 @@ the approval policy depends on.
 
 ### Requirement: Shell tool failure-path hint for cwd outside safe spaces
 
-`ShellTool` SHALL include a one-line hint in the tool result returned
-to the model when a call is denied because its cwd is outside both
-`session_dir` and `project_dir`. The hint SHALL suggest
-`set_working_directory <path>` with the path that triggered the denial,
-in a format recognizable to the agent so it can self-correct without a
-roundtrip through the user.
+`ShellTool` SHALL include a one-line remediation hint in the tool result returned to the model when a call is denied because its cwd is outside both `session_dir` and `project_dir` and a safe correction is available.
 
-The hint SHALL only be emitted when the denial reason is "cwd outside
-safe spaces" and `set_working_directory` is in the audience's tool
-exposure list. The hint SHALL NOT be emitted for hard-deny-list refusals
-or for `ToolPathPolicy` denials (those have different remediation paths).
+For a non-temp cwd, the hint SHALL suggest `set_working_directory <path>` only when that tool is exposed and the same filesystem policy used by `set_working_directory` accepts the exact path without substitution. For a Personal cwd equal to the captured platform temporary root, the hint SHALL instead identify the exact session directory as private scratch and SHALL NOT suggest declaring the platform temporary root. Team and Public shell calls retain their existing earlier denial boundary, and Public results SHALL retain existing path redaction.
 
-#### Scenario: Denial in foreign tree includes set_working_directory hint
+The hint SHALL NOT be emitted for hard-deny-list refusals, `ToolPathPolicy` denials, an unavailable session scratch path, or a foreign non-temp cwd that `set_working_directory` would reject.
+
+#### Scenario: Denial in declarable foreign tree includes set_working_directory hint
 
 - **GIVEN** a Personal session with `project_dir` not set
+- **AND** the shared directory policy accepts `~/repos/bar/`
 - **WHEN** the agent invokes `shell_execute` with cwd `~/repos/bar/`
 - **AND** the user denies the resulting prompt
-- **THEN** the tool result includes a hint pointing at
-  `set_working_directory ~/repos/bar/`
+- **THEN** the tool result includes a hint pointing at `set_working_directory ~/repos/bar/`
+
+#### Scenario: Denied platform-temp retry retains scratch recommendation
+
+- **GIVEN** an agent received the session-scratch correction for the platform temporary root
+- **AND** it repeated the original call unchanged to request ordinary approval
+- **WHEN** the user denies that approval
+- **THEN** the tool result identifies the exact session directory as private scratch
+- **AND** it does not suggest `set_working_directory` for the platform temporary root
+
+#### Scenario: Undeclarable foreign tree has no project declaration hint
+
+- **GIVEN** a non-temp cwd is outside the roots accepted by `set_working_directory`
+- **WHEN** the user denies the resulting shell prompt
+- **THEN** the tool result does not suggest declaring that cwd
 
 #### Scenario: Hint is not emitted for hard-deny refusals
 
 - **GIVEN** a hard-deny-list block on the command
 - **WHEN** `shell_execute` returns the deny error
-- **THEN** the result does NOT include a `set_working_directory` hint
+- **THEN** the result does NOT include a working-directory remediation hint
 
-#### Scenario: Hint is not emitted when set_working_directory is unavailable
+#### Scenario: Hint is not emitted when remediation tools are unavailable
 
-- **GIVEN** a Public session where `set_working_directory` is not in
-  the tool exposure list
+- **GIVEN** a Public session where `set_working_directory` is not exposed
+- **AND** no private session-scratch correction is available
 - **WHEN** a shell call is denied for cwd-outside-safe-space
-- **THEN** the result does NOT include a `set_working_directory` hint
+- **THEN** the result does NOT include a working-directory remediation hint
 
 ### Requirement: set_working_directory expands the approval safe space
 
@@ -279,3 +349,100 @@ For Team and Personal turns whose `WorkingContext.ProjectDirectory` is declared 
 - **GIVEN** a repository with a credential-bearing remote URL
 - **WHEN** Git working context is rendered
 - **THEN** no remote credentials or complete remote URL appears in model-visible context or logs
+
+### Requirement: Project-directory declarations reject control characters
+
+The `set_working_directory` tool SHALL reject a path that contains NUL, CR, or
+LF before filesystem resolution. The tool SHALL return a bounded error without
+echoing the authored path.
+
+#### Scenario: Controlled path cannot become project scope
+
+- **GIVEN** a path contains NUL, CR, or LF
+- **WHEN** an agent calls `set_working_directory` with that path
+- **THEN** the tool returns an error without the authored path
+- **AND** the project scope remains unchanged
+- **AND** project instructions are not loaded from that path
+
+### Requirement: Subagent context announces private session scratch
+
+Before the first model call, the system SHALL include the exact bound `session_dir` in Personal and Team subagent working context and SHALL identify it as private scratch for disposable artifacts. The guidance SHALL preserve an explicitly required platform temporary path. Public subagent context SHALL NOT include the private session path.
+
+The context SHALL be derived from the child run's existing bound session scope. It SHALL NOT add a public protocol field, persist the path as agent identity, create a second scratch directory, or change shell authorization.
+
+#### Scenario: Personal child receives exact scratch path
+
+- **GIVEN** a Personal subagent has bound session directory `/home/user/.netclaw/sessions/example`
+- **WHEN** Netclaw assembles its initial model context
+- **THEN** the context contains `session_dir: /home/user/.netclaw/sessions/example`
+- **AND** it identifies `session_dir` as the location for disposable artifacts
+- **AND** it does not imply that the directory grants shell authority
+
+#### Scenario: Team child receives exact scratch path
+
+- **GIVEN** a Team subagent has a valid bound session directory
+- **WHEN** Netclaw assembles its initial model context
+- **THEN** the context contains that exact directory as private scratch
+- **AND** existing Team tool and shell policy remains unchanged
+
+#### Scenario: Public child retains path redaction
+
+- **GIVEN** a Public subagent has an internal bound session directory
+- **WHEN** Netclaw assembles its initial model context
+- **THEN** the context does not contain that directory
+- **AND** no scratch guidance discloses another private filesystem path
+
+#### Scenario: Explicit platform temporary requirement is preserved
+
+- **GIVEN** a Personal or Team subagent receives scratch guidance
+- **WHEN** its task explicitly requires `/tmp` or the native Windows temporary directory
+- **THEN** the guidance tells the child to preserve that requirement
+- **AND** Netclaw does not rewrite the path or grant authority to it
+
+#### Scenario: Project declaration does not replace session scratch
+
+- **GIVEN** a child has received its initial session scratch context
+- **WHEN** it later calls `set_working_directory` successfully
+- **THEN** its project scope and project instructions update through the existing contract
+- **AND** its bound `session_dir` remains unchanged
+
+### Requirement: Session directory is the private shell scratch location
+
+The system SHALL identify the existing per-session directory as the private scratch location for disposable shell artifacts. Personal and Team model-visible working-context and correction text SHALL provide its absolute path when the agent needs an alternative to the platform temporary root. Public contexts SHALL retain existing path redaction and SHALL NOT receive the private absolute session path. The system SHALL NOT create a second scratch directory, silently substitute the path, or imply that session-directory cleanup occurs as part of this behavior.
+
+#### Scenario: Shell without project scope defaults to session scratch
+
+- **GIVEN** a session has no declared project directory
+- **AND** its session directory is `/home/user/.netclaw/sessions/example`
+- **WHEN** the agent invokes `shell_execute` without an explicit working directory
+- **THEN** the shell working directory is `/home/user/.netclaw/sessions/example`
+- **AND** the working context identifies that directory as session scratch
+
+#### Scenario: Scratch recommendation uses the existing session directory
+
+- **GIVEN** a correction recommends private scratch
+- **WHEN** the correction is rendered for the agent
+- **THEN** it names the exact existing session directory
+- **AND** it does not name a newly created `scratch` child directory
+
+#### Scenario: Public context does not receive private scratch path
+
+- **GIVEN** a Public parent agent or subagent
+- **WHEN** it evaluates a platform-temp shell call
+- **THEN** it does not receive the private session-directory path
+- **AND** existing Public path-redaction behavior remains
+
+#### Scenario: Personal and Team headless context nudges scratch use
+
+- **GIVEN** a Personal or Team headless session
+- **WHEN** its working context is assembled
+- **THEN** the context identifies the exact session directory as private scratch for disposable artifacts
+- **AND** it states that an explicitly required platform-temp path must be preserved
+- **AND** it does not imply that approval prompts or automatic cleanup exist
+
+#### Scenario: No cleanup is implied
+
+- **GIVEN** an agent writes a disposable artifact under the session directory
+- **WHEN** the current session ends
+- **THEN** this capability does not delete or schedule deletion of that artifact
+- **AND** retention remains unchanged until a separate cleanup capability is specified

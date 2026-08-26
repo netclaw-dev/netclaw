@@ -227,4 +227,58 @@ public class ToolArgumentHelperStrictTests
             CultureInfo.CurrentCulture = original;
         }
     }
+
+    [Fact]
+    public void StringDictionary_reads_json_object_with_string_values()
+    {
+        var result = ToolArgumentHelper.GetStringDictionary(
+            Args("Arguments", Json("""{"property":"petabridge-com","monthsBack":"1"}""")),
+            "Arguments");
+
+        Assert.NotNull(result);
+        Assert.Equal("petabridge-com", result["property"]);
+        Assert.Equal("1", result["monthsBack"]);
+    }
+
+    [Fact]
+    public void StringDictionary_rejects_non_string_values()
+    {
+        var error = Assert.Throws<ArgumentException>(() => ToolArgumentHelper.GetStringDictionary(
+            Args("Arguments", Json("""{"monthsBack":1}""")),
+            "Arguments"));
+
+        Assert.Contains("Arguments.monthsBack", error.Message);
+    }
+
+    [Fact]
+    public void StringArray_reads_json_and_clr_arrays_without_coercion()
+    {
+        var pointers = ToolArgumentHelper.GetStringArray(
+            Args("Pointers", Json("""["/status","/items/0/name"]""")),
+            "Pointers");
+        var paths = ToolArgumentHelper.GetStringArray(
+            Args("Paths", new[] { "a.txt", "b.txt" }),
+            "Paths");
+
+        Assert.NotNull(pointers);
+        Assert.Equal(
+            ["/status", "/items/0/name"],
+            pointers);
+        Assert.NotNull(paths);
+        Assert.Equal(
+            ["a.txt", "b.txt"],
+            paths);
+    }
+
+    [Fact]
+    public void StringArray_rejects_scalar_and_non_string_members()
+    {
+        Assert.Throws<ArgumentException>(() => ToolArgumentHelper.GetStringArray(
+            Args("Paths", "a.txt"),
+            "Paths"));
+        var error = Assert.Throws<ArgumentException>(() => ToolArgumentHelper.GetStringArray(
+            Args("Paths", Json("""["a.txt",1]""")),
+            "Paths"));
+        Assert.Contains("Paths[1]", error.Message, StringComparison.Ordinal);
+    }
 }

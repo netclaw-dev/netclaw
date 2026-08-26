@@ -4,14 +4,13 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Provider;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Providers;
+using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -102,35 +101,54 @@ public sealed class ProviderManagerPageTests : IDisposable
         Assert.Equal("https://api.ghe.example.com", vm.NewVendorOptions["GitHubApiBase"]);
     }
 
+    [Fact]
+    public async Task OAuthDeviceFlow_WhenAuthorizationStarts_ShowsTheUserCode()
+    {
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+
+        using var appCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(appCts.Token);
+
+        try
+        {
+            await WaitForConditionAsync(() => terminal.Contains("Provider Manager"), appCts.Token);
+
+            vm.NewProviderType = "openai";
+            vm.CurrentState.Value = ProviderManagerState.AddOAuthDeviceFlow;
+            vm.StateVersion.Value++;
+            vm.RequestRedraw();
+
+            await WaitForConditionAsync(
+                () => terminal.Contains("Starting device authorization..."),
+                appCts.Token);
+
+            vm.OAuth.UserCode = "ABCD-EFGH";
+            vm.OAuth.VerificationUri = "https://auth.openai.com/device";
+            vm.OAuth.FlowState.Value = DeviceFlowState.WaitingForUser;
+            vm.StateVersion.Value++;
+            vm.RequestRedraw();
+
+            using var transitionCts = CancellationTokenSource.CreateLinkedTokenSource(appCts.Token);
+            transitionCts.CancelAfter(TimeSpan.FromSeconds(2));
+            await WaitForConditionAsync(
+                () => terminal.Contains("Enter code: ABCD-EFGH")
+                      && !terminal.Contains("Starting device authorization..."),
+                transitionCts.Token);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(appCts.Token);
+        }
+    }
+
     private (VirtualTerminal Terminal, TerminaApplication App, ProviderManagerViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        ProviderManagerViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/provider", builder =>
-        {
-            builder.RegisterRoute<ProviderManagerPage, ProviderManagerViewModel>(
-                "/provider",
-                _ => new ProviderManagerPage(),
-                _ =>
-                {
-                    capturedVm = new ProviderManagerViewModel(_paths, _registry, _fakeProbe);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<ProviderManagerPage, ProviderManagerViewModel>(
+            "/provider",
+            () => new ProviderManagerPage(),
+            () => new ProviderManagerViewModel(_paths, _registry, _fakeProbe),
+            out input);
 
     [Fact]
     public async Task DeleteKey_OnSecondRow_RemovesHighlightedProvider()
@@ -177,5 +195,14 @@ public sealed class ProviderManagerPageTests : IDisposable
     {
         File.WriteAllText(_paths.NetclawConfigPath,
             JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static async Task WaitForConditionAsync(Func<bool> predicate, CancellationToken ct)
+    {
+        while (!predicate())
+        {
+            ct.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
     }
 }

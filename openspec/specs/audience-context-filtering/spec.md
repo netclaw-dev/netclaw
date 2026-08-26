@@ -15,12 +15,7 @@ fallback.
 ## Requirements
 ### Requirement: Context layer audience filtering
 
-The context layer system SHALL accept a `TrustAudience` parameter on
-`IContextLayerProvider.GetContextLayer()`. Each context layer implementation
-SHALL use the audience to determine what content to return. The
-`ContextAssemblyInput` record SHALL include a `TrustAudience Audience` field.
-When a feature is disabled deployment-wide, the corresponding context layer
-SHALL also return empty even for non-Public audiences.
+The context layer system SHALL accept a `TrustAudience` parameter on `IContextLayerProvider.GetContextLayer()`. Each context layer implementation SHALL use the audience to determine what content to return. The `ContextAssemblyInput` record SHALL include a `TrustAudience Audience` field. When a feature is disabled deployment-wide, the corresponding context layer SHALL also return empty even for non-Public audiences. The skill context layer SHALL use separate Team and Personal index values when source permissions differ.
 
 #### Scenario: Public audience receives no skill index
 
@@ -47,15 +42,23 @@ SHALL also return empty even for non-Public audiences.
 - **THEN** `SkillIndexContextLayer.GetContextLayer(Team)` returns empty string
 - **AND** no skill index appears in the session's system messages
 
-#### Scenario: Team audience receives all allowed context layers
+#### Scenario: Team audience receives allowed context layers
 
 - **WHEN** a Team-audience session assembles context
-- **THEN** all enabled context layers return their full content
+- **THEN** all enabled context layers return their allowed content
 
-#### Scenario: Personal audience receives all allowed context layers
+#### Scenario: Personal audience receives allowed context layers
 
 - **WHEN** a Personal-audience session assembles context
-- **THEN** all enabled context layers return their full content
+- **THEN** all enabled context layers return their allowed content
+
+#### Scenario: MCP prompt server differs by audience
+
+- **GIVEN** Personal can use MCP server `gigatron`
+- **AND** Team cannot use MCP server `gigatron`
+- **WHEN** both audiences request the skill context layer
+- **THEN** the Personal index contains `mcp__gigatron__` prompt skills
+- **AND** the Team index does not reveal those skill names
 
 ### Requirement: Session block path redaction
 
@@ -150,3 +153,4 @@ fail loudly rather than adopt a default audience.
 - **WHEN** the pipeline derives the effective audience
 - **THEN** the derived audience reflects the Personal source audience
 - **AND** no default-audience value participates in the derivation
+

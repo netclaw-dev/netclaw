@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SkillManageTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -22,6 +22,12 @@ namespace Netclaw.Actors.Tools;
     "Create, edit, patch, or delete skills and their resource files. "
     + "Actions: create, edit, patch, delete, write_file, remove_file.",
     Grant = "builtin")]
+[ToolArgumentVariant("Action", "create", Required = ["Content"], Forbidden = ["FilePath", "FileContent", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "edit", Required = ["Content"], Forbidden = ["FilePath", "FileContent", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "patch", Required = ["OldString", "NewString"], Forbidden = ["Content", "FileContent"])]
+[ToolArgumentVariant("Action", "delete", Forbidden = ["Content", "FilePath", "FileContent", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "write_file", Required = ["FilePath", "FileContent"], Forbidden = ["Content", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "remove_file", Required = ["FilePath"], Forbidden = ["Content", "FileContent", "OldString", "NewString", "ReplaceAll"])]
 public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params>
 {
     [GeneratedRegex(@"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")]
@@ -437,6 +443,8 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
 
     private string? GuardReadOnly(SkillEntry skill, string verb)
     {
+        if (skill.Source is not FileSkillSource)
+            return $"Cannot {verb} remote skills. The source server owns this skill.";
         if (IsSystemCategory(skill))
             return $"Cannot {verb} system skills. System skills are read-only.";
         if (IsServerFeedSkill(skill))

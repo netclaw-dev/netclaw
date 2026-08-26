@@ -39,7 +39,12 @@ Set TypingSpeed 30ms
 
 # Determinism pins for stable screenshot pixels.
 Set CursorBlink false
+Set Framerate 60
 Set Theme "Catppuccin Mocha"
+
+# Record every frame as a lossless PNG. The harness selects the final frame
+# after VHS exits, because the Screenshot command can read a stale browser frame.
+Output "/tmp/shot-frames-__TAPE_NAME__/"
 
 Hide
 

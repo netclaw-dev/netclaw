@@ -1,0 +1,439 @@
+﻿{
+  Reminder: {
+    type: object,
+    properties: {
+      Id: {
+        type: string,
+        description: Stable identifier for this reminder (kebab-case slug, e.g. 'daily-standup'). If a reminder with this ID exists it will be updated.
+      },
+      Name: {
+        type: string,
+        description: A short human-readable title for this reminder.
+      },
+      Prompt: {
+        type: string,
+        description: Execution instructions for this reminder.
+      },
+      ScheduleType: {
+        type: string,
+        description: Schedule type: 'once', 'interval', or 'cron'.
+      },
+      Schedule: {
+        type: string,
+        description: Schedule value: relative time, ISO 8601 datetime, interval duration, or cron expression (optional 'CRON_TZ=<IANA-time-zone-id>' prefix for timezone-aware cron, e.g. 'CRON_TZ=Europe/Brussels 0 9 * * *').
+      },
+      DeliveryKind: {
+        type: string,
+        description: How to deliver results: 'current_session' (reply here), 'channel' (post to a target), or 'none' (silent execution).
+      },
+      DeliveryTransport: {
+        type: string,
+        description: Transport for channel delivery (e.g., 'slack' or 'discord'). Required when delivery_kind='channel'.
+      },
+      DeliveryAddress: {
+        type: string,
+        description: Target for channel delivery (e.g., '#general', '@user', '<@discordUserId>', channel ID). Required when delivery_kind='channel'.
+      },
+      DeliveryRequired: {
+        type: boolean,
+        description: Fail execution if delivery doesn't succeed. Default true. Set false for audit/cleanup tasks.
+      },
+      DeliveryInstructions: {
+        type: string,
+        description: Optional guidance for what to include in the delivery to the user. Content guidance only.
+      },
+      Audience: {
+        type: string,
+        description: Trust audience for this reminder's execution: 'personal' (all tools including web_search, shell), 'team' (restricted tools), or 'public' (minimal tools). Omit to inherit the creating session/channel audience.
+      },
+      ExpiresIn: {
+        type: string,
+        description: Optional expiration for recurring reminders. After this duration, the reminder auto-disables. Use relative time like '24h', '7d'. Recommended for task-specific reminders (e.g., CI checks, deploy monitoring).
+      },
+      _rationale: {
+        type: string,
+        description: State your intent for this tool call in one sentence — what are you trying to accomplish and why?
+      },
+      _timeout_seconds: {
+        type: integer,
+        description: Requested timeout in seconds. Only set when the default is insufficient.
+      },
+      _background: {
+        type: boolean,
+        description: Set to true to run this tool in the background and receive results later.
+      }
+    },
+    required: [
+      Id,
+      Name,
+      Prompt,
+      ScheduleType,
+      Schedule,
+      _rationale
+    ],
+    additionalProperties: false,
+    oneOf: [
+      {
+        properties: {
+          DeliveryKind: {
+            enum: [
+              current_session
+            ]
+          }
+        },
+        required: [
+          DeliveryKind
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                DeliveryTransport
+              ]
+            },
+            {
+              required: [
+                DeliveryAddress
+              ]
+            }
+          ]
+        }
+      },
+      {
+        properties: {
+          DeliveryKind: {
+            enum: [
+              channel
+            ]
+          }
+        },
+        required: [
+          DeliveryKind,
+          DeliveryTransport,
+          DeliveryAddress
+        ]
+      },
+      {
+        properties: {
+          DeliveryKind: {
+            enum: [
+              none
+            ]
+          }
+        },
+        required: [
+          DeliveryKind
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                DeliveryTransport
+              ]
+            },
+            {
+              required: [
+                DeliveryAddress
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  SkillManage: {
+    type: object,
+    properties: {
+      Action: {
+        type: string,
+        description: Action to perform: create, edit, patch, delete, write_file, remove_file
+      },
+      Name: {
+        type: string,
+        description: Skill name (lowercase letters, numbers, hyphens)
+      },
+      Content: {
+        type: string,
+        description: Full SKILL.md content for create/edit actions
+      },
+      FilePath: {
+        type: string,
+        description: Relative file path within the skill for write_file/remove_file/patch
+      },
+      FileContent: {
+        type: string,
+        description: File content for write_file action
+      },
+      OldString: {
+        type: string,
+        description: String to find for patch action
+      },
+      NewString: {
+        type: string,
+        description: Replacement string for patch action
+      },
+      ReplaceAll: {
+        type: boolean,
+        description: Replace all occurrences for patch action (default: false)
+      },
+      _rationale: {
+        type: string,
+        description: State your intent for this tool call in one sentence — what are you trying to accomplish and why?
+      },
+      _timeout_seconds: {
+        type: integer,
+        description: Requested timeout in seconds. Only set when the default is insufficient.
+      },
+      _background: {
+        type: boolean,
+        description: Set to true to run this tool in the background and receive results later.
+      }
+    },
+    required: [
+      Action,
+      Name,
+      _rationale
+    ],
+    additionalProperties: false,
+    oneOf: [
+      {
+        properties: {
+          Action: {
+            enum: [
+              create
+            ]
+          }
+        },
+        required: [
+          Action,
+          Content
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                FilePath
+              ]
+            },
+            {
+              required: [
+                FileContent
+              ]
+            },
+            {
+              required: [
+                OldString
+              ]
+            },
+            {
+              required: [
+                NewString
+              ]
+            },
+            {
+              required: [
+                ReplaceAll
+              ]
+            }
+          ]
+        }
+      },
+      {
+        properties: {
+          Action: {
+            enum: [
+              edit
+            ]
+          }
+        },
+        required: [
+          Action,
+          Content
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                FilePath
+              ]
+            },
+            {
+              required: [
+                FileContent
+              ]
+            },
+            {
+              required: [
+                OldString
+              ]
+            },
+            {
+              required: [
+                NewString
+              ]
+            },
+            {
+              required: [
+                ReplaceAll
+              ]
+            }
+          ]
+        }
+      },
+      {
+        properties: {
+          Action: {
+            enum: [
+              patch
+            ]
+          }
+        },
+        required: [
+          Action,
+          OldString,
+          NewString
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                Content
+              ]
+            },
+            {
+              required: [
+                FileContent
+              ]
+            }
+          ]
+        }
+      },
+      {
+        properties: {
+          Action: {
+            enum: [
+              delete
+            ]
+          }
+        },
+        required: [
+          Action
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                Content
+              ]
+            },
+            {
+              required: [
+                FilePath
+              ]
+            },
+            {
+              required: [
+                FileContent
+              ]
+            },
+            {
+              required: [
+                OldString
+              ]
+            },
+            {
+              required: [
+                NewString
+              ]
+            },
+            {
+              required: [
+                ReplaceAll
+              ]
+            }
+          ]
+        }
+      },
+      {
+        properties: {
+          Action: {
+            enum: [
+              write_file
+            ]
+          }
+        },
+        required: [
+          Action,
+          FilePath,
+          FileContent
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                Content
+              ]
+            },
+            {
+              required: [
+                OldString
+              ]
+            },
+            {
+              required: [
+                NewString
+              ]
+            },
+            {
+              required: [
+                ReplaceAll
+              ]
+            }
+          ]
+        }
+      },
+      {
+        properties: {
+          Action: {
+            enum: [
+              remove_file
+            ]
+          }
+        },
+        required: [
+          Action,
+          FilePath
+        ],
+        not: {
+          anyOf: [
+            {
+              required: [
+                Content
+              ]
+            },
+            {
+              required: [
+                FileContent
+              ]
+            },
+            {
+              required: [
+                OldString
+              ]
+            },
+            {
+              required: [
+                NewString
+              ]
+            },
+            {
+              required: [
+                ReplaceAll
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

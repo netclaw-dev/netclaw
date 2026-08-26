@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundRoutingTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -240,6 +240,41 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal("/tmp/project", received.WorkingDirectory);
+    }
+
+    [Fact]
+    public async Task ExplicitBackground_PersistsResolvedProjectDirectoryWhenArgumentIsOmitted()
+    {
+        var executor = new EchoExecutor();
+        var probe = CreateTestProbe("pipeline-probe-resolved-workingdir");
+        var jobManagerProbe = CreateTestProbe("job-manager-resolved-workingdir");
+        var fakeJobManager = Sys.ActorOf(Props.Create(() => new FakeJobManager(jobManagerProbe.Ref)));
+
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-bg-resolved-dir", "shell_execute", new Dictionary<string, object?>
+            {
+                ["command"] = "dotnet test",
+                ["_background"] = true,
+                ["_rationale"] = "run tests in the active project"
+            })
+        };
+
+        await new SessionToolPipelineTestFixture(
+                executor, toolCalls, new SessionId("test/background-resolved-dir"), probe.Ref)
+            .From(TestMessageSource())
+            .InProject("/tmp/active-project")
+            .WithBackgroundJobs(fakeJobManager)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("/tmp/active-project", received.WorkingDirectory);
     }
 
     [Fact]

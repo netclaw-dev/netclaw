@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="IToolExecutor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -81,6 +82,15 @@ public interface IToolExecutor
     {
         yield return new ToolCompletedUpdate(await ExecuteAsync(toolCall, context, ct));
     }
+}
+
+internal interface ISessionScratchRetryAwareExecutor
+{
+    ApprovalShell Shell { get; }
+
+    void MarkSessionScratchRetry(
+        ToolExecutionContext context,
+        ToolAgentCorrection.SessionScratchSuggested correction);
 }
 
 /// <summary>

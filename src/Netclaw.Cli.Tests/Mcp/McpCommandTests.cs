@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpCommandTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -291,6 +291,92 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal("All", personal.GetProperty("McpServersMode").GetString());
     }
 
+    // ── Add-time unconditional OAuth hint ──
+    //
+    // The daemon owns OAuth discovery (RFC 9728/8414, via McpOAuthClientRegistrar).
+    // The CLI does not probe the endpoint; it prints an unconditional hint for any
+    // HTTP/SSE server added without an explicit Authorization header.
+
+    [Theory]
+    [InlineData("stdio")]
+    [InlineData("http-with-header")]
+    public async Task Add_DoesNotPrintOAuthHint_ForStdioOrExplicitAuthorizationHeader(string scenario)
+    {
+        var args = scenario is "stdio"
+            ? new[] { "mcp", "add", "--transport", "stdio", "local", "--", "npx", "-y", "@local/mcp" }
+            : new[] { "mcp", "add", "--transport", "http", "--header", "Authorization: Bearer test-token", "myapi", "https://api.example.com/mcp" };
+
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.DoesNotContain("Next steps:", output);
+        Assert.DoesNotContain("netclaw mcp auth", output);
+        Assert.Contains("Next: run `netclaw mcp permissions`", output);
+    }
+
+    [Fact]
+    public async Task Add_HttpServerWithoutAuthorizationHeader_PrintsUnconditionalAuthHint()
+    {
+        var args = new[] { "mcp", "add", "--transport", "http", "plain", "https://plain.example/mcp" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.Contains("Next steps:", output);
+        Assert.Contains("If this server requires OAuth, authorize first: netclaw mcp auth plain", output);
+        Assert.Contains("Then grant tools: netclaw mcp permissions", output);
+    }
+
+    [Fact]
+    public async Task Add_WithAuthFlag_NoDaemon_PrintsFallbackHint()
+    {
+        var args = new[] { "mcp", "add", "--auth", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.Contains("Next steps:", output);
+        Assert.Contains("authorize first: netclaw mcp auth notion", output);
+        Assert.Contains("--auth: daemon API not available. Run `netclaw mcp auth notion` once the daemon is running.", output);
+    }
+
+    [Fact]
+    public async Task Add_WithAuthFlag_DaemonRejects_PropagatesAuthErrorForAddedServer()
+    {
+        var args = new[] { "mcp", "add", "--auth", "--transport", "http", "notion", "https://mcp.notion.com/mcp" };
+        var daemonApi = CreateDaemonApi(request => request.RequestUri!.AbsolutePath switch
+        {
+            "/api/mcp/oauth/start/notion" => new HttpResponseMessage(HttpStatusCode.Forbidden),
+            _ => new HttpResponseMessage(HttpStatusCode.NotFound),
+        });
+
+        var exitCode = await McpCommand.RunAsync(
+            args, _paths, daemonApi, output: _output);
+
+        // The auth flow must target the added server ('notion'), not the '--auth'
+        // flag position — a wrong name would print "MCP server '--auth' not found."
+        Assert.Equal(1, exitCode);
+        Assert.Contains("HTTP 403 Forbidden", _output.ToString());
+        Assert.Contains("notion", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Add_WithAuthFlag_OnStdio_Ignored()
+    {
+        var args = new[] { "mcp", "add", "--auth", "--transport", "stdio", "local", "--", "npx", "-y", "@local/mcp" };
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var output = _output.ToString();
+        Assert.Contains("--auth ignored: OAuth is only for HTTP/SSE servers.", output);
+        Assert.Contains("netclaw mcp permissions", output);
+    }
+
     [Fact]
     public async Task List_NoServers_ShowsEmptyMessage()
     {
@@ -575,6 +661,155 @@ public sealed class McpCommandTests : IDisposable
         var message = await McpCommand.ReadMcpErrorAsync(response);
 
         Assert.Equal("HTTP 502 Bad Gateway", message);
+    }
+
+    [Fact]
+    public async Task Tools_Revoke_AllMcpServersMode_WritesDenyOverrideNotGrantAllowlist()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All" } } } }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--revoke", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var personal = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Personal");
+        Assert.Equal(
+            "Deny",
+            personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides").GetProperty("dropbox/delete").GetString());
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_ClearsDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox/delete": "Deny" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/delete", out _));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_ClearsAliasDenyOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox__delete": "Deny" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.False(overrides.TryGetProperty("dropbox/delete", out _));
+        Assert.False(overrides.TryGetProperty("dropbox__delete", out _));
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_PreservesApprovalOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "ToolOverrides": { "dropbox/copy": "Approval" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "copy", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.Equal("Approval", overrides.GetProperty("dropbox/copy").GetString());
+    }
+
+    [Fact]
+    public async Task Tools_Snapshot_AllMcpServersMode_IsRejected()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Personal": { "McpServersMode": "All" } } } }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--snapshot", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("All MCP server mode", _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Tools_Grant_AllMcpServersMode_OverServerDefaultDeny_WritesApprovalOverride()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Tools": { "AudienceProfiles": { "Personal": {
+            "McpServersMode": "All",
+            "ApprovalPolicy": { "McpServerDefaults": { "dropbox": "Deny" } }
+          } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--grant", "copy", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var overrides = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles")
+            .GetProperty("Personal").GetProperty("ApprovalPolicy").GetProperty("ToolOverrides");
+        Assert.Equal("Approval", overrides.GetProperty("dropbox/copy").GetString());
+    }
+
+    private static DaemonApi ToolsDaemonApi(string serverName, params string[] tools)
+    {
+        var body = JsonSerializer.Serialize(tools);
+        return CreateDaemonApi(request => request.RequestUri!.AbsolutePath == $"/api/mcp/tools/{serverName}"
+            ? new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(body, Encoding.UTF8, "application/json"),
+            }
+            : new HttpResponseMessage(HttpStatusCode.NotFound));
     }
 
     private static JsonDocument ReadConfigFile(string path)

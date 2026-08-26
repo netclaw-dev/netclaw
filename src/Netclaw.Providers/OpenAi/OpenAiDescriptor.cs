@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="OpenAiDescriptor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -25,7 +25,7 @@ public sealed class OpenAiDescriptor : IProviderDescriptor
 
     // The Codex backend gates model catalog entries by Codex CLI client version.
     // This must track the official @openai/codex release, not Netclaw's version.
-    internal const string CodexModelCatalogClientVersion = "0.135.0";
+    internal const string CodexModelCatalogClientVersion = "0.147.0";
 
     private readonly HttpClient _httpClient;
     private readonly TimeProvider _timeProvider;

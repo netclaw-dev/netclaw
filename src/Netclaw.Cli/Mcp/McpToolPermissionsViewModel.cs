@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpToolPermissionsViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -94,12 +94,11 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         catch (Exception ex)
         {
-            StatusMessage.Value = $"Could not reach daemon: {ex.Message}";
-            NotifyStateChanged();
+            await SetStatusAsync($"Could not reach daemon: {ex.Message}");
             return;
         }
 
-        Servers.Clear();
+        var servers = new List<(string Name, string Status, int ToolCount)>();
 
         // A 200 response whose body is not the expected object shape (or a server entry missing
         // its "state") would otherwise throw out of this fire-and-forget task. Surface it as a
@@ -112,41 +111,53 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
                     ? stateEl.GetString() ?? "unknown"
                     : "unknown";
                 var toolCount = prop.Value.TryGetProperty("toolCount", out var tc) ? tc.GetInt32() : 0;
-                Servers.Add((prop.Name, state, toolCount));
+                servers.Add((prop.Name, state, toolCount));
             }
         }
         catch (Exception ex)
         {
-            StatusMessage.Value = $"Could not read MCP server statuses: {ex.Message}";
-            NotifyStateChanged();
+            await SetStatusAsync($"Could not read MCP server statuses: {ex.Message}");
             return;
         }
 
+        ToolAudienceProfiles profiles;
         try
         {
-            Profiles = LoadToolConfig().AudienceProfiles;
+            profiles = LoadToolConfig().AudienceProfiles;
         }
         catch (Exception ex)
         {
-            StatusMessage.Value = $"Could not load MCP permissions config: {ex.Message}";
-            NotifyStateChanged();
+            await SetStatusAsync($"Could not load MCP permissions config: {ex.Message}");
             return;
         }
 
-        if (Servers.Count == 0)
-            StatusMessage.Value = "No MCP servers connected. Start the daemon and configure servers first.";
-        else
+        await InvokeAsync(() =>
         {
-            StatusMessage.Value = "";
-            CurrentState.Value = ToolPermissionsState.ServerList;
-        }
+            Servers.Clear();
+            Servers.AddRange(servers);
+            Profiles = profiles;
 
-        NotifyStateChanged();
+            if (Servers.Count == 0)
+                StatusMessage.Value = "No MCP servers connected. Start the daemon and configure servers first.";
+            else
+            {
+                StatusMessage.Value = "";
+                CurrentState.Value = ToolPermissionsState.ServerList;
+            }
+
+            NotifyStateChanged();
+        });
     }
 
     public void SelectServer(McpServerName serverName)
     {
+        if (CurrentState.Value != ToolPermissionsState.ServerList)
+            return;
+
         SelectedServer = serverName.Value;
+        StatusMessage.Value = $"Loading tools for {serverName.Value}...";
+        CurrentState.Value = ToolPermissionsState.Loading;
+        NotifyStateChanged();
         _ = LoadToolsForServerAsync(serverName);
     }
 
@@ -176,29 +187,41 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
     private async Task LoadToolsForServerAsync(McpServerName serverName)
     {
-        StatusMessage.Value = $"Loading tools for {serverName.Value}...";
-        NotifyStateChanged();
-
         try
         {
             var tools = await _daemonApi.GetMcpToolNamesAsync(serverName.Value, CancellationToken.None);
-            DiscoveredTools.Clear();
-            DiscoveredTools.AddRange(tools);
+            await InvokeAsync(() =>
+            {
+                DiscoveredTools.Clear();
+                DiscoveredTools.AddRange(tools);
 
-            // Initialize pending grants from current config if not already edited
-            if (!_pendingGrants.ContainsKey(serverName.Value))
-                InitializePendingGrantsFromConfig(serverName);
+                // Initialize pending grants from current config if not already edited
+                if (!_pendingGrants.ContainsKey(serverName.Value))
+                    InitializePendingGrantsFromConfig(serverName);
 
-            StatusMessage.Value = "";
-            CurrentState.Value = ToolPermissionsState.ToolGrid;
+                StatusMessage.Value = "";
+                CurrentState.Value = ToolPermissionsState.ToolGrid;
+                NotifyStateChanged();
+            });
         }
         catch (Exception ex)
         {
-            StatusMessage.Value = $"Error loading tools: {ex.Message}";
+            // The state must return to the server list on error. A failed request must not
+            // strand the user on the Loading screen with no visible exit.
+            await InvokeAsync(() =>
+            {
+                StatusMessage.Value = $"Error loading tools: {ex.Message}";
+                CurrentState.Value = ToolPermissionsState.ServerList;
+                NotifyStateChanged();
+            });
         }
-
-        NotifyStateChanged();
     }
+
+    private Task SetStatusAsync(string status) => InvokeAsync(() =>
+    {
+        StatusMessage.Value = status;
+        NotifyStateChanged();
+    });
 
     private void InitializePendingGrantsFromConfig(McpServerName serverName)
     {
@@ -291,8 +314,11 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else
         {
-            var exactKey = $"{SelectedServer}/{toolName.Value}";
-            current = ResolveProfile(SelectedAudience).ApprovalPolicy?.ToolOverrides.TryGetValue(exactKey, out var configMode) == true
+            current = TryGetExactToolOverride(
+                ResolveProfile(SelectedAudience).ApprovalPolicy,
+                SelectedServer,
+                toolName.Value,
+                out var configMode)
                 ? configMode
                 : null;
         }
@@ -329,8 +355,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         }
         else if (approvalPolicy is not null)
         {
-            var exactKey = $"{SelectedServer}/{toolName.Value}";
-            if (approvalPolicy.ToolOverrides.TryGetValue(exactKey, out var configExact))
+            if (TryGetExactToolOverride(approvalPolicy, SelectedServer, toolName.Value, out var configExact))
                 return (configExact, false);
         }
 
@@ -363,8 +388,12 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             && approvalPolicy.McpServerDefaults.TryGetValue(SelectedServer, out var configMode))
             return configMode;
 
-        return ToolApprovalMode.Auto;
+        return approvalPolicy?.DefaultMode ?? ToolApprovalMode.Auto;
     }
+
+    /// <summary>Checks whether the selected profile exposes all MCP servers.</summary>
+    private bool UsesAllMcpServersMode()
+        => ResolveProfile(SelectedAudience).McpServersMode == ToolProfileMode.All;
 
     public bool IsToolGranted(ToolName toolName)
     {
@@ -372,6 +401,15 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             return false;
 
         var audienceName = AudienceName(SelectedAudience);
+
+        if (UsesAllMcpServersMode())
+        {
+            if (_pendingServerAccess.TryGetValue((audienceName, SelectedServer), out var pendingAllAccess)
+                && !pendingAllAccess)
+                return false;
+
+            return GetEffectiveMode(toolName).Mode != ToolApprovalMode.Deny;
+        }
 
         // Check pending grants first
         if (_pendingGrants.TryGetValue(SelectedServer, out var serverGrants)
@@ -414,6 +452,22 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
 
         var audienceName = AudienceName(SelectedAudience);
 
+        if (UsesAllMcpServersMode())
+        {
+            var enabledMode = GetServerDefault() == ToolApprovalMode.Deny
+                ? ToolApprovalMode.Approval
+                : (ToolApprovalMode?)null;
+
+            foreach (var tool in DiscoveredTools)
+            {
+                _pendingToolOverrides[(audienceName, SelectedServer, tool)] =
+                    anyGranted ? ToolApprovalMode.Deny : enabledMode;
+            }
+
+            NotifyStateChanged();
+            return;
+        }
+
         if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
         {
             serverGrants = [];
@@ -433,6 +487,24 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             return;
 
         var audienceName = AudienceName(SelectedAudience);
+
+        if (UsesAllMcpServersMode())
+        {
+            var overrideKey = (audienceName, SelectedServer, toolName.Value);
+            if (GetEffectiveMode(toolName).Mode == ToolApprovalMode.Deny)
+            {
+                _pendingToolOverrides[overrideKey] = GetServerDefault() == ToolApprovalMode.Deny
+                    ? ToolApprovalMode.Approval
+                    : null;
+            }
+            else
+            {
+                _pendingToolOverrides[overrideKey] = ToolApprovalMode.Deny;
+            }
+
+            NotifyStateChanged();
+            return;
+        }
 
         if (!_pendingGrants.TryGetValue(SelectedServer, out var serverGrants))
         {
@@ -592,18 +664,38 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             var (approvalSection, inMemoryPolicy) = GetOrCreateApprovalPolicy(profilesSection, audienceName);
             var toolOverrides = ConfigFileHelper.GetOrCreateSection(approvalSection, "ToolOverrides");
             var exactKey = $"{serverName}/{toolName}";
+            var aliasKey = $"{serverName}__{toolName}";
 
             if (mode is null)
             {
                 toolOverrides.Remove(exactKey);
+                toolOverrides.Remove(aliasKey);
                 inMemoryPolicy.ToolOverrides.Remove(exactKey);
+                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
             }
             else
             {
                 toolOverrides[exactKey] = mode.Value.ToString();
+                toolOverrides.Remove(aliasKey);
                 inMemoryPolicy.ToolOverrides[exactKey] = mode.Value;
+                inMemoryPolicy.ToolOverrides.Remove(aliasKey);
             }
         }
+    }
+
+    private static bool TryGetExactToolOverride(
+        ToolApprovalConfig? policy,
+        string serverName,
+        string toolName,
+        out ToolApprovalMode mode)
+    {
+        if (policy is not null
+            && (policy.ToolOverrides.TryGetValue($"{serverName}/{toolName}", out mode)
+                || policy.ToolOverrides.TryGetValue($"{serverName}__{toolName}", out mode)))
+            return true;
+
+        mode = default;
+        return false;
     }
 
     public void DiscardChanges()
@@ -648,8 +740,7 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
                 _pendingGrants[SelectedServer] = serverGrants;
             }
 
-            if (!serverGrants.ContainsKey(audienceName))
-                serverGrants[audienceName] = new HashSet<string>(DiscoveredTools, StringComparer.Ordinal);
+            serverGrants[audienceName] = new HashSet<string>(DiscoveredTools, StringComparer.Ordinal);
         }
         else if (_pendingGrants.TryGetValue(SelectedServer, out var existingGrants))
         {

@@ -84,7 +84,11 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             RequesterPrincipal = _requesterPrincipal,
             Patterns = patterns,
             CandidateVerbs = candidateVerbs,
-            Candidates = candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)).ToList(),
+            Candidates = candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)
+            {
+                Shell = c.Shell,
+                VerbTokens = c.VerbTokens,
+            }).ToList(),
             Cwd = cwd,
             IsMessy = isMessy,
             HasAdoptedContext = _hasAdoptedContext,

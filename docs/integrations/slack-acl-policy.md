@@ -5,7 +5,8 @@ Slack ACL policy controls where Netclaw is allowed to engage and who can invoke 
 ## Defaults
 
 - Channel conversations require `@mention` to start a thread.
-- Once a thread is started, follow-up thread replies are accepted without mention.
+- Once a thread is started, follow-up thread replies are accepted without mention
+  (unless `MentionRequiredInThreadByChannel` marks that channel `true`).
 - Direct messages are denied by default.
 - No channels are allowed by default (`AllowedChannelIds` is empty).
 
@@ -25,6 +26,9 @@ Configure in `~/.netclaw/config/netclaw.json`:
 ```
 
 - `MentionOnly`: requires mention to start non-DM sessions.
+- `MentionRequiredInThreadByChannel`: per-channel map (channel ID → bool) that
+  requires a mention for thread replies in that channel even when the thread already
+  has an active session. Unset channels default to `false`.
 - `AllowDirectMessages`: enables DM conversations without mention.
 - `AllowedChannelIds`: required allow-list of channels for non-DM traffic.
 - `AllowedUserIds`: optional allow-list of Slack users.

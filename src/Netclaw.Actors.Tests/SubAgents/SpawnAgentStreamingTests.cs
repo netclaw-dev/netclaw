@@ -52,7 +52,8 @@ public class SpawnAgentStreamingTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         // The sub-agent resolves "file_read" from this registry; the fake LLM
         // never calls it — it just has to resolve so the spawn proceeds.
@@ -97,7 +98,8 @@ public class SpawnAgentStreamingTests : TestKit
             new Dictionary<string, object?>
             {
                 ["agent"] = "summarizer",
-                ["task"] = "Summarize the project."
+                ["task"] = "Summarize the project.",
+                ["_rationale"] = "Verify streamed sub-agent activity."
             });
 
         // Drain the stream the way the production pipeline drains a self-monitoring
@@ -145,7 +147,8 @@ public class SpawnAgentStreamingTests : TestKit
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy());
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
 
         var registry = new ToolRegistry();
         registry.Register(new FakeNetclawTool("file_read", "stub content"));
@@ -189,7 +192,8 @@ public class SpawnAgentStreamingTests : TestKit
             new Dictionary<string, object?>
             {
                 ["agent"] = "summarizer",
-                ["task"] = "Summarize the project."
+                ["task"] = "Summarize the project.",
+                ["_rationale"] = "Verify self-monitored sub-agent activity."
             });
 
         // spawn_agent is self-monitoring, so the parent drains it with no watchdog at

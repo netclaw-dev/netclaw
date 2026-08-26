@@ -13,6 +13,7 @@ public sealed class SlackRoutingPolicyContractTests : RoutingPolicyContractTests
         bool mentionOnly,
         bool allowDm,
         bool mentionRequiredInDm,
+        bool mentionRequiredInThread,
         bool isDm,
         bool containsMention,
         bool threadExists,
@@ -36,7 +37,7 @@ public sealed class SlackRoutingPolicyContractTests : RoutingPolicyContractTests
             Files: null);
 
         var decision = SlackRoutingPolicy.Evaluate(
-            message, mentionOnly, allowDm, mentionRequiredInDm, threadExists, containsMention);
+            message, mentionOnly, allowDm, mentionRequiredInDm, mentionRequiredInThread, threadExists, containsMention);
 
         var kind = decision.Kind switch
         {
@@ -56,6 +57,7 @@ public sealed class SlackRoutingPolicyContractTests : RoutingPolicyContractTests
             SlackRoutingIgnoreReason.NoContent => RoutingIgnoreReason.NoContent,
             SlackRoutingIgnoreReason.DmNotAllowed => RoutingIgnoreReason.DmNotAllowed,
             SlackRoutingIgnoreReason.DmMentionRequired => RoutingIgnoreReason.DmMentionRequired,
+            SlackRoutingIgnoreReason.ThreadMentionRequired => RoutingIgnoreReason.ThreadMentionRequired,
             SlackRoutingIgnoreReason.ChannelMentionRequired => RoutingIgnoreReason.ChannelMentionRequired,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(decision), decision.IgnoreReason, "Slack-specific ignore reason has no contract mapping.")

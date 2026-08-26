@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DiscordSessionBindingActor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -48,38 +48,26 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
-    private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
 
-    // Gates the text-approval cold path (TryHandleColdTextApprovalResponseAsync).
-    // A binding that has never observed any ToolInteractionRequest treats an
-    // inbound "A"/"B"/"C" as a possible cold approval reply for a session that
-    // restarted out from under it. Once we've observed at least one prompt,
-    // subsequent ambiguous text from the user is ordinary conversation, not an
-    // approval reply, so the cold path stays off. This does NOT gate button
-    // clicks — those always route to the session, which is the authority on
-    // CallId staleness.
-    private bool _hasObservedApprovalRequest;
+    // Null when the gateway supplies no thread-history fetcher. That is a real
+    // runtime state (an instance without history access), not a disabled check:
+    // with no fetcher there is no gap to hydrate, so both hydration paths no-op.
+    private readonly ThreadGapHydrationEngine? _hydrationEngine;
+    private readonly List<PendingApprovalRequest> _pendingApprovalRequests = [];
+    private readonly ApprovalResponseFlow<PendingApprovalRequest, DiscordMessageId> _approvalFlow;
+    private readonly ChannelOutputEngine<PendingApprovalRequest, DiscordMessageId> _outputEngine;
+    private readonly SafeTransportCall _safeCall;
 
     private static readonly TimeSpan PipelineInitTimeout = TimeSpan.FromSeconds(15);
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
-    private bool _deliveredThisTurn;
-    // True when a content post/upload this turn was attempted but failed (the
-    // model produced output, the transport rejected it). Distinct from "nothing
-    // was produced" — it suppresses the empty-turn fallback so a failed post
-    // isn't followed by a misleading "I didn't manage to produce a reply".
-    private bool _postFailedThisTurn;
-    // Reply targets for in-flight reminder delivery confirmations, keyed by
-    // reminder delivery key. Captured from DeliverTrustedSessionTurn; each is
-    // told a ReminderDeliveryResult on its turn's TurnCompleted and removed.
-    // Keyed (not a single field) because multiple reminders can target the
-    // same session concurrently — a single field would be clobbered.
-    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
-    private Netclaw.Actors.Protocol.TurnNumber _turnNumber;
     private string? _lastSetThreadName;
-    private ulong? _cursorSnowflake;
-    private ulong? _pendingCursorSnowflake;
+    // Snowflake cursors in canonical decimal string form, which is also the
+    // persisted CursorAdvanced form. NormalizeSnowflake produces every value,
+    // so CursorComparer can order them.
+    private static readonly SnowflakeCursorComparer CursorComparer = SnowflakeCursorComparer.Instance;
+    private string? _cursor;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
     // found no authorized trigger to anchor a turn. This is the proactive-thread
@@ -121,6 +109,69 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             .WithContext("DiscordThreadOrMessageId", _threadOrMessageId.Value);
 
         _handle = new SessionPipelineHandle(_dependencies.Pipeline, _log, "discord-session");
+
+        _safeCall = new SafeTransportCall(
+            ChannelType.Discord,
+            _dependencies.TimeProvider,
+            NotifyDeliveryFailedAsync);
+
+        _outputEngine = new ChannelOutputEngine<PendingApprovalRequest, DiscordMessageId>(
+            channelType: ChannelType.Discord,
+            channelName: "Discord",
+            cursorComparer: CursorComparer,
+            pendingRequests: _pendingApprovalRequests,
+            createPendingRequest: request => new PendingApprovalRequest(request),
+            isApprovalRequest: request => string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase),
+            renderTextOutput: textOutput => textOutput.Text,
+            renderErrorOutput: error => $":warning: {error.Message}",
+            postTextAsync: SafeReplyAsync,
+            uploadFileAsync: SafeUploadFileAsync,
+            postApprovalPromptAsync: SafeReplyWithButtonsAsync,
+            readPromptIdValue: promptMessageId => promptMessageId.Value,
+            onApprovalPromptFailedAsync: request => SendApprovalDenyOnFailureAsync(request.CallId),
+            persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
+            handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
+            advanceCursor: AdvanceCursor,
+            postEmptyTurnFallbackAsync: () => SafeReplyAsync(EmptyTurnFallbackText),
+            // Discord reports a delivery failure inline from SafeReplyAsync, so
+            // the session already knows by the time the turn completes.
+            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask,
+            readObservedAtMs: completed => completed.TimestampMs);
+
+        if (_dependencies.ThreadHistoryFetcher is { } historyFetcher)
+        {
+            _hydrationEngine = new ThreadGapHydrationEngine(
+                sessionId: _sessionId,
+                channelType: ChannelType.Discord,
+                historyFetcher: historyFetcher,
+                injectionDetector: _promptInjectionDetector,
+                classifierSourceContext: "discord-backfill",
+                cursorComparer: CursorComparer,
+                cursorKeySelector: NormalizeSnowflake,
+                isAuthorizedSender: IsAuthorizedSender,
+                log: _log,
+                readCursor: () => _cursor,
+                readInputQueue: () => _handle.InputQueue,
+                readIngressClosedReason: () => _dependencies.IngressGate?.ClosedReason,
+                warnBackfillDetectorUnavailableAsync: () => SafeReplyAsync(BackfillDetectorWarning),
+                onBackfillEnqueued: _outputEngine.AdvancePendingCursorForEnqueuedTurn,
+                setHydrationPending: pending => _hydrationPending = pending);
+        }
+
+        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest, DiscordMessageId>(
+            sessionId: _sessionId,
+            channelType: ChannelType.Discord,
+            channelName: "Discord",
+            pipeline: _dependencies.Pipeline,
+            operationTimeout: OperationTimeout,
+            pendingRequests: _pendingApprovalRequests,
+            hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
+            postWrongRequesterWarningAsync: () => SafeReplyAsync(WrongRequesterWarning),
+            persistPromptCleared: callId => Persist(
+                new PendingApprovalPromptCleared { CallId = callId.Value },
+                ApplyPendingApprovalPromptCleared),
+            renderResolvedPromptAsync: TryResolveApprovalPromptAsync,
+            log: _log);
 
         Recover<CursorAdvanced>(ApplyCursorAdvanced);
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
@@ -202,7 +253,8 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         {
             try
             {
-                await PerformOneShotHydrationAsync();
+                if (_hydrationEngine is { } engine)
+                    await engine.PerformOneShotHydrationAsync();
             }
             catch (Exception ex)
             {
@@ -241,13 +293,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
-            _deliveredThisTurn = false;
-            _postFailedThisTurn = false;
-            // A reinit aborts any in-flight reminder turn before its
-            // TurnCompleted. Report those as not-delivered now so the
-            // execution actor redelivers immediately instead of stalling
-            // until the backstop timeout.
-            FailPendingReminderDeliveries($"Discord pipeline reinitialized: {msg.Reason}");
+            _outputEngine.ResetForPipelineReinitialize(msg.Reason);
             await _handle.ReinitializeAsync(
                 msg.Reason,
                 () => Timers.StartSingleTimer(
@@ -372,11 +418,11 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             return;
 
         // Live inbound path is fetch-free. Thread history is hydrated once per
-        // actor lifetime in PerformOneShotHydrationAsync (driven by the
+        // actor lifetime by the hydration engine (driven by the
         // RecoveryCompleted handler); the only exception is a deferred
-        // hydration, which ApplyDeferredHydrationAsync completes on the first
-        // authorized inbound. By the time we get here the session already has
-        // the historical context it needs.
+        // hydration, which the engine completes on the first authorized
+        // inbound. By the time we get here the session already has the
+        // historical context it needs.
         var input = new ChannelInput
         {
             SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value),
@@ -392,8 +438,34 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
         };
 
-        if (_hydrationPending && IsAuthorizedSender(message.SenderId.Value))
-            input = await ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
+        // Re-arm thread-history hydration on a tap-gated mention so the gap the
+        // tap held since the last completed turn is backfilled. Under
+        // MentionRequiredInThread the conversation actor forwards only mentions here,
+        // so every inbound is a deliberate re-entry. _turnInFlight guards against a
+        // re-arm while a prior turn is still processing, preserving the PR #733
+        // no-duplicate invariant; the deferred hydration no-ops on an empty gap.
+        //
+        // Two accepted trade-offs of reusing the existing backfill (vs. a new
+        // drop-tracking side channel): (1) one thread-history fetch per mention on an
+        // active thread even when nothing accumulated — the actor cannot know the gap
+        // is empty without fetching, and mention-gating makes mentions deliberate so
+        // the cost is bounded; (2) a mention arriving while a turn is in flight takes
+        // the fetch-free path, so chatter in that window is adopted on the next idle
+        // mention, not this one (and can be skipped if the cursor later advances past
+        // it under rapid concurrent mentions).
+        if (!_hydrationPending
+            && !_outputEngine.TurnInFlight
+            && _dependencies.Options.MentionRequiredInThreadFor(_channelId.Value))
+        {
+            _hydrationPending = true;
+        }
+
+        if (_hydrationPending
+            && IsAuthorizedSender(message.SenderId.Value)
+            && _hydrationEngine is { } engine)
+        {
+            input = await engine.ApplyDeferredHydrationAsync(input, message.EventId.Value, inboundCts.Token);
+        }
 
         try
         {
@@ -401,11 +473,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             await writer.WriteAsync(input, writeCts.Token);
             ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
 
-            if (TryParseSnowflake(message.EventId.Value) is { } eventSnowflake)
-            {
-                if (_pendingCursorSnowflake is not { } pending || eventSnowflake > pending)
-                    _pendingCursorSnowflake = eventSnowflake;
-            }
+            _outputEngine.AdvancePendingCursorForEnqueuedTurn(NormalizeSnowflake(message.EventId.Value));
         }
         catch (OperationCanceledException)
         {
@@ -419,557 +487,23 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    /// <summary>
-    /// One-shot thread history hydration. Runs once per actor lifetime, in the
-    /// Hydrating behavior immediately after pipeline initialization. Fetches
-    /// thread history, computes the gap relative to the recovered cursor, and
-    /// if there is an authorized message in the gap, synthesizes one backfill
-    /// <see cref="ChannelInput"/> using that message as the trigger and older
-    /// gap messages as adopted context. Hands the synthesized input to the
-    /// session pipeline through the normal input-queue path.
-    /// </summary>
-    private async Task PerformOneShotHydrationAsync()
-    {
-        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return;
-
-        using var cts = new CancellationTokenSource(InboundProcessingTimeout);
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Warning(ex, "Thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return;
-        }
-
-        if (history.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: empty thread, no backfill cursor={Cursor} session={Session}",
-                _cursorSnowflake?.ToString() ?? "none", _sessionId.Value);
-            return;
-        }
-
-        var cursor = _cursorSnowflake;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (TryParseSnowflake(item.MessageId ?? string.Empty) is not { } itemSnowflake)
-                continue;
-
-            // Strict: only include messages newer than the cursor. PR #733's
-            // "cursor advances only on TurnCompleted" guarantees that
-            // snowflake == cursor means the session already has that message
-            // persisted — re-including it here on a restart hydration would
-            // duplicate it. The in-flight-crash case is handled too: a turn
-            // that didn't complete leaves the cursor un-advanced, so the
-            // message has snowflake > cursor and is correctly included in the gap.
-            if (cursor is { } c && itemSnowflake <= c)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-        {
-            _log.Info(
-                "Thread history hydration: cursor already at thread head fetched={FetchedCount} cursor={Cursor} session={Session}",
-                history.Count, cursor?.ToString() ?? "none", _sessionId.Value);
-            return;
-        }
-
-        var classified = await ClassifyGapAsync(candidates, cts.Token);
-        var gap = classified.Gap;
-
-        _log.Info(
-            "Thread history hydration fetched={FetchedCount} gapCount={GapCount} allowed={AllowedCount} blockedHighRisk={BlockedHighRiskCount} cursor={Cursor} session={Session}",
-            history.Count, candidates.Count, gap.Count, classified.BlockedForRisk, cursor?.ToString() ?? "none", _sessionId.Value);
-
-        if (classified.DetectorUnavailable)
-            await SafeReplyAsync(BackfillDetectorWarning);
-
-        if (gap.Count == 0)
-            return;
-
-        // Locate the most recent authorized message in the gap — it plays the
-        // role of the "current authorized message" that adopted-context normally
-        // anchors around. Without one we have no authorized trigger to enqueue;
-        // we transition to Active and let the next live authorized inbound be
-        // the trigger.
-        AdoptedContextMessage? trigger = null;
-        for (var i = gap.Count - 1; i >= 0; i--)
-        {
-            if (gap[i].AuthorityAtInclusion == AdoptedMessageAuthority.Authorized)
-            {
-                trigger = gap[i];
-                break;
-            }
-        }
-
-        if (trigger is null)
-        {
-            // Deferred: a non-empty gap with no authorized trigger. The
-            // proactive-thread case — the binding actor's lifetime began when
-            // the agent posted the thread root, so this hydration ran before
-            // any authorized human inbound existed. Re-arm so the first
-            // authorized inbound performs this hydration (adopting the gap,
-            // e.g. the bot-authored root) instead of taking the fetch-free path.
-            _hydrationPending = true;
-            _log.Info("Thread history hydration: no authorized message in gap; re-armed for next authorized inbound session={Session}", _sessionId.Value);
-            return;
-        }
-
-        var adoptedContext = new List<AdoptedContextMessage>();
-        foreach (var item in gap)
-        {
-            if (ReferenceEquals(item, trigger))
-                break;
-            adoptedContext.Add(item);
-        }
-
-        var triggerInput = trigger.Input;
-        var triggerSnowflake = TryParseSnowflake(triggerInput.MessageId ?? string.Empty);
-        var backfillInput = MergeAdoptedContext(triggerInput, adoptedContext, cursor);
-
-        if (_dependencies.IngressGate?.ClosedReason is { } ingressClosedReason)
-        {
-            _log.Info("Skipping hydration backfill enqueue while restart drain is active: {Reason}", ingressClosedReason);
-            return;
-        }
-
-        var writer = _handle.InputQueue;
-        if (writer is null)
-        {
-            _log.Warning("Input queue is not initialized; skipping hydration backfill");
-            return;
-        }
-
-        try
-        {
-            using var writeCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
-            writeCts.CancelAfter(TimeSpan.FromSeconds(10));
-            await writer.WriteAsync(backfillInput, writeCts.Token);
-
-            if (triggerSnowflake is { } sn)
-            {
-                if (_pendingCursorSnowflake is not { } pending || sn > pending)
-                    _pendingCursorSnowflake = sn;
-            }
-
-            _log.Info(
-                "hydration_backfill_enqueued trigger={TriggerMessageId} adoptedCount={AdoptedCount} session={Session}",
-                triggerInput.MessageId, adoptedContext.Count, _sessionId.Value);
-            ChannelTelemetry.For(ChannelType.Discord).RecordMessageEnqueued();
-        }
-        catch (OperationCanceledException ex)
-        {
-            _log.Warning(ex, "Timed out enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-        catch (ChannelClosedException ex)
-        {
-            _log.Warning(ex, "Input queue closed while enqueueing hydration backfill for session {SessionId}", _sessionId.Value);
-        }
-    }
-
-    private Task<Classification> ClassifyGapMessageAsync(ChannelInput input, CancellationToken cancellationToken)
-    {
-        var text = string.Join("\n", input.Contents
-            .OfType<TextContent>()
-            .Select(t => t.Text)
-            .Where(t => !string.IsNullOrWhiteSpace(t)));
-
-        return PromptClassifier.ClassifyAsync(
-            _promptInjectionDetector, text, "discord-backfill", _log, cancellationToken);
-    }
-
     // Discord authorization basis for adopted-context: an empty AllowedUserIds
     // list means the instance is unrestricted; otherwise the sender must be listed.
     private bool IsAuthorizedSender(string senderId)
         => _dependencies.Options.AllowedUserIds.Length == 0
             || _dependencies.Options.AllowedUserIds.Contains(senderId, StringComparer.Ordinal);
 
-    private readonly record struct GapClassification(
-        List<AdoptedContextMessage> Gap,
-        int BlockedForRisk,
-        bool DetectorUnavailable);
+    private Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message)
+        => _approvalFlow.TryHandleTextApprovalResponseAsync(message.Text, message.SenderId.Value);
 
-    /// <summary>
-    /// Runs prompt-injection classification over candidate gap messages and
-    /// captures each surviving message's authority-at-inclusion. Blocked
-    /// messages are dropped; detector-unavailable messages are also dropped
-    /// and surface a caller-visible flag.
-    /// </summary>
-    private async Task<GapClassification> ClassifyGapAsync(
-        IReadOnlyList<ChannelInput> candidates,
-        CancellationToken cancellationToken)
-    {
-        var classifications = await Task.WhenAll(
-            candidates.Select(c => ClassifyGapMessageAsync(c, cancellationToken)));
-
-        var gap = new List<AdoptedContextMessage>(candidates.Count);
-        var blockedForRisk = 0;
-        var detectorUnavailable = false;
-        for (var i = 0; i < candidates.Count; i++)
-        {
-            switch (classifications[i].Outcome)
-            {
-                case ClassificationOutcome.Allow:
-                    var authority = IsAuthorizedSender(candidates[i].SenderId.Value)
-                        ? AdoptedMessageAuthority.Authorized
-                        : AdoptedMessageAuthority.Pending;
-                    gap.Add(new AdoptedContextMessage(candidates[i], authority));
-                    break;
-
-                case ClassificationOutcome.Block:
-                    blockedForRisk++;
-                    _log.Warning(
-                        "Dropped backfill message due to prompt injection risk sender={SenderId} messageId={MessageId} reason={Reason}",
-                        candidates[i].SenderId,
-                        candidates[i].MessageId ?? "none",
-                        classifications[i].Reason ?? "high-risk pattern detected");
-                    break;
-
-                case ClassificationOutcome.DetectorUnavailable:
-                    blockedForRisk++;
-                    detectorUnavailable = true;
-                    break;
-            }
-        }
-
-        return new GapClassification(gap, blockedForRisk, detectorUnavailable);
-    }
-
-    /// <summary>
-    /// Merges <paramref name="adoptedContext"/> as the adopted-context window
-    /// preceding <paramref name="triggerInput"/> (the executable message) and
-    /// returns the trigger input with adopted-context metadata populated.
-    /// </summary>
-    private static ChannelInput MergeAdoptedContext(
-        ChannelInput triggerInput,
-        List<AdoptedContextMessage> adoptedContext,
-        ulong? cursor)
-    {
-        var merged = AdoptedContextContentBuilder.MergeWithCurrentMessage(
-            adoptedContext,
-            triggerInput.Contents,
-            triggerInput.SenderId.Value,
-            triggerInput.ReceivedAt);
-
-        return triggerInput with
-        {
-            Contents = merged.Contents,
-            HasThirdPartyAdoptedContext = merged.SpeakerIds.Any(
-                id => !string.Equals(id, triggerInput.SenderId.Value, StringComparison.Ordinal)),
-            AdoptedSpeakerIds = merged.SpeakerIds,
-            AdoptedContextProjection = merged.Projection,
-            AdoptedContextLowerBound = cursor?.ToString(),
-            AdoptedContextUpperBound = triggerInput.MessageId,
-            AdoptedContextEntries = merged.Entries
-        };
-    }
-
-    /// <summary>
-    /// Completes a thread-history hydration that <see cref="PerformOneShotHydrationAsync"/>
-    /// deferred for lack of an authorized trigger (<see cref="_hydrationPending"/>).
-    /// This authorized inbound is the executable trigger; the thread gap strictly
-    /// before it — most importantly a proactively-posted bot-authored root — is
-    /// fetched, classified, and merged as its adopted-context window. On fetch
-    /// failure the turn proceeds un-enriched and hydration stays re-armed so a
-    /// later authorized inbound retries.
-    /// </summary>
-    private async Task<ChannelInput> ApplyDeferredHydrationAsync(
-        ChannelInput baseInput,
-        string liveMessageId,
-        CancellationToken cancellationToken)
-    {
-        if (_dependencies.ThreadHistoryFetcher is not { } fetcher)
-            return baseInput;
-
-        // Without the live message's ordering key the gap below it cannot be
-        // bounded; leave hydration re-armed and take the fetch-free path.
-        if (TryParseSnowflake(liveMessageId) is not { } liveSnowflake)
-            return baseInput;
-
-        IReadOnlyList<ChannelInput> history;
-        try
-        {
-            history = await fetcher.FetchThreadHistoryAsync(_sessionId, cancellationToken);
-        }
-        catch (Exception ex)
-        {
-            // Non-fatal: execute the turn without an adopted window and keep
-            // hydration re-armed so a later authorized inbound retries.
-            _log.Warning(ex, "Re-armed thread history fetch failed for session {SessionId}", _sessionId.Value);
-            return baseInput;
-        }
-
-        // Fetch succeeded: hydration is complete. Only a fetch failure (caught
-        // above) keeps the flag armed — classify/merge outcomes never re-arm.
-        _hydrationPending = false;
-
-        var cursor = _cursorSnowflake;
-        var candidates = new List<ChannelInput>(history.Count);
-        foreach (var item in history)
-        {
-            if (TryParseSnowflake(item.MessageId ?? string.Empty) is not { } itemSnowflake)
-                continue;
-
-            // Strictly above the watermark and strictly below the live inbound:
-            // the live inbound is the executable message, not adopted context.
-            if (cursor is { } c && itemSnowflake <= c)
-                continue;
-            if (itemSnowflake >= liveSnowflake)
-                continue;
-
-            candidates.Add(item);
-        }
-
-        if (candidates.Count == 0)
-            return baseInput;
-
-        var classified = await ClassifyGapAsync(candidates, cancellationToken);
-        if (classified.DetectorUnavailable)
-            await SafeReplyAsync(BackfillDetectorWarning);
-
-        if (classified.Gap.Count == 0)
-            return baseInput;
-
-        _log.Info(
-            "deferred_hydration_adopted gapCount={GapCount} trigger={TriggerMessageId} session={Session}",
-            classified.Gap.Count,
-            baseInput.MessageId,
-            _sessionId.Value);
-
-        return MergeAdoptedContext(baseInput, classified.Gap, cursor);
-    }
-
-    private async Task<bool> TryHandleTextApprovalResponseAsync(DiscordThreadInbound message)
-    {
-        var (result, pending) = ResolvePendingRequest(message.SenderId, callId: null);
-
-        if (result is ApprovalLookupResult.NotFound)
-        {
-            return !_hasObservedApprovalRequest
-                && await TryHandleColdTextApprovalResponseAsync(message);
-        }
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            return true;
-        }
-
-        if (!ToolInteractionResponseParser.TryParseApprovalResponse(
-                message.Text ?? string.Empty,
-                pending!.Options,
-                out var selectedKey)
-            || selectedKey is null)
-        {
-            return false;
-        }
-
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = pending!.CallId,
-                    SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(selectedKey),
-                    SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
-                }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Discord text approval response for call {CallId}", pending!.CallId);
-            return true;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                _log.Info(
-                    "Session rejected Discord text approval response for call {CallId} reason={Reason}; skipping redraw",
-                    pending!.CallId,
-                    nack.Reason ?? "<none>");
-                return true;
-
-            case not CommandAck:
-                _log.Warning(
-                    "Discord text approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    pending!.CallId,
-                    feedbackResult.GetType().Name);
-                return true;
-        }
-
-        _pendingApprovalRequests.Remove(pending!);
-        Persist(new PendingApprovalPromptCleared
-        {
-            CallId = pending.CallId.Value
-        }, ApplyPendingApprovalPromptCleared);
-
-        await TryResolveApprovalPromptAsync(
-            pending!.PromptMessageId,
-            pending!.Request,
-            pending!.CallId,
-            selectedKey,
+    // Discord gateway interactions are one-way telemetry from the websocket, so
+    // the flow gets no synchronous-reply hook here.
+    private Task HandleApprovalResponseAsync(DiscordApprovalResponse message)
+        => _approvalFlow.HandleApprovalResponseAsync(
+            message.CallId,
+            message.SelectedKey,
             message.SenderId.Value,
-            persistedToolName: pending.ToolName,
-            persistedDisplayText: pending.DisplayText);
-        return true;
-    }
-
-    private async Task<bool> TryHandleColdTextApprovalResponseAsync(DiscordThreadInbound message)
-    {
-        if (!ToolInteractionResponseParser.LooksLikeApprovalResponse(message.Text ?? string.Empty))
-            return false;
-
-        using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-        try
-        {
-            var reply = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionTextResponse
-            {
-                SessionId = _sessionId,
-                Text = message.Text ?? string.Empty,
-                SenderId = new SenderId(message.SenderId.Value)
-            }, feedbackCts.Token);
-
-            if (reply is CommandAck)
-            {
-                _log.Info(
-                    "Forwarded cold Discord text approval response from sender={SenderId} without local pending prompt state",
-                    message.SenderId);
-                return true;
-            }
-
-            // approval_no_history means the session has never had an approval request.
-            // The message was a false-positive from LooksLikeApprovalResponse.
-            // Don't consume — let it fall through to normal LLM ingress. See #1164.
-            if (reply is CommandNack { Reason: ApprovalNackReasons.NoHistory })
-                return false;
-
-            return reply is CommandNack;
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route cold Discord text approval response from sender {SenderId}", message.SenderId);
-            return false;
-        }
-    }
-
-    private async Task HandleApprovalResponseAsync(DiscordApprovalResponse message)
-    {
-        var (result, pending) = ResolvePendingRequest(message.SenderId, message.CallId);
-
-        if (result is ApprovalLookupResult.WrongRequester)
-        {
-            await SafeReplyAsync(WrongRequesterWarning);
-            return;
-        }
-
-        // Wait for the session before redrawing. This is the security gate that
-        // prevents (a) a non-requester click destroying the prompt UI on the
-        // cold-spawn path, and (b) a stale re-click overwriting an already-resolved
-        // banner — both surfaced by the #939 code review. The session is the
-        // authority on whether the call is still pending and whether the sender is
-        // allowed. Only redraw on CommandAck.
-        ISessionResponse feedbackResult;
-        try
-        {
-            using var feedbackCts = new CancellationTokenSource(OperationTimeout);
-            feedbackResult = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(
-                new ToolInteractionResponse
-                {
-                    SessionId = _sessionId,
-                    CallId = message.CallId,
-                    SelectedKey = new Netclaw.Actors.Protocol.ApprovalOptionKey(message.SelectedKey),
-                    SenderId = new Netclaw.Actors.Protocol.SenderId(message.SenderId.Value)
-                }, feedbackCts.Token);
-        }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Discord approval response for call {CallId}", message.CallId);
-            return;
-        }
-
-        switch (feedbackResult)
-        {
-            case CommandNack nack:
-                if (string.Equals(nack.Reason, ApprovalNackReasons.WrongRequester, StringComparison.Ordinal))
-                    await SafeReplyAsync(WrongRequesterWarning);
-                _log.Info(
-                    "Session rejected Discord approval response for call {CallId} reason={Reason}; skipping redraw",
-                    message.CallId,
-                    nack.Reason ?? "<none>");
-                return;
-
-            case CommandAck:
-                break;
-
-            default:
-                _log.Warning(
-                    "Discord approval response for call {CallId} returned unexpected feedback result {ResultType}",
-                    message.CallId,
-                    feedbackResult.GetType().Name);
-                return;
-        }
-
-        if (pending is not null)
-        {
-            _pendingApprovalRequests.Remove(pending);
-            Persist(new PendingApprovalPromptCleared
-            {
-                CallId = pending.CallId.Value
-            }, ApplyPendingApprovalPromptCleared);
-            // Prefer captured message ID; fall back to payload ID when capture failed.
-            var promptMessageId = pending.PromptMessageId ?? message.PromptMessageId;
-            await TryResolveApprovalPromptAsync(
-                promptMessageId,
-                pending.Request,
-                pending.CallId,
-                message.SelectedKey,
-                message.SenderId.Value,
-                persistedToolName: pending.ToolName,
-                persistedDisplayText: pending.DisplayText);
-        }
-        else if (message.PromptMessageId is { } payloadPromptMessageId)
-        {
-            // Cold-spawn redraw — no local pending entry for this CallId (no
-            // PendingApprovalPromptTracked replayed, or the entry was already
-            // cleared). The click payload still carries the prompt's message id
-            // and the session has accepted the response; render the generic
-            // banner so the buttons clear. Pre-0.21 journals that DO replay take
-            // the upper `pending is not null` branch — they render generically
-            // via the !IsNullOrEmpty fallback inside the builder, not here.
-            await TryResolveApprovalPromptAsync(
-                payloadPromptMessageId,
-                request: null,
-                message.CallId,
-                message.SelectedKey,
-                message.SenderId.Value);
-
-            _log.Info(
-                "Forwarded Discord approval response for call {0} to session without local pending entry; redrew prompt via payload messageId={1}",
-                message.CallId,
-                payloadPromptMessageId.Value);
-        }
-        else
-        {
-            // Text-reply on a cold-spawned binding. Remaining #939 gap.
-            _log.Info(
-                "Forwarded Discord approval response for call {0} to session without local pending entry; redraw skipped",
-                message.CallId);
-            ChannelTelemetry.For(ChannelType.Discord).RecordExtra("interactionErrors", "cold_spawn_redraw_skipped");
-        }
-    }
+            message.PromptMessageId);
 
     private async Task TryResolveApprovalPromptAsync(
         DiscordMessageId? promptMessageId,
@@ -1067,7 +601,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         if (message.Source.DeliveryObserver is { } deliveryObserver
             && message.Source.ReminderId is { } reminderKey
             && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _reminderDeliveryObservers[reminderKey] = deliveryObserver;
+            _outputEngine.TrackReminderDeliveryObserver(reminderKey, deliveryObserver);
 
         try
         {
@@ -1089,8 +623,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private enum ApprovalLookupResult { Matched, WrongRequester, NotFound }
-
     private ChannelDeliveryTargetInfo BuildDefaultDeliveryTarget()
         => new(
             ChannelType.Discord.ToWireValue(),
@@ -1099,138 +631,29 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             _channelId.Value,
             _threadOrMessageId.Value);
 
-    private (ApprovalLookupResult Result, PendingApprovalRequest? Pending) ResolvePendingRequest(
-        DiscordUserId senderId, Netclaw.Tools.ToolCallId? callId)
-    {
-        if (callId is { } resolvedCallId)
-        {
-            var byCallId = _pendingApprovalRequests.LastOrDefault(p =>
-                p.CallId == resolvedCallId);
-            if (byCallId is null)
-                return (ApprovalLookupResult.NotFound, null);
-            if (!ApprovalButtonValueCodec.CanApprove(byCallId.RequesterPrincipal, byCallId.RequesterSenderId, senderId.Value))
-                return (ApprovalLookupResult.WrongRequester, null);
-            return (ApprovalLookupResult.Matched, byCallId);
-        }
-
-        if (_pendingApprovalRequests.Count == 0)
-            return (ApprovalLookupResult.NotFound, null);
-
-        var bySender = _pendingApprovalRequests.LastOrDefault(p =>
-            ApprovalButtonValueCodec.CanApprove(p.RequesterPrincipal, p.RequesterSenderId, senderId.Value));
-        return bySender is not null
-            ? (ApprovalLookupResult.Matched, bySender)
-            : (ApprovalLookupResult.WrongRequester, null);
-    }
-
     private async Task HandleOutputReceivedAsync(OutputReceived msg)
     {
-        switch (msg.Output)
+        var clearedPrompts = await _outputEngine.HandleOutputAsync(msg.Output);
+        if (clearedPrompts.Count > 0)
+            PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
+    }
+
+    /// <summary>
+    /// Handles the outputs the shared engine leaves to the channel. Discord
+    /// renames its thread from a session title and renders a processing
+    /// indicator; other output types have no Discord effect.
+    /// </summary>
+    private async Task HandleChannelSpecificOutputAsync(SessionOutput output)
+    {
+        switch (output)
         {
-            case TextOutput textOutput:
-                if (await SafeReplyAsync(textOutput.Text))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case ErrorOutput error:
-                if (await SafeReplyAsync($":warning: {error.Message}"))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
-            case FileOutput file:
-                if (await SafeUploadFileAsync(file))
-                    _deliveredThisTurn = true;
-                else
-                    _postFailedThisTurn = true;
-                break;
-
             case ProcessingStateOutput processing:
                 await RenderProcessingStateAsync(processing);
-                break;
-
-            case ToolInteractionRequest request when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
-                _hasObservedApprovalRequest = true;
-                var pendingApproval = new PendingApprovalRequest(request);
-                _pendingApprovalRequests.Add(pendingApproval);
-
-                var promptMessageId = await SafeReplyWithButtonsAsync(request);
-                if (promptMessageId is not null)
-                {
-                    pendingApproval.PromptMessageId = promptMessageId;
-                    Persist(new PendingApprovalPromptTracked
-                    {
-                        CallId = pendingApproval.CallId.Value,
-                        RequesterSenderId = pendingApproval.RequesterSenderId,
-                        RequesterPrincipal = pendingApproval.RequesterPrincipal,
-                        OptionKeys = pendingApproval.OptionKeys,
-                        PromptId = promptMessageId.Value.Value,
-                        ToolName = pendingApproval.ToolName,
-                        // Preserve null-vs-set semantics on the wire: Truncate
-                        // returns string.Empty for null input, which would round-
-                        // trip as DisplayText="" with HasDisplayText=true.
-                        DisplayText = string.IsNullOrEmpty(pendingApproval.DisplayText)
-                            ? null
-                            : ApprovalDisplayTextFormatter.Truncate(
-                                pendingApproval.DisplayText,
-                                PendingApprovalPromptTracked.MaxPersistedDisplayTextChars)
-                    }, ApplyPendingApprovalPromptTracked);
-                }
-                else
-                {
-                    _pendingApprovalRequests.Remove(pendingApproval);
-                }
                 break;
 
             case SessionTitleOutput titleOutput:
                 if (_threadCreated && titleOutput.Title != _lastSetThreadName)
                     await SafeSetThreadNameAsync(titleOutput.Title);
-                break;
-
-            case TurnCompleted completed:
-                if (completed.Outcome == TurnOutcome.Completed && _pendingCursorSnowflake is { } pendingSnowflake)
-                    AdvanceCursor(pendingSnowflake);
-                _pendingCursorSnowflake = null;
-
-                if (completed.SourceReminderId is { } sourceReminderKey
-                    && !string.IsNullOrWhiteSpace(sourceReminderKey.Value)
-                    && _reminderDeliveryObservers.Remove(sourceReminderKey, out var reminderObserver))
-                {
-                    reminderObserver.Tell(new ReminderDeliveryResult(
-                        sourceReminderKey,
-                        ChannelType.Discord,
-                        Delivered: _deliveredThisTurn,
-                        FailureReason: _deliveredThisTurn ? null : "Discord post did not succeed",
-                        ObservedAtMs: completed.TimestampMs));
-                }
-
-                // Only post the empty-turn fallback when the turn genuinely
-                // produced nothing. A failed post already notified the session
-                // (SafeReplyAsync -> NotifyDeliveryFailedAsync); posting "I
-                // didn't manage to produce a reply" on top would be misleading
-                // (a reply WAS produced) and double up with the redelivered one.
-                if (!_deliveredThisTurn && !_postFailedThisTurn)
-                    await SafeReplyAsync(EmptyTurnFallbackText);
-
-                _turnNumber = completed.TurnNumber;
-                var clearedPrompts = _pendingApprovalRequests
-                    .Select(pending => new PendingApprovalPromptCleared
-                    {
-                        CallId = pending.CallId.Value
-                    })
-                    .ToArray();
-                if (clearedPrompts.Length > 0)
-                {
-                    PersistAll(
-                        clearedPrompts,
-                        cleared => ApplyPendingApprovalPromptCleared(cleared));
-                }
-                _pendingApprovalRequests.Clear();
-                _deliveredThisTurn = false;
-                _postFailedThisTurn = false;
                 break;
         }
     }
@@ -1297,8 +720,9 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             }
             catch (Exception textEx)
             {
+                // The shared output engine auto-denies the request when this
+                // returns null, so the blocked tool call still unwinds.
                 _log.Error(textEx, "Failed posting text-only approval fallback; auto-denying request");
-                await SendApprovalDenyOnFailureAsync(request.CallId);
                 return null;
             }
         }
@@ -1310,32 +734,16 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
     /// notifying the session of the delivery failure). Callers that gate
     /// reminder delivery confirmation on real delivery must honor the result.
     /// </summary>
-    private async Task<bool> SafeReplyAsync(string text)
-    {
-        var chunks = ChunkMessage(text);
-        foreach (var chunk in chunks)
-        {
-            var startedAt = _dependencies.TimeProvider.GetTimestamp();
-            try
+    private Task<bool> SafeReplyAsync(string text)
+        => _safeCall.PostChunkedAsync(
+            text,
+            MaxDiscordMessageLength,
+            async chunk =>
             {
-                var postMessage = BuildPostMessage(chunk);
-                var result = await _dependencies.ReplyClient.PostReplyAsync(postMessage);
+                var result = await _dependencies.ReplyClient.PostReplyAsync(BuildPostMessage(chunk));
                 ApplyThreadPromotion(result);
-                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-                ChannelTelemetry.For(ChannelType.Discord).RecordReplyPosted(duration);
-            }
-            catch (Exception ex)
-            {
-                var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-                _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value);
-                ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
-                await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-                return false;
-            }
-        }
-
-        return true;
-    }
+            },
+            ex => _log.Warning(ex, "Failed posting Discord reply for session {0}", _sessionId.Value));
 
     private DiscordPostMessage BuildPostMessage(
         string text,
@@ -1359,47 +767,40 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
     private async Task<bool> SafeUploadFileAsync(FileOutput file)
     {
-        var startedAt = _dependencies.TimeProvider.GetTimestamp();
-        try
+        // A missing file never reaches the transport, so it carries no transport
+        // telemetry and a different failure kind.
+        if (!File.Exists(file.FilePath))
         {
-            if (!File.Exists(file.FilePath))
+            _log.Warning("File not found for upload: {Path}", file.FilePath);
+            await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
+            return false;
+        }
+
+        var uploaded = await _safeCall.InvokeAsync(
+            async () =>
             {
-                _log.Warning("File not found for upload: {Path}", file.FilePath);
-                await NotifyDeliveryFailedAsync(DeliveryFailureKind.Unknown, $"File not found for upload: {file.FilePath}");
-                return false;
-            }
+                using var cts = new CancellationTokenSource(OperationTimeout);
+                await _dependencies.ReplyClient.UploadFileAsync(
+                    new DiscordFileUpload(
+                        _replyChannelId,
+                        file.FilePath,
+                        file.FileName,
+                        $":paperclip: {file.FileName}",
+                        _threadCreated ? null : _rootMessageId),
+                    cts.Token);
+            },
+            ex =>
+            {
+                if (ex is OperationCanceledException)
+                    _log.Error(ex, "Timed out uploading file {FileName} to Discord session", file.FileName);
+                else
+                    _log.Error(ex, "Failed to upload file {FileName} to Discord session", file.FileName);
+            });
 
-            using var cts = new CancellationTokenSource(OperationTimeout);
-            await _dependencies.ReplyClient.UploadFileAsync(
-                new DiscordFileUpload(
-                    _replyChannelId,
-                    file.FilePath,
-                    file.FileName,
-                    $":paperclip: {file.FileName}",
-                    _threadCreated ? null : _rootMessageId),
-                cts.Token);
-
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            ChannelTelemetry.For(ChannelType.Discord).RecordReplyPosted(duration);
+        if (uploaded)
             _log.Info("Uploaded file to Discord session: {FileName}", file.FileName);
-            return true;
-        }
-        catch (OperationCanceledException ex)
-        {
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            _log.Error(ex, "Timed out uploading file {FileName} to Discord session", file.FileName);
-            ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-            return false;
-        }
-        catch (Exception ex)
-        {
-            var duration = _dependencies.TimeProvider.GetElapsedTime(startedAt).TotalMilliseconds;
-            _log.Error(ex, "Failed to upload file {FileName} to Discord session", file.FileName);
-            ChannelTelemetry.For(ChannelType.Discord).RecordReplyFailed(duration);
-            await NotifyDeliveryFailedAsync(DeliveryFailureKind.TransportFailure, ex.Message);
-            return false;
-        }
+
+        return uploaded;
     }
 
     private async Task SafeSetThreadNameAsync(string title)
@@ -1427,23 +828,6 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    /// <summary>
-    /// Tells every in-flight reminder observer that delivery did not happen,
-    /// then clears them. Called when a turn can no longer reach TurnCompleted
-    /// (e.g. pipeline reinit), so the execution actor fails fast and redelivers
-    /// rather than waiting out its backstop timeout.
-    /// </summary>
-    private void FailPendingReminderDeliveries(string reason)
-    {
-        if (_reminderDeliveryObservers.Count == 0)
-            return;
-
-        foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Discord, Delivered: false, FailureReason: reason));
-
-        _reminderDeliveryObservers.Clear();
-    }
-
     private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
     {
         try
@@ -1451,7 +835,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
             {
                 SessionId = _sessionId,
-                TurnNumber = _turnNumber,
+                TurnNumber = _outputEngine.LastCompletedTurnNumber,
                 ChannelType = ChannelType.Discord,
                 FailureKind = failureKind,
                 ErrorMessage = errorMessage
@@ -1459,7 +843,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send delivery feedback to session");
+            // A dead feedback pipe means the session never learns the turn
+            // failed. Rethrow so supervision tears this actor down. The parent
+            // conversation actor stops it; the next inbound re-creates it with
+            // a fresh pipeline. Slack's parent restarts its binding eagerly.
+            // Both paths replace the dead pipeline instead of leaving a zombie.
+            _log.Error(ex, "Failed to send delivery feedback to session; propagating to trigger pipeline reinit");
+            throw;
         }
     }
 
@@ -1596,54 +986,30 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
                 return $"`{file.Name}` has an untrusted URL domain and was skipped.";
             });
 
-    internal static List<string> ChunkMessage(string text)
+    internal static List<string> ChunkMessage(string text) =>
+        MessageChunker.Chunk(text, MaxDiscordMessageLength);
+
+    private void AdvanceCursor(string candidateCursor)
     {
-        if (text.Length <= MaxDiscordMessageLength)
-            return [text];
-
-        var chunks = new List<string>();
-        var remaining = text.AsSpan();
-        while (remaining.Length > 0)
-        {
-            if (remaining.Length <= MaxDiscordMessageLength)
-            {
-                chunks.Add(remaining.ToString());
-                break;
-            }
-
-            var splitAt = MaxDiscordMessageLength;
-            var newlineIdx = remaining[..splitAt].LastIndexOf('\n');
-            if (newlineIdx > 0)
-                splitAt = newlineIdx + 1;
-
-            chunks.Add(remaining[..splitAt].ToString());
-            remaining = remaining[splitAt..];
-        }
-
-        return chunks;
-    }
-
-    private void AdvanceCursor(ulong candidateSnowflake)
-    {
-        if (_cursorSnowflake is { } c && candidateSnowflake <= c)
+        if (_cursor is { } c && CursorComparer.Compare(candidateCursor, c) <= 0)
         {
             _log.Debug("Session cursor did not advance session={Session} snowflake={Snowflake}",
-                _sessionId.Value, candidateSnowflake);
+                _sessionId.Value, candidateCursor);
             return;
         }
 
-        Persist(new CursorAdvanced(candidateSnowflake.ToString()), ApplyCursorAdvanced);
+        Persist(new CursorAdvanced(candidateCursor), ApplyCursorAdvanced);
     }
 
     private void ApplyCursorAdvanced(CursorAdvanced advanced)
     {
-        if (!ulong.TryParse(advanced.Cursor, out var snowflake))
+        if (NormalizeSnowflake(advanced.Cursor) is not { } cursor)
         {
             _log.Warning("Corrupt cursor value during recovery, skipping: {Cursor}", advanced.Cursor);
             return;
         }
 
-        _cursorSnowflake = snowflake;
+        _cursor = cursor;
 
         if (!IsRecovering && LastSequenceNr > 1 && LastSequenceNr % 10 == 0)
             DeleteMessages(LastSequenceNr - 1);
@@ -1651,30 +1017,28 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
 
     private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
     {
-        _hasObservedApprovalRequest = true;
-
-        var existing = _pendingApprovalRequests.LastOrDefault(p => p.CallId.Value == tracked.CallId);
-        if (existing is not null)
-        {
-            existing.PromptMessageId = new DiscordMessageId(tracked.PromptId);
-            return;
-        }
-
-        _pendingApprovalRequests.Add(new PendingApprovalRequest(
-            new ToolCallId(tracked.CallId),
-            tracked.RequesterSenderId,
-            tracked.RequesterPrincipal,
-            tracked.OptionKeys,
-            new DiscordMessageId(tracked.PromptId),
-            toolName: tracked.ToolName,
-            displayText: tracked.DisplayText));
+        _outputEngine.MarkApprovalRequestObserved();
+        PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest, DiscordMessageId>(
+            _pendingApprovalRequests,
+            tracked,
+            wrapPromptId: value => new DiscordMessageId(value),
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText) =>
+                new PendingApprovalRequest(callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText));
     }
 
     private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
-        => _pendingApprovalRequests.RemoveAll(p => p.CallId.Value == cleared.CallId);
+        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest, DiscordMessageId>(_pendingApprovalRequests, cleared);
 
-    private static ulong? TryParseSnowflake(string value)
-        => ulong.TryParse(value, out var id) ? id : null;
+    /// <summary>
+    /// Returns the canonical decimal form of a Discord snowflake, or null
+    /// when the value is not a snowflake and therefore has no order. The
+    /// <see cref="ulong"/> round-trip is a validation and normalization
+    /// step, not cursor state: it rejects the same inputs the previous
+    /// numeric cursor rejected, and it strips a form such as a leading zero
+    /// that <see cref="SnowflakeCursorComparer"/> cannot order.
+    /// </summary>
+    private static string? NormalizeSnowflake(string? value)
+        => ulong.TryParse(value, out var id) ? id.ToString() : null;
 
     private sealed record InitializePipeline
     {

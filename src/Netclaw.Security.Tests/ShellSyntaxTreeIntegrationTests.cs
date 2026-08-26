@@ -32,7 +32,26 @@ public sealed class ShellSyntaxTreeIntegrationTests
         using var provider = services.BuildServiceProvider();
         var parser = provider.GetRequiredService<IShellParser>();
 
-        Assert.IsType<BashParser>(parser);
+        var result = parser.Parse("git status");
+        Assert.False(result.IsUnparseable);
+        Assert.Equal("git status", Assert.Single(result.Commands).Clause.Verb.Joined);
+    }
+
+    [Fact]
+    public void Explicit_environment_DI_registration_uses_selected_power_shell_dialect()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var services = new ServiceCollection();
+        services.AddShellParser(environment);
+
+        using var provider = services.BuildServiceProvider();
+        var parser = provider.GetRequiredService<IShellParser>();
+
+        var result = parser.Parse("Get-ChildItem && Get-Content .\\input.txt");
+        Assert.False(result.IsUnparseable);
+        Assert.Equal(2, result.Commands.Count);
     }
 
     [Fact]
@@ -50,6 +69,11 @@ public sealed class ShellSyntaxTreeIntegrationTests
         Assert.Equal("ls", clause.Verb.Joined);
         Assert.Contains(clause.Args, a => a.Raw == "-la" && a.IsFlag);
         Assert.Contains(clause.Args, a => a.Raw == "/tmp" && a.IsPath);
+
+        var occurrence = Assert.Single(result.Commands);
+        Assert.Same(clause, occurrence.Clause);
+        Assert.Equal(CommandOccurrenceRole.Ordinary, occurrence.ImmediateRole);
+        Assert.True(occurrence.IsComplete);
     }
 
     [Fact]
@@ -163,22 +187,18 @@ public sealed class ShellSyntaxTreeIntegrationTests
     }
 
     [Fact]
-    public void Dynamic_token_marked_for_skip()
+    public void Unknown_variable_state_is_unparseable()
     {
-        // Unresolved env var must be flagged so consumers don't extract
-        // a literal "$UNRESOLVED/foo" as a path candidate.
+        // Netclaw cannot prove the inherited Bash variable attributes.
+        // Alpha.1 rejects the full command before a nameref can hide
+        // execution inside the path expression.
         var parser = new BashParser();
 
         var result = parser.Parse("rm $UNRESOLVED/foo");
 
-        Assert.False(result.IsUnparseable);
-        Assert.Single(result.Clauses);
-
-        var argWithDynamic = result.Clauses[0].Args
-            .FirstOrDefault(a => a.Raw.Contains("$UNRESOLVED"));
-        Assert.NotNull(argWithDynamic);
-        Assert.Equal(ArgKind.DynamicSkip, argWithDynamic.Kind);
-        Assert.Null(argWithDynamic.Resolved);
+        Assert.True(result.IsUnparseable);
+        Assert.Empty(result.Clauses);
+        Assert.Empty(result.Commands);
     }
 
     [Fact]
@@ -279,6 +299,97 @@ public sealed class ShellSyntaxTreeIntegrationTests
         Assert.Equal(2, result.Clauses.Count);
         Assert.Equal("cat", result.Clauses[0].Verb.Joined);
         Assert.Equal("echo after", result.Clauses[1].Verb.Joined);
+    }
+
+    [Fact]
+    public void Static_descriptor_redirect_has_explicit_non_path_facts()
+    {
+        var parser = new BashParser();
+
+        var result = parser.Parse("dotnet test 2>&1");
+
+        Assert.False(result.IsUnparseable);
+        var redirect = Assert.IsType<DescriptorDuplicateRedirectAnalysis>(
+            Assert.Single(Assert.Single(result.Commands).Redirects));
+        var source = Assert.IsType<RedirectSource.Descriptor>(redirect.Source);
+        Assert.Equal(2, source.Value);
+        Assert.Equal(1, redirect.TargetDescriptor);
+        Assert.True(redirect.IsComplete);
+    }
+
+    [Fact]
+    public void Analyzed_arguments_join_authored_arguments_to_their_source_elements()
+    {
+        var parser = new BashParser(new BashParserOptions
+        {
+            WorkingDirectory = "/work"
+        });
+
+        var result = parser.Parse("git --work-tree=../repo status");
+
+        Assert.False(result.IsUnparseable, result.UnparseableReason);
+        var occurrence = Assert.Single(result.Commands);
+        Assert.Equal(3, occurrence.Arguments.Count);
+
+        var option = occurrence.Arguments[0];
+        var value = occurrence.Arguments[1];
+        Assert.Equal("--work-tree", option.Argument.Raw);
+        Assert.Equal("../repo", value.Argument.Raw);
+        Assert.Same(option.Element, value.Element);
+        Assert.Contains(
+            occurrence.Clause.Elements,
+            element => ReferenceEquals(element, option.Element));
+        Assert.Equal(
+            "../repo",
+            Assert.IsType<ShellValueDomain.Exact>(value.Value).Value);
+    }
+
+    [Fact]
+    public void Tr_data_exposes_a_positive_authored_non_file_value()
+    {
+        var parser = new BashParser(new BashParserOptions
+        {
+            WorkingDirectory = "/work"
+        });
+
+        var result = parser.Parse("tr -d '\\n'");
+
+        Assert.False(result.IsUnparseable, result.UnparseableReason);
+        var argument = Assert.Single(
+            Assert.Single(result.Commands).Arguments,
+            static item => item.Element.Value == "\\n");
+        Assert.Equal("'\\n'", argument.Argument.Raw);
+        Assert.False(argument.Argument.IsPath);
+        Assert.Null(argument.Argument.Resolved);
+        Assert.Equal(ShellPathShape.Windows, argument.AuthoredPathShape);
+        Assert.Equal(
+            "\\n",
+            Assert.IsType<ShellValueDomain.Exact>(
+                argument.AuthoredNonFileSystemValue).Value);
+        Assert.IsType<ShellValueDomain.Unknown>(
+            argument.AuthoredFileSystemValue);
+    }
+
+    [Fact]
+    public void PowerShell_all_stream_redirect_uses_closed_source_and_file_alternatives()
+    {
+        var parser = new PwshParser(new PwshParserOptions
+        {
+            Dialect = PwshDialect.PowerShell7,
+            WorkingDirectory = @"C:\work"
+        });
+
+        var result = parser.Parse("Write-Output ok *> output.log");
+
+        Assert.False(result.IsUnparseable, result.UnparseableReason);
+        var redirect = Assert.IsType<FileRedirectAnalysis>(
+            Assert.Single(Assert.Single(result.Commands).Redirects));
+        Assert.IsType<RedirectSource.PowerShellAllStreams>(redirect.Source);
+        Assert.Equal(FileRedirectMode.Output, redirect.Mode);
+        Assert.Equal(
+            "C:/work/output.log",
+            Assert.IsType<ShellValueDomain.Exact>(redirect.Target).Value);
+        Assert.True(redirect.IsComplete);
     }
 
     [Fact]

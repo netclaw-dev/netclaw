@@ -43,69 +43,132 @@ public static class ToolApprovalEntryComparer
         string.Equals(left, right, Comparison);
 
     /// <summary>
+    /// Compares shell-owned tokens or paths with that shell's path rules.
+    /// </summary>
+    public static bool Equals(string? left, string? right, ApprovalShell shell) =>
+        string.Equals(
+            left,
+            right,
+            shell == ApprovalShell.PowerShell
+                ? StringComparison.OrdinalIgnoreCase
+                : StringComparison.Ordinal);
+
+    /// <summary>
     /// Equality predicate matching the daemon's approval matcher: two
     /// entries are equal when their verbs match and their normalized
     /// directories match (with both <c>null</c> directories considered equal —
     /// the global wildcard).
     /// </summary>
     public static bool Equals(ApprovalEntry left, ApprovalEntry right)
-        => Equals(left.Verb, right.Verb)
-           && Equals(NormalizeDirectory(left.Directory), NormalizeDirectory(right.Directory));
+    {
+        if (left.Shell != right.Shell || left.Match != right.Match)
+        {
+            return false;
+        }
+
+        var phraseMatches = left.Match == ApprovalMatchKind.TokenPrefix
+            ? TokenSequencesEqual(left.VerbTokens, right.VerbTokens, left.Shell)
+            : left.Shell is { } shell
+                ? Equals(left.Verb, right.Verb, shell)
+                : Equals(left.Verb, right.Verb);
+        return phraseMatches &&
+               (left.Shell is { } directoryShell
+                   ? Equals(
+                       NormalizeDirectory(left.Directory, directoryShell),
+                       NormalizeDirectory(right.Directory, directoryShell),
+                       directoryShell)
+                   : Equals(
+                       NormalizeDirectory(left.Directory),
+                       NormalizeDirectory(right.Directory)));
+    }
 
     /// <summary>
-    /// Canonicalizes a directory path for storage and comparison. Trims
-    /// surrounding whitespace, collapses null/empty/whitespace to <c>null</c>
-    /// (the global-wildcard sentinel), and strips a trailing path separator so
-    /// <c>/path/</c> and <c>/path</c> compare equal. Preserves filesystem
-    /// roots (<c>/</c>, <c>C:\</c>) intact.
+    /// Canonicalizes a directory path for comparison. It preserves significant
+    /// whitespace and never maps a non-null value to the global sentinel. It
+    /// strips redundant trailing separators and preserves file-system roots.
     /// </summary>
     public static string? NormalizeDirectory(string? directory)
+        => NormalizeDirectory(directory, shell: null);
+
+    /// <summary>
+    /// Canonicalizes a directory with the selected shell path rules.
+    /// </summary>
+    public static string? NormalizeDirectory(string? directory, ApprovalShell? shell)
     {
         if (directory is null)
             return null;
 
-        var trimmed = directory.Trim();
-        if (trimmed.Length == 0)
-            return null;
+        if (directory.Length == 0)
+            return directory;
 
-        // Preserve POSIX filesystem root.
-        if (trimmed == "/")
-            return trimmed;
-
-        // Preserve Windows drive roots like "C:\" — TrimEnd would otherwise
-        // leave "C:" which means "the drive's current directory," a different
-        // location.
-        if (OperatingSystem.IsWindows()
-            && trimmed.Length == 3
-            && trimmed[1] == ':'
-            && (trimmed[2] == '\\' || trimmed[2] == '/'))
+        if (shell == ApprovalShell.Bash)
         {
-            return trimmed;
+            return directory == "/"
+                ? directory
+                : directory.TrimEnd('/');
         }
 
-        var stripped = trimmed.TrimEnd('/', '\\');
-        return stripped.Length == 0 ? trimmed : stripped;
+        if (shell == ApprovalShell.PowerShell)
+        {
+            var windowsDirectory = directory.Replace('/', '\\');
+            return windowsDirectory.Length == 3 &&
+                   char.IsAsciiLetter(windowsDirectory[0]) &&
+                   windowsDirectory[1] == ':' &&
+                   windowsDirectory[2] == '\\'
+                ? windowsDirectory
+                : windowsDirectory.TrimEnd('\\');
+        }
+
+        var fullPath = Path.IsPathFullyQualified(directory)
+            ? Path.GetFullPath(directory)
+            : directory;
+        var root = Path.IsPathFullyQualified(fullPath)
+            ? Path.GetPathRoot(fullPath)
+            : null;
+        if (root is not null && Equals(fullPath, root))
+            return fullPath;
+
+        var stripped = fullPath.TrimEnd('/', '\\');
+        return stripped.Length == 0 ? fullPath : stripped;
     }
 
     /// <summary>
-    /// Returns <paramref name="entry"/> with its verb trimmed and its
-    /// directory normalized via <see cref="NormalizeDirectory"/>. Used by
-    /// the store at write time so the on-disk file never accumulates
-    /// trailing-slash directory variants or whitespace-padded verbs of the
-    /// same logical entry — both shapes would silently never match a real
-    /// candidate at the gate.
+    /// Returns <paramref name="entry"/> with its directory normalized via
+    /// <see cref="NormalizeDirectory"/>. It preserves the exact verb text.
     /// </summary>
     public static ApprovalEntry Normalize(ApprovalEntry entry)
     {
-        var trimmedVerb = entry.Verb?.Trim() ?? string.Empty;
-        var normalizedDir = NormalizeDirectory(entry.Directory);
+        var normalizedDir = NormalizeDirectory(entry.Directory, entry.Shell);
 
-        var verbChanged = !string.Equals(trimmedVerb, entry.Verb, StringComparison.Ordinal);
         var dirChanged = !string.Equals(normalizedDir, entry.Directory, StringComparison.Ordinal);
 
-        if (!verbChanged && !dirChanged)
+        if (!dirChanged)
             return entry;
 
-        return entry with { Verb = trimmedVerb, Directory = normalizedDir };
+        return entry with { Directory = normalizedDir };
+    }
+
+    private static bool TokenSequencesEqual(
+        IReadOnlyList<string>? left,
+        IReadOnlyList<string>? right,
+        ApprovalShell? shell)
+    {
+        if (left is null || right is null || left.Count != right.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < left.Count; index++)
+        {
+            var equal = shell is { } typedShell
+                ? Equals(left[index], right[index], typedShell)
+                : Equals(left[index], right[index]);
+            if (!equal)
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

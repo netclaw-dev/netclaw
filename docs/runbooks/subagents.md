@@ -179,7 +179,7 @@ findings into clear, well-organized summaries.
 - Cross-reference multiple sources when possible.
 - Always cite your sources with URLs.
 - Use file_read for local reference material when needed.
-- Use attach_file if the parent session should deliver an existing file.
+- Return each authorized file path that the parent session should deliver.
 - Be thorough but concise — focus on facts and actionable information.
 ```
 

@@ -9,20 +9,13 @@ using Akka.Streams.Dsl;
 namespace Netclaw.Actors.Channels;
 
 /// <summary>
-/// Helpers for observing the internal <see cref="Task{Done}"/> instances
-/// that Akka.Streams stages (e.g. <c>Sink.ForEach</c>'s <c>IgnoreSink</c>
-/// and <c>Source.Queue</c>'s <c>_completion</c>) create via
-/// <c>TaskCompletionSource</c>. Those tasks are faulted on stream
-/// teardown; if nothing observes them, the finalizer surfaces the fault
-/// as <see cref="TaskScheduler.UnobservedTaskException"/>. Real failures
-/// still surface through <c>WatchTermination</c> / actor messages — this
-/// only silences the duplicate finalizer noise.
+/// Observes discarded Akka.Streams sink tasks. Stream teardown can fault these
+/// tasks after the owner receives the primary termination signal.
 /// </summary>
 internal static class StreamTaskObservation
 {
     /// <summary>
-    /// Attach a fault-only continuation that reads <see cref="Task.Exception"/>
-    /// so the task is marked observed before the finalizer runs.
+    /// Attach a fault-only continuation that reads <see cref="Task.Exception"/>.
     /// </summary>
     public static void ObserveSilently(Task task)
     {
@@ -34,11 +27,7 @@ internal static class StreamTaskObservation
     }
 
     /// <summary>
-    /// Replace a sink's <see cref="Task{Done}"/> materialized value with
-    /// <see cref="NotUsed"/> after attaching <see cref="ObserveSilently"/>
-    /// to the underlying task. Use when the caller wants to discard the
-    /// materialized value but the underlying TCS still gets faulted on
-    /// teardown.
+    /// Replace a sink task with <see cref="NotUsed"/> after the observer attaches.
     /// </summary>
     public static Sink<TIn, NotUsed> ObservingFault<TIn>(this Sink<TIn, Task<Done>> sink) =>
         sink.MapMaterializedValue<NotUsed>(static task =>

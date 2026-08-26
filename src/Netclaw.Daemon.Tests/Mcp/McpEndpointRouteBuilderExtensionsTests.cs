@@ -73,10 +73,14 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
 
         // Minimal McpClientManager with empty state
         var toolRegistry = new ToolRegistry();
+        var dependencies = McpManagerTestDependencies.Create();
         var mcpManager = new McpClientManager(
             servers,
             toolRegistry,
-            new ToolConfig(),
+            dependencies.SkillRegistry,
+            dependencies.SkillIndexPublisher,
+            dependencies.ToolAccessPolicy,
+            dependencies.ToolConfig,
             credentialStore,
             McpOAuthTestDoubles.UnusedRegistrar(),
             flowBroker,

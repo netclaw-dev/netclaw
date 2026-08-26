@@ -10,20 +10,19 @@ namespace Netclaw.Security.Tests;
 
 /// <summary>
 /// Multi-line shell command coverage for <see cref="ShellApprovalMatcher"/>.
-/// A bare newline separates statements; on POSIX both <c>ExtractPatterns</c>
-/// and <c>ExtractCandidates</c> route through BashParser, so a multi-line
-/// command decomposes into one approval unit per statement.
+/// A bare newline separates Bash statements. The matcher returns one approval
+/// unit for each statement and keeps pipeline stages in one unit.
 /// </summary>
 public sealed class ShellApprovalMatcherMultilineTests
 {
-    private readonly ShellApprovalMatcher _matcher = ShellApprovalMatcher.Instance;
+    private readonly ShellApprovalMatcher _matcher = new(
+        ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
 
     private static Dictionary<string, object?> Args(string command) => new() { ["Command"] = command };
 
     /// <summary>
-    /// xunit.v3 <c>SkipUnless</c> hook: the matcher routes through BashParser
-    /// on POSIX only — the Windows path uses the legacy newline-blind
-    /// <c>ShellTokenizer</c> splitter, so these assertions don't hold there.
+    /// xunit.v3 <c>SkipUnless</c> hook for tests that require POSIX paths and
+    /// filesystem behavior. Native PowerShell cases have a separate matrix.
     /// </summary>
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
@@ -76,5 +75,16 @@ public sealed class ShellApprovalMatcherMultilineTests
 
         Assert.Contains(candidates, c => c.Verb == "cd" && c.Directory == "/tmp");
         Assert.Contains(candidates, c => c.Verb == "rm" && c.Directory == "/tmp/foo");
+    }
+
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_uncertain_cwd_without_absolute_scope_fails_closed()
+    {
+        // A newline runs git even if cd fails. Its cwd can therefore be the
+        // original directory or /tmp, and no persistent scope is safe.
+        var arguments = Args("cd /tmp\ngit status");
+
+        Assert.Empty(_matcher.ExtractCandidates(new ToolName("shell_execute"), arguments));
+        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
     }
 }

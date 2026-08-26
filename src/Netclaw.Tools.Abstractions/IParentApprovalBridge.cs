@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
+
 namespace Netclaw.Tools;
 
 public abstract record InteractiveApprovalCapability
@@ -40,6 +42,23 @@ public enum ParentApprovalDecision
 }
 
 /// <summary>
+/// Extensions over <see cref="ParentApprovalDecision"/>.
+/// </summary>
+public static class ParentApprovalDecisionExtensions
+{
+    /// <summary>
+    /// True when the sub-agent's parent decision grants execution (any approve
+    /// scope). Mirrors <c>ApprovalDecision.IsApprovalGrant</c> so the sub-agent
+    /// loop classifies approve scopes identically to the parent session paths.
+    /// </summary>
+    public static bool IsApprovalGrant(this ParentApprovalDecision decision)
+        => decision is ParentApprovalDecision.ApprovedOnce
+            or ParentApprovalDecision.ApprovedSession
+            or ParentApprovalDecision.ApprovedAlways
+            or ParentApprovalDecision.ApprovedEverywhere;
+}
+
+/// <summary>
 /// Thrown when a sub-agent needs parent approval but the parent session cannot
 /// safely emit an approval prompt with complete authority context.
 /// </summary>
@@ -56,7 +75,23 @@ public sealed class ParentApprovalUnavailableException : InvalidOperationExcepti
 /// session can record folder-scoped grants from the actual paths the sub-agent
 /// touched, not just the cwd.
 /// </summary>
-public sealed record ParentApprovalCandidate(string Verb, string? Directory);
+public sealed record ParentApprovalCandidate(string Verb, string? Directory)
+{
+    /// <summary>The immutable parser-owned canonical verb tokens.</summary>
+    public IReadOnlyList<string>? VerbTokens { get; init; }
+
+    /// <summary>The native shell grammar that produced the candidate.</summary>
+    public ApprovalShell? Shell { get; init; }
+
+    /// <summary>Retains the released candidate identity contract.</summary>
+    public bool Equals(ParentApprovalCandidate? other) =>
+        other is not null &&
+        string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
+        string.Equals(Directory, other.Directory, StringComparison.Ordinal);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory);
+}
 
 /// <summary>
 /// One button on the approval prompt. <paramref name="Key"/> is the wire-stable

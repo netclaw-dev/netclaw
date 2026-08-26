@@ -39,12 +39,15 @@ internal sealed class SessionToolPipelineTestFixture(
     private string? _projectDirectory;
     private IReadOnlyList<string> _recentFiles = [];
     private bool _setWorkingDirectoryAvailable;
+    private Func<string, ToolInvocationContext, bool>? _canDeclareWorkingDirectory;
     private bool _streamResults;
     private ModelModality _modelInputModalities = ModelModality.Text;
     private IReadOnlyDictionary<string, IReadOnlyList<string>> _oneTimeApprovalPreSeed
         = new Dictionary<string, IReadOnlyList<string>>();
     private IReadOnlyDictionary<string, ApprovalDecision> _decisionOverrides
         = new Dictionary<string, ApprovalDecision>();
+    private IReadOnlyList<SessionScratchCorrectionKey> _scratchCorrectionKeys = [];
+    private ILoggingAdapter _logger = NoLogger.Instance;
 
     public SessionToolPipelineTestFixture From(MessageSource source)
     {
@@ -61,6 +64,12 @@ internal sealed class SessionToolPipelineTestFixture(
     public SessionToolPipelineTestFixture WithTimeProvider(TimeProvider timeProvider)
     {
         _timeProvider = timeProvider;
+        return this;
+    }
+
+    public SessionToolPipelineTestFixture WithLogger(ILoggingAdapter logger)
+    {
+        _logger = logger;
         return this;
     }
 
@@ -130,6 +139,7 @@ internal sealed class SessionToolPipelineTestFixture(
     public SessionToolPipelineTestFixture WithSetWorkingDirectoryAvailable()
     {
         _setWorkingDirectoryAvailable = true;
+        _canDeclareWorkingDirectory = static (_, _) => true;
         return this;
     }
 
@@ -154,6 +164,13 @@ internal sealed class SessionToolPipelineTestFixture(
         return this;
     }
 
+    public SessionToolPipelineTestFixture WithScratchCorrections(
+        params SessionScratchCorrectionKey[] keys)
+    {
+        _scratchCorrectionKeys = Array.AsReadOnly(keys.ToArray());
+        return this;
+    }
+
     public Task ExecuteAsync(CancellationToken cancellationToken)
     {
         var turnContext = _turnContext ?? TurnContext.FromMessageSource(
@@ -172,7 +189,7 @@ internal sealed class SessionToolPipelineTestFixture(
         var pipeline = new SessionToolExecutionPipeline(
             executor,
             _timeProvider,
-            NoLogger.Instance);
+            _logger);
         var batch = new SessionToolBatch(turnContext, runEnvironment)
         {
             ToolCalls = toolCalls,
@@ -185,9 +202,11 @@ internal sealed class SessionToolPipelineTestFixture(
                 _approvalTimeout),
             BackgroundJobs = _backgroundJobs,
             SetWorkingDirectoryAvailable = _setWorkingDirectoryAvailable,
+            CanDeclareWorkingDirectory = _canDeclareWorkingDirectory,
             StreamResults = _streamResults,
             OneTimeApprovalPreSeed = _oneTimeApprovalPreSeed,
             DecisionOverrides = _decisionOverrides,
+            ScratchCorrections = new SessionScratchCorrectionDispatch(_scratchCorrectionKeys),
             CancellationToken = cancellationToken
         };
 

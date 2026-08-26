@@ -9,6 +9,7 @@ using DotNet.Testcontainers.Builders;
 using DotNet.Testcontainers.Containers;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Skills;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
 using Netclaw.Security.Skills;
@@ -105,11 +106,13 @@ public sealed class SkillServerNativeSidecarIntegrationTests : IAsyncLifetime
                 }
             ]
         };
+        var skillRegistry = new SkillRegistry();
+        var skillIndexLayer = new SkillIndexContextLayer();
         var service = new ServerFeedSkillSyncService(
             feedsConfig,
             paths,
-            new SkillRegistry(),
-            new SkillIndexContextLayer(),
+            skillRegistry,
+            new SkillIndexPublisher(skillRegistry, skillIndexLayer, static (_, _) => true),
             TimeProvider.System,
             new NoOpSkillContentScanner(),
             NullLogger<ServerFeedSkillSyncService>.Instance,

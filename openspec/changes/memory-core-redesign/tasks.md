@@ -54,7 +54,7 @@ constitution gates (tests, evals where mapped, schema/skill sync, slopwatch).
 
 - [ ] 5.1 **BREAKING**: restrict automatic recall to `recall_mode='auto'` in `SearchByPlanAsync` (searchable leaves the auto pool); update `MemoryIndexContextLayer` guidance
 - [ ] 5.2 Formation: policy gate honors sidecar-proposed recall mode for durable facts, defaulting to `searchable`; observer distillation prompt rewritten for fewer, more comprehensive proposals with an explicit auto-mode whitelist (identity/preferences/environment)
-- [ ] 5.3 Trace revival: reachable producer (sidecar may propose `trace` with 72 h TTL), fresh-trace auto-recall eligibility weighted below durable facts, removal of the unreachable turn-complete Trace dead code
+- [ ] 5.3 [SUPERSEDED by PR #2007 — the turn-complete Trace lane was removed; only the unreachable MemoryClass.Trace resolver branches remain to adjudicate] Trace revival: reachable producer (sidecar may propose `trace` with 72 h TTL), fresh-trace auto-recall eligibility weighted below durable facts, removal of the unreachable turn-complete Trace dead code
 - [ ] 5.4 `MemoryClass.ToolLesson` (`tool_lesson`) → Document/MergeDocument/Searchable with per-tool anchors; `store_memory` accepts the class and sets the `VerifiedToolFinding` checkpoint flag
 - [ ] 5.5 Sidecar distillation prompt: correction-hunting instruction producing tool-lesson proposals
 - [ ] 5.6 Per-tool context injection in the tool-execution pipeline: `[tool-lessons:<name>]` block on first use per session (bounded, once per tool, reset on compaction); remove the dead `verified-tool-finding` +25 recall bonus
@@ -69,7 +69,7 @@ constitution gates (tests, evals where mapped, schema/skill sync, slopwatch).
 - [ ] 6.3 `netclaw memory consolidate --apply --plan <path>`: live-daemon refusal (override flag), `VACUUM INTO` backup, batched apply, re-embed + FTS rebuild, ledger row
 - [ ] 6.4 Expiry sweep in the daemon maintenance loop (grace window, per-class deletion logging)
 - [ ] 6.5 `netclaw memory status` (composition, coverage, pending checkpoints, expired-awaiting-sweep, recent ledger)
-- [ ] 6.6 Checkpoint enqueue gating: turn-complete lane gated by the extractor's precondition at enqueue time
+- [ ] 6.6 [SUPERSEDED by PR #2007 — the turn-complete lane was removed, not gated; no enqueue gating is needed] Checkpoint enqueue gating: turn-complete lane gated by the extractor's precondition at enqueue time
 - [ ] 6.7 Subtraction: drop `memory_edges` DDL, remove facet/soft-scope inference from `DeterministicRetrievalPlanning` (keep stopword hygiene + lexical terms), delete dead Trace path remnants
 - [ ] 6.8 Integration tests on a seeded corpus: backfill→dry-run→edited-plan apply→status round-trip; sweep deletes only past-grace rows
 - [ ] 6.9 Runbook update (`docs/runbooks/memory-health-and-evals.md`): embedding, consolidation, sweep operations

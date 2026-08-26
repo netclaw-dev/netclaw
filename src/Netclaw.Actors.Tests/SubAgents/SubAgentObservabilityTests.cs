@@ -9,7 +9,9 @@ using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tests.Memory;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -44,6 +46,12 @@ public sealed class SubAgentObservabilityTests : TestKit
             EmitStructuredFindings = false
         };
 
+    private static ToolAccessPolicy PermissivePolicy() => new(
+        new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
+        new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal, ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+        new ShellCommandPolicy(),
+        new ToolPathPolicy([]));
+
     private static RunSubAgent NewRun(string task, string? scopeId = null)
         => new()
         {
@@ -61,7 +69,7 @@ public sealed class SubAgentObservabilityTests : TestKit
         // between start and completion. Now the phase is logged, so it is visible and
         // diagnosable in Seq. The scope id mirrors a real spawn so the SessionId/
         // SubSessionId enrichment branch is exercised too.
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), new FakeChatClient()));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), new FakeChatClient(), PermissivePolicy()));
 
         await EventFilter.Info(contains: "calling the model").ExpectAsync(1, async () =>
         {
@@ -75,7 +83,7 @@ public sealed class SubAgentObservabilityTests : TestKit
     [Fact]
     public async Task Completion_emits_summary_with_cumulative_stats()
     {
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), new FakeChatClient()));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), new FakeChatClient(), PermissivePolicy()));
 
         // The summary line carries the cumulative tool/iteration/duration stats used
         // for sub-agent run analysis.
@@ -84,6 +92,30 @@ public sealed class SubAgentObservabilityTests : TestKit
             await agent.Ask<SubAgentResult>(
                 NewRun("Say hello"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Startup_emits_one_payload_free_tool_exposure_diagnostic()
+    {
+        var core = new FakeNetclawTool("core_marker", "core result");
+        var deferred = new FakeNetclawTool("deferred_marker", "deferred result");
+        var props = SubAgentActor.CreatePropsWithProjectInstructionProvider(
+            CreateDefinition([core, deferred]),
+            new FakeChatClient(),
+            PermissivePolicy(),
+            NullSystemPromptProvider.Instance,
+            coreToolNames: new HashSet<string>([core.Name], StringComparer.Ordinal));
+        var agent = Sys.ActorOf(props);
+
+        await EventFilter.Info(
+            message: "SubAgent tool exposure core=1 deferredVisible=1 loaded=0")
+            .ExpectAsync(1, async () =>
+            {
+                await agent.Ask<SubAgentResult>(
+                    NewRun("Inspect /private/payload-marker.txt"),
+                    TimeSpan.FromSeconds(5),
+                    TestContext.Current.CancellationToken);
+            }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -98,7 +130,7 @@ public sealed class SubAgentObservabilityTests : TestKit
                     new Dictionary<string, object?> { ["name"] = "World" })
             ]
         };
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
 
         // A tool start event (distinct from the existing tool-result log) lets an
         // operator see when a slow tool began, not just when it finished.
@@ -106,6 +138,36 @@ public sealed class SubAgentObservabilityTests : TestKit
         {
             await agent.Ask<SubAgentResult>(
                 NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Tool_dispatch_emits_only_the_bounded_outcome_category()
+    {
+        var fakeTool = new FakeNetclawTool("greet", "private-result-marker");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("private-call-marker", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "private-argument-marker",
+                        ["_rationale"] = "Exercise the bounded diagnostic."
+                    })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        await EventFilter.Info(message: "SubAgent tool outcome category=Success").ExpectAsync(1, async () =>
+        {
+            await agent.Ask<SubAgentResult>(
+                NewRun("Use the tool with a private payload marker."),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
@@ -123,7 +185,7 @@ public sealed class SubAgentObservabilityTests : TestKit
             UsageOverride = new UsageDetails { InputTokenCount = 120, OutputTokenCount = 45 }
         };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
-            CreateDefinition(), fakeClient, sessionMetrics: metrics));
+            CreateDefinition(), fakeClient, PermissivePolicy(), sessionMetrics: metrics));
 
         var result = await agent.Ask<SubAgentResult>(
             NewRun("Say hello"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -154,7 +216,7 @@ public sealed class SubAgentObservabilityTests : TestKit
             UsageOverride = new UsageDetails { InputTokenCount = 120, OutputTokenCount = 45 }
         };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
-            CreateDefinition([fakeTool]), fakeClient, sessionMetrics: metrics));
+            CreateDefinition([fakeTool]), fakeClient, PermissivePolicy(), sessionMetrics: metrics));
 
         var result = await agent.Ask<SubAgentResult>(
             NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -173,7 +235,7 @@ public sealed class SubAgentObservabilityTests : TestKit
         {
             UsageOverride = new UsageDetails { InputTokenCount = 120, OutputTokenCount = 45 }
         };
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient));
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition(), fakeClient, PermissivePolicy()));
 
         // The completion summary now carries token totals so sub-agent cost is visible
         // in the logs (and Seq), not just tool/iteration/duration counts.

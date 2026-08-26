@@ -50,6 +50,8 @@ namespace Netclaw.SmokeMcpServer;
 
 internal sealed class Program
 {
+    private static McpServerPrimitiveCollection<McpServerTool>? _dynamicTools;
+
     // Class is non-static so WithTools<Program>() can construct it for tool
     // discovery; tool methods themselves remain static because they have no
     // per-instance state. Static-only state lives on HttpAuthCapture.
@@ -96,6 +98,27 @@ internal sealed class Program
             arguments = Environment.GetCommandLineArgs().Skip(1).ToArray(),
         });
 
+    [Description("Add one deterministic tool to the live catalog.")]
+    public static string AddDynamicTool()
+    {
+        var tools = _dynamicTools
+                    ?? throw new InvalidOperationException("Dynamic catalog mode is not active.");
+        return tools.TryAdd(McpServerTool.Create(
+            DynamicTool,
+            new McpServerToolCreateOptions { Name = "dynamic-added" }))
+            ? "added"
+            : "already-added";
+    }
+
+    public static string DynamicTool() => "dynamic-result";
+
+    [McpServerPrompt(Name = "verify-sum", Title = "Verify a sum")]
+    [Description("Create a deterministic workflow that verifies a sum with the add tool.")]
+    public static string VerifySum(
+        [Description("The first integer as text.")] string left,
+        [Description("The second integer as text.")] string right)
+        => $"SMOKE-MCP-PROMPT-V1: Call the add tool with a={left} and b={right}. Report the returned sum.";
+
     /// <summary>
     /// HTTP-mode-only tool: returns the Authorization header attached to
     /// the most recent request the server received. Returns the literal
@@ -132,7 +155,7 @@ internal sealed class Program
             return parsed.Transport switch
             {
                 "http" => await RunHttpAsync(parsed),
-                _ => await RunStdioAsync(),
+                _ => await RunStdioAsync(parsed),
             };
         }
         catch (Exception ex)
@@ -142,7 +165,7 @@ internal sealed class Program
         }
     }
 
-    private static async Task<int> RunStdioAsync()
+    private static async Task<int> RunStdioAsync(ParsedArgs args)
     {
         var tools = new McpServerPrimitiveCollection<McpServerTool>
         {
@@ -151,6 +174,18 @@ internal sealed class Program
             McpServerTool.Create(RecordTasks, new McpServerToolCreateOptions { Name = "record-tasks" }),
             McpServerTool.Create(ProcessInfo, new McpServerToolCreateOptions { Name = "process-info" }),
         };
+        var prompts = new McpServerPrimitiveCollection<McpServerPrompt>
+        {
+            McpServerPrompt.Create(VerifySum, new McpServerPromptCreateOptions { Name = "verify-sum" }),
+        };
+
+        if (args.CatalogNotifications)
+        {
+            tools.Add(McpServerTool.Create(
+                AddDynamicTool,
+                new McpServerToolCreateOptions { Name = "add-dynamic-tool" }));
+            _dynamicTools = tools;
+        }
 
         var options = new McpServerOptions
         {
@@ -164,6 +199,8 @@ internal sealed class Program
                 "Use 'add' to sum two integers, 'echo' to repeat text, and " +
                 "'record-tasks' to record a batch of task objects.",
             ToolCollection = tools,
+            PromptCollection = prompts,
+            ProtocolVersion = args.CatalogNotifications ? "2026-07-28" : null,
         };
 
         await using var transport = new StdioServerTransport(options);
@@ -198,7 +235,8 @@ internal sealed class Program
                     "from the most recent request.";
             })
             .WithHttpTransport()
-            .WithTools<Program>();
+            .WithTools<Program>()
+            .WithPrompts<Program>();
 
         var app = builder.Build();
 
@@ -289,6 +327,7 @@ internal sealed class Program
         var port = 0;
         var captureAuth = false;
         var requireAuth = false;
+        var catalogNotifications = false;
 
         for (var i = 0; i < args.Length; i++)
         {
@@ -306,13 +345,21 @@ internal sealed class Program
                 case "--require-auth":
                     requireAuth = true;
                     break;
+                case "--catalog-notifications":
+                    catalogNotifications = true;
+                    break;
             }
         }
 
-        return new ParsedArgs(transport, port, captureAuth, requireAuth);
+        return new ParsedArgs(transport, port, captureAuth, requireAuth, catalogNotifications);
     }
 
-    private sealed record ParsedArgs(string Transport, int Port, bool CaptureAuth, bool RequireAuth);
+    private sealed record ParsedArgs(
+        string Transport,
+        int Port,
+        bool CaptureAuth,
+        bool RequireAuth,
+        bool CatalogNotifications);
 }
 
 /// <summary>

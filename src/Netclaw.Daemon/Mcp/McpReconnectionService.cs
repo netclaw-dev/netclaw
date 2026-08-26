@@ -58,6 +58,12 @@ internal sealed class McpReconnectionService : BackgroundService
             if (status.State is not McpConnectionState.Unreachable)
             {
                 _backoff.TryRemove(serverName, out _);
+
+                // Healthy connections get a throttled catalog refresh so live tool
+                // changes surface without a reconnect. The manager owns the cadence.
+                if (status.State is McpConnectionState.Connected)
+                    await TryRefreshCatalogAsync(serverName, ct);
+
                 continue;
             }
 
@@ -133,6 +139,26 @@ internal sealed class McpReconnectionService : BackgroundService
             {
                 ["serverName"] = serverName.Value,
             }));
+    }
+
+    private async Task TryRefreshCatalogAsync(McpServerName serverName, CancellationToken ct)
+    {
+        try
+        {
+            await _mcpReconnectable.TryRefreshCatalogAsync(serverName, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            // A refresh failure is not a connection failure — the manager keeps the
+            // last good catalog and the next tick retries. Log and move on.
+            _logger.LogDebug(ex,
+                "MCP server '{Name}' catalog refresh threw an exception",
+                serverName.Value);
+        }
     }
 
     internal readonly record struct BackoffState(int FailureCount, long LastAttemptMs);

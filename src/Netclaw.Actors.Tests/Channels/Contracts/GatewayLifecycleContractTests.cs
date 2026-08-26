@@ -44,6 +44,13 @@ public abstract class GatewayLifecycleContractTests : TestKit
         akka.scheduler.implementation = "Akka.TestKit.TestScheduler, Akka.TestKit"
         """);
 
+    /// <summary>
+    /// Budget for AwaitAssertAsync loops that embed a GetSnapshotAsync Ask.
+    /// Must exceed the 3s Ask timeout across retries: 15s / (3s + 100ms interval)
+    /// guarantees >= 4 full attempts on a loaded runner.
+    /// </summary>
+    private static readonly TimeSpan SnapshotAssertTimeout = TimeSpan.FromSeconds(15);
+
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
     }
@@ -189,7 +196,7 @@ public abstract class GatewayLifecycleContractTests : TestKit
             Assert.False(snapshot.IsReady);
             Assert.False(snapshot.IsConnected);
             Assert.Equal(1, CleanReconnectCount);
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -231,7 +238,7 @@ public abstract class GatewayLifecycleContractTests : TestKit
             Assert.True(snapshot.IsConnected);
             Assert.False(snapshot.IsReady);
             Assert.Equal(1, CleanReconnectCount);
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
 
         ReleaseTransportStop();
 
@@ -240,7 +247,7 @@ public abstract class GatewayLifecycleContractTests : TestKit
             var snapshot = await GetSnapshotAsync(actor);
             Assert.False(snapshot.IsConnected);
             Assert.False(snapshot.IsReady);
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -270,7 +277,7 @@ public abstract class GatewayLifecycleContractTests : TestKit
             // publishing closes the Healthy-but-deaf gap where a client-side
             // ask timeout suppressed the only setup signal.
             Assert.Equal(2, ConnectionRestoredCount);
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -310,7 +317,7 @@ public abstract class GatewayLifecycleContractTests : TestKit
         {
             Assert.Equal(2, TransportStartCount);
             Assert.True((await GetSnapshotAsync(actor)).IsReady);
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
 
         // Flap #2, again inside the stability window: the backoff must NOT
         // reset to zero — the next retry honors the grown 5s delay instead of
@@ -342,7 +349,7 @@ public abstract class GatewayLifecycleContractTests : TestKit
         {
             Assert.Equal(2, TransportStartCount);
             Assert.True((await GetSnapshotAsync(actor)).IsReady);
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
 
         // Hold Ready past the stability window, then drop: the backoff must
         // reset, so the next retry fires immediately instead of after 5s.
@@ -399,5 +406,5 @@ public abstract class GatewayLifecycleContractTests : TestKit
             Assert.False(snapshot.IsConnected);
             Assert.Equal(DisconnectedHealthDetail, snapshot.HealthDetail);
             Assert.Equal(expectedCleanReconnects, CleanReconnectCount);
-        }, cancellationToken: TestContext.Current.CancellationToken);
+        }, duration: SnapshotAssertTimeout, cancellationToken: TestContext.Current.CancellationToken);
 }

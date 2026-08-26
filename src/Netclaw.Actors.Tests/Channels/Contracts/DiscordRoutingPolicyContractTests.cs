@@ -13,6 +13,7 @@ public sealed class DiscordRoutingPolicyContractTests : RoutingPolicyContractTes
         bool mentionOnly,
         bool allowDm,
         bool mentionRequiredInDm,
+        bool mentionRequiredInThread,
         bool isDm,
         bool containsMention,
         bool threadExists,
@@ -36,7 +37,7 @@ public sealed class DiscordRoutingPolicyContractTests : RoutingPolicyContractTes
             IsInThread: isThreadReply);
 
         var decision = DiscordRoutingPolicy.Evaluate(
-            message, mentionOnly, allowDm, mentionRequiredInDm, threadExists, containsMention);
+            message, mentionOnly, allowDm, mentionRequiredInDm, mentionRequiredInThread, threadExists, containsMention);
 
         var kind = decision.Kind switch
         {
@@ -53,6 +54,7 @@ public sealed class DiscordRoutingPolicyContractTests : RoutingPolicyContractTes
             DiscordRoutingIgnoreReason.NoContent => RoutingIgnoreReason.NoContent,
             DiscordRoutingIgnoreReason.DmNotAllowed => RoutingIgnoreReason.DmNotAllowed,
             DiscordRoutingIgnoreReason.DmMentionRequired => RoutingIgnoreReason.DmMentionRequired,
+            DiscordRoutingIgnoreReason.ThreadMentionRequired => RoutingIgnoreReason.ThreadMentionRequired,
             DiscordRoutingIgnoreReason.ChannelMentionRequired => RoutingIgnoreReason.ChannelMentionRequired,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(decision), decision.IgnoreReason, "Unmapped Discord routing ignore reason.")

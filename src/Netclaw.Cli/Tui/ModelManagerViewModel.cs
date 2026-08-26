@@ -22,7 +22,8 @@ public enum ModelManagerState
     RoleOverview,
     SelectProvider,
     DiscoverModels,
-    ConfirmAssignment
+    ConfirmAssignment,
+    Loading
 }
 
 /// <summary>
@@ -47,7 +48,7 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     /// </summary>
     internal bool IsEmbeddedInConfig { get; set; }
 
-    public ReactiveProperty<ModelManagerState> CurrentState { get; } = new(ModelManagerState.RoleOverview);
+    public ReactiveProperty<ModelManagerState> CurrentState { get; } = new(ModelManagerState.Loading);
     public ReactiveProperty<string> StatusMessage { get; } = new("");
     public ReactiveProperty<bool> IsProbing { get; } = new(false);
     public ReactiveProperty<ProviderProbeResult?> ProbeResult { get; } = new(null);
@@ -87,6 +88,8 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     {
         base.OnActivated();
         Refresh();
+        CurrentState.Value = ModelManagerState.RoleOverview;
+        NotifyStateChanged();
 
         Input.OfType<IInputEvent, KeyPressed>()
             .Subscribe(HandleGlobalKey)
@@ -151,7 +154,6 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     {
         SelectedProvider = providerName;
         CurrentState.Value = ModelManagerState.DiscoverModels;
-        NotifyStateChanged();
         StartProbe();
     }
 
@@ -252,7 +254,6 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         SelectedProvider = providerName;
         SelectedRole = null;
         CurrentState.Value = ModelManagerState.DiscoverModels;
-        NotifyStateChanged();
         StartProbe();
     }
 
@@ -306,6 +307,13 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
     internal void StartProbe()
     {
         CancelProbe();
+        ManualModelEntry = false;
+        SelectedModelId = null;
+        IsProbing.Value = true;
+        ProbeResult.Value = null;
+        ProbeElapsedSeconds.Value = 0;
+        DiscoveredModels.Clear();
+        NotifyStateChanged();
         ProbeCompletion = ProbeProviderAsync();
     }
 
@@ -336,14 +344,6 @@ public sealed class ModelManagerViewModel : ReactiveViewModel
         var probeId = IdGen.ShortId();
         var stopwatch = Stopwatch.StartNew();
         Exception? probeException = null;
-
-        ManualModelEntry = false;
-        SelectedModelId = null;
-        IsProbing.Value = true;
-        ProbeResult.Value = null;
-        ProbeElapsedSeconds.Value = 0;
-        DiscoveredModels.Clear();
-        RequestRedraw();
 
         ProbeDiagnosticsLog.Write(
             _paths,

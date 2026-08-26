@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="BackgroundJobDefinitionStore.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -29,11 +29,21 @@ public sealed class BackgroundJobDefinitionStore
     private readonly Dictionary<string, RejectedLegacyBackgroundJobDefinition> _rejectedLegacyDefinitions =
         new(StringComparer.Ordinal);
     private readonly ILogger _logger;
+    private readonly Action<string, bool> _deleteDirectory;
 
     public BackgroundJobDefinitionStore(NetclawPaths paths, ILogger<BackgroundJobDefinitionStore>? logger = null)
+        : this(paths, logger ?? NullLogger<BackgroundJobDefinitionStore>.Instance, Directory.Delete)
+    {
+    }
+
+    internal BackgroundJobDefinitionStore(
+        NetclawPaths paths,
+        ILogger<BackgroundJobDefinitionStore> logger,
+        Action<string, bool> deleteDirectory)
     {
         _directory = paths.JobsDirectory;
-        _logger = logger ?? NullLogger<BackgroundJobDefinitionStore>.Instance;
+        _logger = logger;
+        _deleteDirectory = deleteDirectory;
         Directory.CreateDirectory(_directory);
     }
 
@@ -54,7 +64,55 @@ public sealed class BackgroundJobDefinitionStore
             return null;
         }
 
-        return JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+        var definition = JsonSerializer.Deserialize<BackgroundJobDefinition>(text, JsonOptions);
+        if (definition is null)
+            return null;
+
+        // Reject ids that resolve to special directory entries ("." / "..") —
+        // Uri.EscapeDataString does NOT escape dots, so such an id would make
+        // DeleteJobArtifacts target the jobs directory itself or its parent
+        // (see DeleteJobArtifacts containment check). The manager only ever
+        // generates 12-hex ids; anything else on disk is corrupt or hostile.
+        if (!IsSafeJobId(definition.Id.Value))
+        {
+            _logger.LogError(
+                "Background job document {Path} has an unsafe id '{JobId}'. The job will not be loaded.",
+                path, definition.Id.Value);
+            return null;
+        }
+
+        var expectedFileName = $"{Uri.EscapeDataString(definition.Id.Value)}.json";
+        var actualFileName = Path.GetFileName(path);
+        if (!string.Equals(actualFileName, expectedFileName, StringComparison.Ordinal))
+        {
+            _logger.LogError(
+                "Background job document {Path} has id '{JobId}', which does not match its canonical file name {ExpectedFileName}. "
+                + "The job will not be loaded.",
+                path, definition.Id.Value, expectedFileName);
+            return null;
+        }
+
+        return definition;
+    }
+
+    /// <summary>
+    /// True when the id is a plain file-name token that cannot traverse out of
+    /// the jobs directory. Dots pass through <c>Uri.EscapeDataString</c>
+    /// unescaped, so "." / ".." (and any id containing a path separator) are
+    /// rejected outright.
+    /// </summary>
+    private static bool IsSafeJobId(string id)
+    {
+        if (string.IsNullOrWhiteSpace(id))
+            return false;
+
+        if (id is "." or "..")
+            return false;
+
+        if (id.IndexOfAny(['/', '\\']) >= 0)
+            return false;
+
+        return true;
     }
 
     /// <summary>
@@ -142,6 +200,60 @@ public sealed class BackgroundJobDefinitionStore
 
             File.Delete(path);
             return true;
+        }
+    }
+
+    /// <summary>
+    /// Deletes the job definition file AND its output-log directory. Used by
+    /// terminal-job cleanup once a job's retention window has elapsed. Returns
+    /// true when anything was removed.
+    /// </summary>
+    public bool DeleteJobArtifacts(BackgroundJobId id)
+    {
+        lock (_sync)
+        {
+            var removed = false;
+
+            // Reuse the canonical output-log path (same encoding as
+            // GetOutputLogPathOnly) so the artifact directory matches exactly
+            // what the execution actor wrote.
+            var outputLogPath = GetOutputLogPathOnly(id);
+            var outputDir = Path.GetDirectoryName(outputLogPath);
+            if (outputDir is not null)
+            {
+                // Containment guard: Uri.EscapeDataString does not escape dots,
+                // so an id like ".." would otherwise resolve to the jobs
+                // directory's parent and Directory.Delete(recursive) would wipe
+                // it. Never touch anything outside the jobs directory.
+                var root = Path.GetFullPath(_directory);
+                var fullDir = Path.GetFullPath(outputDir);
+                var prefix = root.EndsWith(Path.DirectorySeparatorChar)
+                    ? root
+                    : root + Path.DirectorySeparatorChar;
+                if (!fullDir.StartsWith(prefix, StringComparison.Ordinal))
+                    return false;
+
+                if (File.Exists(fullDir))
+                    throw new IOException($"Background job artifact path '{fullDir}' is not a directory.");
+
+                if (Directory.Exists(fullDir))
+                {
+                    _deleteDirectory(fullDir, true);
+                    removed = true;
+                }
+            }
+
+            // Keep the definition until every output artifact is gone. A later
+            // sweep can retry if the directory delete fails because of a lock,
+            // permissions, or another transient filesystem error.
+            var path = GetPath(id);
+            if (File.Exists(path))
+            {
+                File.Delete(path);
+                removed = true;
+            }
+
+            return removed;
         }
     }
 

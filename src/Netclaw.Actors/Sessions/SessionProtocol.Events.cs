@@ -161,6 +161,8 @@ public static partial class SessionProtocol
         public IReadOnlyList<ApprovalCandidate> Candidates { get; init; } =
             Array.Empty<ApprovalCandidate>();
 
+        public string? SessionScratchDirectory { get; init; }
+
         public TurnContextRecord? TurnContext { get; init; }
 
         public long RequestedAtMs { get; init; }

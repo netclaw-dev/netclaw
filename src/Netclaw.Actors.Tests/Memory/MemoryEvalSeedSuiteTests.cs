@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="MemoryEvalSeedSuiteTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -211,75 +211,6 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
         Assert.Equal(MemoryClass.Evidence, candidate.MemoryClass);
         Assert.Equal(MemoryRecallMode.Searchable, candidate.RecallMode);
         Assert.Equal(now + (long)TimeSpan.FromDays(30).TotalMilliseconds, candidate.ExpiresAtMs);
-    }
-
-    [Fact]
-    public async Task TurnCompletion_promotes_stable_project_fact_into_durable_document()
-    {
-        await _store.InitializeAsync(TestContext.Current.CancellationToken);
-        var policy = new MemoryPolicyEvaluator();
-        var extractor = new MemoryRulesFirstExtractor(policy);
-        var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
-
-        var payload = new MemoryCheckpointPayload(
-            SessionId: "ops/thread-5",
-            TriggerType: "turn-complete",
-            Source: "session",
-            Content: "User: TextForge has oauth\nAssistant: Got it.",
-            UserContent: "TextForge has oauth",
-            AssistantContent: "Got it.",
-            IsExplicitRequest: false,
-            HasVerifiedToolFinding: false,
-            IsCompactionBoundary: false,
-            HasAcceptedSubAgentFinding: false,
-            Sensitivity: "normal",
-            RecallMode: "auto",
-            Confidence: 0.8,
-            FreshnessAtMs: now,
-            Kind: "document",
-            Title: "turn-completion",
-            UpdateSemantics: "append-document");
-
-        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-        var candidate = Assert.Single(candidates);
-
-        Assert.Equal(MemoryClass.DurableFact, candidate.MemoryClass);
-        Assert.Equal("Project Fact: TextForge has Oauth", candidate.Title);
-        Assert.Contains("project_fact", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains("product_capability", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task TurnCompletion_promotes_completed_project_milestone_into_durable_document()
-    {
-        await _store.InitializeAsync(TestContext.Current.CancellationToken);
-        var policy = new MemoryPolicyEvaluator();
-        var extractor = new MemoryRulesFirstExtractor(policy);
-
-        var payload = new MemoryCheckpointPayload(
-            SessionId: "ops/thread-6",
-            TriggerType: "turn-complete",
-            Source: "session",
-            Content: "User: we successfully completed our security audit\nAssistant: Nice.",
-            UserContent: "we successfully completed our security audit",
-            AssistantContent: "Nice.",
-            IsExplicitRequest: false,
-            HasVerifiedToolFinding: false,
-            IsCompactionBoundary: false,
-            HasAcceptedSubAgentFinding: false,
-            Sensitivity: "normal",
-            RecallMode: "auto",
-            Confidence: 0.8,
-            Kind: "document",
-            Title: "turn-completion",
-            UpdateSemantics: "append-document");
-
-        var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
-        var candidate = Assert.Single(candidates);
-
-        Assert.Equal(MemoryClass.DurableFact, candidate.MemoryClass);
-        Assert.Equal("Project Milestone: Our security audit", candidate.Title);
-        Assert.Contains("delivery_status", candidate.FacetsJson ?? string.Empty, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

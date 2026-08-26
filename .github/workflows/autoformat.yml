@@ -1,0 +1,53 @@
+name: autoformat
+
+# Auto-format .cs files changed in a pull request and commit the fixes back
+# to the PR branch. This is the fix-in-place pattern used by dotnet/maui
+# (dotnet-autoformat-pr.yml): formatting never blocks a PR, it repairs it.
+# BOM enforcement stays separate - see scripts/check-no-bom.sh / the no-bom
+# job in pr_validation.yml, because a whitespace-scope format does not strip
+# BOMs.
+on:
+  pull_request:
+
+# Only this workflow needs write access - it pushes formatting commits back
+# to the PR branch. pr_validation.yml stays read-only.
+permissions:
+  contents: write
+
+# A push to the PR branch re-fires pull_request (synchronize). Serialize runs
+# per PR so two pushes cannot race on the same branch; if the push already
+# landed, the new run finds nothing to do and no-ops.
+concurrency:
+  group: autoformat-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  autoformat-code:
+    name: Auto-format changed code
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          lfs: true
+          fetch-depth: 0
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Restore solution"
+        run: dotnet restore Netclaw.slnx
+
+      - name: "Autoformat"
+        uses: rolfbjarne/autoformat@6651f9ce43cbbc99f74186f20fe17b8e9f8001a3 # v0.5
+        with:
+          script: 'dotnet format Netclaw.slnx --no-restore'
+          onlyFilesModifiedInPullRequest: true
+          git_commit_message: 'Auto-format source code'

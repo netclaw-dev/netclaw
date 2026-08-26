@@ -4,8 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
+using Akka.Actor;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using static Netclaw.Actors.Webhooks.WebhookRouteProtocol;
 
 namespace Netclaw.Actors.Tools;
 
@@ -14,7 +16,9 @@ namespace Netclaw.Actors.Tools;
     Grant = "webhook_admin")]
 public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
 {
-    private readonly WebhookRouteStore _store;
+    private static readonly TimeSpan AskTimeout = TimeSpan.FromSeconds(10);
+
+    private readonly IActorRef _routeActor;
 
     public record Params(
         [property: Description("Stable route name used in the webhook URL path (kebab-case, for example 'github-issues').")]
@@ -60,23 +64,26 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         [property: Description("Accepted timestamp tolerance in seconds for HmacTimestamped routes, from 1 to 3600. Defaults to 300.")]
         int? ToleranceSeconds = null);
 
-    public SetWebhookTool(WebhookRouteStore store)
+    public SetWebhookTool(IActorRef routeActor)
     {
-        _store = store;
+        _routeActor = routeActor;
     }
 
-    protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
+    protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
-        if (!WebhookRouteStore.TryNormalizeRouteName(args.RouteName, out var routeName, out var routeError))
-            return Task.FromResult($"Error: {routeError}");
+        // The tool front parses the wire string once. Past this line the route
+        // name is a WebhookRouteName, so no later step can reach a file with an
+        // unvalidated name.
+        if (!WebhookRouteName.TryCreate(args.RouteName, out var routeName, out var routeError))
+            return $"Error: {routeError}";
 
         if (string.IsNullOrWhiteSpace(args.Prompt))
-            return Task.FromResult("Error: 'prompt' is required.");
+            return "Error: 'prompt' is required.";
         if (string.IsNullOrWhiteSpace(args.Secret))
-            return Task.FromResult("Error: 'secret' is required.");
+            return "Error: 'secret' is required.";
 
         if (!WebhookRouteValidator.TryParseVerifierKind(args.VerificationKind, out var verificationKind))
-            return Task.FromResult("Error: 'verificationKind' must be 'Hmac', 'HmacTimestamped', or 'HeaderSecret'.");
+            return "Error: 'verificationKind' must be 'Hmac', 'HmacTimestamped', or 'HeaderSecret'.";
 
         if ((args.TimestampField is not null
              || args.SignatureField is not null
@@ -84,149 +91,94 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
              || args.ToleranceSeconds is not null)
             && verificationKind != WebhookVerifierKind.HmacTimestamped)
         {
-            return Task.FromResult("Error: Timestamp signature settings require 'verificationKind' to be 'HmacTimestamped'.");
+            return "Error: Timestamp signature settings require 'verificationKind' to be 'HmacTimestamped'.";
         }
+
+        if (!TryResolveRequestedAudience(args.Audience, out var requestedAudience, out var audienceError))
+            return audienceError!;
 
         try
         {
-            var result = _store.Update(
-                routeName,
-                ct,
-                existing => BuildUpdate(routeName, args, context.Audience, verificationKind, existing));
-            return Task.FromResult(result);
+            var response = await _routeActor.Ask<RouteSaved>(
+                BuildCommand(routeName, args, context.Audience, verificationKind, requestedAudience),
+                AskTimeout,
+                ct);
+
+            return response.Success
+                ? $"Webhook route '{routeName.Value}' saved at /api/webhooks/{routeName.Value}. Secret stored in the route file; keep it aligned with the sender configuration."
+                : $"Error: {response.ErrorMessage}";
         }
         catch (InvalidDataException ex)
         {
-            return Task.FromResult($"Error: {ex.Message}");
+            return $"Error: {ex.Message}";
         }
         catch (TimeoutException ex)
         {
-            return Task.FromResult($"Error: {ex.Message}");
+            return $"Error: {ex.Message}";
         }
-    }
-
-    private static (WebhookRouteConfig? Definition, string Result) BuildUpdate(
-        string routeName,
-        Params args,
-        TrustAudience creatorAudience,
-        WebhookVerifierKind verificationKind,
-        WebhookRouteConfig? existing)
-    {
-        if (existing is not null && existing.Audience > creatorAudience)
-        {
-            return (null,
-                $"Error: Existing route audience '{existing.Audience.ToWireValue()}' exceeds creator authority ({creatorAudience.ToWireValue()}).");
-        }
-
-        TrustAudience audience;
-        if (string.IsNullOrWhiteSpace(args.Audience) && existing is not null)
-        {
-            audience = existing.Audience;
-        }
-        else if (!TryResolveAudience(args.Audience, creatorAudience, out audience, out var audienceError))
-        {
-            return (null, audienceError!);
-        }
-
-        var existingVerification = existing?.Verification;
-
-        var definition = new WebhookRouteConfig
-        {
-            Enabled = args.Enabled ?? existing?.Enabled ?? true,
-            Prompt = args.Prompt.Trim(),
-            Events = args.Events is null ? [.. existing?.Events ?? []] : ParseEvents(args.Events),
-            Audience = audience,
-            NotifyInstructions = args.NotifyInstructions?.Trim() ?? existing?.NotifyInstructions ?? string.Empty,
-            DeliveryRequired = args.DeliveryRequired ?? existing?.DeliveryRequired ?? true,
-            MaxBodyBytes = args.MaxBodyBytes ?? existing?.MaxBodyBytes ?? 1024 * 1024,
-            RateLimitPerMinute = args.RateLimitPerMinute ?? existing?.RateLimitPerMinute ?? 30,
-            Verification = new WebhookVerificationConfig
-            {
-                Kind = verificationKind,
-                HmacAlgorithm = existingVerification?.HmacAlgorithm ?? WebhookHmacAlgorithm.Sha256,
-                Secret = new SensitiveString(args.Secret),
-                SignatureHeaderName = args.SignatureHeaderName is null
-                    ? existingVerification?.SignatureHeaderName
-                    : NormalizeOptional(args.SignatureHeaderName),
-                SignaturePrefix = args.SignaturePrefix is null
-                    ? existingVerification?.SignaturePrefix
-                    : NormalizeOptional(args.SignaturePrefix, trim: false),
-                SecretHeaderName = args.SecretHeaderName is null
-                    ? existingVerification?.SecretHeaderName
-                    : NormalizeOptional(args.SecretHeaderName),
-                EventHeaderName = args.EventHeaderName is null
-                    ? existingVerification?.EventHeaderName
-                    : NormalizeOptional(args.EventHeaderName),
-                DeliveryIdHeaderName = args.DeliveryIdHeaderName is null
-                    ? existingVerification?.DeliveryIdHeaderName
-                    : NormalizeOptional(args.DeliveryIdHeaderName),
-                TimestampField = args.TimestampField is null
-                    ? existingVerification?.TimestampField
-                    : args.TimestampField,
-                SignatureField = args.SignatureField is null
-                    ? existingVerification?.SignatureField
-                    : args.SignatureField,
-                SignedPayloadSeparator = args.SignedPayloadSeparator ?? existingVerification?.SignedPayloadSeparator,
-                ToleranceSeconds = args.ToleranceSeconds ?? existingVerification?.ToleranceSeconds
-            }
-        };
-
-        if (args.NotificationChannelId is null && existing?.NotificationTarget is { } existingTarget)
-        {
-            definition.NotificationTarget = new NotificationTargetConfig
-            {
-                Kind = existingTarget.Kind,
-                ChannelId = existingTarget.ChannelId
-            };
-        }
-        else if (!string.IsNullOrWhiteSpace(args.NotificationChannelId))
-        {
-            definition.NotificationTarget = new NotificationTargetConfig
-            {
-                Kind = NotificationTargetKind.Slack,
-                ChannelId = args.NotificationChannelId.Trim()
-            };
-        }
-
-        var validationErrors = WebhookRouteValidator.Validate(routeName, definition);
-        if (validationErrors.Count > 0)
-            return (null, $"Error: {validationErrors[0]}");
-
-        return (definition,
-            $"Webhook route '{routeName}' saved at /api/webhooks/{routeName}. Secret stored in the route file; keep it aligned with the sender configuration.");
     }
 
     /// <summary>
-    /// Resolves the route's audience from the optional explicit argument, falling
-    /// back to the creating context's audience (transitive provenance, mirroring
-    /// <c>set_reminder</c>). A route may not be minted above the creator's
-    /// authority — downgrade-only, mirroring
-    /// <c>ReminderManagerActor.ValidateRequestedAudience</c>. A context-less
-    /// invocation carries the unbound tool scope's
+    /// Projects the tool arguments into the actor's field-level patch. The tool
+    /// owns the wire grammar — comma-separated events, the audience and
+    /// verification-kind spellings — and the actor owns the merge, the audience
+    /// authority check, and validation.
+    /// </summary>
+    private static UpsertRoute BuildCommand(
+        WebhookRouteName routeName,
+        Params args,
+        TrustAudience creatorAudience,
+        WebhookVerifierKind verificationKind,
+        TrustAudience? requestedAudience) => new()
+        {
+            RouteName = routeName,
+            CreatorAudience = creatorAudience,
+            RequestedAudience = requestedAudience,
+            Prompt = args.Prompt,
+            Secret = args.Secret,
+            VerificationKind = verificationKind,
+            Events = args.Events is null ? null : ParseEvents(args.Events),
+            NotifyInstructions = args.NotifyInstructions,
+            DeliveryRequired = args.DeliveryRequired,
+            NotificationChannelId = args.NotificationChannelId,
+            MaxBodyBytes = args.MaxBodyBytes,
+            RateLimitPerMinute = args.RateLimitPerMinute,
+            Enabled = args.Enabled,
+            SignatureHeaderName = args.SignatureHeaderName,
+            SignaturePrefix = args.SignaturePrefix,
+            SecretHeaderName = args.SecretHeaderName,
+            EventHeaderName = args.EventHeaderName,
+            DeliveryIdHeaderName = args.DeliveryIdHeaderName,
+            TimestampField = args.TimestampField,
+            SignatureField = args.SignatureField,
+            SignedPayloadSeparator = args.SignedPayloadSeparator,
+            ToleranceSeconds = args.ToleranceSeconds
+        };
+
+    /// <summary>
+    /// Parses the optional explicit audience argument. A blank argument leaves
+    /// the audience unrequested, so the actor inherits the stored route's
+    /// audience or the creating context's audience (transitive provenance,
+    /// mirroring <c>set_reminder</c>). The actor enforces the downgrade-only
+    /// rule: a route may not be minted above the creator's authority. A
+    /// context-less invocation carries the unbound tool scope's
     /// <see cref="TrustAudience.Public"/>, so it cannot escalate. (Routes defined
     /// directly in config never reach this tool; they keep
     /// <c>WebhooksConfig.Audience</c>'s <see cref="TrustAudience.Public"/> default.)
     /// </summary>
-    private static bool TryResolveAudience(string? requested, TrustAudience creatorAudience, out TrustAudience audience, out string? error)
+    private static bool TryResolveRequestedAudience(string? requested, out TrustAudience? audience, out string? error)
     {
         if (string.IsNullOrWhiteSpace(requested))
         {
-            audience = creatorAudience;
+            audience = null;
             error = null;
             return true;
         }
 
         if (!SecurityPolicyDefaults.TryParseAudience(requested, out var parsed))
         {
-            audience = creatorAudience;
+            audience = null;
             error = "Error: 'audience' must be Public, Team, or Personal.";
-            return false;
-        }
-
-        if (parsed > creatorAudience)
-        {
-            audience = creatorAudience;
-            error = $"Error: Requested audience '{parsed.ToWireValue()}' exceeds creator authority ({creatorAudience.ToWireValue()}).";
             return false;
         }
 
@@ -241,13 +193,5 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
             return [];
 
         return [.. value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).Where(x => !string.IsNullOrWhiteSpace(x))];
-    }
-
-    private static string? NormalizeOptional(string value, bool trim = true)
-    {
-        if (string.IsNullOrWhiteSpace(value))
-            return null;
-
-        return trim ? value.Trim() : value;
     }
 }

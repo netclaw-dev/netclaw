@@ -76,6 +76,7 @@ debugging a daemon-wide problem → read `daemon.log`.
 |---------|-------|
 | No LLM responses | `netclaw doctor`; verify provider credentials |
 | Missing tools | `netclaw mcp list`; check MCP connection state |
+| An MCP tool call fails | Grep `<NETCLAW_HOME>/logs/daemon-*.log` for `MCP tool '` and `invocation failed`. Each failed call writes one Warning that names the server, the tool, and the HTTP status when the server sent one. The tool-result text gives the kind: `reported a failure:` is an error the tool declared, and `failed:` is an exception from the server or the transport. |
 | Memory recall degraded | `netclaw status` memory section |
 | Memory embedding/relevance model unavailable | Fires a `memory.embedding_model.unavailable` / `memory.relevance_model.unavailable` operational alert (once per model per daemon run) naming the model, failure reason, and consequence when `Memory.Embeddings.Enabled=true` and either ONNX model fails to provision or load; see `netclaw-memory`'s Embeddings section and `netclaw doctor`'s Memory Embeddings / Memory Relevance Gate checks |
 | Daemon won't start | crash logs at `<NETCLAW_HOME>/logs/crash-*.log` (`NETCLAW_HOME` defaults to `~/.netclaw`) |

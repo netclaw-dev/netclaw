@@ -1,9 +1,10 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpClientManagerStatusTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using ModelContextProtocol;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
 using Netclaw.Tools;
@@ -16,7 +17,7 @@ public sealed class McpClientManagerStatusTests
     private static readonly DateTimeOffset ErrorAt = DateTimeOffset.Parse("2026-07-22T12:00:00Z");
 
     [Fact]
-    public void BuildConnectionFailureStatus_WithoutTokensButWithOAuthHints_ReturnsAwaitingAuth()
+    public void BuildConnectionFailureStatus_WithoutTokensButWithOAuthChallenge_ReturnsAwaitingAuth()
     {
         var entry = new McpServerEntry
         {
@@ -25,16 +26,57 @@ public sealed class McpClientManagerStatusTests
             OAuthClientId = "client-id",
         };
 
+        // A real OAuth challenge does not reach us as a bare transport 401/403: the MCP SDK
+        // engages its OAuth handler on a Bearer WWW-Authenticate response and, when it cannot
+        // complete non-interactively, throws this McpException. That is the only shape that
+        // warrants "awaiting auth".
+        var challenge = new McpException(
+            "Failed to handle unauthorized response with 'Bearer' scheme. " +
+            "The AuthorizationCallbackHandler returned a null authorization result.");
+
         var status = McpClientManager.BuildConnectionFailureStatus(
             new McpServerName("notion"),
             entry,
-            new HttpRequestException(httpRequestError: HttpRequestError.Unknown, "Unauthorized", null, HttpStatusCode.Unauthorized),
+            challenge,
             hasCachedTokens: false,
             hasOAuthRuntimeHints: true,
             ErrorAt);
 
         Assert.Equal(McpConnectionState.AwaitingAuth, status.State);
         Assert.Contains("netclaw mcp auth notion", status.ErrorMessage);
+        Assert.Equal(ErrorAt, status.LastErrorAt);
+    }
+
+    [Fact]
+    public void BuildConnectionFailureStatus_ForNonOAuth403_ReturnsTransportErrorNotAwaitingAuth()
+    {
+        var entry = new McpServerEntry
+        {
+            Transport = "http",
+            Url = "https://mcp.example.com",
+        };
+
+        // A plain 403 with no OAuth challenge (no WWW-Authenticate: Bearer, no discoverable
+        // protected-resource metadata) reaches us as a bare transport HttpRequestException --
+        // e.g. a Host-header allowlist rejection. Even with OAuth runtime hints and no cached
+        // tokens, this must surface as the real transport error, never "awaiting auth".
+        var status = McpClientManager.BuildConnectionFailureStatus(
+            new McpServerName("playwright"),
+            entry,
+            new HttpRequestException(
+                httpRequestError: HttpRequestError.Unknown,
+                "Response status code does not indicate success: 403 (Forbidden). " +
+                "Response body: Forbidden: Access is only allowed at localhost:8931",
+                null,
+                HttpStatusCode.Forbidden),
+            hasCachedTokens: false,
+            hasOAuthRuntimeHints: true,
+            ErrorAt);
+
+        Assert.NotEqual(McpConnectionState.AwaitingAuth, status.State);
+        Assert.Equal(McpConnectionState.Unreachable, status.State);
+        Assert.Contains("403 Forbidden", status.ErrorMessage);
+        Assert.DoesNotContain("netclaw mcp auth", status.ErrorMessage);
         Assert.Equal(ErrorAt, status.LastErrorAt);
     }
 
@@ -81,6 +123,39 @@ public sealed class McpClientManagerStatusTests
         Assert.Equal(McpConnectionState.Unreachable, status.State);
         Assert.Equal("Failed to reach MCP server. Check daemon logs for details.", status.ErrorMessage);
         Assert.DoesNotContain("Connection refused", status.ErrorMessage);
+        Assert.Equal(ErrorAt, status.LastErrorAt);
+    }
+
+    [Fact]
+    public void BuildConnectionFailureStatus_ForStdioSpawnFailureWithEmbeddedStatusLikeDigits_ReturnsUnreachable()
+    {
+        var entry = new McpServerEntry
+        {
+            Transport = "stdio",
+            Command = "netclaw-missing-mcp-server-632401b4aa2f4c1e9c1b2a3d4e5f6789",
+            Enabled = true,
+        };
+
+        // A stdio process-spawn failure carries the command name inside its message. The
+        // command name is caller-supplied config data, not an HTTP signal, and can
+        // coincidentally embed digits that look like a status code -- here "401" inside
+        // the GUID suffix. No HTTP request ever occurs for stdio, so this must never be
+        // misread as an HTTP 401 failure.
+        var spawnFailure = new IOException(
+            $"An error occurred trying to start process '{entry.Command}' with working " +
+            "directory '/tmp'. No such file or directory");
+
+        var status = McpClientManager.BuildConnectionFailureStatus(
+            new McpServerName("notifications"),
+            entry,
+            spawnFailure,
+            hasCachedTokens: false,
+            hasOAuthRuntimeHints: false,
+            ErrorAt);
+
+        Assert.Equal(McpConnectionState.Unreachable, status.State);
+        Assert.Equal("Failed to reach MCP server. Check daemon logs for details.", status.ErrorMessage);
+        Assert.DoesNotContain("401", status.ErrorMessage, StringComparison.Ordinal);
         Assert.Equal(ErrorAt, status.LastErrorAt);
     }
 

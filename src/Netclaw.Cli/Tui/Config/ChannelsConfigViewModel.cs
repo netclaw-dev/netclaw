@@ -32,10 +32,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private readonly WizardContext _context;
     private readonly HashSet<ChannelType> _knownProviders;
     private readonly Dictionary<ChannelType, Dictionary<string, TrustAudience>> _channelAudiences = [];
+    private readonly Dictionary<ChannelType, Dictionary<string, bool>> _channelMentionRequired = [];
     private ChannelType _activeAdapterType = ChannelType.Slack;
-    private string? _editingAudienceId;
-    private string? _editingAudienceLabel;
-    private bool _editingAudienceIsDm;
     private int _managementMenuIndex;
     private int _channelRowIndex;
     private int _audienceSelectionIndex;
@@ -240,6 +238,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             Step,
             _knownProviders,
             _channelAudiences,
+            _channelMentionRequired,
             _context.SelectedPosture ?? DeploymentPosture.Personal));
         session.Save();
     }
@@ -588,7 +587,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 IsDirectMessage: false,
                 IsAddAction: false,
                 IsDoneAction: false,
-                IsUnresolved: unresolved.Contains(channelId)));
+                IsUnresolved: unresolved.Contains(channelId),
+                MentionRequired: GetChannelMentionRequired(_activeAdapterType, channelId)));
         }
 
         if (GetAllowDirectMessages(_activeAdapterType))
@@ -632,7 +632,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         NotifyContentChanged();
     }
 
-    internal void OpenSelectedChannelAudience()
+    internal void ActivateSelectedChannelRow()
     {
         var rows = GetChannelRows();
         if (rows.Count == 0)
@@ -640,23 +640,31 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         var row = rows[_channelRowIndex];
         if (row.IsAddAction)
-        {
             BeginAddChannel();
-            return;
-        }
-
-        if (row.IsDoneAction)
-        {
+        else if (row.IsDoneAction)
             FinishChannelPermissions();
-            return;
-        }
 
-        _editingAudienceId = row.Id;
-        _editingAudienceLabel = row.DisplayName;
-        _editingAudienceIsDm = row.IsDirectMessage;
-        _audienceSelectionIndex = AudienceIndex(row.Audience);
-        Screen.Value = ChannelsConfigScreen.EditAudience;
-        NotifyContentChanged();
+        // A channel or DM row has no detail page: audience is set inline with
+        // left/right and the thread mention rule with Space.
+    }
+
+    internal void ToggleSelectedChannelMentionRequired()
+    {
+        var rows = GetChannelRows();
+        if (rows.Count == 0)
+            return;
+
+        var row = rows[_channelRowIndex];
+        // The thread mention rule applies only to real channels. A DM is
+        // one-to-one, and the add/done rows are actions.
+        if (row.IsAction || row.IsDirectMessage)
+            return;
+
+        var next = !GetChannelMentionRequired(_activeAdapterType, row.Id);
+        SetChannelMentionRequired(_activeAdapterType, row.Id, next);
+        // Autosave like the audience toggle: without an immediate save an Esc
+        // would silently discard it (the next load resets from disk).
+        AutosaveCompletedAction($"{row.DisplayName} require @mention {(next ? "on" : "off")} and saved.");
     }
 
     internal void ChangeSelectedChannelAudience(int delta)
@@ -694,6 +702,8 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         SetChannelIds(_activeAdapterType, remaining);
         if (_channelAudiences.TryGetValue(_activeAdapterType, out var audiences))
             audiences.Remove(row.Id);
+        if (_channelMentionRequired.TryGetValue(_activeAdapterType, out var mentionRequired))
+            mentionRequired.Remove(row.Id);
 
         UpdateAdapterPickerSummary(_activeAdapterType);
         _channelRowIndex = Clamp(_channelRowIndex, GetChannelRows().Count);
@@ -746,7 +756,16 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         // row index is computed from the in-memory append, which the save's reload preserves.
         SetChannelIds(_activeAdapterType, [.. existing, .. fresh]);
         foreach (var reference in fresh)
-            SetChannelAudience(_activeAdapterType, reference, DefaultChannelAudience());
+        {
+            var defaultAudience = DefaultChannelAudience();
+            SetChannelAudience(_activeAdapterType, reference, defaultAudience);
+            // Broad audiences (Team/Public) default to requiring an explicit mention in a thread;
+            // Personal channels do not. Seeded here so a channel added at a broad tier starts guarded.
+            SetChannelMentionRequired(
+                _activeAdapterType,
+                reference,
+                defaultAudience is TrustAudience.Team or TrustAudience.Public);
+        }
         Screen.Value = ChannelsConfigScreen.ChannelPermissions;
 
         var lastRow = GetChannelRows()
@@ -772,27 +791,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     {
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
         Status.Value = new ConfigStatusMessage("Done adding channels. Completed changes are already saved.", ConfigStatusTone.Neutral);
-        NotifyContentChanged();
-    }
-
-    internal string? EditingAudienceLabel => _editingAudienceLabel;
-    internal string? EditingAudienceId => _editingAudienceId;
-    internal bool EditingAudienceIsDm => _editingAudienceIsDm;
-
-    internal void MoveAudienceSelection(int delta)
-    {
-        _audienceSelectionIndex = Wrap(_audienceSelectionIndex + delta, AudienceOptions.Count);
-        NotifyContentChanged();
-    }
-
-    internal void ApplyAudienceSelection()
-    {
-        if (string.IsNullOrWhiteSpace(_editingAudienceId))
-            return;
-
-        SetChannelAudience(_activeAdapterType, _editingAudienceId, AudienceOptions[_audienceSelectionIndex]);
-        Screen.Value = ChannelsConfigScreen.ChannelPermissions;
-        AutosaveCompletedAction($"Updated {_editingAudienceLabel} audience and saved.");
         NotifyContentChanged();
     }
 
@@ -1075,6 +1073,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         SetChannelIds(ChannelType.Slack, [.. resolvedChannels.Distinct(StringComparer.Ordinal)]);
         RemapChannelAudiences(ChannelType.Slack, remap);
+        RemapChannelMentionRequired(ChannelType.Slack, remap);
         UpdateAdapterPickerSummary(ChannelType.Slack);
         return ChannelAccessOutcome.None;
     }
@@ -1182,6 +1181,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
         SetChannelIds(type, [.. resolvedChannels.Distinct(StringComparer.Ordinal)]);
         RemapChannelAudiences(type, remap);
+        RemapChannelMentionRequired(type, remap);
         UpdateAdapterPickerSummary(type);
     }
 
@@ -1287,6 +1287,7 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         {
             SetChannelIds(type, canonical);
             RemapChannelAudiences(type, remap);
+            RemapChannelMentionRequired(type, remap);
             UpdateAdapterPickerSummary(type);
             WriteChannelConfigToDisk();
             IsSaved.Value = true;
@@ -1358,6 +1359,24 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
 
             audiences.Remove(oldId);
             audiences.TryAdd(newId, audience);
+        }
+    }
+
+    // The mention rule is seeded on the typed reference (which may be a display name), so it must
+    // move to the canonical channel id when the name resolves — otherwise BuildMentionRequiredMap
+    // drops the rule because the name is no longer in the channel id list.
+    private void RemapChannelMentionRequired(ChannelType type, IReadOnlyDictionary<string, string> remap)
+    {
+        if (remap.Count == 0 || !_channelMentionRequired.TryGetValue(type, out var mentionRequired))
+            return;
+
+        foreach (var (oldId, newId) in remap)
+        {
+            if (!mentionRequired.TryGetValue(oldId, out var required))
+                continue;
+
+            mentionRequired.Remove(oldId);
+            mentionRequired.TryAdd(newId, required);
         }
     }
 
@@ -1539,7 +1558,6 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         {
             ChannelsConfigScreen.AdapterMenu => ChannelsConfigScreen.Picker,
             ChannelsConfigScreen.ChannelPermissions => ChannelsConfigScreen.AdapterMenu,
-            ChannelsConfigScreen.EditAudience => ChannelsConfigScreen.ChannelPermissions,
             ChannelsConfigScreen.AddChannel => ChannelsConfigScreen.ChannelPermissions,
             ChannelsConfigScreen.AllowedUsers => ChannelsConfigScreen.AdapterMenu,
             ChannelsConfigScreen.DirectMessages => ChannelsConfigScreen.AdapterMenu,
@@ -1608,9 +1626,13 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
     private void LoadAudienceDrafts(ChannelsConfigDraft draft)
     {
         _channelAudiences.Clear();
+        _channelMentionRequired.Clear();
         AddAudienceDraft(ChannelType.Slack, draft.Slack.ChannelAudiences);
         AddAudienceDraft(ChannelType.Discord, draft.Discord.ChannelAudiences);
         AddAudienceDraft(ChannelType.Mattermost, draft.Mattermost.ChannelAudiences);
+        AddMentionRequiredDraft(ChannelType.Slack, draft.Slack.MentionRequiredInThreadByChannel);
+        AddMentionRequiredDraft(ChannelType.Discord, draft.Discord.MentionRequiredInThreadByChannel);
+        AddMentionRequiredDraft(ChannelType.Mattermost, draft.Mattermost.MentionRequiredInThreadByChannel);
     }
 
     private void AddAudienceDraft(ChannelType type, IReadOnlyDictionary<string, TrustAudience> audiences)
@@ -1619,6 +1641,14 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
             return;
 
         _channelAudiences[type] = new Dictionary<string, TrustAudience>(audiences, StringComparer.Ordinal);
+    }
+
+    private void AddMentionRequiredDraft(ChannelType type, IReadOnlyDictionary<string, bool> mentionRequired)
+    {
+        if (mentionRequired.Count == 0)
+            return;
+
+        _channelMentionRequired[type] = new Dictionary<string, bool>(mentionRequired, StringComparer.Ordinal);
     }
 
     private TrustAudience GetChannelAudience(ChannelType type, string channelId, TrustAudience defaultAudience)
@@ -1635,6 +1665,22 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
         }
 
         audiences[channelId] = audience;
+    }
+
+    private bool GetChannelMentionRequired(ChannelType type, string channelId)
+        => _channelMentionRequired.TryGetValue(type, out var mentionRequired)
+            && mentionRequired.TryGetValue(channelId, out var required)
+            && required;
+
+    private void SetChannelMentionRequired(ChannelType type, string channelId, bool value)
+    {
+        if (!_channelMentionRequired.TryGetValue(type, out var mentionRequired))
+        {
+            mentionRequired = new Dictionary<string, bool>(StringComparer.Ordinal);
+            _channelMentionRequired[type] = mentionRequired;
+        }
+
+        mentionRequired[channelId] = value;
     }
 
     private TrustAudience DefaultChannelAudience()
@@ -1950,7 +1996,6 @@ internal enum ChannelsConfigScreen
     Picker,
     AdapterMenu,
     ChannelPermissions,
-    EditAudience,
     AddChannel,
     AllowedUsers,
     DirectMessages,
@@ -1982,7 +2027,8 @@ internal sealed record ChannelPermissionRow(
     bool IsDirectMessage,
     bool IsAddAction,
     bool IsDoneAction,
-    bool IsUnresolved = false)
+    bool IsUnresolved = false,
+    bool MentionRequired = false)
 {
     internal bool IsAction => IsAddAction || IsDoneAction;
 }
@@ -2053,6 +2099,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         ChannelPickerStepViewModel step,
         IReadOnlySet<ChannelType> knownProviders,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
+        IReadOnlyDictionary<ChannelType, Dictionary<string, bool>> channelMentionRequired,
         DeploymentPosture posture)
     {
         var fields = new List<SectionFieldAction>();
@@ -2071,6 +2118,7 @@ internal sealed class ChannelsConfigPersistenceMapper
             step.IsAdapterEnabled(ChannelType.Slack),
             knownProviders.Contains(ChannelType.Slack),
             channelAudiences,
+            channelMentionRequired,
             posture);
         AddDiscordContribution(
             fields,
@@ -2079,6 +2127,7 @@ internal sealed class ChannelsConfigPersistenceMapper
             step.IsAdapterEnabled(ChannelType.Discord),
             knownProviders.Contains(ChannelType.Discord),
             channelAudiences,
+            channelMentionRequired,
             posture);
         AddMattermostContribution(
             fields,
@@ -2087,6 +2136,7 @@ internal sealed class ChannelsConfigPersistenceMapper
             step.IsAdapterEnabled(ChannelType.Mattermost),
             knownProviders.Contains(ChannelType.Mattermost),
             channelAudiences,
+            channelMentionRequired,
             posture);
 
         return new SectionContribution(fields, secrets);
@@ -2120,7 +2170,8 @@ internal sealed class ChannelsConfigPersistenceMapper
             ChannelIds = channels,
             AllowDirectMessages = GetBool(config, "Slack.AllowDirectMessages", defaultValue: false),
             AllowedUserIds = users,
-            ChannelAudiences = GetChannelAudiences(config, "Slack.ChannelAudiences")
+            ChannelAudiences = GetChannelAudiences(config, "Slack.ChannelAudiences"),
+            MentionRequiredInThreadByChannel = GetChannelMentionRequired(config, "Slack.MentionRequiredInThreadByChannel")
         };
     }
 
@@ -2141,7 +2192,8 @@ internal sealed class ChannelsConfigPersistenceMapper
             ChannelIds = channels,
             AllowDirectMessages = GetBool(config, "Discord.AllowDirectMessages", defaultValue: false),
             AllowedUserIds = users,
-            ChannelAudiences = GetChannelAudiences(config, "Discord.ChannelAudiences")
+            ChannelAudiences = GetChannelAudiences(config, "Discord.ChannelAudiences"),
+            MentionRequiredInThreadByChannel = GetChannelMentionRequired(config, "Discord.MentionRequiredInThreadByChannel")
         };
     }
 
@@ -2164,7 +2216,8 @@ internal sealed class ChannelsConfigPersistenceMapper
             ChannelIds = channels,
             AllowDirectMessages = GetBool(config, "Mattermost.AllowDirectMessages", defaultValue: false),
             AllowedUserIds = users,
-            ChannelAudiences = GetChannelAudiences(config, "Mattermost.ChannelAudiences")
+            ChannelAudiences = GetChannelAudiences(config, "Mattermost.ChannelAudiences"),
+            MentionRequiredInThreadByChannel = GetChannelMentionRequired(config, "Mattermost.MentionRequiredInThreadByChannel")
         };
     }
 
@@ -2212,6 +2265,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         bool enabled,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
+        IReadOnlyDictionary<ChannelType, Dictionary<string, bool>> channelMentionRequired,
         DeploymentPosture posture)
     {
         if (!enabled)
@@ -2234,6 +2288,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         fields.Add(new SectionFieldAction("Slack.DefaultChannelName", SectionFieldActionKind.Delete));
         SetArrayOrDelete(fields, "Slack.AllowedUserIds", userIds);
         SetDictionaryOrDelete(fields, "Slack.ChannelAudiences", BuildAudienceMap(ChannelType.Slack, channelIds, userIds, vm.AllowDirectMessages, channelAudiences, posture));
+        SetBoolDictionaryOrDelete(fields, "Slack.MentionRequiredInThreadByChannel", BuildMentionRequiredMap(ChannelType.Slack, channelIds, channelMentionRequired));
         AddSecretPreserveOrSet(secrets, "Slack.BotToken", vm.BotToken, vm.HasPersistedBotToken);
         AddSecretPreserveOrSet(secrets, "Slack.AppToken", vm.AppToken, vm.HasPersistedAppToken);
     }
@@ -2245,6 +2300,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         bool enabled,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
+        IReadOnlyDictionary<ChannelType, Dictionary<string, bool>> channelMentionRequired,
         DeploymentPosture posture)
     {
         if (!enabled)
@@ -2264,6 +2320,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         SetStringOrDelete(fields, "Discord.DefaultChannelId", channelIds.FirstOrDefault());
         SetArrayOrDelete(fields, "Discord.AllowedUserIds", userIds);
         SetDictionaryOrDelete(fields, "Discord.ChannelAudiences", BuildAudienceMap(ChannelType.Discord, channelIds, userIds, vm.AllowDirectMessages, channelAudiences, posture));
+        SetBoolDictionaryOrDelete(fields, "Discord.MentionRequiredInThreadByChannel", BuildMentionRequiredMap(ChannelType.Discord, channelIds, channelMentionRequired));
         AddSecretPreserveOrSet(secrets, "Discord.BotToken", vm.BotToken, vm.HasPersistedBotToken);
     }
 
@@ -2274,6 +2331,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         bool enabled,
         bool knownProvider,
         IReadOnlyDictionary<ChannelType, Dictionary<string, TrustAudience>> channelAudiences,
+        IReadOnlyDictionary<ChannelType, Dictionary<string, bool>> channelMentionRequired,
         DeploymentPosture posture)
     {
         if (!enabled)
@@ -2295,6 +2353,7 @@ internal sealed class ChannelsConfigPersistenceMapper
         SetStringOrDelete(fields, "Mattermost.DefaultChannelId", channelIds.FirstOrDefault());
         SetArrayOrDelete(fields, "Mattermost.AllowedUserIds", userIds);
         SetDictionaryOrDelete(fields, "Mattermost.ChannelAudiences", BuildAudienceMap(ChannelType.Mattermost, channelIds, userIds, vm.AllowDirectMessages, channelAudiences, posture));
+        SetBoolDictionaryOrDelete(fields, "Mattermost.MentionRequiredInThreadByChannel", BuildMentionRequiredMap(ChannelType.Mattermost, channelIds, channelMentionRequired));
         AddSecretPreserveOrSet(secrets, "Mattermost.BotToken", vm.BotToken, vm.HasPersistedBotToken);
     }
 
@@ -2335,6 +2394,13 @@ internal sealed class ChannelsConfigPersistenceMapper
     {
         fields.Add(values.Count > 0
             ? new SectionFieldAction(path, SectionFieldActionKind.Set, new Dictionary<string, string>(values, StringComparer.Ordinal))
+            : new SectionFieldAction(path, SectionFieldActionKind.Delete));
+    }
+
+    private static void SetBoolDictionaryOrDelete(List<SectionFieldAction> fields, string path, IReadOnlyDictionary<string, bool> values)
+    {
+        fields.Add(values.Count > 0
+            ? new SectionFieldAction(path, SectionFieldActionKind.Set, new Dictionary<string, bool>(values, StringComparer.Ordinal))
             : new SectionFieldAction(path, SectionFieldActionKind.Delete));
     }
 
@@ -2382,6 +2448,27 @@ internal sealed class ChannelsConfigPersistenceMapper
         else if (allowDirectMessages)
         {
             map["dm"] = ChannelAudienceDefaults.ForDirectMessage(posture, userIds.Count).ToWireValue();
+        }
+
+        return map;
+    }
+
+    // Persist only the channels whose mention rule is true — false is the runtime default, so
+    // an absent key means "no mention required". This keeps the config minimal and stops a stale
+    // rule for a removed channel from persisting (the map is built from the live channel id list).
+    private static Dictionary<string, bool> BuildMentionRequiredMap(
+        ChannelType type,
+        IReadOnlyList<string> channelIds,
+        IReadOnlyDictionary<ChannelType, Dictionary<string, bool>> channelMentionRequired)
+    {
+        var map = new Dictionary<string, bool>(StringComparer.Ordinal);
+        if (!channelMentionRequired.TryGetValue(type, out var explicitMentionRequired))
+            return map;
+
+        foreach (var channelId in channelIds)
+        {
+            if (explicitMentionRequired.TryGetValue(channelId, out var required) && required)
+                map[channelId] = true;
         }
 
         return map;
@@ -2478,6 +2565,29 @@ internal sealed class ChannelsConfigPersistenceMapper
         return audiences;
     }
 
+    private static Dictionary<string, bool> GetChannelMentionRequired(Dictionary<string, object> config, string path)
+    {
+        if (!ConfigFileHelper.TryGetPathValue(config, path, out var value) || value is null)
+            return [];
+
+        if (value is not Dictionary<string, object> values)
+            throw new InvalidOperationException($"Configuration value '{path}' must be an object.");
+
+        var mentionRequired = new Dictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var (channelId, rawRequired) in values)
+        {
+            mentionRequired[channelId] = rawRequired switch
+            {
+                bool required => required,
+                JsonElement { ValueKind: JsonValueKind.True } => true,
+                JsonElement { ValueKind: JsonValueKind.False } => false,
+                _ => throw new InvalidOperationException($"Channel mention rule '{path}.{channelId}' must be a boolean.")
+            };
+        }
+
+        return mentionRequired;
+    }
+
     private static bool HasSecret(NetclawPaths paths, Dictionary<string, object> secrets, string path)
     {
         if (!ConfigFileHelper.TryGetPathValue(secrets, path, out var value))
@@ -2539,6 +2649,7 @@ internal abstract class ChannelProviderDraft
     public bool AllowDirectMessages { get; init; }
     public IReadOnlyList<string> AllowedUserIds { get; init; } = [];
     public IReadOnlyDictionary<string, TrustAudience> ChannelAudiences { get; init; } = new Dictionary<string, TrustAudience>(StringComparer.Ordinal);
+    public IReadOnlyDictionary<string, bool> MentionRequiredInThreadByChannel { get; init; } = new Dictionary<string, bool>(StringComparer.Ordinal);
 }
 
 internal sealed class SlackChannelDraft : ChannelProviderDraft

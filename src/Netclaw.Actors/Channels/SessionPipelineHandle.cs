@@ -17,11 +17,8 @@ namespace Netclaw.Actors.Channels;
 /// <summary>
 /// Manages the lifecycle of a materialized session pipeline on behalf of an
 /// owning actor. Not thread-safe — designed for use within a single actor context
-/// (no concurrent access). Supports two modes:
-/// <list type="bullet">
-///   <item>Long-lived (with reinitialization) for binding actors (Slack, SignalR)</item>
-///   <item>Short-lived (fire-and-forget) for execution actors (Reminders, Webhooks)</item>
-/// </list>
+/// (no concurrent access). Callers keep the input channel open for multiple turns
+/// or complete it after one turn. Long-lived callers can reinitialize the pipeline.
 /// The handle does not own the <see cref="ActorMaterializer"/>. The owning actor
 /// creates the materializer from its context and passes it in; Akka disposes it
 /// automatically when the actor stops.
@@ -40,7 +37,7 @@ public sealed class SessionPipelineHandle
     private int _pipelineGeneration;
     private bool _isReinitializing;
 
-    // Stored from first InitializeWithChannelAsync for reinit
+    // Stored from the first initialization for optional reinitialization.
     private IActorContext? _storedContext;
     private SessionId? _storedSessionId;
     private SessionPipelineOptions? _storedOptions;
@@ -60,16 +57,17 @@ public sealed class SessionPipelineHandle
     /// <summary>The current pipeline generation, for <c>OutputStreamTerminated</c> filtering.</summary>
     public int Generation => _pipelineGeneration;
 
-    /// <summary>The <see cref="System.Threading.Channels.ChannelWriter{T}"/> for long-lived actors to write input.
-    /// Null if not initialized or if initialized via queue mode.</summary>
+    /// <summary>The <see cref="System.Threading.Channels.ChannelWriter{T}"/> for actors to write input.
+    /// Null if the pipeline is not initialized.</summary>
     public ChannelWriter<ChannelInput>? InputQueue => _inputQueue;
 
     /// <summary>Whether the handle has been initialized (session is not null).</summary>
     public bool IsInitialized => _session is not null;
 
     /// <summary>
-    /// Idempotent pipeline creation for long-lived actors that use <see cref="Source.Channel{T}(int, bool)"/>
-    /// for ongoing input. Stores all parameters for use by <see cref="ReinitializeAsync"/>.
+    /// Idempotent pipeline creation with <see cref="Source.Channel{T}(int, bool)"/> input.
+    /// The caller controls the input lifetime. This method stores its parameters for
+    /// optional use by <see cref="ReinitializeAsync"/>.
     /// </summary>
     public async Task<ChannelWriter<ChannelInput>> InitializeWithChannelAsync(
         IActorContext context,
@@ -144,49 +142,6 @@ public sealed class SessionPipelineHandle
         _inputQueue = inputQueue;
 
         _log.Info("{0} session pipeline initialized", _materializerNamePrefix);
-        return inputQueue;
-    }
-
-    /// <summary>
-    /// Pipeline creation for fire-and-forget execution actors that use
-    /// <see cref="Source.Queue{T}(int,OverflowStrategy)"/>, offer input once, and complete.
-    /// Does not wire stream-terminated detection (the actor stops on <c>TurnCompleted</c>/<c>ErrorOutput</c>).
-    /// </summary>
-    public async Task<ISourceQueueWithComplete<ChannelInput>> InitializeWithQueueAsync(
-        IActorContext context,
-        SessionId sessionId,
-        SessionPipelineOptions options,
-        Action<SessionOutput> onOutput,
-        CancellationToken cancellationToken = default)
-    {
-        _log.Info("Initializing {0} execution pipeline", _materializerNamePrefix);
-
-        var materializer = context.Materializer(namePrefix: _materializerNamePrefix);
-
-        var materialized = await _pipeline.CreateAsync(
-            sessionId, options,
-            materializer: materializer,
-            cancellationToken: cancellationToken);
-
-        var inputQueue = Source.Queue<ChannelInput>(8, OverflowStrategy.Backpressure)
-            .ToMaterialized(materialized.Input, Keep.Left)
-            .Run(materializer);
-
-        // SourceQueueLogic.PostStop sets StreamDetachedException on its
-        // _completion TCS unconditionally — observe it so unused queue-mode
-        // sessions don't leak the fault on teardown.
-        StreamTaskObservation.ObserveSilently(inputQueue.WatchCompletionAsync());
-
-        _outputCompletion = materialized.Output
-            .WatchTermination((_, done) => done)
-            .ToMaterialized(
-                Sink.ForEach<SessionOutput>(onOutput).ObservingFault(),
-                Keep.Left)
-            .Run(materializer);
-
-        _session = materialized;
-
-        _log.Info("{0} execution pipeline initialized", _materializerNamePrefix);
         return inputQueue;
     }
 

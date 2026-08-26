@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DiscordChannelOptionsDefaultsTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -22,6 +22,7 @@ public sealed class DiscordChannelOptionsDefaultsTests
 
         Assert.False(options.Enabled);
         Assert.False(options.AllowDirectMessages);
+        Assert.Empty(options.MentionRequiredInThreadByChannel);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
     }
@@ -44,7 +45,29 @@ public sealed class DiscordChannelOptionsDefaultsTests
         Assert.True(options.Enabled);
         Assert.Equal("123456789", options.DefaultChannelId);
         Assert.False(options.AllowDirectMessages);
+        Assert.Empty(options.MentionRequiredInThreadByChannel);
         Assert.Empty(options.AllowedChannelIds);
         Assert.Empty(options.AllowedUserIds);
+    }
+
+    [Fact]
+    public void BindsPerChannelMentionRequiredInThread_AndResolvesPerChannel()
+    {
+        var values = new Dictionary<string, string?>
+        {
+            ["Discord:MentionRequiredInThreadByChannel:111"] = "true",
+            ["Discord:MentionRequiredInThreadByChannel:222"] = "false"
+        };
+
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(values)
+            .Build();
+
+        var options = configuration.GetSection("Discord").Get<DiscordChannelOptions>() ?? new DiscordChannelOptions();
+
+        Assert.True(options.MentionRequiredInThreadFor("111"));
+        Assert.False(options.MentionRequiredInThreadFor("222"));
+        // A channel with no entry defaults to false.
+        Assert.False(options.MentionRequiredInThreadFor("333"));
     }
 }

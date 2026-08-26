@@ -6,6 +6,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Jobs;
 using Netclaw.Configuration;
 using Xunit;
@@ -95,6 +96,200 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.Equal(jobId, loaded.Id.Value);
         Assert.Equal("dotnet test", loaded.Command);
         Assert.Equal("C0ABC/1712000000.000001", loaded.SessionId.Value);
+    }
+
+    /// <summary>
+    /// Terminal-job cleanup: <see cref="BackgroundJobDefinitionStore.DeleteJobArtifacts"/>
+    /// removes BOTH the definition file and the job's output-log directory, so the
+    /// store cannot grow without bound after a job's retention window elapses.
+    /// </summary>
+    [Fact]
+    public void DeleteJobArtifacts_removes_definition_and_output_directory()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+        var jobId = new BackgroundJobId("cleanup-job-001");
+
+        store.Save(new BackgroundJobDefinition
+        {
+            Id = jobId,
+            Command = "dotnet test",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
+            Rationale = "Run the test suite.",
+            Status = BackgroundJobStatus.Completed,
+            TimeoutSeconds = 300,
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
+        });
+
+        // Simulate a real job's output log on disk.
+        var outputLogPath = store.GetOutputLogPath(jobId);
+        File.WriteAllText(outputLogPath, "build output");
+
+        Assert.NotNull(store.Get(jobId));
+        Assert.True(File.Exists(outputLogPath));
+
+        var removed = store.DeleteJobArtifacts(jobId);
+
+        Assert.True(removed);
+        Assert.Null(store.Get(jobId));
+        Assert.False(File.Exists(outputLogPath));
+        Assert.False(Directory.Exists(Path.GetDirectoryName(outputLogPath)));
+    }
+
+    /// <summary>
+    /// Idempotent cleanup: deleting artifacts for an already-removed job reports
+    /// false and does not throw.
+    /// </summary>
+    [Fact]
+    public void DeleteJobArtifacts_missing_job_returns_false_without_throwing()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+
+        var removed = store.DeleteJobArtifacts(new BackgroundJobId("never-existed"));
+
+        Assert.False(removed);
+    }
+
+    [Fact]
+    public void DeleteJobArtifacts_keeps_definition_when_output_cleanup_fails_then_retries()
+    {
+        var rejectCleanup = true;
+        var store = new BackgroundJobDefinitionStore(
+            _paths,
+            NullLogger<BackgroundJobDefinitionStore>.Instance,
+            (path, recursive) =>
+            {
+                if (rejectCleanup)
+                    throw new IOException("simulated output cleanup failure");
+
+                Directory.Delete(path, recursive);
+            });
+        var jobId = new BackgroundJobId("cleanup-retry-001");
+        store.Save(new BackgroundJobDefinition
+        {
+            Id = jobId,
+            Command = "dotnet test",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
+            Rationale = "Run the test suite.",
+            Status = BackgroundJobStatus.Completed,
+            TimeoutSeconds = 300,
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
+        });
+
+        var outputLogPath = store.GetOutputLogPath(jobId);
+        var outputDirectory = Path.GetDirectoryName(outputLogPath)!;
+        File.WriteAllText(outputLogPath, "build output");
+
+        var error = Assert.Throws<IOException>(() => store.DeleteJobArtifacts(jobId));
+
+        Assert.Contains("simulated output cleanup failure", error.Message);
+        Assert.NotNull(store.Get(jobId));
+        Assert.True(File.Exists(outputLogPath));
+
+        rejectCleanup = false;
+
+        Assert.True(store.DeleteJobArtifacts(jobId));
+        Assert.Null(store.Get(jobId));
+        Assert.False(Directory.Exists(outputDirectory));
+    }
+
+    /// <summary>
+    /// Traversal guard (adversarial review, HIGH): Uri.EscapeDataString does not
+    /// escape dots, so a dot-only id must NOT resolve to the jobs directory's
+    /// parent and delete it recursively. The store rejects such ids at
+    /// deserialization, and DeleteJobArtifacts contains the delete to the jobs
+    /// directory as belt-and-braces.
+    /// </summary>
+    [Fact]
+    public void DeleteJobArtifacts_dot_only_id_cannot_escape_jobs_directory()
+    {
+        var store = new BackgroundJobDefinitionStore(_paths);
+        var jobsDir = _paths.JobsDirectory;
+        var parentDir = Path.GetDirectoryName(jobsDir.TrimEnd(Path.DirectorySeparatorChar))!;
+        var sentinel = Path.Combine(parentDir, "sentinel-file.txt");
+        File.WriteAllText(sentinel, "do not delete");
+
+        // ".." would resolve to the parent of the jobs directory.
+        var removed = store.DeleteJobArtifacts(new BackgroundJobId(".."));
+
+        // The delete must be refused (nothing removed) — the parent survives.
+        Assert.False(removed);
+        Assert.True(File.Exists(sentinel));
+        Assert.True(Directory.Exists(jobsDir));
+
+        File.Delete(sentinel);
+    }
+
+    /// <summary>
+    /// Traversal guard (adversarial review, HIGH): a persisted definition whose
+    /// id is "." or ".." must be rejected at load — it never appears in
+    /// List(), so the sweep can never act on it.
+    /// </summary>
+    [Theory]
+    [InlineData(".")]
+    [InlineData("..")]
+    public void Definition_with_dot_only_id_is_rejected_at_load(string unsafeId)
+    {
+        var logger = new CapturingJobLogger<BackgroundJobDefinitionStore>();
+        var store = new BackgroundJobDefinitionStore(_paths, logger);
+
+        // File name mirrors what GetPath would produce for this id:
+        // Uri.EscapeDataString leaves dots unescaped, so the file is "..json".
+        var filePath = Path.Combine(_paths.JobsDirectory, $"{Uri.EscapeDataString(unsafeId)}.json");
+        File.WriteAllText(filePath, $$"""
+            {
+              "id": "{{unsafeId}}",
+              "command": "echo pwn",
+              "sessionId": "C0TEST/1712000000.000001",
+              "rationale": "test",
+              "status": "Completed",
+              "timeoutSeconds": 600,
+              "startedAtMs": 0,
+              "completedAtMs": 0,
+              "audience": "Personal",
+              "boundary": "Personal"
+            }
+            """);
+
+        Assert.Empty(store.List());
+        Assert.Null(store.Get(new BackgroundJobId(unsafeId)));
+        Assert.Contains(logger.Errors, e => e.Contains("unsafe id"));
+    }
+
+    [Fact]
+    public void Definition_with_id_that_does_not_match_file_name_is_rejected_at_load()
+    {
+        var logger = new CapturingJobLogger<BackgroundJobDefinitionStore>();
+        var store = new BackgroundJobDefinitionStore(_paths, logger);
+        var victimId = new BackgroundJobId("victim-job");
+        store.Save(new BackgroundJobDefinition
+        {
+            Id = victimId,
+            Command = "dotnet test",
+            SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
+            Rationale = "Run the test suite.",
+            Status = BackgroundJobStatus.Completed,
+            StartedAtMs = 1,
+            CompletedAtMs = 2,
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
+        });
+
+        var victimPath = Path.Combine(_paths.JobsDirectory, $"{Uri.EscapeDataString(victimId.Value)}.json");
+        var aliasPath = Path.Combine(_paths.JobsDirectory, "stale-alias.json");
+        File.Copy(victimPath, aliasPath);
+
+        var loaded = store.List();
+
+        var definition = Assert.Single(loaded);
+        Assert.Equal(victimId, definition.Id);
+        Assert.Null(store.Get(new BackgroundJobId("stale-alias")));
+        Assert.Contains(logger.Errors, error =>
+            error.Contains("does not match its canonical file name", StringComparison.Ordinal));
     }
 
     /// <summary>
