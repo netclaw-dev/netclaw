@@ -137,7 +137,9 @@ public sealed class McpClientManagerLifecycleTests
                 """{"content":[{"type":"text","text":"Unauthorized: token expired"}],"isError":true}""")
                 .RootElement.Clone()),
         });
-        await using var harness = CreateHarness(runtime);
+        // Only an OAuth-capable server carries this case: it is the one server kind that
+        // `netclaw mcp auth` can repair.
+        await using var harness = CreateHarness(runtime, OAuthCapableEntry());
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
         Assert.Equal(
             McpConnectionState.Connected,
@@ -151,7 +153,36 @@ public sealed class McpClientManagerLifecycleTests
     }
 
     [Fact]
-    public async Task InvocationAgainstAnAuthFailedServer_NamesTheRemedy()
+    public async Task ToolLevelAuthWordsFromAStaticHeaderServer_KeepTheServerConnected()
+    {
+        var runtime = new ControlledMcpClientRuntime();
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Invoke = (_, _) => Task.FromResult<object?>(JsonDocument.Parse(
+                """{"content":[{"type":"text","text":"Forbidden: you do not own this domain"}],"isError":true}""")
+                .RootElement.Clone()),
+        });
+        await using var harness = CreateHarness(runtime, StaticHeaderEntry());
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
+
+        // A tool that proxies a REST API answers "Forbidden" for an ordinary business
+        // error. The operator owns this header, so AuthFailed would name a remedy that
+        // cannot work and would keep the server down until the daemon restarts.
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.Connected, status.State);
+        Assert.Contains(
+            harness.Logger.Entries,
+            entry => entry.Contains("reported a failure", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "netclaw mcp auth",
+            status.ErrorMessage ?? string.Empty,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task ToolLevelAuthWordsFromAStdioServer_KeepTheServerConnected()
     {
         var runtime = new ControlledMcpClientRuntime();
         runtime.Enqueue(new ClientPlan("run")
@@ -160,15 +191,45 @@ public sealed class McpClientManagerLifecycleTests
                 """{"content":[{"type":"text","text":"Unauthorized: token expired"}],"isError":true}""")
                 .RootElement.Clone()),
         });
-        // The reconnect that follows must fail the way a dead credential does. A failure
-        // the manager cannot read as an auth problem would reclassify the server as
-        // Unreachable, and the remedy branch would correctly not apply.
+        await using var harness = CreateHarness(runtime);
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
+
+        // A stdio server has no OAuth flow, so `netclaw mcp auth` cannot repair it.
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.Connected, status.State);
+        Assert.Contains(
+            harness.Logger.Entries,
+            entry => entry.Contains("reported a failure", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "netclaw mcp auth",
+            status.ErrorMessage ?? string.Empty,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task InvocationAgainstAnAwaitingAuthServer_NamesTheRemedy()
+    {
+        // The remedy only exists for an OAuth-capable server, so this case needs one.
+        var runtime = new ControlledMcpClientRuntime();
         runtime.Enqueue(new ClientPlan("run")
         {
-            Initialize = _ => Task.FromException(
-                new HttpRequestException("Unauthorized", null, HttpStatusCode.Unauthorized)),
+            Invoke = (_, _) => Task.FromResult<object?>(JsonDocument.Parse(
+                """{"content":[{"type":"text","text":"Unauthorized: token expired"}],"isError":true}""")
+                .RootElement.Clone()),
         });
-        await using var harness = CreateHarness(runtime);
+        // The reconnect that follows must fail the way a dead credential does. The SDK
+        // engages its OAuth handler on a Bearer challenge and throws this McpException when
+        // it cannot complete the flow. A bare 401 reads as a host or access-control error:
+        // the manager reports Unreachable, and the remedy branch correctly does not apply.
+        runtime.Enqueue(new ClientPlan("run")
+        {
+            Initialize = _ => Task.FromException(new McpException(
+                "Failed to handle unauthorized response with 'Bearer' scheme. " +
+                "The AuthorizationCallbackHandler returned a null authorization result.")),
+        });
+        await using var harness = CreateHarness(runtime, OAuthCapableEntry());
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
         await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
         Assert.Equal(
@@ -178,6 +239,11 @@ public sealed class McpClientManagerLifecycleTests
         var error = await Assert.ThrowsAsync<InvalidOperationException>(
             () => InvokeAsync(harness.Manager, TestContext.Current.CancellationToken));
 
+        // The tool-level failure sets AuthFailed. The reauthorization on the next call has
+        // no cached token to refresh, so it moves the server to AwaitingAuth.
+        Assert.Equal(
+            McpConnectionState.AwaitingAuth,
+            harness.Manager.GetServerStatuses()[ServerName].State);
         // This text is what the agent repeats to the operator. "unavailable" would send
         // them looking for a broken server rather than a credential to renew.
         Assert.Contains($"netclaw mcp auth {ServerName.Value}", error.Message, StringComparison.Ordinal);
@@ -611,6 +677,39 @@ public sealed class McpClientManagerLifecycleTests
         IOperationalNotificationSink notificationSink)
         => new(runtime, timeProvider, notificationSink);
 
+    private static ManagerHarness CreateHarness(
+        ControlledMcpClientRuntime runtime,
+        McpServerEntry entry)
+        => new(
+            runtime,
+            new FakeTimeProvider(InitialTime),
+            NullNotificationSink.Instance,
+            entry);
+
+    // An HTTP server with no operator-configured Authorization header. This is the one
+    // server kind that `netclaw mcp auth` can repair. The controlled runtime opens no
+    // connection, so the URL is never dialled.
+    private static McpServerEntry OAuthCapableEntry()
+        => new()
+        {
+            Enabled = true,
+            Transport = "http",
+            Url = "http://127.0.0.1:1/mcp",
+        };
+
+    // An HTTP server the operator authenticates with a static header. It never uses OAuth.
+    private static McpServerEntry StaticHeaderEntry()
+        => new()
+        {
+            Enabled = true,
+            Transport = "http",
+            Url = "http://127.0.0.1:1/mcp",
+            Headers = new Dictionary<string, SensitiveString>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Authorization"] = new("Bearer operator-key"),
+            },
+        };
+
     internal sealed class ManagerHarness : IAsyncDisposable
     {
         private readonly McpOAuthFlowBroker _flowBroker;
@@ -628,6 +727,24 @@ public sealed class McpClientManagerLifecycleTests
             ControlledMcpClientRuntime runtime,
             FakeTimeProvider timeProvider,
             IOperationalNotificationSink notificationSink)
+            : this(
+                runtime,
+                timeProvider,
+                notificationSink,
+                new McpServerEntry
+                {
+                    Enabled = true,
+                    Transport = "stdio",
+                    Command = "not-launched-by-controlled-runtime",
+                })
+        {
+        }
+
+        public ManagerHarness(
+            ControlledMcpClientRuntime runtime,
+            FakeTimeProvider timeProvider,
+            IOperationalNotificationSink notificationSink,
+            McpServerEntry entry)
         {
             var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
             paths.EnsureDirectoriesExist();
@@ -643,15 +760,7 @@ public sealed class McpClientManagerLifecycleTests
             SkillIndex = dependencies.SkillIndex;
             Logger = new RecordingLogger<McpClientManager>();
             Manager = new McpClientManager(
-                new Dictionary<string, McpServerEntry>
-                {
-                    [ServerName.Value] = new()
-                    {
-                        Enabled = true,
-                        Transport = "stdio",
-                        Command = "not-launched-by-controlled-runtime",
-                    },
-                },
+                new Dictionary<string, McpServerEntry> { [ServerName.Value] = entry },
                 Registry,
                 dependencies.SkillRegistry,
                 dependencies.SkillIndexPublisher,

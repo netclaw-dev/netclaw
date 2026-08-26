@@ -1089,6 +1089,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     /// The detail reaches the model but no exception reaches the transport layer, so
     /// without this the daemon log keeps only the result length and an operator has
     /// nothing to debug from.
+    /// Only a server that can use OAuth becomes <see cref="McpConnectionState.AuthFailed"/>
+    /// here. The auth test reads free result text, and a tool that proxies a REST API
+    /// answers "Forbidden" for an ordinary business error. A false demotion costs three
+    /// things: it fires an <c>authentication_failed</c> alert; it makes
+    /// <c>netclaw mcp list</c> and <c>netclaw doctor</c> report "auth failed" until the
+    /// next invocation; and that invocation then tears the healthy client down and
+    /// reconnects for nothing. A stdio server and a server with an operator-configured
+    /// Authorization header cannot use <c>netclaw mcp auth</c>, so the remedy that state
+    /// names is wrong for them.
     /// </summary>
     private void ReportToolFailure(McpServerName serverName, string qualifiedToolName, string detail)
     {
@@ -1100,6 +1109,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             SecretOutputRedactor.Redact(detail));
 
         if (!IsAuthFailureMessage(detail))
+            return;
+
+        if (!_serverEntries.TryGetValue(serverName.Value, out var entry)
+            || !HasOAuthRuntimeHints(serverName, entry))
             return;
 
         MarkToolAuthFailure(serverName);

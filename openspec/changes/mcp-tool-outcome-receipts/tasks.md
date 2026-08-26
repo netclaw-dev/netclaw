@@ -15,13 +15,13 @@
 
 ## 4. Auth guard for servers that cannot use OAuth (#2057)
 
-- [ ] 4.1 Make `ReportToolFailure` call `MarkToolAuthFailure` only when `HasOAuthRuntimeHints(serverName, entry)` is true; add a lifecycle harness overload that accepts an `McpServerEntry`; convert `ToolLevelAuthFailure_MovesServerOutOfConnected` to an HTTP entry without an `Authorization` header; verify new lifecycle tests that a static-header HTTP server and a stdio server each stay `Connected` after an `isError` result with auth words, with the Warning present in `harness.Logger.Entries`.
+- [x] 4.1 Make `ReportToolFailure` call `MarkToolAuthFailure` only when `HasOAuthRuntimeHints(serverName, entry)` is true; add a lifecycle harness overload that accepts an `McpServerEntry`; convert `ToolLevelAuthFailure_MovesServerOutOfConnected` to an HTTP entry without an `Authorization` header; verify new lifecycle tests that a static-header HTTP server and a stdio server each stay `Connected` after an `isError` result with auth words, with the Warning present in `harness.Logger.Entries`.
 
 ## 5. Validation and documentation
 
-- [ ] 5.1 Run `dotnet test` for `Netclaw.Actors.Tests` (Tools) and `Netclaw.Daemon.Tests` (Mcp), `dotnet slopwatch analyze`, and `./scripts/Add-FileHeaders.ps1 -Verify`; verify no new violations.
+- [x] 5.1 Run `dotnet test` for `Netclaw.Actors.Tests` (Tools) and `Netclaw.Daemon.Tests` (Mcp), `dotnet slopwatch analyze`, and `./scripts/Add-FileHeaders.ps1 -Verify`; verify no new violations.
 - [x] 5.2 Add the new Warning line to the diagnostics table in `feeds/skills/.system/files/netclaw-operations/references/diagnostics.md` and bump the `netclaw-operations` skill version; verify the row and the version change.
-- [ ] 5.3 Run an adversarial review on each stacked pull request before it opens; verify every finding has a NOW, PARK, or FIX INLINE disposition recorded in the pull request.
+- [x] 5.3 Run an adversarial review on each stacked pull request before it opens; verify every finding has a NOW, PARK, or FIX INLINE disposition recorded in the pull request.
 - [x] 5.4 Edit issue #2055 so its Expected section matches design D2 (the `Tool executed:` line stays); verify the issue body no longer requires that line to be absent.
 - [x] 5.5 Edit issue #2056 to remove the `Retry-After` expectation and to add the prompt-load path; verify the body matches design D3.
 - [x] 5.6 Edit issue #2057 to state the `HasOAuthRuntimeHints` gate, the retained heuristic for OAuth-capable servers, and the absence of 401/403 remedy text; verify the body matches design D4.
