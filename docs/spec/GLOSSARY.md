@@ -292,6 +292,80 @@ final message:
 If the named tool is hidden, the presenter leaves the factual result unchanged.
 This prevents an instruction that the current model cannot follow.
 
+## MCP Invocation Terms
+
+These terms classify what an MCP server's answer means for the client. The
+`netclaw-mcp` and `netclaw-tools` capabilities share them. The examples come
+from a link-shortener MCP server observed on 2026-08-26.
+
+### Transport or session failure
+
+A transport or session failure means the request got no usable answer. The
+connection broke, the request timed out, or the server reported that the
+session is gone (HTTP 404 under Streamable HTTP). A new session can repair it.
+Netclaw reconnects once for later calls and never replays the failed call.
+
+Example:
+
+```text
+HttpRequestException with no status code      -> transport failure
+HttpRequestException with HTTP 404            -> session failure
+IOException, ClientTransportClosedException   -> transport failure
+```
+
+**Code anchor:** `McpClientManager.IsTransportOrSessionFailure`
+
+### Application error
+
+An application error is an answer from a server that received the request: an
+HTTP status other than 404, a JSON-RPC error, or a tool-declared error. A new
+session cannot change the answer, so Netclaw returns it without a reconnect.
+
+Example:
+
+```text
+HTTP 429  {"statusCode":429,"error":"Too Many Requests","message":"Rate limit exceeded, retry in 52 seconds"}
+HTTP 401  {"jsonrpc":"2.0","error":{"code":-32000,"message":"Unauthorized: No API key provided"},"id":null}
+```
+
+Both are application errors. Neither triggers a reconnect.
+
+### Tool-declared error
+
+A tool-declared error is a successful JSON-RPC response whose result carries
+`isError: true`. The tool ran and reported a failure in its own words. Netclaw
+formats it as a tool result and logs it at Warning. It is not an exception and
+does not produce an exception outcome.
+
+Example (`search-links` called with only its one required argument):
+
+```text
+HTTP 200
+{"result":{"content":[{"type":"text","text":"Internal Server Error"}],"isError":true},"jsonrpc":"2.0","id":70}
+
+tool result: "Error: MCP tool 'shortio/search-links' reported a failure: Internal Server Error"
+daemon log:  [WRN] McpClientManager: MCP tool 'shortio/search-links' reported a failure: Internal Server Error
+```
+
+**Code anchors:** `McpClientManager.ReportToolFailure`, `McpToolResultFormatter`
+
+### OAuth-capable server
+
+An OAuth-capable server is an HTTP or SSE MCP server with no operator-configured
+`Authorization` header. Only such a server can hold OAuth tokens, so only such a
+server can enter `AuthFailed` because of a tool-declared auth error. A stdio
+server or a static-header server cannot use `netclaw mcp auth`.
+
+Example:
+
+```text
+stdio, no headers                        -> not OAuth-capable
+http, Headers.Authorization configured   -> not OAuth-capable (static header)
+http, no Authorization header            -> OAuth-capable
+```
+
+**Code anchor:** `McpClientManager.HasOAuthRuntimeHints`
+
 ## Filesystem and Output Terms
 
 ### Project scope

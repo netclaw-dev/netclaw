@@ -1,4 +1,4 @@
-Use the [Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md) for tool call, tool result, and tool receipt.
+Use the [Netclaw engineering glossary](../../../../../docs/spec/GLOSSARY.md) for tool call, tool result, tool receipt, transport or session failure, application error, tool-declared error, and OAuth-capable server.
 
 ## MODIFIED Requirements
 
@@ -10,13 +10,11 @@ The system SHALL attempt reconnection on the next tool call to a previously
 unavailable server. Reconnection SHALL be triggered only by
 classified transport or session failures: caller cancellation SHALL propagate
 immediately without teardown or retry, and tool-declared or application
-errors SHALL be returned without reconnecting. An HTTP response that carries a
-status code SHALL count as an application error unless the status is 404,
-which signals session expiry. An HTTP failure with no status code, a socket or
-stream fault, or a session-closed protocol error SHALL count as a transport or
-session failure. The same classification SHALL apply to an MCP prompt load: an
-application error SHALL return a failed load result without a reconnect. A
-classified transport failure
+errors SHALL be returned without reconnecting. The engineering glossary
+defines transport or session failure and application error. An HTTP answer
+with a status code other than 404 SHALL count as an application error. The
+same rule SHALL apply to an MCP prompt load: an application error SHALL return
+a failed load result without a reconnect. A classified transport failure
 SHALL trigger at most one coalesced reconnection for later calls. The failed
 tool invocation SHALL NOT be replayed automatically because the remote side
 effect may have completed before the failure became visible.
@@ -64,7 +62,7 @@ effect may have completed before the failure became visible.
 
 #### Scenario: Application-level HTTP status does not reconnect
 
-- **GIVEN** a tool invocation fails with an HTTP 500 or HTTP 429 response from a connected server
+- **GIVEN** a tool invocation fails with an HTTP 500 or HTTP 429 response from a connected server, for example a rate-limit answer `{"statusCode":429,"error":"Too Many Requests","message":"Rate limit exceeded, retry in 52 seconds"}`
 - **WHEN** the system handles the failure
 - **THEN** the failure is returned as an error that names the HTTP status
 - **AND** the published connection generation does not change
@@ -98,10 +96,9 @@ state and tool count without fabricating a new failure timestamp. The daemon
 log SHALL record each MCP tool invocation that ends in an exception at Warning
 level or higher. The line SHALL name the server, the tool, and the HTTP status
 when one is present, and SHALL redact secrets. Caller cancellation SHALL NOT
-produce that line. A server that uses a stdio transport or an
-operator-configured `Authorization` header SHALL NOT enter `AuthFailed`
-because of tool-result text. Only an HTTP server without an operator-configured
-`Authorization` header MAY be reclassified from a tool-declared auth error.
+produce that line. Only an OAuth-capable server, as the engineering glossary
+defines it, MAY enter `AuthFailed` because of a tool-declared auth error. Any
+other server SHALL stay `Connected` after such a result.
 
 #### Scenario: Server becomes unavailable
 
@@ -141,7 +138,7 @@ because of tool-result text. Only an HTTP server without an operator-configured
 
 - **GIVEN** an MCP tool invocation ends in an HTTP 500 exception
 - **WHEN** the daemon handles the failure
-- **THEN** the daemon log holds one Warning line that names the server, the tool, and status 500
+- **THEN** the daemon log holds one Warning line that names the server, the tool, and status 500, for example `MCP tool 'shortio/get-domains' invocation failed (HTTP 500)`
 - **AND** the line contains no secret values
 
 #### Scenario: Cancelled invocation is not logged as a failure
@@ -153,7 +150,7 @@ because of tool-result text. Only an HTTP server without an operator-configured
 #### Scenario: Static-header server ignores auth words in a tool result
 
 - **GIVEN** an HTTP server authenticated by an operator-configured `Authorization` header
-- **WHEN** a tool returns `isError: true` with text that contains "Forbidden"
+- **WHEN** a tool returns a tool-declared error whose text contains "Forbidden", for example `{"error":"Request failed: 403 Forbidden"}`
 - **THEN** the server status stays `Connected`
 - **AND** the daemon log records the tool failure at Warning
 - **AND** no remedy names `netclaw mcp auth`
@@ -161,13 +158,13 @@ because of tool-result text. Only an HTTP server without an operator-configured
 #### Scenario: Stdio server ignores auth words in a tool result
 
 - **GIVEN** a stdio server
-- **WHEN** a tool returns `isError: true` with text that reports an expired token
+- **WHEN** a tool returns a tool-declared error whose text reports an expired token
 - **THEN** the server status stays `Connected`
 - **AND** no remedy names `netclaw mcp auth`
 
 #### Scenario: OAuth-capable server still reclassifies an expired-token result
 
 - **GIVEN** an HTTP server without an operator-configured `Authorization` header
-- **WHEN** a tool returns `isError: true` with text that reports an expired token
+- **WHEN** a tool returns a tool-declared error whose text reports an expired token
 - **THEN** the server status becomes `AuthFailed`
 - **AND** remediation points to `netclaw mcp auth <name>`

@@ -1,5 +1,7 @@
 ## Why
 
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms: tool receipt, outcome category, transport or session failure, application error, tool-declared error, and OAuth-capable server.
+
 PRD-006 (MCP-005, MCP-008) requires that runtime diagnostics show recent MCP invocation failures and that failures degrade gracefully. Today an MCP tool call that ends in an exception becomes a tool result with no tool receipt. The dispatcher records it as a success, and the daemon log holds no failure line at the default level. The same path treats every HTTP error as a transport fault and reconnects. A server-side business error can also move a static-header server into `AuthFailed`. Epic #2058 tracks the three defects (#2055, #2056, #2057).
 
 ## What Changes
@@ -10,6 +12,7 @@ PRD-006 (MCP-005, MCP-008) requires that runtime diagnostics show recent MCP inv
 - Keep tool-result-text auth detection for HTTP servers without an operator-configured `Authorization` header. A stdio server or a server with such a header never enters `AuthFailed` because of tool-result text.
 - Apply the same application-error classification to MCP prompt loads, so an HTTP error returns a failed load result instead of an exception.
 - Remove the duplicate exception-to-string conversion in the client manager. The adapter owns that conversion.
+- Add four MCP invocation terms to the engineering glossary: transport or session failure, application error, tool-declared error, and OAuth-capable server. Both modified capabilities use them.
 
 In scope for MVP: the three defects above and their regression tests.
 
