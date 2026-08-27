@@ -47,7 +47,15 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
             {
                 ctx = await _listener.GetContextAsync().ConfigureAwait(false);
             }
-            catch (HttpListenerException) when (!_listener.IsListening)
+            // On Windows, Stop()/Close() while a GetContextAsync() is pending makes the
+            // pending accept throw HttpListenerException ("I/O operation has been aborted").
+            // That exception surfaces asynchronously and can arrive AFTER IsListening has
+            // already been flipped to false, so gating on `!IsListening` here is racy and lets
+            // the exception escape the loop, faulting _serveLoop and rethrowing from
+            // DisposeAsync into whichever test is tearing down. There is no legitimate
+            // "retry GetContextAsync" scenario during shutdown, so any HttpListenerException
+            // from the accept side terminates the loop gracefully.
+            catch (HttpListenerException)
             {
                 return;
             }
@@ -78,9 +86,30 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
                 ctx.Response.StatusCode = 404;
             }
         }
+        // On Windows, DisposeAsync can Stop()/Close() the listener while a request is still
+        // being served, which aborts the in-flight response stream (ObjectDisposedException on
+        // the response OutputStream, or HttpListenerException). That is a shutdown artifact,
+        // not a defect: the fixture is being torn down and the client already got its data.
+        // Catch so an in-flight request cannot fault _serveLoop and fail a subsequent test.
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (HttpListenerException)
+        {
+        }
         finally
         {
-            ctx.Response.OutputStream.Close();
+            // Close() on an already-aborted stream can itself throw; guard the teardown.
+            try
+            {
+                ctx.Response.OutputStream.Close();
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (HttpListenerException)
+            {
+            }
         }
     }
 
@@ -103,6 +132,20 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
 
         _listener.Stop();
         _listener.Close();
-        await _serveLoop.ConfigureAwait(false);
+
+        // Network-teardown aborts (HttpListenerException on the pending accept, or
+        // ObjectDisposedException on an in-flight response stream) can fault the serve loop
+        // on Windows. That is a shutdown artifact, not a defect. Swallow it so a mid-test
+        // DisposeAsync can never poison a later test in the same class.
+        try
+        {
+            await _serveLoop.ConfigureAwait(false);
+        }
+        catch (ObjectDisposedException)
+        {
+        }
+        catch (HttpListenerException)
+        {
+        }
     }
 }
