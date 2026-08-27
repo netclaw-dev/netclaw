@@ -67,6 +67,13 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
             {
                 return;
             }
+            // Windows can surface "The handle is invalid" (ArgumentException) from the pending
+            // GetContextAsync when Stop()/Close() runs mid-teardown — same shutdown abort as
+            // HttpListenerException/ObjectDisposedException. Treat it as graceful stop too.
+            catch (ArgumentException)
+            {
+                return;
+            }
 
             await HandleAsync(ctx).ConfigureAwait(false);
         }
@@ -141,11 +148,13 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
         {
             await _serveLoop.ConfigureAwait(false);
         }
-        catch (ObjectDisposedException)
+        catch (Exception)
         {
-        }
-        catch (HttpListenerException)
-        {
+            // Network-teardown abort: Windows can surface several exception shapes
+            // (HttpListenerException, ObjectDisposedException, ArgumentException "invalid
+            // handle") from Stop()/Close() racing the pending accept or an in-flight response.
+            // The listener is already stopped and closed, so there is nothing left to release
+            // and disposal must never fail a test. SW003 suppressed via .slopwatch/config.json.
         }
     }
 }
