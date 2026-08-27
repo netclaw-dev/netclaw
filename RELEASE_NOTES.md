@@ -1,5 +1,26 @@
 # NetClaw Release Notes
 
+## 0.27.0-beta.1 (2026-08-27)
+
+This beta opens the semantic memory cycle. NetClaw now embeds and recalls memories locally on your machine with ONNX — no cloud embeddings, no external services. Recall gets a relevance gate that keeps weak matches out, and `netclaw doctor` watches your embedding model's health.
+
+### Local semantic memory (ONNX)
+
+A new `Netclaw.Embeddings` assembly gives every cross-session memory a local embedding, searched and gated on-device.
+
+- **Embed at write time, recall by meaning.** Memories are embedded when stored, nominated by kNN during curation, and found through hybrid vector + lexical recall ([#1749](https://github.com/netclaw-dev/netclaw/pull/1749)).
+- **A cross-encoder keeps weak matches out.** `OnnxCrossEncoderScorer` applies a post-floor relevance gate so vague hits don't slip into recall ([#1749](https://github.com/netclaw-dev/netclaw/pull/1749)).
+- **Local, pinned models.** Defaults are `snowflake-arctic-embed-m-int8` for embedding and `ms-marco-minilm-l-6-v2` for the gate. Both come from a pinned allowlist — NetClaw never loads an arbitrary model ([#1749](https://github.com/netclaw-dev/netclaw/pull/1749)).
+- **Faster and lighter at rest.** The int8 embedder used about 57% less steady-state RSS than fp32 and ran about 1.7 times faster ([#1749](https://github.com/netclaw-dev/netclaw/pull/1749)).
+- **Provisioning you can control.** Models download on first daemon start, alert through the operational channel on failure, and can be pre-provisioned for a fully offline start ([#1749](https://github.com/netclaw-dev/netclaw/pull/1749)).
+- **New CLI and health tooling.** `netclaw memory backfill-embeddings` embeds an existing corpus, and `netclaw doctor` reports embedding model health ([#1749](https://github.com/netclaw-dev/netclaw/pull/1749)).
+
+### Small fixes
+
+- Fixed release-note parsing so version metadata resolves cleanly ([#2067](https://github.com/netclaw-dev/netclaw/pull/2067)).
+
+> **Upgrade note:** embeddings default to enabled. Expect roughly 800 MB total RSS on the reference configuration, and plan for model access on first start. Operators can disable embeddings or pre-provision the models for offline use.
+
 ## 0.26.0 (2026-08-26)
 
 This release closes the 0.26 beta cycle. Across five betas and a post-beta polish pass, NetClaw got faster with your permission, lighter on your token budget, and more dependable with MCP servers.

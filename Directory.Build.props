@@ -8,8 +8,9 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.26.0</VersionPrefix>
-    <PackageReleaseNotes>Netclaw v0.26.0 — Less approval fatigue, more token efficiency, MCP reliability + OAuth improvements, and MCP server prompts invocable as skills. Agents reach for the right tool (tool calls cut more than half on attachment tasks), structured tools are selected in 25/25 eval trials, native tool names can no longer leak into the shell, OAuth refresh survives cold restarts, and server prompts plug into Netclaw's skill system. Now proven by an executable behavioral eval harness, not vibes.</PackageReleaseNotes>
+    <VersionPrefix>0.27.0</VersionPrefix>
+    <VersionSuffix>beta.1</VersionSuffix>
+    <PackageReleaseNotes>Netclaw v0.27.0-beta.1 — Local semantic memory. NetClaw now embeds, recalls, and relevance-gates cross-session memories entirely on-device with ONNX — no cloud embeddings. Pinned int8 models cut steady-state RSS by 57% and run ~1.7x faster than fp32, `netclaw memory backfill-embeddings` embeds an existing corpus, and `netclaw doctor` watches embedding model health.</PackageReleaseNotes>
   </PropertyGroup>
   <PropertyGroup>
     <NetCoreTestVersion>net10.0</NetCoreTestVersion>
