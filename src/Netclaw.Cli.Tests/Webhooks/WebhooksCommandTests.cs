@@ -173,7 +173,7 @@ public sealed class WebhooksCommandTests : IDisposable
 }
 """);
 
-        var result = await WebhooksCommand.RunAsync(["webhooks", "list"], _paths);
+        var result = await WebhooksCommand.RunAsync(["webhooks", "list"], _paths, TextWriter.Null);
         Assert.Equal(0, result);
     }
 
