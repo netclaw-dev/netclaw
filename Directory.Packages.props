@@ -14,7 +14,7 @@
     <!-- Microsoft.Extensions.TimeProvider.Testing ships on the dotnet/extensions minor
          cadence and has no 10.8.x patch, so it cannot share MicrosoftExtensionsAIVersion
          once the AI packages move to a patch release. -->
-    <MicrosoftExtensionsTimeProviderTestingVersion>10.8.0</MicrosoftExtensionsTimeProviderTestingVersion>
+    <MicrosoftExtensionsTimeProviderTestingVersion>10.9.0</MicrosoftExtensionsTimeProviderTestingVersion>
     <OpenAIVersion>2.12.0</OpenAIVersion>
     <MicrosoftAspNetCoreVersion>10.0.11</MicrosoftAspNetCoreVersion>
     <SkiaSharpVersion>4.151.1</SkiaSharpVersion>
