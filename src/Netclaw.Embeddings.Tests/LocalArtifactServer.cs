@@ -55,6 +55,10 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
             {
                 return;
             }
+            catch (InvalidOperationException) when (!_listener.IsListening)
+            {
+                return;
+            }
 
             await HandleAsync(ctx).ConfigureAwait(false);
         }
