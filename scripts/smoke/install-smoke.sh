@@ -493,8 +493,13 @@ else
 fi
 
 if run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL" >/dev/null \
-    && run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL" >/dev/null; then
+    && bash_install_out=$(run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL"); then
   BASH_INSTALL_PHYSICAL=$(cd "$BASH_INSTALL" && pwd -P)
+  if printf '%s' "$bash_install_out" | grep -qF "source $BASH_RC"; then
+    pass "bash: recommends sourcing the edited rc file"
+  else
+    fail "bash: recommendation missing 'source $BASH_RC'"
+  fi
   bash_path=$(PATH="/usr/bin:/bin" HOME="$BASH_HOME" \
     bash --noprofile --rcfile "$BASH_RC" -i -c 'printf "%s" "$PATH"' 2>/dev/null)
   assert_path_once "bash" "$bash_path" "$BASH_INSTALL_PHYSICAL"
@@ -529,8 +534,13 @@ if command -v zsh >/dev/null 2>&1; then
   printf "ZDOTDIR='%s'\n" "$ZDOT_DIR" > "$ZSH_HOME/.zshenv"
   printf '# existing zsh config\n' > "$ZDOT_DIR/.zshrc"
   if (unset ZDOTDIR; run_unix_installer "$ZSH_EXECUTABLE" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null) \
-      && (unset ZDOTDIR; run_unix_installer "$ZSH_EXECUTABLE" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null); then
+      && zsh_install_out=$(unset ZDOTDIR; run_unix_installer "$ZSH_EXECUTABLE" "$ZSH_HOME" "$ZSH_INSTALL"); then
     ZSH_INSTALL_PHYSICAL=$(cd "$ZSH_INSTALL" && pwd -P)
+    if printf '%s' "$zsh_install_out" | grep -qF "source $ZDOT_DIR/.zshrc"; then
+      pass "zsh: recommends sourcing the edited rc file"
+    else
+      fail "zsh: recommendation missing 'source $ZDOT_DIR/.zshrc'"
+    fi
     zsh_path=$(PATH="/usr/bin:/bin" ZDOTDIR="$ZDOT_DIR" \
       "$ZSH_EXECUTABLE" -f -c 'source "$ZDOTDIR/.zshrc"; print -rn -- "$PATH"')
     assert_path_once "zsh" "$zsh_path" "$ZSH_INSTALL_PHYSICAL"
@@ -554,9 +564,14 @@ if command -v fish >/dev/null 2>&1; then
   FISH_RC="$FISH_HOME/.config/fish/conf.d/netclaw.fish"
   if XDG_CONFIG_HOME="$FISH_HOME/.config" \
       run_unix_installer "$FISH_EXECUTABLE" "$FISH_HOME" "$FISH_INSTALL" >/dev/null \
-      && XDG_CONFIG_HOME="$FISH_HOME/.config" \
-      run_unix_installer "$FISH_EXECUTABLE" "$FISH_HOME" "$FISH_INSTALL" >/dev/null; then
+      && fish_install_out=$(XDG_CONFIG_HOME="$FISH_HOME/.config" \
+          run_unix_installer "$FISH_EXECUTABLE" "$FISH_HOME" "$FISH_INSTALL"); then
     FISH_INSTALL_PHYSICAL=$(cd "$FISH_INSTALL" && pwd -P)
+    if printf '%s' "$fish_install_out" | grep -qF "source $FISH_RC"; then
+      pass "fish: recommends sourcing the edited conf.d file"
+    else
+      fail "fish: recommendation missing 'source $FISH_RC'"
+    fi
     fish_path=$(PATH="/usr/bin:/bin" "$FISH_EXECUTABLE" --no-config -c \
       "source '$FISH_RC'; string join : -- \$PATH")
     assert_path_once "fish" "$fish_path" "$FISH_INSTALL_PHYSICAL"
