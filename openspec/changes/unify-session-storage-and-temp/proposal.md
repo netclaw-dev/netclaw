@@ -9,17 +9,18 @@ use separate directory trees.
 
 ## What Changes
 
-- Give each new session one versioned storage descriptor with an agent-data
-  root and a protected audit root.
-- Store both resolved roots with the session. A later upgrade or configuration
-  change must not reinterpret either root for an existing session.
+- Give each new session one versioned storage binding with one physical
+  session storage envelope.
+- Store the resolved envelope root with the session. A later upgrade or
+  configuration change must not reinterpret it for an existing session.
 - Keep legacy session roots and log paths in place. Do not move or delete them
   during an upgrade.
-- Place each child's artifacts below the parent agent-data root and its raw log
-  below the parent audit root. Return opaque log and artifact references to the
-  parent.
-- Keep raw audit logs outside normal workspace-file access. Provide a bounded,
-  redacted parent view of child activity instead of requiring shell searches.
+- Place each child's artifacts, temporary files, and raw log below one child-run
+  directory inside the parent's envelope. Return an opaque log reference and
+  the parent-readable child artifact directory.
+- Keep raw logs outside the session working directory and ordinary
+  workspace-file safe roots. Provide a bounded, redacted parent view of child
+  activity instead of requiring shell searches.
 - Set `TMPDIR`, `TMP`, and `TEMP` for each parent and child execution scope.
   The values must identify that run's managed temporary directory.
 - Extend the existing typed correction path for an explicit unmanaged
@@ -28,15 +29,16 @@ use separate directory trees.
 - Add a deferred structured worktree tool. The tool chooses a session-owned
   worktree path, creates the worktree, returns its working directory, and
   records cleanup ownership.
-- Replace eval assertions that require the session root as the shell working
-  directory for all disposable work. New assertions must test the managed
-  temporary environment and parent-child artifact discovery.
+- Replace eval assertions that treat the complete session storage envelope as
+  shell cwd or disposable work. New assertions must test the `workspace/` cwd,
+  managed temporary environment, and parent-child artifact discovery.
 - Preserve current strict behavior when a task explicitly requires a platform
   temporary path.
 
-**BREAKING:** New child logs no longer use standalone sibling directories in
-the session-logs base. They are grouped below the parent audit root. Operator
-runbooks that derive child log paths must use the supported inspection command.
+**BREAKING:** New parent and child logs no longer use standalone directories in
+the session-logs base. They are grouped inside the session storage envelope.
+Operator runbooks that derive log paths must use the supported inspection
+command.
 
 This change is in scope for Personal and Team sessions on POSIX and Windows.
 It includes deterministic runtime tests and PII-free model evals. Automated
@@ -51,11 +53,11 @@ An agent asks a standard temporary API for a file path. Netclaw sets the
 process environment before execution.
 
 ```text
-TMPDIR=/home/agent/.netclaw/sessions/s-42/tmp/parent
-TEMP=/home/agent/.netclaw/sessions/s-42/tmp/parent
+TMPDIR=/srv/netclaw/sessions/s-42/tmp/parent
+TEMP=/srv/netclaw/sessions/s-42/tmp/parent
 
 standard_temp_api()
-  -> /home/agent/.netclaw/sessions/s-42/tmp/parent/result-7.tmp
+  -> /srv/netclaw/sessions/s-42/tmp/parent/result-7.tmp
 ```
 
 Counterexample: Netclaw does not move the complete session below `/tmp`.
@@ -72,8 +74,10 @@ the same requirement. An eligible Personal session receives
 
 ### Child activity discovery
 
-`spawn_agent` returns an opaque child log reference. The parent passes that
-reference to `subagent_log_read` and receives a bounded activity page.
+`spawn_agent` returns an opaque child log reference and the child's artifact
+directory. The parent passes the reference to `subagent_log_read` and receives
+a bounded activity page. The raw file is physically below the same session
+envelope as the artifacts.
 
 Counterexample: The parent does not receive a raw log path. It does not search
 the daemon log tree with shell commands.
@@ -94,26 +98,27 @@ None.
 
 ### Modified Capabilities
 
-- `netclaw-session`: Persist the versioned agent-data and audit roots and group
-  main and child session logs under one protected lineage with legacy resume
-  behavior.
+- `netclaw-session`: Persist one versioned session storage envelope and group
+  main and child data under that physical lineage while existing sessions keep
+  their current path behavior.
 - `session-cwd`: Define managed temporary and worktree areas and inject the
   standard temporary environment for every run.
 - `netclaw-tools`: Expose bounded child-log discovery and a managed deferred
-  worktree operation without exposing raw audit files.
+  worktree operation without exposing raw log files.
 - `tool-approval-gates`: Return a typed managed-temp correction for eligible
   explicit writes and define the deterministic and behavioral proof boundary.
 
 ## Impact
 
 - **Session runtime:** Session creation, recovery, child-run scope, and path
-  resolution gain a versioned two-root storage descriptor.
+  resolution gain a versioned single-envelope storage binding.
 - **Logging:** The session log dispatcher routes parent and child files into
-  one protected session audit hierarchy. Daemon-global logs remain unchanged.
+  the session envelope. Daemon-global logs remain unchanged.
 - **Tool execution:** Shell child processes receive session-specific temporary
   environment variables. File and worktree tools use managed destinations.
-- **Security:** Path knowledge grants no authority. Raw audit logs remain
-  protected, and all replacement calls pass normal authorization.
+- **Security:** Path knowledge grants no authority. Raw logs remain outside
+  ordinary workspace-file safe roots, and all replacement calls pass normal
+  authorization. This change does not claim OS-level process isolation.
 - **Operations:** Runbooks and diagnostics must stop deriving session log paths.
   Cleanup must recognize both legacy and new layouts.
 - **Testing:** Contract and integration tests prove layout, environment,

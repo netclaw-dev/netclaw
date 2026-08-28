@@ -5,23 +5,49 @@ This delta uses terms from the
 
 ### Requirement: Spawned child references are machine-actionable
 
-A successful `spawn_agent` result SHALL return the child run identifier and
-opaque references for the child's activity log and artifact area. The result
-SHALL NOT disclose the protected raw log path. A failed spawn SHALL NOT return
-references that appear usable.
+A successful `spawn_agent` result SHALL return the child run identifier, an
+opaque reference for the child's activity log, and the exact child artifact
+directory. The current parent SHALL receive read and attach authority for that
+artifact directory through child ownership. The authority SHALL NOT include a
+sibling raw-log or temporary area. The result SHALL NOT disclose the raw log
+path. A failed spawn SHALL NOT return locations that appear usable.
+
+The result shape SHALL be equivalent to:
+
+```text
+run_id: "run-7"
+activity_log_ref: "child-log:opaque-value"
+artifact_dir: "/srv/netclaw/sessions/s-42/subagents/run-7/artifacts"
+```
 
 #### Scenario: Example - successful spawn returns child references
 
 - **WHEN** a parent successfully starts a child run
 - **THEN** the tool result contains the child run identifier
-- **AND** it contains opaque activity-log and artifact references
-- **AND** it does not contain a raw audit-log path
+- **AND** it contains an opaque activity-log reference and exact artifact
+  directory
+- **AND** it does not contain a raw-log path
+
+#### Scenario: Example - parent reads a child artifact with an existing tool
+
+- **GIVEN** a successful spawn returned the child artifact directory
+- **WHEN** the owning parent calls `file_read` or `attach_file` for a file below
+  that directory
+- **THEN** child ownership can satisfy the artifact-area authorization check
+- **AND** no new artifact-reference reader is required
+
+#### Scenario: Counterexample - artifact directory does not expose siblings
+
+- **GIVEN** the parent knows a child artifact directory
+- **WHEN** it requests a sibling file below the child's `logs/` or `tmp/` area
+- **THEN** the artifact-area authority does not authorize that request
+- **AND** normal policy decides the call
 
 #### Scenario: Counterexample - failed spawn has no usable child references
 
 - **WHEN** the child run is not created
 - **THEN** the tool result reports failure
-- **AND** it contains no active log or artifact reference
+- **AND** it contains no active log reference or artifact directory
 
 ### Requirement: Parent can read bounded child activity without shell
 
@@ -32,7 +58,7 @@ include an optional literal-query field. The tool SHALL NOT return system
 prompts, credentials, secrets, raw
 approval payloads, or unredacted tool arguments and results.
 The reference SHALL remain valid after parent actor recovery while the child
-audit lineage exists.
+raw-log lineage exists.
 
 #### Scenario: Example - parent reads the next child activity page
 

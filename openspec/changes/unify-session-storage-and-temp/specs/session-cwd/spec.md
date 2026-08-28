@@ -22,6 +22,11 @@ The context SHALL derive from the child's existing bound run scope. It SHALL
 NOT add a public protocol field, persist a path as agent identity, or change
 shell authorization.
 
+For a parent with a version-2 storage binding, `session_dir` SHALL mean
+`<session-envelope>/workspace`. For a child, `temp_dir` and `artifact_dir`
+SHALL be siblings below `<session-envelope>/subagents/<run-id>`. The context
+SHALL NOT use `session_dir` as a synonym for the complete storage envelope.
+
 #### Scenario: Example - Personal child receives distinct managed paths
 
 - **GIVEN** a Personal child has a bound session and run scope
@@ -65,11 +70,12 @@ shell authorization.
 ### Requirement: Managed temporary directory is the private temporary location
 
 The system SHALL provide a separate managed temporary directory for each
-parent and child run. A parent SHALL use `<session-root>/tmp/parent`. A child
-SHALL use `<session-root>/tmp/subagents/<run-id>`. The system SHALL identify
-this directory as the preferred location for disposable files. It SHALL keep
-the session root as the shell working-directory fallback when no project or
-explicit working directory exists.
+parent and child run. A version-2 parent SHALL use
+`<session-envelope>/tmp/parent`. A child SHALL use
+`<session-envelope>/subagents/<run-id>/tmp`. The system SHALL identify this
+directory as the preferred location for disposable files. It SHALL use the
+session directory, not the complete envelope, as the shell working-directory
+fallback when no project or explicit working directory exists.
 
 Personal and Team working context and correction text SHALL provide the
 absolute managed temporary path when the agent needs an alternative to the
@@ -82,23 +88,31 @@ temporary-directory cleanup occurs as part of this behavior.
 - **GIVEN** a session has no declared project directory
 - **WHEN** the agent invokes `shell_execute` without an explicit working
   directory
-- **THEN** the shell working directory is the bound session root
+- **THEN** the shell working directory is the bound session directory at
+  `<session-envelope>/workspace`
 - **AND** temporary APIs in the process resolve to the managed temporary
   directory
+
+#### Scenario: Counterexample - complete envelope is not the fallback cwd
+
+- **GIVEN** a version-2 session has raw logs and child runs in its envelope
+- **WHEN** the agent invokes `shell_execute` without a project or explicit cwd
+- **THEN** the shell does not start at `<session-envelope>`
+- **AND** a recursive search of `.` does not include those sibling areas
 
 #### Scenario: Parent and child temporary directories do not collide
 
 - **GIVEN** a parent and two child runs belong to one session
 - **WHEN** Netclaw resolves their managed temporary directories
 - **THEN** each run receives a different directory
-- **AND** every directory remains below the same session root
+- **AND** every directory remains below the same session envelope
 
 #### Scenario: Example - correction names the managed temporary directory
 
 - **GIVEN** a correction recommends private temporary storage
 - **WHEN** the correction is rendered for the agent
 - **THEN** it names the exact managed temporary directory for that run
-- **AND** it does not name the complete session root as disposable storage
+- **AND** it does not name the complete session envelope as disposable storage
 
 #### Scenario: Counterexample - Public context cannot receive managed paths
 
@@ -162,7 +176,7 @@ Windows temporary path.
 ### Requirement: Worktrees have a separate session-owned area
 
 The system SHALL distinguish managed worktrees from ordinary temporary files.
-It SHALL allocate worktrees below `<session-root>/worktrees` and SHALL NOT
+It SHALL allocate worktrees below `<session-envelope>/worktrees` and SHALL NOT
 place them below a run's managed temporary directory. This capability SHALL
 NOT define automatic worktree cleanup.
 

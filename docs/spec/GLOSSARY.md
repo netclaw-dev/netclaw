@@ -377,32 +377,60 @@ http, no headers, no tokens, isError "token expired"   -> not OAuth-managed; sta
 Project scope is the declared project directory for a main session or subagent
 run. Workspace tools use it as the first base for relative paths.
 
-### Session directory and agent-data root
+### Session storage envelope
 
-The session directory is the agent-data root for one session. Its path is
-fixed after the session binds it. Its contents are mutable.
+A session storage envelope is the one physical directory that contains all
+session-owned files for a new-layout session. Its path is fixed when the
+session binds its versioned storage binding. Its contents are mutable.
 
-The agent-data root contains agent-visible session files. Examples include
-artifacts, inbound files, bounded tool output, temporary files, and worktrees.
-It is the relative-path base when the session has no valid project directory.
+The envelope contains distinct working, artifact, temporary, worktree, log,
+and child-run areas. Physical containment does not make the complete envelope
+a project scope, a shell safe space, or an authority grant.
+
+```text
+<session-envelope>/
+├── workspace/                 # default no-project working directory
+├── artifacts/                 # retained parent outputs
+├── tmp/parent/                # disposable parent files
+├── worktrees/                 # managed source worktrees
+├── logs/session.log           # raw parent log
+└── subagents/<run-id>/
+    ├── artifacts/
+    ├── tmp/
+    └── logs/session.log       # raw child log
+```
+
+### Session storage binding
+
+A session storage binding is the durable layout version and absolute envelope
+root for a new-layout session. It has one root. A later configuration change
+does not recompute that root. Existing sessions keep the binding absent and use
+their established path behavior; absence is not a second descriptor shape.
+
+### Session directory
+
+The session directory is the agent-facing `workspace/` area inside the session
+storage envelope. It is the relative-path base when the session has no valid
+project directory. It is not the complete storage envelope.
 
 The phrase `session scratch` is a legacy term for disposable work directly in
 the session directory. New designs use a managed temporary directory instead.
 
-### Audit root
+### Raw session log
 
-The audit root contains raw parent and subagent session logs. It is separate
-from the agent-data root. Normal session context does not add it to workspace
-or shell safe spaces.
+A raw session log is the diagnostic file for one main session or subagent run.
+New-layout raw logs are physically inside the session storage envelope but are
+outside the session directory and ordinary workspace-file safe roots.
 
-An opaque log reference does not grant access to the audit root. The reference
-can authorize one bounded and redacted projection through its owning tool.
+This separation is an application authority boundary, not an operating-system
+process sandbox. An opaque log reference does not grant raw-file access. It can
+authorize one bounded and redacted projection through its owning tool.
 
 ### Managed temporary directory
 
 A managed temporary directory contains disposable files for one parent or
-subagent run. Netclaw places it below the agent-data root. Each run receives a
-different directory.
+subagent run. Netclaw places it inside the session storage envelope. Each run
+receives a different directory.
 
 Netclaw sets `TMPDIR`, `TMP`, and `TEMP` to this directory for child processes.
 The managed temporary directory is not a project scope or an authority grant.
@@ -410,8 +438,15 @@ The managed temporary directory is not a project scope or an authority grant.
 ### Artifact directory
 
 An artifact directory contains outputs that a parent or user must keep or
-attach. It is separate from the managed temporary directory. Netclaw does not
-apply a retention policy to either directory yet.
+attach. It is separate from the session directory and managed temporary
+directory. Netclaw does not apply a retention policy to either directory yet.
+
+### Child run directory
+
+A child run directory is the area below
+`<session-envelope>/subagents/<run-id>` for one subagent run. Its artifact,
+temporary, and raw-log areas share the same opaque run identifier. The parent
+owns the lineage; that ownership does not grant unrestricted raw-log access.
 
 ### Allowed root
 
