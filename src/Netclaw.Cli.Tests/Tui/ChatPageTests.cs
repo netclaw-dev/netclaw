@@ -296,6 +296,28 @@ public sealed class ChatPageTests
     }
 
     [Fact]
+    public void ErrorOutput_EndsGenerationAndShowsRetryReadyState()
+    {
+        var vm = new TestChatViewModel(seed: null);
+        vm.SeedPendingInteractionForTesting(BuildApproval("pending approval"));
+        vm.IsGenerating.Value = true;
+        vm.IsInputEnabled.Value = false;
+        vm.StatusMessage.Value = "Generating...";
+
+        vm.ProcessOutputForTesting(new ErrorOutput
+        {
+            SessionId = new SessionId("tui/test"),
+            Message = "Provider rejected tools."
+        });
+
+        Assert.False(vm.IsGenerating.Value);
+        Assert.True(vm.IsInputEnabled.Value);
+        Assert.False(vm.HasPendingInteraction);
+        Assert.Empty(vm.ApprovalOptions);
+        Assert.Equal("Last request failed. Ready to retry.", vm.StatusMessage.Value);
+    }
+
+    [Fact]
     public async Task NarrowTerminal_PreservesCtrlOHint()
     {
         // 60-col terminal — narrower than the previous hard-coded 76-col

@@ -4,10 +4,10 @@
 Output "/tmp/tape-shot-mcp-permissions-tool-grid.gif"
 
 Hide
-Type "netclaw provider add smoke-llm ollama --endpoint http://127.0.0.1:11434"
+Type "netclaw provider add smoke-llm openai-compatible --endpoint __SMOKE_LLM_ENDPOINT__"
 Enter
 Wait+Screen@10s /TAPE\$/
-Type "netclaw model set main smoke-llm qwen2:0.5b"
+Type "netclaw model set main smoke-llm __SMOKE_LLM_MODEL__"
 Enter
 Wait+Screen@10s /TAPE\$/
 Type "netclaw mcp add --transport stdio --grant-all smoke-math -- __NETCLAW_SMOKE_MCP_SERVER__"

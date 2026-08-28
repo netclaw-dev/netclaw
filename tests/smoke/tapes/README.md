@@ -33,8 +33,8 @@ distinct from the pretty marketing screenshots in
 ```
 
 `run-smoke.sh` publishes the binary (or uses `NETCLAW_SMOKE_CLI` /
-`NETCLAW_SMOKE_DAEMON` if exported), installs `vhs` if missing, starts a
-native `ollama serve`, and pulls the smoke models automatically.
+`NETCLAW_SMOKE_DAEMON` if exported), starts a loopback smoke LLM server,
+and installs `vhs` if missing.
 
 ## Authoring conventions
 
@@ -46,8 +46,7 @@ that breaks them.
    source (`src/Netclaw.Cli/Tui/Wizard/Steps/*StepView.cs`).
    Sleep-based synchronization is the single biggest source of CI
    flakiness. The only acceptable timeout is the outer one inside
-   `run-native-tape.sh`. (The short `Sleep 300ms` Termina-relayout
-   guards in the provider tapes are a known, documented exception.)
+   `run-native-tape.sh`.
 
 2. **Tapes do not reset state.** The wrapper sets a per-tape
    `NETCLAW_HOME` and clears it before the tape runs. Tape bodies do

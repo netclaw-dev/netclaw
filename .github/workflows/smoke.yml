@@ -1,7 +1,7 @@
 name: smoke
 
 # Native smoke harness — runs the real netclaw / netclawd binaries natively
-# (no Docker for the binary) against a native Ollama process.
+# (no Docker for the binary) against a loopback smoke LLM process.
 #
 # Runs on every PR to dev (Linux + macOS legs in parallel), on dev pushes,
 # and nightly. The `Native Smoke (Linux)` + `Screenshot Regression (Linux)`
@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
   schedule:
     # 07:00 UTC daily — catches external-dependency drift during quiet
-    # stretches (Ollama model digests, the Homebrew vhs version).
+    # stretches (the smoke binary and Homebrew vhs version).
     # NOTE: scheduled runs only fire from the repository's default branch.
     - cron: '0 7 * * *'
   push:
@@ -82,6 +82,13 @@ jobs:
           -c Release -r ${{ matrix.rid }} --self-contained /p:PublishSingleFile=true
           -o ./publish/mcp-server
 
+      - name: Publish smoke LLM server
+        shell: bash
+        run: >
+          dotnet publish tests/Netclaw.SmokeLlmServer
+          -c Release -r ${{ matrix.rid }} --self-contained /p:PublishSingleFile=true
+          -o ./publish/llm-server
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v7
         with:
@@ -90,6 +97,7 @@ jobs:
             publish/cli/netclaw
             publish/daemon/netclawd
             publish/mcp-server/Netclaw.SmokeMcpServer
+            publish/llm-server/Netclaw.SmokeLlmServer
           retention-days: 1
           if-no-files-found: error
 
@@ -98,10 +106,6 @@ jobs:
     needs: publish
     runs-on: ubuntu-latest
     timeout-minutes: 45
-
-    env:
-      SMOKE_OLLAMA_MODEL: qwen2:0.5b
-      SMOKE_OLLAMA_ALT_MODEL: all-minilm:latest
 
     steps:
       - name: Checkout
@@ -115,10 +119,11 @@ jobs:
 
       - name: Mark binaries executable
         run: |
-          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer
+          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer publish/llm-server/Netclaw.SmokeLlmServer
           echo "NETCLAW_SMOKE_CLI=$(pwd)/publish/cli/netclaw" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_DAEMON=$(pwd)/publish/daemon/netclawd" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_MCP_SERVER=$(pwd)/publish/mcp-server/Netclaw.SmokeMcpServer" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_LLM_SERVER=$(pwd)/publish/llm-server/Netclaw.SmokeLlmServer" >> "$GITHUB_ENV"
 
       - name: Run native smoke (light)
         shell: bash
@@ -141,10 +146,6 @@ jobs:
     runs-on: macos-26
     timeout-minutes: 45
 
-    env:
-      SMOKE_OLLAMA_MODEL: qwen2:0.5b
-      SMOKE_OLLAMA_ALT_MODEL: all-minilm:latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -157,10 +158,11 @@ jobs:
 
       - name: Mark binaries executable
         run: |
-          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer
+          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer publish/llm-server/Netclaw.SmokeLlmServer
           echo "NETCLAW_SMOKE_CLI=$(pwd)/publish/cli/netclaw" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_DAEMON=$(pwd)/publish/daemon/netclawd" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_MCP_SERVER=$(pwd)/publish/mcp-server/Netclaw.SmokeMcpServer" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_LLM_SERVER=$(pwd)/publish/llm-server/Netclaw.SmokeLlmServer" >> "$GITHUB_ENV"
 
       # Screenshots stay Linux-only (VHS renders identically across OSes); the
       # macOS leg runs the flow tapes + scenarios, which assert on exit codes.
@@ -185,10 +187,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
 
-    env:
-      SMOKE_OLLAMA_MODEL: qwen2:0.5b
-      SMOKE_OLLAMA_ALT_MODEL: all-minilm:latest
-
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -201,10 +199,11 @@ jobs:
 
       - name: Mark binaries executable
         run: |
-          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer
+          chmod +x publish/cli/netclaw publish/daemon/netclawd publish/mcp-server/Netclaw.SmokeMcpServer publish/llm-server/Netclaw.SmokeLlmServer
           echo "NETCLAW_SMOKE_CLI=$(pwd)/publish/cli/netclaw" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_DAEMON=$(pwd)/publish/daemon/netclawd" >> "$GITHUB_ENV"
           echo "NETCLAW_SMOKE_MCP_SERVER=$(pwd)/publish/mcp-server/Netclaw.SmokeMcpServer" >> "$GITHUB_ENV"
+          echo "NETCLAW_SMOKE_LLM_SERVER=$(pwd)/publish/llm-server/Netclaw.SmokeLlmServer" >> "$GITHUB_ENV"
 
       - name: Run screenshot regression
         shell: bash

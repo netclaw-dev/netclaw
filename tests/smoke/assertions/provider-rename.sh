@@ -2,8 +2,8 @@
 # provider-rename.tape post-tape assertion.
 #
 # Validates the rename swapped the dictionary key in netclaw.json:
-#   - 'seed-ollama' is gone
-#   - 'renamed-ollama' exists with the original Type/Endpoint
+#   - 'seed-provider' is gone
+#   - 'renamed-provider' exists with the original Type/Endpoint
 #   - `netclaw provider list` reflects the rename
 #
 # See provider-add.sh for why doctor is not run here.
@@ -22,25 +22,25 @@ fi
 
 config_json="$(read_config_json)"
 
-assert_field '(.Providers | has("seed-ollama"))'      'false'                    "$config_json" || :
-assert_field '(.Providers | has("renamed-ollama"))'   'true'                     "$config_json" || :
-assert_field '.Providers["renamed-ollama"].Type'      'ollama'                   "$config_json" || :
-assert_field '.Providers["renamed-ollama"].Endpoint'  'http://localhost:11434'   "$config_json" || :
+assert_field '(.Providers | has("seed-provider"))'      'false'                    "$config_json" || :
+assert_field '(.Providers | has("renamed-provider"))'   'true'                     "$config_json" || :
+assert_field '.Providers["renamed-provider"].Type'      'openai-compatible'        "$config_json" || :
+assert_field '.Providers["renamed-provider"].Endpoint'  "$SMOKE_LLM_ENDPOINT"     "$config_json" || :
 
 echo "provider-rename: cross-checking 'netclaw provider list'..."
 list_output="$("$NETCLAW_SMOKE_CLI" provider list 2>/dev/null | tr -d '\r')"
-if echo "$list_output" | grep -qE '^seed-ollama[[:space:]]'; then
-  echo "FAIL: 'seed-ollama' still shown in provider list." >&2
+if echo "$list_output" | grep -qE '^seed-provider[[:space:]]'; then
+  echo "FAIL: 'seed-provider' still shown in provider list." >&2
   assert_fail=1
 else
-  echo "  ok  'seed-ollama' absent from provider list"
+  echo "  ok  'seed-provider' absent from provider list"
 fi
-if ! echo "$list_output" | grep -qE '^renamed-ollama[[:space:]]+Ollama'; then
-  echo "FAIL: 'renamed-ollama' missing from provider list." >&2
+if ! echo "$list_output" | grep -qE '^renamed-provider[[:space:]]+OpenAI-compatible'; then
+  echo "FAIL: 'renamed-provider' missing from provider list." >&2
   printf -- '--- provider list ---\n%s\n' "$list_output" >&2
   assert_fail=1
 else
-  echo "  ok  'renamed-ollama' present in provider list"
+  echo "  ok  'renamed-provider' present in provider list"
 fi
 
 if (( assert_fail )); then

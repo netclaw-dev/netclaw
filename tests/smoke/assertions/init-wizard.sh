@@ -58,11 +58,11 @@ if [[ $doctor_status -ne 0 && $doctor_status -ne 2 ]]; then
 fi
 
 echo "init-wizard: checking expected fields in netclaw.json..."
-assert_field '.Providers.ollama.Type'       'ollama'                   "$config_json" || :
-assert_field '.Providers.ollama.Endpoint'   'http://localhost:11434'   "$config_json" || :
-assert_field '.Models.Roles.Main'                                  'ollama-qwen2-0-5b' "$config_json" || :
-assert_field '.Models.Definitions[.Models.Roles.Main].Provider'     'ollama'             "$config_json" || :
-assert_field '.Models.Definitions[.Models.Roles.Main].ModelId'      'qwen2:0.5b'         "$config_json" || :
+assert_field '.Providers["openai-compatible"].Type'       'openai-compatible'          "$config_json" || :
+assert_field '.Providers["openai-compatible"].Endpoint'   "$SMOKE_LLM_ENDPOINT"       "$config_json" || :
+assert_field '.Models.Roles.Main'                                  'openai-compatible-netclaw-smoke-tool-model' "$config_json" || :
+assert_field '.Models.Definitions[.Models.Roles.Main].Provider'     'openai-compatible'  "$config_json" || :
+assert_field '.Models.Definitions[.Models.Roles.Main].ModelId'      'netclaw-smoke-tool-model' "$config_json" || :
 assert_field '(.Models.Definitions[.Models.Roles.Main] | has("ContextWindow"))'     'false' "$config_json" || :
 assert_field '(.Models.Definitions[.Models.Roles.Main] | has("InputModalities"))'   'false' "$config_json" || :
 assert_field '(.Models.Definitions[.Models.Roles.Main] | has("OutputModalities"))'  'false' "$config_json" || :

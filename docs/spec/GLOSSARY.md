@@ -396,11 +396,91 @@ http, no headers, no tokens, isError "token expired"   -> not OAuth-managed; sta
 Project scope is the declared project directory for a main session or subagent
 run. Workspace tools use it as the first base for relative paths.
 
-### Session directory and session scratch
+### Session storage envelope
 
-The session directory path is fixed for one session. Its contents are mutable.
-Session scratch means disposable work inside that directory. It is the
-relative-path base when the session has no valid project directory.
+A session storage envelope is the one physical directory that contains all
+session-owned files for a new-layout session. Its path is fixed when the
+session binds its versioned storage binding. Its contents are mutable.
+
+The envelope contains distinct working, artifact, temporary, worktree, log,
+and child-run areas. Physical containment does not make the complete envelope
+a project scope, a shell safe space, or an authority grant.
+
+```text
+<session-envelope>/
+├── workspace/                 # default no-project working directory
+├── artifacts/                 # retained parent outputs
+├── tmp/parent/                # disposable parent files
+├── worktrees/                 # managed source worktrees
+├── logs/session.log           # raw parent log
+└── subagents/<run-id>/
+    ├── artifacts/
+    ├── tmp/
+    └── logs/session.log       # raw child log
+```
+
+### Session storage binding
+
+A session storage binding is the durable layout version and absolute envelope
+root for a new-layout session. It has one root. A later configuration change
+does not recompute that root. Existing sessions keep the binding absent and use
+their established path behavior; absence is not a second descriptor shape.
+
+### Session directory
+
+The session directory is the agent-facing `workspace/` area inside the session
+storage envelope. It is the relative-path base when the session has no valid
+project directory. It is not the complete storage envelope.
+
+The phrase `session scratch` is a legacy term that mixed the session directory
+with disposable storage. Current designs use session directory for the working
+and relative-path base, and managed temporary directory for disposable work.
+Current runtime text and identifiers must use the specific term.
+
+### Raw session log
+
+A raw session log is the diagnostic file for one main session or subagent run.
+New-layout raw logs are physically inside the session storage envelope but are
+outside the session directory.
+
+Every parent and child run can read, list, and search logs from its own session
+through the existing file tools. The session is the log-read trust boundary.
+This read scope does not grant file-write, file-edit, attach, or shell
+authority. Another session cannot use this scope.
+
+These reads return normal bounded file-tool output. A raw session log does not
+use a separate activity projection or log-specific redaction layer.
+
+### Managed temporary directory
+
+A managed temporary directory contains disposable files for one parent or
+subagent run. Netclaw places it inside the session storage envelope. Each run
+receives a different directory.
+
+Netclaw sets `TMPDIR`, `TMP`, and `TEMP` to this directory for child processes.
+The managed temporary directory is not a project scope or an authority grant.
+
+### Artifact directory
+
+An artifact directory contains outputs that a parent or user must keep or
+attach. It is separate from the session directory and managed temporary
+directory. Netclaw does not apply a retention policy to either directory yet.
+
+### Child run directory
+
+A child run directory is the area below
+`<session-envelope>/subagents/<run-id>` for one subagent run. Its artifact,
+temporary, and raw-log areas share the same opaque run identifier. The parent
+owns the lineage and can read the child's log through the existing file tools.
+This ownership does not grant access to a different session.
+
+### Session-owned directory
+
+A session-owned directory has a lifetime or authority scope tied to one
+session or run. Session directories, managed temporary directories, artifact
+directories, and managed worktree directories are session-owned, but they do
+not have the same purpose or access policy. Approval code uses this broader
+term only when the rule intentionally applies to more than one of them.
 
 ### Allowed root
 

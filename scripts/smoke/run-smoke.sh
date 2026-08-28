@@ -2,7 +2,7 @@
 # Unified native smoke harness entrypoint (no Docker for the binary).
 #
 # Runs the real netclaw / netclawd binaries natively against a native
-# Ollama host process. Drives both the interactive VHS tapes and the
+# OpenAI-compatible smoke LLM process. Drives both the interactive VHS tapes and the
 # non-interactive scenario scripts.
 #
 # Usage:
@@ -12,7 +12,7 @@
 #   [filters]   when <profile> is light/full, restrict to the named
 #               tapes/scenarios (optional)
 #
-# The `screenshots` profile provisions Ollama + the binary exactly like
+# The `screenshots` profile provisions the smoke LLM + the binary exactly like
 # `light`, then runs the capture tapes under tests/smoke/tapes/screenshots/
 # and compares each final lossless PNG frame against the approved baseline
 # in tests/smoke/screenshots/<frame>.approved.png. Missing baselines and
@@ -21,7 +21,7 @@
 # What it does, in order:
 #   1) Resolve the binaries: use NETCLAW_SMOKE_CLI / NETCLAW_SMOKE_DAEMON
 #      if exported, else publish via scripts/build/publish-binaries.sh.
-#   2) Provision native Ollama: install, `ollama serve`, pull models.
+#   2) Start the loopback smoke LLM server.
 #   3) Ensure vhs is installed.
 #   4) Run interactive tapes (run-native-tape.sh) + non-interactive
 #      scenarios (tests/smoke/scenarios/*.sh). Each gets a fresh
@@ -33,8 +33,8 @@
 #   NETCLAW_SMOKE_CLI / NETCLAW_SMOKE_DAEMON  pre-built binary paths
 #   NETCLAW_SMOKE_MCP_SERVER pre-published Netclaw.SmokeMcpServer executable
 #   SMOKE_RID                publish RID            (default: linux-x64)
-#   SMOKE_OLLAMA_MODEL       primary model          (default: qwen2:0.5b)
-#   SMOKE_OLLAMA_ALT_MODEL   alternate model        (default: all-minilm:latest)
+#   NETCLAW_SMOKE_LLM_SERVER pre-published Netclaw.SmokeLlmServer executable
+#   SMOKE_LLM_MODEL          primary model          (default: netclaw-smoke-tool-model)
 #   SMOKE_LOG_DIR            artifact dir           (default: ./smoke-logs)
 #   SMOKE_DAEMON_PORT        isolated daemon port   (default: 56199)
 #   KEEP_RUN_ROOT            set 1 to keep the temp run root
@@ -61,7 +61,6 @@ LIGHT_SCENARIOS=(
   doctor
   daemon-lifecycle
   provider-model-cli
-  context-window
   sessions-and-chat
   stats
   reminders
@@ -182,9 +181,9 @@ teardown() {
   [[ $teardown_done -eq 1 ]] && return 0
   teardown_done=1
   echo "==> Tearing down native smoke harness..."
-  # Stop Ollama if we started it.
-  if declare -f ollama_serve_stop >/dev/null 2>&1; then
-    ollama_serve_stop || true
+  if [[ -n "${SMOKE_LLM_PID:-}" ]] && kill -0 "$SMOKE_LLM_PID" 2>/dev/null; then
+    kill "$SMOKE_LLM_PID" 2>/dev/null || true
+    wait "$SMOKE_LLM_PID" 2>/dev/null || true
   fi
   # Kill any stray smoke daemon. Scoped to NETCLAW_SMOKE_DAEMON's full path
   # so a production netclawd on the same box is never targeted — an
@@ -260,20 +259,49 @@ fi
 export NETCLAW_SMOKE_MCP_SERVER
 echo "    NETCLAW_SMOKE_MCP_SERVER=${NETCLAW_SMOKE_MCP_SERVER}"
 
-# ── 2) Provision native Ollama ───────────────────────────────────────────────
+# ── 2) Start the deterministic loopback smoke LLM ───────────────────────────
 
-# shellcheck source=lib/ollama.sh
-. "${SMOKE_SCRIPTS}/lib/ollama.sh"
+if [[ -n "${NETCLAW_SMOKE_LLM_SERVER:-}" ]]; then
+  echo "==> Using pre-published smoke LLM server from environment."
+else
+  echo "==> Publishing smoke LLM server (rid=${SMOKE_RID})..."
+  llm_out="${RUN_ROOT}/llm-server"
+  dotnet publish "${ROOT_DIR}/tests/Netclaw.SmokeLlmServer" \
+    -c Release -r "$SMOKE_RID" --self-contained /p:PublishSingleFile=true \
+    -o "$llm_out"
+  NETCLAW_SMOKE_LLM_SERVER="${llm_out}/Netclaw.SmokeLlmServer"
+fi
 
-echo "==> Ensuring Ollama is installed..."
-ollama_ensure_installed
+NETCLAW_SMOKE_LLM_SERVER="$(cd "$(dirname "$NETCLAW_SMOKE_LLM_SERVER")" && pwd)/$(basename "$NETCLAW_SMOKE_LLM_SERVER")"
+if [[ ! -x "$NETCLAW_SMOKE_LLM_SERVER" ]]; then
+  echo "ERROR: smoke LLM server not found / not executable: $NETCLAW_SMOKE_LLM_SERVER" >&2
+  exit 1
+fi
 
-echo "==> Starting Ollama serve..."
-ollama_serve_start
-
-echo "==> Pulling smoke models..."
-ollama_pull "$SMOKE_OLLAMA_MODEL"
-ollama_pull "$SMOKE_OLLAMA_ALT_MODEL"
+SMOKE_LLM_MODEL="${SMOKE_LLM_MODEL:-netclaw-smoke-tool-model}"
+SMOKE_LLM_LOG="${RUN_ROOT}/smoke-llm.log"
+SMOKE_LLM_REQUEST_RECORD="${RUN_ROOT}/smoke-llm-requests.jsonl"
+"$NETCLAW_SMOKE_LLM_SERVER" --port 0 --request-record "$SMOKE_LLM_REQUEST_RECORD" >"$SMOKE_LLM_LOG" 2>&1 &
+SMOKE_LLM_PID=$!
+for _ in $(seq 1 100); do
+  SMOKE_LLM_ENDPOINT="$(sed -n 's/^\[smoke-llm:listening\] //p' "$SMOKE_LLM_LOG" | head -1)"
+  if [[ -n "$SMOKE_LLM_ENDPOINT" ]] && curl -fsS "${SMOKE_LLM_ENDPOINT}/health" >/dev/null 2>&1; then
+    break
+  fi
+  if ! kill -0 "$SMOKE_LLM_PID" 2>/dev/null; then
+    echo "ERROR: smoke LLM server exited before it became healthy. Log: $SMOKE_LLM_LOG" >&2
+    cat "$SMOKE_LLM_LOG" >&2 || true
+    exit 1
+  fi
+  sleep 0.1
+done
+if [[ -z "${SMOKE_LLM_ENDPOINT:-}" ]] || ! curl -fsS "${SMOKE_LLM_ENDPOINT}/health" >/dev/null 2>&1; then
+  echo "ERROR: smoke LLM server did not become healthy." >&2
+  cat "$SMOKE_LLM_LOG" >&2 || true
+  exit 1
+fi
+export NETCLAW_SMOKE_LLM_SERVER SMOKE_LLM_MODEL SMOKE_LLM_ENDPOINT SMOKE_LLM_LOG SMOKE_LLM_REQUEST_RECORD
+echo "    SMOKE_LLM_ENDPOINT=${SMOKE_LLM_ENDPOINT}"
 
 # ── 3) Ensure vhs ────────────────────────────────────────────────────────────
 
@@ -304,6 +332,8 @@ run_one_tape() {
        DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
+       SMOKE_LLM_ENDPOINT="$SMOKE_LLM_ENDPOINT" \
+       SMOKE_LLM_MODEL="$SMOKE_LLM_MODEL" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/${tape}" \
        bash "${SMOKE_SCRIPTS}/run-native-tape.sh" "$tape"; then
     failed+=("tape:${tape}")
@@ -331,6 +361,8 @@ run_one_scenario() {
        DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
+       SMOKE_LLM_ENDPOINT="$SMOKE_LLM_ENDPOINT" \
+       SMOKE_LLM_MODEL="$SMOKE_LLM_MODEL" \
        NETCLAW_DAEMON_PATH="$NETCLAW_SMOKE_DAEMON" \
        bash "${SCENARIOS_DIR}/${scenario}.sh"; then
     failed+=("scenario:${scenario}")
@@ -367,6 +399,8 @@ run_shot_tape() {
        DAEMON_PORT="$SMOKE_DAEMON_PORT" \
        NETCLAW_SMOKE_CLI="$NETCLAW_SMOKE_CLI" \
        NETCLAW_SMOKE_DAEMON="$NETCLAW_SMOKE_DAEMON" \
+       SMOKE_LLM_ENDPOINT="$SMOKE_LLM_ENDPOINT" \
+       SMOKE_LLM_MODEL="$SMOKE_LLM_MODEL" \
        ARTIFACT_DIR="${SMOKE_LOG_DIR}/tapes/shot-${tape}" \
        TAPE_PREAMBLE="$SHOT_PREAMBLE" \
        TAPE_BODY_DIR="$SHOT_TAPES_DIR" \
