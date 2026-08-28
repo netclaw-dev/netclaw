@@ -58,7 +58,8 @@ Each state item has one owner and one lifetime.
 | Managed temporary path | Parent or child run scope | Run lifetime; files persist until later cleanup | Process environment and working context |
 | Captured host temporary root | Shell approval policy | Daemon process lifetime | Generic path comparison |
 | Managed-temp correction key | Parent or child actor | One user turn | Approval bridge |
-| Session log paths | Session storage resolver | Durable session lifetime | Existing file tools and `spawn_agent` |
+| Session log paths | Session storage resolver | Durable session lifetime | Existing context assembly, file tools, and `spawn_agent` |
+| Session log read scope | Parent or child run scope | Run lifetime | `ScopedFileAccessPolicy` read authorization |
 | Session log records | Log dispatcher | Durable file lifetime | Same-session file-tool reads |
 | Worktree ownership record | Parent session actor | Durable until later cleanup | Future cleanup policy |
 
@@ -83,7 +84,8 @@ tool authorization stages.
 10. A replacement call passes complete authorization as a new call.
 11. A child run writes its raw log below its child-run directory.
 12. `spawn_agent` returns the exact child log path to the parent.
-13. The parent reads or searches that path with an existing file tool.
+13. Existing context assembly exposes the current run log path.
+14. An existing file tool checks the same-session log read scope.
 ```
 
 Counterexample: A prompt cannot replace steps 1 through 8. A compliant model
@@ -115,11 +117,14 @@ that envelope, not the envelope itself.
             └── session.log               raw child log
 ```
 
-Normal session context names `session_dir`, `artifact_dir`, `temp_dir`, and the
-current run's `log_path` when audience policy permits exact paths. A separate
-same-session read scope lets existing file tools inspect session logs. It does
-not grant log-write or shell authority. A default `find .` still starts in
-`workspace/` and does not recurse into sibling logs.
+The existing `[session]` context block keeps `session_dir`. It adds
+`artifact_dir`, `temp_dir`, and the current run's `log_path` when audience
+policy permits exact paths. No second prompt provider or context block owns
+these values.
+
+A separate same-session read scope lets existing file tools inspect session
+logs. It does not grant log-write, attach, or shell authority. A default
+`find .` still starts in `workspace/` and does not recurse into sibling logs.
 
 This is an application authority boundary. It does not prevent an already
 authorized arbitrary process that runs as the Netclaw OS identity from opening
@@ -158,12 +163,17 @@ ResolvedSessionStorage
   WorktreeDirectory
   ParentRawLogPath
   Child(run_id) -> child artifact, temporary, and raw-log paths
+  LogReadScope -> normalized main and child log path classifier
 ```
 
 Consumers receive `ResolvedSessionStorage`; they do not branch on "legacy" or
 "unified" themselves. Only the shared resolver knows whether it used a stored
 binding or the unchanged existing-session path rules. This keeps path selection
 out of ingress, actor, tool, and logging call sites.
+
+The resolver also supplies the read-only log scope for either path strategy.
+The file policy consumes that scope from the existing invocation context. It
+does not reconstruct storage paths from current configuration.
 
 The shared resolver will persist the binding before the first new-layout
 filesystem side effect. A child will receive it in its immutable run scope. The
@@ -246,6 +256,32 @@ language, or a second output contract. The same-session read scope does not
 grant log writes, file edits, attachments, or shell authority. Cross-session
 log access remains denied.
 
+The complete session is the log-read trust boundary. A parent or child run can
+read the main log and every child log in that session. No run can use this
+scope to read another session.
+
+The implementation will add this read-only scope to the existing invocation
+context and `ScopedFileAccessPolicy`. It will not redefine `{session_dir}` or
+add the complete envelope to an audience profile. Public and Team currently
+reuse `{session_dir}` across read, write, and attach profiles. Widening that
+token would also widen mutation and attachment authority.
+
+For the new layout, the scope accepts only these normalized path shapes:
+
+```text
+<session-envelope>/logs/**
+<session-envelope>/subagents/<run-id>/logs/**
+```
+
+It does not accept `<session-envelope>/**` or
+`<session-envelope>/subagents/**`. The latter roots would expose child
+artifacts and temporary files. Existing path normalization, link checks, and
+protected-path checks still apply.
+
+For an unbound existing session, the same read scope uses the unchanged legacy
+log resolver and durable child lineage. It grants access to the resolved main
+and child log paths without moving those files.
+
 ```text
 spawn_agent result
   run_id: "run-7"
@@ -256,12 +292,28 @@ file_read(log_path, StartLine: 1, Limit: 200)
   -> normal bounded line range
 ```
 
+The log writer keeps an append handle open. `file_read` and `file_search` must
+open active logs with a compatible share mode on POSIX and Windows. A read must
+not block the writer or fail only because the writer remains active.
+
+`spawn_agent` will return a log path only after the child log target is
+resolved and created. The file can be empty, but an immediate authorized read
+must not fail because the path is not ready.
+
 **Counterexample:** Netclaw does not add a special session-log reader. The
 parent does not need `find`, `grep`, or `cat`. It uses `file_read` on the path.
 It can use `file_search` or `file_list` on the path's directory.
 
 **Counterexample:** A path below another session envelope remains denied. A
 same-session log read does not let `file_write` modify the log.
+
+**Counterexample:** The implementation does not add the complete `subagents/`
+directory as a read root. That path also contains artifacts and temporary
+files, which use different access contracts.
+
+**Counterexample:** The implementation does not replace `{session_dir}` with
+the envelope root. Public and Team write or attach profiles also consume that
+token.
 
 ### Give each run one managed temporary environment
 
@@ -281,10 +333,10 @@ Netclaw will set all three values on POSIX and Windows. The host process
 environment remains unchanged. On Windows, `TMP` and `TEMP` drive native and
 .NET temporary-path selection. `TMPDIR` supports cross-platform programs.
 
-The model context will name `session_dir`, `temp_dir`, `artifact_dir`, and
-`log_path` once. It will use one short rule for each path. The environment
-remains the primary mechanism. Prompt text is not the security or correctness
-boundary.
+The existing model context will keep `session_dir` and add `temp_dir`,
+`artifact_dir`, and `log_path` once. It will use one short rule for each path.
+The environment remains the primary mechanism. Prompt text is not the security
+or correctness boundary.
 
 **Example:** A .NET process calls `Path.GetTempPath()`. The result is the
 current run's `temp_dir` because Netclaw injected the environment first.
@@ -371,8 +423,9 @@ The initial source audit identifies these implementation groups:
 | Retry and approval flow | `IToolExecutor`, `DispatchingToolExecutor`, `ToolAccessPolicy`, `SessionToolExecutionPipeline` | Rename correction state and keys; compare retries against managed-temp semantics |
 | Parent and child actors | `LlmSessionActor`, `SubAgentActor`, `LlmMessages` | Use the same managed-temp correction and lifecycle state in both paths |
 | Durable pending approvals | `ToolApprovalState`, `SessionProtocol.Events`, `netclaw_messages.proto`, `NetclawProtoMapper` | Add the new field, retain field 19 as legacy-read-only, and test recovery without reinterpretation |
-| Model-visible guidance | shipped `AGENTS.md`, `SessionMessageAssembler`, `SubAgentActor`, `ToolChoiceGuidance`, `ShellTool` | Describe `session_dir`, `temp_dir`, and `artifact_dir` by their distinct purposes |
+| Model-visible guidance | shipped `AGENTS.md`, `SessionMessageAssembler`, `SubAgentActor`, `ToolChoiceGuidance`, `ShellTool` | Extend the existing session block with `temp_dir`, `artifact_dir`, and `log_path`; preserve current `session_dir` assembly |
 | Workspace file schemas | `FileReadTool`, `FileListTool`, `FileSearchTool`, `FileWriteTool`, `FileEditTool`, `AttachFileTool` | Replace “session scratch” with “session directory” for relative-path fallback |
+| Session log reads | `ToolExecutionContext`, `ScopedFileAccessPolicy`, `FileReadTool`, `FileSearchTool`, `SessionLogActor` | Add a read-only same-session log scope and use a writer-compatible file share mode |
 | Approval scopes and prompts | `ApprovalBucketBuilder`, `ToolAccessPolicy`, Slack and Discord approval builders, approval runbook | Name the broader rule “session-owned directory” and define which roots suppress persistent folder grants |
 | Verification | actor, policy, serialization, approval-rehydration, TUI, configuration, and daemon test projects | Rename fixtures and add distinct `session_dir` versus `temp_dir` assertions |
 
@@ -466,6 +519,8 @@ integration tests will prove:
 - parent and child log routing;
 - same-session log reads and cross-session log denial;
 - separation between log-read, log-write, and shell authority;
+- live log reads that do not block the writer on POSIX or Windows;
+- legacy main and child log reads without file migration;
 - POSIX and Windows environment values;
 - process-local environment isolation;
 - correction precedence and retry behavior;
@@ -546,6 +601,10 @@ That pass does not prove environment injection, access control, or recovery.
   from the same-session log read scope.
 - **The model tries to read a foreign session log.** -> Deny the operation
   without revealing whether the foreign file exists.
+- **A file tool reads while the log writer stays open.** -> Use a compatible
+  read share mode and test the active writer on Windows and POSIX.
+- **An implementation widens `{session_dir}` to the envelope.** -> Keep the
+  existing token unchanged and add a read-only log scope to invocation context.
 - **An approved arbitrary process knows a raw-log path.** -> Treat this change
   as an application authority boundary, not an OS sandbox. Add process
   containment only through a separate security design.

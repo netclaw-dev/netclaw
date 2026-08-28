@@ -21,11 +21,15 @@ use separate directory trees.
 - Let agents read, list, and search their same-session logs with the existing
   file tools. Keep cross-session access, log writes, and shell authority out of
   this read scope.
+- Treat one session as the log-read trust boundary. Parent and child runs can
+  read main and child logs from that session, including resolved legacy logs.
 - Set `TMPDIR`, `TMP`, and `TEMP` for each parent and child execution scope.
   The values must identify that run's managed temporary directory.
 - Retire the ambiguous “session scratch” vocabulary. Use `session_dir` for the
   working and relative-path base, `temp_dir` for disposable run-local files,
   and “session-owned directory” only for approval rules that cover both.
+- Preserve the existing `[session]` context block. Extend it with `temp_dir`,
+  `artifact_dir`, and `log_path` instead of adding another context mechanism.
 - Extend the existing typed correction path for an explicit unmanaged
   temporary write. The correction must name the managed temporary directory
   and must not rewrite or approve the original call.
@@ -83,6 +87,9 @@ directory. The parent passes the path to `file_read`, `file_search`, or
 
 Counterexample: The parent does not need a special child-log tool or a shell
 search. A different session cannot read the returned path.
+
+Counterexample: Netclaw does not redefine `{session_dir}` as the complete
+envelope. That token also participates in write and attach profiles.
 
 ### Managed worktree creation
 

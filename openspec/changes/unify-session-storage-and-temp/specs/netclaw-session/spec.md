@@ -144,12 +144,23 @@ SHALL use `<session-envelope>/logs/session.log` for the parent and
 
 The system SHALL give existing file-read, file-list, and file-search operations
 read access to logs in the current session envelope. The scope SHALL include
-the main session log and its child logs. It SHALL NOT include another session.
+the main session log and every child log. Every parent and child run in that
+session SHALL receive the same log-read scope. The scope SHALL NOT include
+another session.
+
+For an existing unbound session, the system SHALL build the same read scope
+from the unchanged legacy main-log resolver and durable child lineage. It SHALL
+NOT move or copy a legacy log to make it readable.
 
 This read scope SHALL NOT authorize file writes, file edits, attachments, or
 shell execution. The default no-project working directory SHALL remain the
 `workspace/` child. The system SHALL NOT add the complete envelope as a shell
 safe root.
+
+The implementation SHALL NOT redefine `{session_dir}` as the session envelope.
+It SHALL NOT add the complete envelope or `subagents/` directory as a read
+root. It SHALL authorize only normalized main-log and child-log path shapes.
+Existing link, reparse-point, and protected-path checks SHALL still apply.
 
 This requirement defines Netclaw application authorization. It SHALL NOT be
 documented or tested as OS-level containment of an arbitrary process that has
@@ -177,6 +188,21 @@ already received execution authority under the Netclaw identity.
 - **THEN** same-session log scope authorizes the search
 - **AND** no special log tool is required
 
+#### Scenario: Example - child reads another log in the same session
+
+- **GIVEN** child runs `run-7` and `run-8` belong to one session
+- **WHEN** `run-7` reads the main log or the log for `run-8`
+- **THEN** same-session log scope authorizes the read
+- **AND** the request remains subject to normal file-tool limits
+
+#### Scenario: Example - legacy session keeps readable log paths
+
+- **GIVEN** an existing unbound session uses separate data and log roots
+- **WHEN** its parent or child calls an existing file tool for a resolved
+  same-session log path
+- **THEN** same-session log scope authorizes the operation
+- **AND** no file moves into a new envelope
+
 #### Scenario: Counterexample - foreign session log is denied
 
 - **GIVEN** a log path belongs to another session envelope
@@ -190,6 +216,21 @@ already received execution authority under the Netclaw identity.
 - **WHEN** it calls `file_write` or `file_edit` for a log path
 - **THEN** same-session log scope does not authorize that operation
 - **AND** normal write policy decides the call
+
+#### Scenario: Counterexample - broad child root is not authorized
+
+- **GIVEN** a version-2 session has child logs, artifacts, and temporary files
+- **WHEN** policy constructs the same-session log read scope
+- **THEN** it does not add `<session-envelope>/subagents` as a broad root
+- **AND** log-read scope cannot read a child artifact or temporary file
+
+#### Scenario: Counterexample - linked path cannot escape log scope
+
+- **GIVEN** a same-session log directory contains a filesystem link to another
+  session
+- **WHEN** an agent reads, lists, or searches through that link
+- **THEN** existing path safety policy denies the operation
+- **AND** same-session ownership does not bypass that denial
 
 #### Scenario: Counterexample - envelope is not the shell root
 

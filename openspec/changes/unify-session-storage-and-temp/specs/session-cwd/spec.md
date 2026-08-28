@@ -4,21 +4,25 @@ This delta uses terms from the
 ## RENAMED Requirements
 
 - FROM: `Subagent context announces private session scratch`
-- TO: `Subagent context announces managed session paths`
+- TO: `Existing session context announces managed paths`
 - FROM: `Session directory is the private shell scratch location`
 - TO: `Managed temporary directory is the private temporary location`
 
 ## MODIFIED Requirements
 
-### Requirement: Subagent context announces managed session paths
+### Requirement: Existing session context announces managed paths
 
-Before the first model call, the system SHALL include the exact bound
-`session_dir`, `temp_dir`, `artifact_dir`, and `log_path` in Personal and Team
-subagent working context. It SHALL state the distinct purpose of each path.
-Public subagent context SHALL retain its existing private-path policy. The
-guidance SHALL preserve an explicitly required platform temporary path.
+The system SHALL preserve the existing `[session]` context block and its
+`session_dir` entry. It SHALL extend that same block with the applicable
+`temp_dir`, `artifact_dir`, and `log_path` entries for Personal and Team parent
+and child runs. It SHALL NOT add a second context block or repeat these paths in
+per-turn guidance.
 
-The context SHALL derive from the child's existing bound run scope. It SHALL
+The system SHALL state the distinct purpose of each path. Public context SHALL
+retain its existing private-path policy. The guidance SHALL preserve an
+explicitly required platform temporary path.
+
+The context SHALL derive from the existing parent or child run scope. It SHALL
 NOT add a public protocol field, persist a path as agent identity, or change
 shell authorization.
 
@@ -42,6 +46,14 @@ runtime prompts and tool schemas SHALL NOT call either path â€œsession scratch.â
   parent or user must keep
 - **AND** it does not imply that path knowledge grants shell authority
 
+#### Scenario: Example - Personal parent extends the existing session block
+
+- **GIVEN** a Personal parent already receives `[session]` with `session_dir`
+- **WHEN** Netclaw assembles its first model context for the new layout
+- **THEN** the same block also contains `temp_dir`, `artifact_dir`, and
+  `log_path`
+- **AND** no second session block contains duplicate path guidance
+
 #### Scenario: Team child receives distinct managed paths
 
 - **GIVEN** a Team child has a valid bound run scope
@@ -56,6 +68,14 @@ runtime prompts and tool schemas SHALL NOT call either path â€œsession scratch.â
 - **WHEN** Netclaw assembles its initial model context
 - **THEN** the context does not contain those paths
 - **AND** no replacement guidance discloses another private filesystem path
+
+#### Scenario: Counterexample - implementation cannot replace context assembly
+
+- **GIVEN** the current parent and child context assemblers already emit
+  `session_dir`
+- **WHEN** the implementation adds the new path entries
+- **THEN** it extends those existing assembly seams
+- **AND** it does not create another prompt provider or context protocol
 
 #### Scenario: Counterexample - explicit platform temporary intent is preserved
 

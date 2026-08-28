@@ -424,9 +424,13 @@ A raw session log is the diagnostic file for one main session or subagent run.
 New-layout raw logs are physically inside the session storage envelope but are
 outside the session directory.
 
-The owning agent can read, list, and search its same-session logs through the
-existing file tools. This read scope does not grant file-write, file-edit, or
-shell authority. Another session cannot use this scope.
+Every parent and child run can read, list, and search logs from its own session
+through the existing file tools. The session is the log-read trust boundary.
+This read scope does not grant file-write, file-edit, attach, or shell
+authority. Another session cannot use this scope.
+
+These reads return normal bounded file-tool output. A raw session log does not
+use a separate activity projection or log-specific redaction layer.
 
 ### Managed temporary directory
 

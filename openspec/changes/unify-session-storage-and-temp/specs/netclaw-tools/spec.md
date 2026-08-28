@@ -11,6 +11,10 @@ parent SHALL receive read authority for the child log and read and attach
 authority for the artifact directory through child ownership. A failed spawn
 SHALL NOT return locations that appear usable.
 
+The system SHALL resolve and create the child log target before it returns a
+successful result. The log can be empty. An immediate authorized `file_read`
+SHALL NOT fail because the log path is not ready.
+
 The result shape SHALL be equivalent to:
 
 ```text
@@ -54,6 +58,12 @@ artifact_dir: "/srv/netclaw/sessions/s-42/subagents/run-7/artifacts"
 - **THEN** the tool result reports failure
 - **AND** it contains no child log path or artifact directory
 
+#### Scenario: Example - successful child log path is ready
+
+- **WHEN** `spawn_agent` returns a successful child result
+- **THEN** the returned log path identifies an existing file
+- **AND** an authorized `file_read` can open it immediately
+
 ### Requirement: Existing file tools can inspect same-session logs
 
 The existing `file_read`, `file_search`, and `file_list` tools SHALL accept log
@@ -63,8 +73,17 @@ contract. This capability SHALL NOT add a new tool or a log-specific query
 language.
 
 The same-session log read scope SHALL include the main session log and its
-child logs. It SHALL NOT include another session. It SHALL NOT grant write,
-edit, attach, or shell authority.
+child logs for every parent and child run. It SHALL also cover resolved legacy
+main and child log paths. It SHALL NOT include another session. It SHALL NOT
+grant write, edit, attach, or shell authority.
+
+The existing file tools SHALL return their normal file content. The system
+SHALL NOT add a log-specific redaction or projection layer. Existing file-tool
+output bounds and audience policy SHALL still apply.
+
+`file_read` and `file_search` SHALL support an active session-log writer on
+POSIX and Windows. Their read handles SHALL NOT block the writer or fail only
+because the writer keeps its append handle open.
 
 #### Scenario: Example - parent reads the next child log page
 
@@ -86,6 +105,20 @@ edit, attach, or shell authority.
 - **WHEN** it calls `file_list` for its session log area
 - **THEN** the tool lists only paths that its current session owns
 - **AND** it applies its normal result limit
+
+#### Scenario: Example - active Windows log remains readable
+
+- **GIVEN** the session-log writer holds its normal append handle open
+- **WHEN** `file_read` or `file_search` opens that log on Windows
+- **THEN** the read succeeds with the normal file-tool result
+- **AND** the writer can append and flush another line
+
+#### Scenario: Counterexample - same-session log gets no special projection
+
+- **GIVEN** a same-session log contains normal session diagnostic content
+- **WHEN** an authorized agent reads it with `file_read`
+- **THEN** the tool returns its normal bounded file content
+- **AND** Netclaw does not replace it with a log-specific activity view
 
 #### Scenario: Counterexample - foreign session log is denied
 

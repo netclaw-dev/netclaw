@@ -1,7 +1,7 @@
 ## 1. Lock the Evidence Baseline
 
 - [ ] 1.1 Record PII-free pre-change results for `subagent_session_scratch_disposable`, `approval_session_scratch_disposable`, `approval_shell_working_directory_argument`, `approval_inline_cd_semantics`, and `approval_natural_directory_change`; verify the artifact identifies the binary and keeps the prompts and assertions unchanged for the later comparison
-- [ ] 1.2 Add deterministic failing contract tests for versioned single-envelope storage binding, parent-child layout, same-session log reads, cross-session log denial, process-local temp variables, managed-temp correction eligibility, and existing-session resume; verify each test fails for the intended missing behavior before production edits
+- [ ] 1.2 Add deterministic failing contract tests for versioned single-envelope storage binding, parent-child layout, new and legacy same-session log reads, cross-session denial, active-writer compatibility on POSIX and Windows, process-local temp variables, managed-temp correction eligibility, and existing-session resume; verify each test fails for the intended missing behavior before production edits
 - [ ] 1.3 Add sanitized fixtures for observed parent-to-child log discovery failures and explicit POSIX temp writes; verify the PII audit finds no user, repository, channel, thread, host, email, token, or secret
 
 ## 2. Add Versioned Session Storage
@@ -10,13 +10,13 @@
 - [ ] 2.2 Change filesystem helpers to accept resolved storage paths, then implement the version-2 envelope, parent `workspace/`, named parent areas, and child-run path derivation; verify no helper writes from only a session ID plus current configuration and every new path stays below the persisted envelope
 - [ ] 2.3 Leave the binding absent for existing sessions and keep their current path resolvers unchanged; verify an existing session resumes without moving, copying, or renaming data
 - [ ] 2.4 Route newly bound parent and child logs below the stored envelope while leaving existing-session and daemon-global logs unchanged; verify concurrent writers use the correct main or child target
-- [ ] 2.5 Add same-session log read scope to existing file-read, file-list, and file-search authorization; keep log writes and shell authority separate, and verify the default cwd remains `workspace/`
+- [ ] 2.5 Add a read-only same-session log scope to the existing invocation context and `ScopedFileAccessPolicy`; preserve `{session_dir}`, reject broad envelope and `subagents/` roots, keep write, attach, and shell authority separate, and verify the default cwd remains `workspace/`
 
 ## 3. Make Managed Temporary Storage Deterministic
 
 - [ ] 3.1 Resolve and create one parent or child managed temporary directory before process launch; verify a preparation failure stops execution without falling back to the host temp root
 - [ ] 3.2 Inject `TMPDIR`, `TMP`, and `TEMP` into every POSIX and Windows child process without changing the daemon environment; verify native and .NET temporary APIs return a path below the run's `temp_dir`
-- [ ] 3.3 Add distinct `session_dir`, `temp_dir`, `artifact_dir`, and `log_path` working-context entries for Personal and Team runs while preserving Public path policy; verify context snapshots contain the correct paths and purpose text
+- [ ] 3.3 Extend the existing parent and child `[session]` context blocks with `temp_dir`, `artifact_dir`, and `log_path`; preserve current `session_dir` assembly and Public path policy, and verify no second block or per-turn duplicate appears
 - [ ] 3.4 Use `<session-envelope>/workspace` as the shell cwd fallback when no project or explicit cwd exists; verify the complete envelope is never the fallback and the managed temporary environment operates independently
 - [ ] 3.5 Audit every production use of “session scratch” and classify it as session-directory fallback, managed temporary storage, or session-owned approval scope; update model prompts, `AGENTS.md`, tool schemas, comments, and identifiers to the correct term and verify current runtime text contains no ambiguous “session scratch” guidance
 
@@ -33,9 +33,9 @@
 
 ## 5. Compose Parent-Child Discovery from Existing File Tools
 
-- [ ] 5.1 Extend successful `spawn_agent` outcomes with the child run identifier, exact child log path, and exact parent-readable artifact directory; verify failed spawns contain no usable child location
-- [ ] 5.2 Authorize `file_read`, `file_list`, and `file_search` for same-session log paths; verify each tool keeps its current bounds, pagination, and query behavior without a new log-specific tool
-- [ ] 5.3 Deny cross-session log access and keep file-write, file-edit, attach, and shell authority separate; verify denials do not reveal whether a foreign log exists
+- [ ] 5.1 Extend successful `spawn_agent` outcomes with the child run identifier, exact child log path, and exact parent-readable artifact directory; create the log target before success and verify failed spawns contain no usable child location
+- [ ] 5.2 Authorize `file_read`, `file_list`, and `file_search` for new-layout and legacy same-session log paths; verify each tool keeps its current bounds and query behavior, returns normal file content, and adds no log-specific tool or projection
+- [ ] 5.3 Use an active-writer-compatible read share mode for `file_read` and `file_search`; deny cross-session paths, linked escapes, broad envelope roots, writes, edits, attaches, and shell authority, and verify active Windows and POSIX writers continue after a read
 
 ## 6. Add Managed Worktree Creation
 
@@ -59,5 +59,5 @@
 - [ ] 8.1 Verify the engineering glossary, update current session-storage documentation, active OpenSpec text, operator runbooks, and eval runbooks with examples and counterexamples; verify every cross-capability term links to the glossary and leave archived changes and immutable evidence unchanged as historical records
 - [ ] 8.2 Update the implementation plan and release notes for the versioned layout, managed temp environment, same-session log reads, and worktree tool; state that pre-feature binaries resuming newly bound sessions are out of scope and verify public text contains no private provider, hardware, host, or user detail
 - [ ] 8.3 Run `openspec validate unify-session-storage-and-temp --strict`, focused tests, `dotnet build -c Release`, `dotnet test -c Release`, header verification, and Slopwatch; verify every command succeeds without warning suppression or skipped tests
-- [ ] 8.4 Upgrade one existing session and restart one newly bound session; verify the existing paths remain unchanged, the new envelope remains stable, same-session logs remain readable, foreign logs remain denied, and no data is moved or deleted
+- [ ] 8.4 Upgrade one existing session and restart one newly bound session; verify existing and new log paths remain readable by every run in their session, foreign logs remain denied, active writers remain healthy, paths stay stable, and no data is moved or deleted
 - [ ] 8.5 Harvest sanitized live traffic after the swap and classify remaining temp, log-discovery, worktree, and approval-friction patterns; verify new evidence enters the corpus only after manual PII review
