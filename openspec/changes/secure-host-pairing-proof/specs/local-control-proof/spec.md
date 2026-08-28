@@ -133,9 +133,24 @@ The daemon SHALL fail closed when the cache remains full.
 
 ### Requirement: Key-ring access defines host authority
 
-The CLI and daemon SHALL fail clearly when the key ring is missing, unreadable, corrupt, or unsafe.
-On Unix systems, Netclaw SHALL restrict the key directory to its owner before proof use.
+The Data Protection provider SHALL create the key directory on first use.
+The CLI and daemon SHALL fail clearly when the key path is unreadable, corrupt, or not a directory.
+On Unix systems, Netclaw SHALL restrict a new or existing key directory to its owner before proof use.
 A container operator SHALL run the CLI inside the daemon container or another process with the same persisted Netclaw home.
+
+#### Scenario: First use creates an owner-only key directory
+
+- **GIVEN** the Netclaw home has no `keys` directory
+- **WHEN** the CLI or daemon creates the Data Protection provider
+- **THEN** Netclaw creates the directory
+- **AND** Unix grants access only to the owner
+
+#### Scenario: A file at the key path fails clearly
+
+- **GIVEN** the `keys` path contains a regular file
+- **WHEN** the CLI or daemon creates the Data Protection provider
+- **THEN** creation fails visibly
+- **AND** Netclaw does not continue with a new fallback key ring
 
 #### Scenario: Container CLI shares the daemon key ring
 
