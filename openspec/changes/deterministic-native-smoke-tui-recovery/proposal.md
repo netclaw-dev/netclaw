@@ -1,6 +1,6 @@
 ## Why
 
-The required native smoke suite depends on Ollama and `qwen2:0.5b`.
+The required native smoke suite depended on an external local-model runtime and a downloaded model.
 Model download, model speed, and tool support make unrelated pull requests fail.
 
 The chat TUI also retains `Generating...` after a terminal provider error.
@@ -10,8 +10,7 @@ That stale state makes the init wizard tape depend on a transient render.
 
 - Add a loopback-only OpenAI-compatible smoke LLM server.
 - Use that server for the broad native tape and CLI smoke suite.
-- Remove Ollama install, serve, pull, and model variables from the broad PR smoke path.
-- Keep a separate manual or scheduled Ollama contract check.
+- Remove external local-model setup from the broad PR smoke path.
 - Clear chat generation state and show a retry-ready status after `ErrorOutput`.
 - Preserve bounded, prompt-free smoke request records in failure artifacts.
 

@@ -85,8 +85,8 @@ cat >"$config_path" <<'JSON'
   "configVersion": 1,
   "Providers": {
     "local": {
-      "Type": "ollama",
-      "Endpoint": "http://localhost:11434"
+      "Type": "openai-compatible",
+      "Endpoint": "${SMOKE_LLM_ENDPOINT}"
     }
   },
   "Models": {

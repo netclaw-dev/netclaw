@@ -45,4 +45,3 @@ The harness SHALL preserve the provider log and request record after a smoke fai
 - **GIVEN** the smoke provider receives a non-loopback bind address
 - **WHEN** the provider starts
 - **THEN** startup fails before it accepts a request
-

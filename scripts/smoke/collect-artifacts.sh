@@ -55,7 +55,7 @@ if [[ -n "$RUN_ROOT" && -d "$RUN_ROOT" ]]; then
     done
   fi
 else
-  echo "    (no run root supplied; skipped NETCLAW_HOME + ollama log collection)" >&2
+  echo "    (no run root supplied; skipped NETCLAW_HOME and smoke-server diagnostics)" >&2
 fi
 
 echo "==> Artifacts gathered: $(ls "$DEST_DIR" 2>/dev/null | tr '\n' ' ')"

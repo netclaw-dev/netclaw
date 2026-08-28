@@ -1,7 +1,7 @@
 ## Context
 
 See `proposal.md` for the motivation.
-The current native smoke harness owns a real Ollama process and model download.
+The current native smoke harness owns an external local-model process and a model download.
 The harness already owns a deterministic MCP sidecar and its failure artifacts.
 
 ## Goals / Non-Goals
@@ -17,7 +17,6 @@ The harness already owns a deterministic MCP sidecar and its failure artifacts.
 
 - This server does not prove real model quality or general provider compatibility.
 - This change does not change tool policy or model routing.
-- This change does not replace independent real-Ollama coverage.
 
 ## Decisions
 
@@ -40,7 +39,7 @@ The config writer is the producer.
 Provider discovery and chat completion are the consumers.
 
 The harness will fail when the smoke server lacks health or exits.
-It will not fall back to Ollama.
+It will not fall back to an external local-model runtime.
 
 ### Record only safe request metadata
 
@@ -59,13 +58,11 @@ The view model will clear all terminal generation state before it redraws.
 - [The fake diverges from the OpenAI wire contract] → HTTP contract tests cover discovery, tools, JSON, and SSE.
 - [A child process outlives a run] → The harness tracks the process identifier and stops it in teardown.
 - [Artifacts leak data] → The server records an allowlist of metadata fields only.
-- [Ollama behavior regresses] → A small scheduled or manual Ollama contract workflow stays separate.
 
 ## Migration Plan
 
 1. Add the smoke LLM executable and its HTTP contract tests.
 2. Add harness lifecycle helpers and CI publishing.
 3. Convert provider setup, tapes, and scenarios to the canonical smoke profile.
-4. Remove Ollama work from required native smoke jobs.
-5. Add the independent Ollama contract workflow.
-6. Run targeted, native, and repository quality checks.
+4. Remove external local-model work from required native smoke jobs.
+5. Run targeted, native, and repository quality checks.

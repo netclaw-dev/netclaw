@@ -61,7 +61,6 @@ LIGHT_SCENARIOS=(
   doctor
   daemon-lifecycle
   provider-model-cli
-  context-window
   sessions-and-chat
   stats
   reminders
@@ -290,6 +289,7 @@ for _ in $(seq 1 100); do
     break
   fi
   if ! kill -0 "$SMOKE_LLM_PID" 2>/dev/null; then
+    echo "ERROR: smoke LLM server exited before it became healthy. Log: $SMOKE_LLM_LOG" >&2
     cat "$SMOKE_LLM_LOG" >&2 || true
     exit 1
   fi

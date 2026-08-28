@@ -13,4 +13,3 @@ The TUI SHALL show an explicit retry-ready status and request a redraw.
 - **THEN** it does not show `Generating...`
 - **AND** it shows `Last request failed. Ready to retry.`
 - **AND** input is enabled
-
