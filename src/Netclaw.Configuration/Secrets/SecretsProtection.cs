@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.AspNetCore.DataProtection;
+using System.Runtime.InteropServices;
 
 namespace Netclaw.Configuration.Secrets;
 
@@ -15,16 +16,30 @@ namespace Netclaw.Configuration.Secrets;
 /// </summary>
 public static class SecretsProtection
 {
+    internal const string ApplicationName = "Netclaw";
+
+    internal static IDataProtectionProvider CreateDataProtectionProvider(NetclawPaths paths)
+    {
+        Directory.CreateDirectory(paths.KeysDirectory);
+
+        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            File.SetUnixFileMode(
+                paths.KeysDirectory,
+                UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        }
+
+        return DataProtectionProvider.Create(
+            new DirectoryInfo(paths.KeysDirectory),
+            config => config.SetApplicationName(ApplicationName));
+    }
+
     /// <summary>
     /// Create a <see cref="DataProtectionSecretsProtector"/> with keys persisted
     /// to the Netclaw keys directory.
     /// </summary>
     public static DataProtectionSecretsProtector CreateProtector(NetclawPaths paths)
     {
-        var provider = DataProtectionProvider.Create(
-            new DirectoryInfo(paths.KeysDirectory),
-            config => config.SetApplicationName("Netclaw"));
-
-        return new DataProtectionSecretsProtector(provider);
+        return new DataProtectionSecretsProtector(CreateDataProtectionProvider(paths));
     }
 }

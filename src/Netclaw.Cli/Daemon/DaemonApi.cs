@@ -72,6 +72,39 @@ public sealed class DaemonApi
     /// </summary>
     public string Endpoint => _endpoint;
 
+    internal async Task<PairingCodeRequestResult> RequestPairingCodeAsync(
+        string proof,
+        CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        using var response = await client.PostAsJsonAsync(
+            $"{_endpoint}/api/local-control/v1/pairing-code",
+            new LocalControlPairingCodeRequest(proof),
+            JsonDefaults.Api,
+            cts.Token);
+
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        if (response.IsSuccessStatusCode)
+        {
+            var result = await JsonSerializer.DeserializeAsync<PairingCodeResultDto>(stream, JsonDefaults.Api, cts.Token);
+            return new PairingCodeRequestResult(response.StatusCode, result, null);
+        }
+
+        PairingCodeErrorResponse? error = null;
+        try
+        {
+            error = await JsonSerializer.DeserializeAsync<PairingCodeErrorResponse>(stream, JsonDefaults.Api, cts.Token);
+        }
+        catch (JsonException)
+        {
+            error = new PairingCodeErrorResponse(
+                response.ReasonPhrase ?? "The daemon returned an invalid error response.");
+        }
+
+        return new PairingCodeRequestResult(response.StatusCode, null, error?.Error);
+    }
+
     // ── Status ────────────────────────────────────────────────────────
 
     public async Task<DaemonRuntimeStatus.Response?> GetStatusAsync(CancellationToken ct = default)
@@ -458,3 +491,12 @@ public sealed class DaemonApi
         return client;
     }
 }
+
+internal sealed record LocalControlPairingCodeRequest(string Proof);
+
+internal sealed record PairingCodeErrorResponse(string Error);
+
+internal sealed record PairingCodeRequestResult(
+    HttpStatusCode StatusCode,
+    PairingCodeResultDto? Result,
+    string? Error);

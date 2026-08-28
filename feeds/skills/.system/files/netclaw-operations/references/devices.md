@@ -1,6 +1,3 @@
-# Device Pairing
-
-
 ## Device Pairing
 
 
@@ -8,14 +5,24 @@ Remote devices authenticate with the daemon using a two-sided pairing protocol.
 
 ### Pairing flow
 
-**Daemon side** (requires local/SSH access):
+**Daemon host** (requires local or SSH access):
 
 ```
 shell_execute: netclaw daemon pair
 ```
 
-This generates a single-use pairing code (8 chars, 5-minute TTL). The code
-generation endpoint is loopback-only.
+This command proves access to the daemon host key ring.
+It creates a single-use pairing code with a five-minute lifetime.
+The command works in all exposure modes.
+
+Run the CLI inside the daemon container for a container deployment:
+
+```
+shell_execute: docker exec <container-name> netclaw daemon pair
+```
+
+The container command must use the same Netclaw home and user as the daemon.
+Do not copy the key ring to a remote device.
 
 If `netclaw daemon pair` fails immediately after an exposure-mode change, run
 `netclaw doctor` and inspect `~/.netclaw/logs/crash-*.log` for the specific
@@ -30,6 +37,12 @@ shell_execute: netclaw pair https://my-daemon.tail1234.ts.net:5000
 The user is prompted for the pairing code. On success, the bearer token is
 saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
 `~/.netclaw/client/config.json`.
+
+If the daemon rejects a duplicate device name, select a unique name.
+The same valid code remains available after this conflict.
+
+Update the CLI and daemon together when the command reports a protocol mismatch.
+The command does not use the old hub method as a fallback.
 
 ### Device management
 

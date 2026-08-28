@@ -4,17 +4,20 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net.Http.Json;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.Connections;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -28,6 +31,9 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
     private readonly DeviceRegistry _deviceRegistry;
     private readonly PairingCodeService _pairingCodeService;
     private readonly PairingExchangeGuard _exchangeGuard;
+    private readonly LocalControlPairingProofProtector _proofProtector;
+    private readonly LocalControlPairingProofValidator _proofValidator;
+    private readonly PairingCoordinator _pairingCoordinator;
 
     public RemotePairingSignalRIntegrationTests()
     {
@@ -37,6 +43,17 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         _deviceRegistry = new DeviceRegistry(_paths, TimeProvider.System, NullLogger<DeviceRegistry>.Instance);
         _pairingCodeService = new PairingCodeService(TimeProvider.System);
         _exchangeGuard = new PairingExchangeGuard(TimeProvider.System);
+        var provider = SecretsProtection.CreateDataProtectionProvider(_paths);
+        _proofProtector = new LocalControlPairingProofProtector(provider);
+        _proofValidator = new LocalControlPairingProofValidator(
+            _proofProtector,
+            TimeProvider.System,
+            NullLogger<LocalControlPairingProofValidator>.Instance);
+        _pairingCoordinator = new PairingCoordinator(
+            _pairingCodeService,
+            _deviceRegistry,
+            TimeProvider.System,
+            NullLogger<PairingCoordinator>.Instance);
     }
 
     public void Dispose()
@@ -58,14 +75,20 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
     public async Task PairingExchange_TokenAuthenticatesRealSignalRConnection()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (code, _) = _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync();
         var httpClient = app.GetTestClient();
+        var proof = _proofProtector.CreateProof(TimeProvider.System.GetUtcNow());
+        var codeResponse = await httpClient.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+        codeResponse.EnsureSuccessStatusCode();
+        var codeResult = await codeResponse.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
+        Assert.NotNull(codeResult);
 
         var exchangeResponse = await httpClient.PostAsJsonAsync(
             "/api/pair/exchange",
-            new { code, deviceName = "remote-laptop" },
+            new { code = codeResult.FormattedCode, deviceName = "remote-laptop" },
             ct);
         exchangeResponse.EnsureSuccessStatusCode();
 
@@ -101,76 +124,31 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         builder.Services.AddSingleton(_deviceRegistry);
         builder.Services.AddSingleton(_pairingCodeService);
         builder.Services.AddSingleton(_exchangeGuard);
+        builder.Services.AddSingleton(_proofProtector);
+        builder.Services.AddSingleton(_proofValidator);
+        builder.Services.AddSingleton(_pairingCoordinator);
         builder.Services.AddNetclawAuthSchemes(new DaemonConfig());
         builder.Services.AddAuthorization();
         builder.Services.AddSignalR();
+        builder.Services.AddRateLimiter(options =>
+        {
+            options.AddPolicy("pairing-exchange", context =>
+                RateLimitPartition.GetFixedWindowLimiter(
+                    context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                    _ => new FixedWindowRateLimiterOptions
+                    {
+                        PermitLimit = 10,
+                        Window = TimeSpan.FromMinutes(1),
+                        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                        QueueLimit = 0,
+                    }));
+        });
 
         var app = builder.Build();
         app.UseAuthentication();
         app.UseAuthorization();
-
-        app.MapPost("/api/pair/exchange", async (
-            HttpContext httpContext,
-            PairingCodeExchangeRequest request,
-            PairingCodeService pairingCodeService,
-            PairingExchangeGuard exchangeGuard,
-            DeviceRegistry deviceRegistry,
-            TimeProvider timeProvider,
-            CancellationToken ct) =>
-        {
-            var remoteIp = httpContext.Connection.RemoteIpAddress;
-
-            if (exchangeGuard.IsBlocked(remoteIp))
-            {
-                var retryAfter = exchangeGuard.GetRetryAfterSeconds(remoteIp);
-                httpContext.Response.Headers.RetryAfter = retryAfter?.ToString() ?? "900";
-                return Results.Json(
-                    new { error = "Too many failed attempts. Try again later." },
-                    statusCode: StatusCodes.Status429TooManyRequests);
-            }
-
-            if (pairingCodeService.GetPendingExpiry() is null)
-                return Results.NotFound();
-
-            if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.DeviceName))
-                return Results.BadRequest(new { error = "code and deviceName are required." });
-
-            if (!pairingCodeService.TryConsume(request.Code))
-            {
-                exchangeGuard.RecordFailure(remoteIp);
-                return Results.Json(
-                    new { error = "Invalid, expired, or already-used pairing code." },
-                    statusCode: StatusCodes.Status401Unauthorized);
-            }
-
-            var tokenBytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(32);
-            var rawToken = System.Buffers.Text.Base64Url.EncodeToString(tokenBytes);
-
-            var saltBytes = System.Security.Cryptography.RandomNumberGenerator.GetBytes(16);
-            var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-            var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
-
-            var now = timeProvider.GetUtcNow();
-            var device = new PairedDevice
-            {
-                Name = request.DeviceName.Trim(),
-                TokenHash = tokenHash,
-                Salt = saltHex,
-                CreatedAt = now,
-                LastUsedAt = now,
-            };
-
-            try
-            {
-                await deviceRegistry.AddAsync(device, ct);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return Results.Conflict(new { error = ex.Message });
-            }
-
-            return Results.Ok(new { token = rawToken });
-        }).AllowAnonymous();
+        app.UseRateLimiter();
+        app.MapPairingEndpoints();
 
         app.MapHub<AuthenticatedHub>("/hub/session");
         await app.StartAsync();
@@ -178,6 +156,4 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
     }
 
     private sealed record ExchangeResponse(string Token);
-
-    private sealed record PairingCodeExchangeRequest(string Code, string DeviceName);
 }

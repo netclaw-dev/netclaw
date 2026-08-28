@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -540,39 +541,48 @@ static async Task RunAsync(string[] args)
 
                 using var pairHost = pairBuilder.Build();
                 var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
-                var pairHubUrl = $"{pairApi.Endpoint}/hub/session";
-                var pairPaths = pairHost.Services.GetRequiredService<NetclawPaths>();
-                var pairExposureMode = DaemonClientFactory.ResolveExposureMode(pairPaths);
-                var pairTokenFactory = DaemonClientFactory.CreateAccessTokenProvider(pairApi.Endpoint, pairPaths, pairExposureMode);
-
-                await using var pairConn = new HubConnectionBuilder()
-                    .ConfigureAccessToken(pairHubUrl, pairTokenFactory)
-                    .Build();
+                var proofProtector = pairHost.Services.GetRequiredService<LocalControlPairingProofProtector>();
+                var timeProvider = pairHost.Services.GetRequiredService<TimeProvider>();
 
                 try
                 {
-                    await pairConn.StartAsync();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.Endpoint}: {ex.Message}");
-                    Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
-                    Environment.ExitCode = 1;
-                    return;
-                }
+                    var proof = proofProtector.CreateProof(timeProvider.GetUtcNow());
+                    var response = await pairApi.RequestPairingCodeAsync(proof);
+                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        Console.Error.WriteLine("error: The daemon does not support local-control pairing.");
+                        Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
 
-                try
-                {
-                    var pairingResult = await pairConn.InvokeAsync<PairingCodeResultDto>("GeneratePairingCode");
+                    if (response.StatusCode == System.Net.HttpStatusCode.BadRequest
+                        && response.Error == "unsupported_protocol_version")
+                    {
+                        Console.Error.WriteLine("error: The daemon does not support this local-control proof version.");
+                        Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
+
+                    if (response.Result is null)
+                    {
+                        Console.Error.WriteLine($"error: The daemon rejected the pairing request: {response.Error ?? response.StatusCode.ToString()}");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
+
+                    var pairingResult = response.Result;
                     Console.WriteLine($"Pairing code:  {pairingResult.FormattedCode}");
                     Console.WriteLine($"Expires at:    {pairingResult.ExpiresAt.ToLocalTime():HH:mm:ss} (local time)");
                     Console.WriteLine();
                     Console.WriteLine("On the remote device, run:");
                     Console.WriteLine($"  netclaw pair {pairApi.Endpoint}");
                 }
-                catch (HubException ex)
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
-                    Console.Error.WriteLine($"error: {ex.Message}");
+                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.Endpoint}: {ex.Message}");
+                    Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
                     Environment.ExitCode = 1;
                 }
 
@@ -2009,7 +2019,10 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // Initialize Data Protection for secrets encryption/decryption.
     // Must happen before config binding so SensitiveStringTypeConverter
     // can transparently decrypt ENC: values.
-    var protector = SecretsProtection.CreateProtector(paths);
+    var dataProtectionProvider = SecretsProtection.CreateDataProtectionProvider(paths);
+    services.AddSingleton<IDataProtectionProvider>(dataProtectionProvider);
+    services.AddSingleton<LocalControlPairingProofProtector>();
+    var protector = new DataProtectionSecretsProtector(dataProtectionProvider);
     services.AddSingleton<ISecretsProtector>(protector);
     SensitiveStringTypeConverter.Protector = protector;
 

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
@@ -51,6 +52,53 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         Assert.Equal("Bearer", capturedRequest!.Headers.Authorization?.Scheme);
         Assert.Equal("remote-device-token", capturedRequest.Headers.Authorization?.Parameter);
         Assert.Empty(devices);
+    }
+
+    [Fact]
+    public async Task RequestPairingCode_without_device_token_sends_proof_and_reads_result()
+    {
+        HttpRequestMessage? capturedRequest = null;
+        var expiresAt = new DateTimeOffset(2026, 8, 28, 12, 5, 0, TimeSpan.Zero);
+        var api = CreateDaemonApi(
+            "http://127.0.0.1:5199",
+            request =>
+            {
+                capturedRequest = request;
+                return FakeHttpMessageHandler.JsonResponse(
+                    new PairingCodeResultDto("ABCD-EFGH", expiresAt));
+            });
+
+        var result = await api.RequestPairingCodeAsync(
+            "host-proof",
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(capturedRequest);
+        Assert.Equal("/api/local-control/v1/pairing-code", capturedRequest.RequestUri!.AbsolutePath);
+        Assert.Null(capturedRequest.Headers.Authorization);
+        var requestJson = await capturedRequest.Content!.ReadFromJsonAsync<JsonElement>(
+            TestContext.Current.CancellationToken);
+        Assert.Equal("host-proof", requestJson.GetProperty("proof").GetString());
+        Assert.Equal(HttpStatusCode.OK, result.StatusCode);
+        Assert.Equal("ABCD-EFGH", result.Result!.FormattedCode);
+        Assert.Equal(expiresAt, result.Result.ExpiresAt);
+    }
+
+    [Fact]
+    public async Task RequestPairingCode_returns_version_error_for_mixed_version_guidance()
+    {
+        var api = CreateDaemonApi(
+            "http://127.0.0.1:5199",
+            _ => FakeHttpMessageHandler.JsonResponse(
+                new { error = "unsupported_protocol_version" },
+                HttpStatusCode.BadRequest));
+
+        var result = await api.RequestPairingCodeAsync(
+            "host-proof",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, result.StatusCode);
+        Assert.Null(result.Result);
+        Assert.Equal("unsupported_protocol_version", result.Error);
     }
 
     [Fact]

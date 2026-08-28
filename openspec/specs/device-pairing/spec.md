@@ -50,29 +50,53 @@ In exposure modes that require remote authentication, this scheme SHALL remain e
 
 ### Requirement: Pairing code exchange
 
-A remote CLI SHALL exchange a valid pairing code for a long-lived device token
-via `netclaw pair <endpoint>`. The exchange SHALL occur over an unauthenticated
-pairing endpoint that is separate from the main hub. The daemon SHALL prompt
-the operator to name the device and store the token hash in the device
-registry.
+A remote CLI SHALL exchange a valid pairing code for a long-lived device token via `netclaw pair <endpoint>`.
+The exchange SHALL use an unauthenticated endpoint that is separate from the main hub.
+The daemon SHALL validate the code before it checks the device name.
+The daemon SHALL consume the code only after it stores the new device.
 
 #### Scenario: Successful pairing exchange
 
-- **GIVEN** a valid, unexpired pairing code exists
-- **WHEN** a remote CLI runs `netclaw pair http://daemon:5199` and enters the
-  pairing code and a device name
-- **THEN** the daemon validates the code
-- **AND** generates a long-lived device token
-- **AND** returns the token to the remote CLI
-- **AND** stores the token hash and device name in the device registry
+- **GIVEN** a valid and unexpired pairing code exists
+- **WHEN** a remote CLI submits the code and a unique device name
+- **THEN** the daemon stores the device and token hash
+- **AND** the daemon returns the raw device token once
+- **AND** the daemon consumes the pairing code
 
 #### Scenario: Remote CLI stores token
 
 - **GIVEN** a successful pairing exchange returned a device token
 - **WHEN** the remote CLI receives the token
-- **THEN** the token is stored in `~/.netclaw/config/secrets.json` under a
-  `DeviceToken` key
-- **AND** the daemon endpoint is stored in config for future connections
+- **THEN** it stores the token in `secrets.json` under `DeviceToken`
+- **AND** it stores the daemon endpoint for later connections
+
+#### Scenario: Duplicate device name preserves the code
+
+- **GIVEN** a valid and unexpired pairing code exists
+- **AND** the requested device name already exists
+- **WHEN** the remote CLI submits the code and name
+- **THEN** the daemon returns a conflict response
+- **AND** the pairing code remains valid until its normal expiration
+
+#### Scenario: Registry failure preserves the code
+
+- **GIVEN** a valid and unexpired pairing code exists
+- **WHEN** the device registry write fails
+- **THEN** the request fails visibly
+- **AND** the pairing code remains valid until its normal expiration
+
+#### Scenario: Invalid code cannot probe device names
+
+- **GIVEN** a caller has no valid pairing code
+- **WHEN** the caller submits a known or guessed device name
+- **THEN** the daemon rejects the code before a device-name lookup
+
+#### Scenario: Concurrent exchange permits one success
+
+- **GIVEN** two requests submit the same valid code concurrently
+- **WHEN** the daemon processes both requests
+- **THEN** exactly one request can register a device
+- **AND** the other request cannot reuse the consumed code
 
 ### Requirement: Paired device registry
 
@@ -160,21 +184,48 @@ The CLI's control-plane clients SHALL read a device token from `~/.netclaw/confi
 
 ### Requirement: Pairing code generation stays daemon-host local
 
-The daemon SHALL generate a short-lived pairing code only for a daemon-host local operator connection via `netclaw daemon pair`. The code SHALL be a human-readable format, expire after 5 minutes, and be single-use.
+The daemon SHALL generate a five-minute single-use pairing code only through `netclaw daemon pair` and the local-control endpoint.
+The SignalR hub SHALL NOT expose pairing code generation.
+The daemon SHALL NOT use request source addresses or device bearer tokens as host-origin proof.
 
 #### Scenario: Direct authenticated local control-plane request may generate a pairing code
 
-- **GIVEN** `Daemon.ExposureMode` requires remote authentication
-- **AND** the daemon host CLI authenticates with a valid paired-device bearer token
-- **AND** the request reaches the daemon over a direct local control-plane connection from the daemon host
-- **WHEN** `GeneratePairingCode()` runs
-- **THEN** the daemon accepts the request
+- **GIVEN** any configured exposure mode is active
+- **AND** the host CLI submits a valid local-control proof
+- **WHEN** `netclaw daemon pair` runs
+- **THEN** the daemon creates and returns a pairing code
 
 #### Scenario: Remote paired device cannot mint pairing codes through a reverse proxy
 
-- **GIVEN** `Daemon.ExposureMode` is `reverse-proxy`
-- **AND** a remote device authenticates with a valid paired-device bearer token
-- **AND** the request reaches the daemon through a trusted reverse proxy
-- **WHEN** `GeneratePairingCode()` runs
-- **THEN** the daemon rejects the request because the caller is not a daemon-host local operator
+- **GIVEN** tunnel or proxy traffic reaches the daemon through loopback
+- **AND** the remote caller has no local-control proof
+- **WHEN** the caller requests a pairing code
+- **THEN** the daemon rejects the request
+- **AND** the daemon creates no pairing code
 
+### Requirement: Pairing upgrade preserves durable device state
+
+The upgrade SHALL preserve device records, valid device tokens, and exposure settings.
+Operators SHALL update the daemon and host CLI together, then restart the daemon.
+The CLI SHALL NOT fall back to the removed hub method.
+
+#### Scenario: Current daemon and CLI pair successfully
+
+- **GIVEN** the operator updated and restarted both components
+- **WHEN** the host runs `netclaw daemon pair`
+- **THEN** the new local-control flow succeeds
+- **AND** previously paired remote devices remain valid
+
+#### Scenario: Mixed versions fail without fallback
+
+- **GIVEN** only the daemon or CLI supports the local-control protocol
+- **WHEN** the host runs `netclaw daemon pair`
+- **THEN** the command fails with guidance to update both components
+- **AND** the command does not call the legacy hub method
+
+#### Scenario: Host re-authentication uses normal pairing
+
+- **GIVEN** the host has key-ring access but has no valid device token
+- **WHEN** another host command requires a device token
+- **THEN** the operator can generate a code through local control
+- **AND** the operator can pair the host through the normal exchange endpoint

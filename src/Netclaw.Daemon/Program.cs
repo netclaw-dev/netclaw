@@ -10,6 +10,7 @@ using Akka.Hosting;
 using Akka.Persistence.Hosting;
 using Akka.Persistence.Sql.Hosting;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
@@ -185,6 +186,9 @@ static async Task RunDaemonAsync(
     builder.Services.AddSingleton<BootstrapStateStore>();
     builder.Services.AddSingleton<BootstrapDeviceSeeder>();
     builder.Services.AddSingleton<PairingCodeService>();
+    builder.Services.AddSingleton<LocalControlPairingProofProtector>();
+    builder.Services.AddSingleton<LocalControlPairingProofValidator>();
+    builder.Services.AddSingleton<PairingCoordinator>();
     builder.Services.AddSingleton<PairingExchangeGuard>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services.AddNetclawAuthSchemes(daemonConfig);
@@ -387,7 +391,9 @@ static NetclawPaths ConfigureConfigServices(
     // Initialize Data Protection for secrets encryption/decryption.
     // Must happen before config binding so SensitiveStringTypeConverter
     // can transparently decrypt ENC: values.
-    var protector = SecretsProtection.CreateProtector(bootstrapPaths);
+    var dataProtectionProvider = SecretsProtection.CreateDataProtectionProvider(bootstrapPaths);
+    services.AddSingleton<IDataProtectionProvider>(dataProtectionProvider);
+    var protector = new DataProtectionSecretsProtector(dataProtectionProvider);
     services.AddSingleton<ISecretsProtector>(protector);
     SensitiveStringTypeConverter.Protector = protector;
 

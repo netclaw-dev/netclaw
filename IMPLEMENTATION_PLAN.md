@@ -143,6 +143,27 @@ Use the [engineering glossary](docs/spec/GLOSSARY.md) for path and authority ter
   path, authority, worktree, and configuration contracts.
 - [ ] Harvest sanitized traffic after the binary swap.
 
+### Priority: Secure Host Pairing and Recovery
+
+**PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**Spec:** `openspec/changes/secure-host-pairing-proof/`
+**Surface area:** daemon security, CLI, HTTP, device registry, operations
+**Verification:** L3
+
+The host must generate a pairing code in every exposure mode without granting
+host authority to traffic that a tunnel or proxy forwards through loopback.
+
+Done when:
+
+- [x] A versioned Data Protection proof authorizes the host-only endpoint.
+- [x] The SignalR hub no longer exposes pairing code generation.
+- [x] Valid device records, tokens, and exposure settings survive the upgrade.
+- [x] A duplicate device name or registry failure does not consume a valid code.
+- [x] Tests prove host success and remote denial in every exposure mode.
+- [x] Process smoke proves host recovery without a live tunnel dependency.
+- [x] The operations skill and next `0.27` beta website task describe the new procedure.
+- [x] The private advisory receives the fix before public disclosure.
+
 ### Priority: Keep MCP HTTP Protocol Fallback Deterministic
 
 **PRD:** `docs/prd/PRD-006-mcp-tool-integration.md`

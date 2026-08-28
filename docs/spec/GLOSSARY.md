@@ -92,6 +92,14 @@ durable:   a stored tool-role chat message
 ephemeral: the ToolInvocationReceipt for that tool call
 ```
 
+### Local-control proof
+
+A local-control proof shows that a process can use the Netclaw host key ring.
+It authorizes one named and time-bounded host operation.
+It is not a device token, source-address claim, or general operator session.
+
+**Code anchor:** `LocalControlPairingProofProtector`
+
 ## Tool Lifecycle Terms
 
 ### Tool definition or tool schema

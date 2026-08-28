@@ -17,6 +17,7 @@
     <PackageReference Include="NSec.Cryptography" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <PackageReference Include="ModelContextProtocol.Core" />
+    <PackageReference Include="Verify.XunitV3" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
