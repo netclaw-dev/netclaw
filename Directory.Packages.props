@@ -3,7 +3,7 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <!-- Nuget package versions -->
-    <AkkaHostingVersion>1.5.70</AkkaHostingVersion>
+    <AkkaHostingVersion>1.5.71</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.7.0</AkkaRemindersVersion>
     <OpenTelemetryVersion>1.17.0</OpenTelemetryVersion>
