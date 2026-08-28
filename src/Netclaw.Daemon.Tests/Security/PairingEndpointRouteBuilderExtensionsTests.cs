@@ -126,6 +126,15 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         QueueLimit = 0,
                     }));
+            if (useRealRateLimiter)
+            {
+                PairingEndpointRouteBuilderExtensions.AddLocalControlRateLimitPolicy(options);
+            }
+            else
+            {
+                options.AddPolicy(PairingEndpointRouteBuilderExtensions.LocalControlRateLimitPolicy, context =>
+                    RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
+            }
             options.RejectionStatusCode = 429;
         });
 
@@ -175,7 +184,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         services.AddLogging();
         services.AddSingleton<TimeProvider>(_time);
         services.AddSingleton(_registry);
-        services.AddSingleton(_pairingCodeService);
+        services.AddSingleton<PairingCodeService>();
         services.AddSingleton<IDataProtectionProvider>(
             SecretsProtection.CreateDataProtectionProvider(new NetclawPaths(_dir.Path)));
         services.AddSingleton<LocalControlPairingProofProtector>();
@@ -366,6 +375,37 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
 
         Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
         Assert.Null(_pairingCodeService.GetPendingExpiry());
+    }
+
+    [Fact]
+    public async Task Local_control_rate_limit_rejects_excess_requests_without_replacing_code()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(useRealRateLimiter: true);
+        var client = app.GetTestClient();
+        PairingCodeResultDto? lastAccepted = null;
+
+        for (var index = 0; index < 10; index++)
+        {
+            var response = await client.PostAsJsonAsync(
+                "/api/local-control/v1/pairing-code",
+                new { proof = _proofProtector.CreateProof(_time.GetUtcNow()) },
+                ct);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            lastAccepted = await response.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
+        }
+
+        var rejected = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof = _proofProtector.CreateProof(_time.GetUtcNow()) },
+            ct);
+        var exchange = await client.PostAsJsonAsync(
+            "/api/pair/exchange",
+            new { code = lastAccepted!.FormattedCode, deviceName = "rate-limit-proof" },
+            ct);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
     }
 
     /// <summary>Test case 1: no pending code → 404 (endpoint hidden).</summary>

@@ -31,5 +31,7 @@
 
 ## 6. Adversarial Review Follow-up
 
-- [ ] 6.1 Use a dedicated host client that ignores remote client state, bearer tokens, HTTP proxies, and redirects.
-- [ ] 6.2 Verify the proof never reaches a remote endpoint, redirect target, or HTTP proxy.
+- [x] 6.1 Use a dedicated host client that ignores remote client state, bearer tokens, HTTP proxies, and redirects.
+- [x] 6.2 Verify the proof never reaches a remote endpoint, redirect target, or HTTP proxy.
+- [x] 6.3 Restrict pairing-code mutation to the coordinator and expire replay entries with their proof windows.
+- [x] 6.4 Bound local-control request load and verify key-ring first use and corruption failures.

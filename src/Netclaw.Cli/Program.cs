@@ -2042,6 +2042,8 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
 
     // Shared daemon HTTP API client — single endpoint resolution for all commands
     services.AddHttpClient();
+    services.AddHttpClient(DaemonApi.LocalControlHttpClientName)
+        .ConfigurePrimaryHttpMessageHandler(DaemonApi.CreateLocalControlHttpHandler);
     services.AddSingleton<DaemonApi>();
 
     // Whether an external supervisor (e.g. the Docker entrypoint) owns the daemon lifecycle.

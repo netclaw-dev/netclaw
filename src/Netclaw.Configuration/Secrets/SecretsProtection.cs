@@ -9,7 +9,7 @@ using System.Runtime.InteropServices;
 namespace Netclaw.Configuration.Secrets;
 
 /// <summary>
-/// Factory for creating the machine-bound <see cref="ISecretsProtector"/> backed by
+/// Factory for creating the key-ring-bound <see cref="ISecretsProtector"/> backed by
 /// ASP.NET Data Protection. Keys are stored in <c>~/.netclaw/keys/</c>, separate
 /// from <c>secrets.json</c> — copying the secrets file alone is insufficient to
 /// decrypt its values.

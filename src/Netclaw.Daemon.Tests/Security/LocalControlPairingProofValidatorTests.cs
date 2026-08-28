@@ -42,6 +42,25 @@ public sealed class LocalControlPairingProofValidatorTests : IDisposable
         Assert.Equal(LocalControlPairingProofValidation.Unauthorized, _validator.ValidateAndConsume(proof));
     }
 
+    [Fact]
+    public void Nonce_expires_when_its_proof_window_ends()
+    {
+        const string nonce = "00112233445566778899AABBCCDDEEFF";
+        var boundaryProof = _protector.ProtectPayload(new LocalControlPairingProofPayload(
+            LocalControlPairingProofProtector.CurrentVersion,
+            LocalControlPairingProofProtector.GeneratePairingCodeOperation,
+            _time.GetUtcNow().Subtract(LocalControlPairingProofValidator.ProofLifetime),
+            nonce));
+        var freshProof = _protector.ProtectPayload(new LocalControlPairingProofPayload(
+            LocalControlPairingProofProtector.CurrentVersion,
+            LocalControlPairingProofProtector.GeneratePairingCodeOperation,
+            _time.GetUtcNow(),
+            nonce));
+
+        Assert.Equal(LocalControlPairingProofValidation.Valid, _validator.ValidateAndConsume(boundaryProof));
+        Assert.Equal(LocalControlPairingProofValidation.Valid, _validator.ValidateAndConsume(freshProof));
+    }
+
     [Theory]
     [InlineData(-31, (int)LocalControlPairingProofValidation.Unauthorized)]
     [InlineData(-30, (int)LocalControlPairingProofValidation.Valid)]

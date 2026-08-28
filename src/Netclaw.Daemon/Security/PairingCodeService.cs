@@ -22,7 +22,7 @@ namespace Netclaw.Daemon.Security;
 /// <para>Code format: 8 characters drawn from <c>23456789ABCDEFGHJKLMNPQRSTUVWXYZ</c>
 /// (no ambiguous 0/O/1/I characters), displayed as <c>XXXX-XXXX</c>.</para>
 /// </summary>
-public sealed class PairingCodeService
+internal sealed class PairingCodeService
 {
     private static readonly char[] Alphabet =
         "23456789ABCDEFGHJKLMNPQRSTUVWXYZ".ToCharArray();
@@ -42,7 +42,7 @@ public sealed class PairingCodeService
     /// Generates a new pairing code, replacing any previously pending code.
     /// </summary>
     /// <returns>The formatted code (<c>XXXX-XXXX</c>) and its expiration time.</returns>
-    public (string FormattedCode, DateTimeOffset ExpiresAt) GenerateCode()
+    internal (string FormattedCode, DateTimeOffset ExpiresAt) GenerateCode()
     {
         // Use rejection sampling to avoid modulo bias over the 32-char alphabet.
         // The alphabet size (32) divides evenly into 256, so % 32 has no bias here;
@@ -69,7 +69,7 @@ public sealed class PairingCodeService
     /// </summary>
     /// <param name="presentedCode">Code as presented by the remote client (with or without dash).</param>
     /// <returns><c>true</c> if the code matched and was not expired; the code is consumed on success.</returns>
-    public bool TryConsume(string presentedCode)
+    internal bool TryConsume(string presentedCode)
     {
         lock (_lock)
         {
@@ -97,7 +97,7 @@ public sealed class PairingCodeService
     /// Returns the expiration time of the currently pending code,
     /// or <c>null</c> if no code is pending (or the code has expired).
     /// </summary>
-    public DateTimeOffset? GetPendingExpiry()
+    internal DateTimeOffset? GetPendingExpiry()
     {
         lock (_lock)
         {

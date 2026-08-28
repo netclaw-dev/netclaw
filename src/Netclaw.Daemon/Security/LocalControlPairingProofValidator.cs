@@ -90,7 +90,7 @@ internal sealed class LocalControlPairingProofValidator
                 return LocalControlPairingProofValidation.CapacityExhausted;
             }
 
-            _liveNonces.Add(payload.Nonce, now.Add(ProofLifetime).Add(FutureClockSkew));
+            _liveNonces.Add(payload.Nonce, payload.IssuedAt.Add(ProofLifetime));
         }
 
         return LocalControlPairingProofValidation.Valid;

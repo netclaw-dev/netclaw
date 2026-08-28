@@ -131,6 +131,33 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
             File.GetUnixFileMode(paths.KeysDirectory));
     }
 
+    [Fact]
+    public void First_use_creates_an_owner_only_key_directory_on_Unix()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return;
+
+        var paths = new NetclawPaths(Path.Combine(_dir.Path, "first-use"));
+        Assert.False(Directory.Exists(paths.KeysDirectory));
+
+        _ = SecretsProtection.CreateDataProtectionProvider(paths);
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute,
+            File.GetUnixFileMode(paths.KeysDirectory));
+    }
+
+    [Fact]
+    public void Corrupt_key_file_fails_before_proof_creation()
+    {
+        var paths = CreatePaths(_dir.Path);
+        File.WriteAllText(Path.Combine(paths.KeysDirectory, $"key-{Guid.NewGuid():D}.xml"), "<key>");
+        var protector = new LocalControlPairingProofProtector(
+            SecretsProtection.CreateDataProtectionProvider(paths));
+
+        Assert.Throws<CryptographicException>(() => protector.CreateProof(IssuedAt));
+    }
+
     private static NetclawPaths CreatePaths(string basePath)
     {
         var paths = new NetclawPaths(basePath);

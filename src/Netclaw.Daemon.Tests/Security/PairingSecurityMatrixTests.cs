@@ -149,6 +149,8 @@ public sealed class PairingSecurityMatrixTests
         {
             options.AddPolicy("pairing-exchange", context =>
                 RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
+            options.AddPolicy(PairingEndpointRouteBuilderExtensions.LocalControlRateLimitPolicy, context =>
+                RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
         });
 
         var app = builder.Build();

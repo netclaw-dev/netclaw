@@ -142,6 +142,8 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         QueueLimit = 0,
                     }));
+            options.AddPolicy(PairingEndpointRouteBuilderExtensions.LocalControlRateLimitPolicy, context =>
+                RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
         });
 
         var app = builder.Build();

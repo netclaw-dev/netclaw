@@ -22,6 +22,8 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 public sealed class DaemonApi
 {
+    internal const string LocalControlHttpClientName = "Netclaw.LocalControl";
+
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan LongTimeout = TimeSpan.FromSeconds(30);
 
@@ -66,6 +68,16 @@ public sealed class DaemonApi
         return DaemonControlPlaneEndpointResolver.ResolveFallbackEndpoint(daemonConfig);
     }
 
+    internal static string ResolveLocalControlEndpoint(NetclawPaths paths)
+        => ResolveDaemonConfigEndpoint(paths) ?? DefaultEndpoint;
+
+    internal static SocketsHttpHandler CreateLocalControlHttpHandler()
+        => new()
+        {
+            AllowAutoRedirect = false,
+            UseProxy = false,
+        };
+
     /// <summary>
     /// The resolved daemon base endpoint (e.g. <c>http://127.0.0.1:5199</c>).
     /// Useful for display messages and SignalR hub URL construction.
@@ -77,9 +89,10 @@ public sealed class DaemonApi
         CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
-        var client = CreateHttpClient();
+        var client = _factory.CreateClient(LocalControlHttpClientName);
+        var localControlEndpoint = ResolveLocalControlEndpoint(_paths);
         using var response = await client.PostAsJsonAsync(
-            $"{_endpoint}/api/local-control/v1/pairing-code",
+            $"{localControlEndpoint}/api/local-control/v1/pairing-code",
             new LocalControlPairingCodeRequest(proof),
             JsonDefaults.Api,
             cts.Token);

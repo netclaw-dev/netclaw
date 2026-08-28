@@ -5,8 +5,10 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
 using Netclaw.Configuration;
 
@@ -14,7 +16,22 @@ namespace Netclaw.Daemon.Security;
 
 public static class PairingEndpointRouteBuilderExtensions
 {
+    internal const string LocalControlRateLimitPolicy = "local-control";
     private const int MaximumLocalControlRequestBytes = 4 * 1024;
+
+    internal static void AddLocalControlRateLimitPolicy(RateLimiterOptions options)
+    {
+        options.AddPolicy(LocalControlRateLimitPolicy, context =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 10,
+                    Window = TimeSpan.FromSeconds(1),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 0,
+                }));
+    }
 
     public static IEndpointRouteBuilder MapPairingEndpoints(this IEndpointRouteBuilder app)
     {
@@ -22,6 +39,7 @@ public static class PairingEndpointRouteBuilderExtensions
             .WithName("GenerateHostPairingCodeV1")
             .WithSummary("Generate a pairing code with a daemon-host local-control proof.")
             .WithTags("Pairing")
+            .RequireRateLimiting(LocalControlRateLimitPolicy)
             .AllowAnonymous();
 
         // Device pairing exchange — unauthenticated, rate-limited, with per-IP lockout guard.

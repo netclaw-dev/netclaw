@@ -197,8 +197,8 @@ static async Task RunDaemonAsync(
     // Add OpenAPI
     builder.Services.AddOpenApi();
 
-    // Rate limiting for the unauthenticated pairing exchange endpoint.
-    // 5 attempts per minute per IP — brute-force defense for the 8-char code space.
+    // Rate limits bound both unauthenticated pairing endpoints.
+    // The exchange uses a long brute-force window. Local control uses a short load-shed window.
     builder.Services.AddRateLimiter(options =>
     {
         options.AddPolicy("pairing-exchange", context =>
@@ -211,6 +211,7 @@ static async Task RunDaemonAsync(
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 0,
                 }));
+        PairingEndpointRouteBuilderExtensions.AddLocalControlRateLimitPolicy(options);
         options.RejectionStatusCode = 429;
     });
     builder.Services.AddMattermostActionEndpointRateLimiting();
