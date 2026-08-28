@@ -457,7 +457,7 @@ if [ "$SKIP_SHELL" = false ]; then
             modify_posix_rc_file "$RC_FILE"
             echo ""
             echo "Installation complete! netclaw will be on PATH in new shells."
-            echo "To update this shell, run:"
+            echo "To use it now in this shell, run (safe to re-run anytime):"
             echo ""
             echo "  $SOURCE_LINE"
             ;;
@@ -467,7 +467,7 @@ if [ "$SKIP_SHELL" = false ]; then
                 modify_posix_rc_file "$RC_FILE"
                 echo ""
                 echo "Installation complete! netclaw will be on PATH in new shells."
-                echo "To update this shell, run:"
+                echo "To use it now in this shell, run (safe to re-run anytime):"
                 echo ""
                 echo "  $SOURCE_LINE"
             else
@@ -481,7 +481,7 @@ if [ "$SKIP_SHELL" = false ]; then
             write_fish_config
             echo ""
             echo "Installation complete! netclaw will be on PATH in new fish shells."
-            echo "To update this shell, run:"
+            echo "To use it now in this shell, run:"
             echo ""
             echo "  set -gx PATH $INSTALL_DIR_QUOTED \$PATH"
             ;;
