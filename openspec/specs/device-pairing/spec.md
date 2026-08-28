@@ -5,6 +5,31 @@
 Define the bearer token authentication scheme, pairing code exchange flow,
 paired device registry, device management commands, and CLI token attachment
 for self-hosted remote access without an external identity provider.
+
+This capability uses these [engineering glossary](../../../docs/spec/GLOSSARY.md) terms:
+
+- [Local-control proof](../../../docs/spec/GLOSSARY.md#local-control-proof)
+- [Authority](../../../docs/spec/GLOSSARY.md#authority)
+- [Durable and ephemeral](../../../docs/spec/GLOSSARY.md#durable-and-ephemeral)
+
+## Pairing State Flow
+
+```text
+host proof -> create process-local code
+remote code + device name -> validate code -> write durable device -> consume code
+                                               |
+                                               +-> failure keeps the code
+```
+
+The diagram is schematic.
+It omits rate limits, token hashing, and HTTP status mapping.
+
+| Decision or data | Owner | Lifetime |
+|---|---|---|
+| Pending code | Pairing code service | Process-local |
+| Exchange order | Pairing coordinator | Process-local |
+| Raw device token | Pairing coordinator | Call-local |
+| Device record and token hash | Device registry | Durable |
 ## Requirements
 ### Requirement: Bearer token authentication scheme
 
@@ -57,8 +82,8 @@ The daemon SHALL consume the code only after it stores the new device.
 
 #### Scenario: Successful pairing exchange
 
-- **GIVEN** a valid and unexpired pairing code exists
-- **WHEN** a remote CLI submits the code and a unique device name
+- **GIVEN** the valid code is `ABCD-EFGH`
+- **WHEN** a remote CLI submits the code with device name `tablet`
 - **THEN** the daemon stores the device and token hash
 - **AND** the daemon returns the raw device token once
 - **AND** the daemon consumes the pairing code
@@ -73,10 +98,17 @@ The daemon SHALL consume the code only after it stores the new device.
 #### Scenario: Duplicate device name preserves the code
 
 - **GIVEN** a valid and unexpired pairing code exists
-- **AND** the requested device name already exists
+- **AND** the requested device name `laptop` already exists
 - **WHEN** the remote CLI submits the code and name
 - **THEN** the daemon returns a conflict response
 - **AND** the pairing code remains valid until its normal expiration
+
+#### Scenario: Duplicate retry uses the same code
+
+- **GIVEN** code `ABCD-EFGH` received a conflict for device name `laptop`
+- **WHEN** the remote CLI retries `ABCD-EFGH` with device name `tablet`
+- **THEN** the daemon stores `tablet`
+- **AND** the daemon consumes `ABCD-EFGH`
 
 #### Scenario: Registry failure preserves the code
 
@@ -87,9 +119,10 @@ The daemon SHALL consume the code only after it stores the new device.
 
 #### Scenario: Invalid code cannot probe device names
 
-- **GIVEN** a caller has no valid pairing code
-- **WHEN** the caller submits a known or guessed device name
+- **GIVEN** a caller submits invalid code `ZZZZ-ZZZZ`
+- **WHEN** the caller submits known name `laptop` or unknown name `guess`
 - **THEN** the daemon rejects the code before a device-name lookup
+- **AND** both requests use the same unauthorized response
 
 #### Scenario: Concurrent exchange permits one success
 
@@ -194,6 +227,14 @@ The daemon SHALL NOT use request source addresses or device bearer tokens as hos
 - **AND** the host CLI submits a valid local-control proof
 - **WHEN** `netclaw daemon pair` runs
 - **THEN** the daemon creates and returns a pairing code
+
+#### Scenario: Device bearer token does not add host authority
+
+- **GIVEN** a remote device has a valid token for `laptop`
+- **AND** it has no local-control proof
+- **WHEN** it requests a new pairing code
+- **THEN** the daemon returns an unauthorized response
+- **AND** it creates no pairing code
 
 #### Scenario: Remote paired device cannot mint pairing codes through a reverse proxy
 

@@ -25,6 +25,11 @@
 ## 5. Regression Proof and Operations
 
 - [x] 5.1 Add and approve the complete pairing security matrix snapshot.
-- [x] 5.2 Extend the deterministic pairing smoke scenario and verify host success, remote denial, upgrade state, and duplicate-name retry.
+- [x] 5.2 Extend the deterministic pairing smoke scenario and verify host success, remote denial, restart state, and duplicate-name retry.
 - [x] 5.3 Update the operations skill and record the vague website procedure task for the next `0.27` beta.
 - [x] 5.4 Run focused tests, the full suite, evals, Slopwatch, header checks, OpenSpec validation, and `git diff --check`.
+
+## 6. Adversarial Review Follow-up
+
+- [ ] 6.1 Use a dedicated host client that ignores remote client state, bearer tokens, HTTP proxies, and redirects.
+- [ ] 6.2 Verify the proof never reaches a remote endpoint, redirect target, or HTTP proxy.

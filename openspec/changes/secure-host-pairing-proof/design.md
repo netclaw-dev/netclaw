@@ -67,7 +67,8 @@ The device registry remains the durable owner of `devices.json`.
 ### Serialize each pairing transaction
 
 One singleton pairing coordinator serializes code generation and code exchange.
-It owns the call-local token material and the process-local active code.
+It owns the call-local token material and the transaction order.
+The pairing code service owns the process-local active code.
 It validates the code before the registry checks the device name.
 It writes the device before it consumes the code.
 
@@ -86,6 +87,22 @@ A new CLI against an old daemon receives `404` and prints joint-update guidance.
 An old CLI against a new daemon receives a missing hub-method error.
 The new daemon does not add a compatibility route.
 
+### Use a direct host transport for the proof
+
+The host command derives its endpoint from the daemon configuration in the same Netclaw home.
+It does not use paired-client endpoint state.
+A dedicated client sends no device token and bypasses HTTP proxies.
+The client also rejects redirects.
+
+This rule keeps the proof on the host authority boundary.
+A remote client endpoint could otherwise receive a valid proof and a device token.
+
+Examples:
+
+- `Daemon.Host=0.0.0.0` maps the host request to `http://127.0.0.1:<port>`.
+- A saved `https://remote.example` client endpoint does not receive the proof.
+- A `307` redirect does not receive a second request.
+
 ### Treat key-ring access as host authority
 
 The common Data Protection factory restricts the Unix key directory to owner access.
@@ -100,7 +117,7 @@ This command shares the daemon key ring and user identity.
 ```text
 Host CLI                 Local-control endpoint       Pairing coordinator       Device registry
    | protect v1 proof              |                         |                         |
-   | POST proof ------------------>|                         |                         |
+   | direct POST, no redirect ---->|                         |                         |
    |                               | validate time/replay    |                         |
    |                               | generate -------------->|                         |
    |<--------- code and expiry ----|                         |                         |
@@ -121,6 +138,7 @@ It omits rate limits, token hashing, and HTTP error mapping.
 - A full replay cache can deny a valid host. → Entries expire quickly and the daemon logs only a reason category.
 - Immediate removal breaks mixed versions. → The CLI prints explicit joint-update guidance and never uses an unsafe fallback.
 - A registry write can fail after token creation. → The coordinator discards the raw token and preserves the code.
+- A general HTTP client can export the proof. → A dedicated direct client disables proxies, redirects, and bearer attachment.
 
 ## Migration Plan
 

@@ -1,4 +1,28 @@
-Cross-cutting terms use the [engineering glossary](../../../../../docs/spec/GLOSSARY.md).
+This capability uses these [engineering glossary](../../../../../docs/spec/GLOSSARY.md) terms:
+
+- [Local-control proof](../../../../../docs/spec/GLOSSARY.md#local-control-proof)
+- [Authority](../../../../../docs/spec/GLOSSARY.md#authority)
+- [Durable and ephemeral](../../../../../docs/spec/GLOSSARY.md#durable-and-ephemeral)
+
+## Required Proof Layers
+
+```text
+proof codec tests
+  -> validator tests with virtual time
+  -> real HTTP endpoint matrix
+  -> CLI-to-daemon integration
+  -> process smoke with daemon restart
+```
+
+The endpoint matrix SHALL execute real endpoint requests.
+Labels that do not configure the tested exposure mode or credential are not sufficient.
+
+| Example case | Expected result |
+|---|---|
+| `tailscale-funnel` + valid proof + no bearer | Code created |
+| `reverse-proxy` + no proof + valid device bearer | Unauthorized; no code |
+| `local` + cross-home proof + bootstrap bearer | Unauthorized; no code |
+| Any mode + repeated proof | Unauthorized; original code unchanged |
 
 ## ADDED Requirements
 
@@ -28,10 +52,9 @@ The required suite SHALL not require a live tunnel provider.
 - **THEN** every result matches the reviewed security matrix
 - **AND** no case needs network access or a live tunnel process
 
-#### Scenario: Process test proves recovery after upgrade
+#### Scenario: Process test proves durable state across restart
 
-- **GIVEN** an isolated Netclaw home contains a pre-upgrade device registry
-- **WHEN** the current daemon and CLI run the host pairing procedure
-- **THEN** the host receives a pairing code
-- **AND** the prior device registry remains valid
-
+- **GIVEN** the current daemon stores a paired device in an isolated Netclaw home
+- **WHEN** the process smoke restarts the daemon with that home
+- **THEN** the prior device token still authenticates
+- **AND** the host can create another pairing code
