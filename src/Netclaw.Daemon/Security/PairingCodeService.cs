@@ -44,9 +44,7 @@ internal sealed class PairingCodeService
     /// <returns>The formatted code (<c>XXXX-XXXX</c>) and its expiration time.</returns>
     internal (string FormattedCode, DateTimeOffset ExpiresAt) GenerateCode()
     {
-        // Use rejection sampling to avoid modulo bias over the 32-char alphabet.
-        // The alphabet size (32) divides evenly into 256, so % 32 has no bias here;
-        // but we use the standard "discard if >= threshold" pattern anyway for clarity.
+        // The 32-symbol alphabet divides the byte range evenly, so modulo mapping has no bias.
         var rawBytes = RandomNumberGenerator.GetBytes(8);
         Span<char> chars = stackalloc char[8];
         for (var i = 0; i < 8; i++)
