@@ -86,6 +86,12 @@ agent to author a replacement call. It SHALL execute nothing, record no grant,
 change no working context, and SHALL NOT rewrite the original call. The
 replacement SHALL pass every normal authorization stage.
 
+`UseManagedTemporaryDirectory` SHALL replace the former `UseSessionScratch`
+remediation code. Correction and retry state SHALL carry the run's exact
+`temp_dir`; they SHALL NOT use `session_dir` as the replacement destination.
+Model-facing correction text SHALL use “managed temporary directory” and
+`temp_dir`. It SHALL NOT describe `session_dir` as session scratch.
+
 For Bash causal-directory advice, the system SHALL use the canonical parser's
 exact cwd-attribution and effective-directory facts. Native PowerShell causal
 directory mutation SHALL remain ineligible until the canonical parser exposes
@@ -242,6 +248,24 @@ results SHALL take precedence. One call SHALL return at most one correction.
 - **THEN** the system evaluates the replacement as a new call through every
   normal authorization stage
 - **AND** the correction does not guarantee execution
+
+#### Scenario: Example - remediation names the new contract
+
+- **GIVEN** an eligible unmanaged temporary write
+- **WHEN** the dispatcher creates its recoverable-correction receipt
+- **THEN** the remediation code is `UseManagedTemporaryDirectory`
+- **AND** the trusted correction path is the current run's `temp_dir`
+- **AND** neither the code nor presenter calls `session_dir` session scratch
+
+#### Scenario: Counterexample - legacy persisted path is not reinterpreted
+
+- **GIVEN** a recovered approval event contains legacy protobuf field 19
+  `session_scratch_directory`
+- **WHEN** the current runtime restores the approval
+- **THEN** it does not treat that stored path as `temp_dir`
+- **AND** it derives the current managed temporary directory from resolved run
+  storage or omits managed-temp correction metadata
+- **AND** the approval decision itself can still complete normally
 
 #### Scenario: Counterexample - headless execution gets no interactive correction
 

@@ -315,6 +315,72 @@ standard environment.
 **Counterexample:** Netclaw does not use `temp_dir` as the shell cwd. A final
 attachment also does not belong in `temp_dir`; it belongs in `artifact_dir`.
 
+### Retire the session-scratch term by meaning
+
+The current code uses “session scratch” for three different contracts. The
+implementation will classify each use before renaming it.
+
+| Current meaning | Replacement term | Representative uses |
+|---|---|---|
+| Default no-project cwd and relative-path base | session directory; `session_dir` | `ToolExecutionContext.SessionDirectory`, file-tool schemas, cwd fallback |
+| Disposable run-local files | managed temporary directory; `temp_dir` | platform-temp correction, model guidance, process environment |
+| Session-specific directory unsuitable for a durable folder grant | session-owned directory | approval-option pruning and runbooks |
+
+The correction pipeline will use the second meaning. It will replace
+`UseSessionScratch` with `UseManagedTemporaryDirectory`, and its trusted path
+will be the run's exact `temp_dir`, not `session_dir`. Correction, retry,
+approval-context, parent-actor, and child-actor type names will use
+`ManagedTemporaryDirectory` or `ManagedTemp` consistently.
+
+File tools use the first meaning. Their schemas will say that relative paths
+resolve against the current project and then the session directory. They will
+not claim that the session directory is disposable scratch.
+
+Approval-option pruning uses the third meaning. The implementation will state
+which session-owned directories suppress a reusable folder grant. It will not
+carry the name “session scratch” after the paths have distinct purposes.
+
+One persisted approval field currently stores `session_scratch_directory` at
+protobuf field 19. The implementation will retain that field as legacy-read-only
+input and add a new `managed_temporary_directory` field with a new field number.
+New events will not write field 19. The runtime will not reinterpret an old
+session-directory path as `temp_dir`. When an old pending approval resumes, it
+will derive the current managed temporary directory from resolved run storage
+or omit the new correction metadata.
+
+```text
+old pending approval
+  session_scratch_directory = <old session_dir>
+  -> never relabel that value as temp_dir
+  -> derive current temp_dir from resolved run storage, or omit temp guidance
+
+new correction receipt
+  remediation = UseManagedTemporaryDirectory
+  managed_temporary_directory = <current run temp_dir>
+```
+
+Archived OpenSpec changes and immutable evidence remain historical records.
+Current production code, active specifications, tool schemas, runtime prompts,
+runbooks, and tests will use the new vocabulary.
+
+The initial source audit identifies these implementation groups:
+
+| Area | Current anchors | Required change |
+|---|---|---|
+| Remediation identity and text | `ToolRemediationCode`, `ToolRemediationPresenter`, `ToolOutcomeResults` | Replace `UseSessionScratch`; render `temp_dir` as the managed temporary directory |
+| Platform-temp detection | `PlatformTemporaryScopePolicy` | Replace `SessionScratchSuggested` and carry the resolved run `temp_dir` |
+| Retry and approval flow | `IToolExecutor`, `DispatchingToolExecutor`, `ToolAccessPolicy`, `SessionToolExecutionPipeline` | Rename correction state and keys; compare retries against managed-temp semantics |
+| Parent and child actors | `LlmSessionActor`, `SubAgentActor`, `LlmMessages` | Use the same managed-temp correction and lifecycle state in both paths |
+| Durable pending approvals | `ToolApprovalState`, `SessionProtocol.Events`, `netclaw_messages.proto`, `NetclawProtoMapper` | Add the new field, retain field 19 as legacy-read-only, and test recovery without reinterpretation |
+| Model-visible guidance | shipped `AGENTS.md`, `SessionMessageAssembler`, `SubAgentActor`, `ToolChoiceGuidance`, `ShellTool` | Describe `session_dir`, `temp_dir`, and `artifact_dir` by their distinct purposes |
+| Workspace file schemas | `FileReadTool`, `FileListTool`, `FileSearchTool`, `FileWriteTool`, `FileEditTool`, `AttachFileTool` | Replace “session scratch” with “session directory” for relative-path fallback |
+| Approval scopes and prompts | `ApprovalBucketBuilder`, `ToolAccessPolicy`, Slack and Discord approval builders, approval runbook | Name the broader rule “session-owned directory” and define which roots suppress persistent folder grants |
+| Verification | actor, policy, serialization, approval-rehydration, TUI, configuration, and daemon test projects | Rename fixtures and add distinct `session_dir` versus `temp_dir` assertions |
+
+**Counterexample:** A global replacement from `SessionScratchDirectory` to
+`ManagedTemporaryDirectory` would make a persisted `session_dir` appear to be
+the new disposable directory. That is a semantic migration bug, not a rename.
+
 ### Extend the existing correction with one managed-temp code
 
 `UseManagedTemporaryDirectory` will be a closed remediation code. The

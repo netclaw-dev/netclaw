@@ -23,6 +23,9 @@ use separate directory trees.
   activity instead of requiring shell searches.
 - Set `TMPDIR`, `TMP`, and `TEMP` for each parent and child execution scope.
   The values must identify that run's managed temporary directory.
+- Retire the ambiguous “session scratch” vocabulary. Use `session_dir` for the
+  working and relative-path base, `temp_dir` for disposable run-local files,
+  and “session-owned directory” only for approval rules that cover both.
 - Extend the existing typed correction path for an explicit unmanaged
   temporary write. The correction must name the managed temporary directory
   and must not rewrite or approve the original call.

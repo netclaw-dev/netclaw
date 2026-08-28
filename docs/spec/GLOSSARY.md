@@ -413,8 +413,10 @@ The session directory is the agent-facing `workspace/` area inside the session
 storage envelope. It is the relative-path base when the session has no valid
 project directory. It is not the complete storage envelope.
 
-The phrase `session scratch` is a legacy term for disposable work directly in
-the session directory. New designs use a managed temporary directory instead.
+The phrase `session scratch` is a legacy term that mixed the session directory
+with disposable storage. Current designs use session directory for the working
+and relative-path base, and managed temporary directory for disposable work.
+Current runtime text and identifiers must use the specific term.
 
 ### Raw session log
 
@@ -447,6 +449,14 @@ A child run directory is the area below
 `<session-envelope>/subagents/<run-id>` for one subagent run. Its artifact,
 temporary, and raw-log areas share the same opaque run identifier. The parent
 owns the lineage; that ownership does not grant unrestricted raw-log access.
+
+### Session-owned directory
+
+A session-owned directory has a lifetime or authority scope tied to one
+session or run. Session directories, managed temporary directories, artifact
+directories, and managed worktree directories are session-owned, but they do
+not have the same purpose or access policy. Approval code uses this broader
+term only when the rule intentionally applies to more than one of them.
 
 ### Allowed root
 

@@ -26,6 +26,9 @@ For a parent with a version-2 storage binding, `session_dir` SHALL mean
 `<session-envelope>/workspace`. For a child, `temp_dir` and `artifact_dir`
 SHALL be siblings below `<session-envelope>/subagents/<run-id>`. The context
 SHALL NOT use `session_dir` as a synonym for the complete storage envelope.
+It SHALL describe `session_dir` as the working directory and relative-path
+fallback. It SHALL describe `temp_dir` as disposable run-local storage. Current
+runtime prompts and tool schemas SHALL NOT call either path “session scratch.”
 
 #### Scenario: Example - Personal child receives distinct managed paths
 
@@ -66,6 +69,21 @@ SHALL NOT use `session_dir` as a synonym for the complete storage envelope.
 - **THEN** its project scope and project instructions update through the
   existing contract
 - **AND** its bound session, temporary, and artifact paths remain unchanged
+
+#### Scenario: Example - file schemas name the relative-path fallback correctly
+
+- **GIVEN** a workspace file tool accepts a relative path
+- **WHEN** its model-visible schema describes path resolution
+- **THEN** it says that the current project is tried before the session
+  directory
+- **AND** it does not describe the session directory as disposable scratch
+
+#### Scenario: Counterexample - disposable guidance cannot point to session_dir
+
+- **GIVEN** the model needs a location for disposable run-local output
+- **WHEN** Netclaw renders managed-path guidance
+- **THEN** the guidance points to `temp_dir`
+- **AND** it does not tell the model to use `session_dir` as scratch
 
 ### Requirement: Managed temporary directory is the private temporary location
 

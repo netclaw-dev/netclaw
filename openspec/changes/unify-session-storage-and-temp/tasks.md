@@ -18,15 +18,18 @@
 - [ ] 3.2 Inject `TMPDIR`, `TMP`, and `TEMP` into every POSIX and Windows child process without changing the daemon environment; verify native and .NET temporary APIs return a path below the run's `temp_dir`
 - [ ] 3.3 Add the distinct `session_dir`, `temp_dir`, and `artifact_dir` working-context entries for Personal and Team runs while preserving Public redaction; verify context snapshots contain the correct paths and purpose text
 - [ ] 3.4 Use `<session-envelope>/workspace` as the shell cwd fallback when no project or explicit cwd exists; verify the complete envelope is never the fallback and the managed temporary environment operates independently
+- [ ] 3.5 Audit every production use of “session scratch” and classify it as session-directory fallback, managed temporary storage, or session-owned approval scope; update model prompts, `AGENTS.md`, tool schemas, comments, and identifiers to the correct term and verify current runtime text contains no ambiguous “session scratch” guidance
 
 ## 4. Complete the Managed-Temp Correction
 
-- [ ] 4.1 Add the closed `UseManagedTemporaryDirectory` remediation code and presenter text; verify the model receives the exact trusted `temp_dir` and the result grants no authority
+- [ ] 4.1 Replace `UseSessionScratch` with the closed `UseManagedTemporaryDirectory` remediation code and presenter text; verify the model receives the exact trusted `temp_dir`, never `session_dir`, and the result grants no authority
 - [ ] 4.2 Detect eligible structured file writes and edits below the captured host temp root; verify denied, dynamic, external, and link-escape paths remain on their existing policy path
 - [ ] 4.3 Detect exact shell redirects, explicit working directories, and canonical Bash leading-directory facts without executable-specific option parsing; verify incomplete PowerShell and private CLI syntax remain approval-gated
 - [ ] 4.4 Preserve hard-deny, protected-path, audience, and noninteractive precedence; verify Public and Team calls do not receive a private path and headless calls retain their existing result
 - [ ] 4.5 Extend actor-owned correction-loop keys to the eligible structured and shell forms; verify equivalent retries expose only `Once` and `Deny`, execution changes re-evaluate fully, and lifecycle boundaries clear the keys
 - [ ] 4.6 Apply the same correction before the parent user bridge and child parent bridge; verify the first eligible child attempt does not prompt the parent user
+- [ ] 4.7 Rename correction, retry, approval-context, parent-actor, and child-actor symbols from `SessionScratch*` to `ManagedTemporary*` or `ManagedTemp*`; separately rename session-directory approval guards to `SessionOwned*` terminology and verify no internal type conflates `session_dir` with `temp_dir`
+- [ ] 4.8 Retain protobuf field 19 `session_scratch_directory` as legacy-read-only input, add `managed_temporary_directory` with a new field number, and update event mapping and approval recovery; verify new events never write field 19, legacy data is never reinterpreted as `temp_dir`, a recovered approval still completes, and new round trips preserve only the managed temporary path
 
 ## 5. Add Parent-Child Discovery Tools
 
@@ -53,7 +56,7 @@
 
 ## 8. Documentation and Release Verification
 
-- [ ] 8.1 Verify the engineering glossary, update the session-storage documentation, and update the operator and eval runbooks with examples and counterexamples; verify every cross-capability term links to the glossary
+- [ ] 8.1 Verify the engineering glossary, update current session-storage documentation, active OpenSpec text, operator runbooks, and eval runbooks with examples and counterexamples; verify every cross-capability term links to the glossary and leave archived changes and immutable evidence unchanged as historical records
 - [ ] 8.2 Update the implementation plan and release notes for the versioned layout, managed temp environment, child-log tool, and worktree tool; state that pre-feature binaries resuming newly bound sessions are out of scope and verify public text contains no private provider, hardware, host, or user detail
 - [ ] 8.3 Run `openspec validate unify-session-storage-and-temp --strict`, focused tests, `dotnet build -c Release`, `dotnet test -c Release`, header verification, and Slopwatch; verify every command succeeds without warning suppression or skipped tests
 - [ ] 8.4 Upgrade one existing session and restart one newly bound session; verify the existing paths remain unchanged, the new envelope remains stable, ordinary workspace access excludes raw logs, and no data is moved or deleted
