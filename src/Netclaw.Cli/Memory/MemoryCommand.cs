@@ -18,8 +18,13 @@ namespace Netclaw.Cli.Memory;
 /// </summary>
 internal static class MemoryCommand
 {
-    public static Task<int> RunAsync(string[] args, NetclawPaths paths, IConfiguration configuration)
-        => RunAsync(args, paths, configuration, EmbeddingModelProvisioner.Allowlist);
+    public static Task<int> RunAsync(
+        string[] args,
+        NetclawPaths paths,
+        IConfiguration configuration,
+        TextWriter output,
+        TextWriter error)
+        => RunAsync(args, paths, configuration, EmbeddingModelProvisioner.Allowlist, output, error);
 
     /// <summary>
     /// Test-visible entry point: <paramref name="allowlist"/> is the same explicit, required
@@ -32,12 +37,14 @@ internal static class MemoryCommand
         string[] args,
         NetclawPaths paths,
         IConfiguration configuration,
-        IReadOnlyDictionary<string, EmbeddingModelManifestEntry> allowlist)
+        IReadOnlyDictionary<string, EmbeddingModelManifestEntry> allowlist,
+        TextWriter output,
+        TextWriter error)
     {
         var subcommand = args.Length > 1 ? args[1] : "help";
 
         if (subcommand is "help" or "-h" or "--help")
-            return Task.FromResult(WriteHelp());
+            return Task.FromResult(WriteHelp(output));
 
         // `backfill-embeddings` takes no required positional arguments (only the optional
         // `--force` flag), so a trailing `--help`/`-h` would otherwise be silently ignored
@@ -45,24 +52,24 @@ internal static class MemoryCommand
         // (canary finding: `netclaw memory backfill-embeddings --help` downloaded/embedded
         // for real). Scan the full argument list, not just the subcommand slot.
         if (CliArgsParser.HasTrailingHelpToken(args, startIndex: 2))
-            return Task.FromResult(WriteHelp());
+            return Task.FromResult(WriteHelp(output));
 
         return subcommand switch
         {
-            "backfill-embeddings" => RunBackfillEmbeddingsAsync(args, paths, configuration, allowlist),
-            _ => Task.FromResult(WriteHelp())
+            "backfill-embeddings" => RunBackfillEmbeddingsAsync(args, paths, configuration, allowlist, output, error),
+            _ => Task.FromResult(WriteHelp(output))
         };
     }
 
-    private static int WriteHelp()
+    private static int WriteHelp(TextWriter output)
     {
-        Console.WriteLine("Usage: netclaw memory <subcommand>");
-        Console.WriteLine();
-        Console.WriteLine("Subcommands:");
-        Console.WriteLine("  backfill-embeddings [--force]   Provision the embedding model (if needed) and");
-        Console.WriteLine("                                   embed memories missing a current-model embedding.");
-        Console.WriteLine("                                   --force re-scans every recallable document instead");
-        Console.WriteLine("                                   of only ones missing a current-model embedding.");
+        output.WriteLine("Usage: netclaw memory <subcommand>");
+        output.WriteLine();
+        output.WriteLine("Subcommands:");
+        output.WriteLine("  backfill-embeddings [--force]   Provision the embedding model (if needed) and");
+        output.WriteLine("                                   embed memories missing a current-model embedding.");
+        output.WriteLine("                                   --force re-scans every recallable document instead");
+        output.WriteLine("                                   of only ones missing a current-model embedding.");
         return 0;
     }
 
@@ -70,7 +77,9 @@ internal static class MemoryCommand
         string[] args,
         NetclawPaths paths,
         IConfiguration configuration,
-        IReadOnlyDictionary<string, EmbeddingModelManifestEntry> allowlist)
+        IReadOnlyDictionary<string, EmbeddingModelManifestEntry> allowlist,
+        TextWriter output,
+        TextWriter error)
     {
         var force = args.Contains("--force", StringComparer.OrdinalIgnoreCase);
         var memoryConfig = configuration.GetSection("Memory").Get<MemoryConfig>() ?? new MemoryConfig();
@@ -85,7 +94,7 @@ internal static class MemoryCommand
             {
                 if (memoryConfig.Embeddings.AutoDownload)
                 {
-                    Console.WriteLine($"Provisioning embedding model '{modelId}'...");
+                    output.WriteLine($"Provisioning embedding model '{modelId}'...");
                     provisioned = await provisioner.ProvisionAsync(modelId, modelDirectory);
                 }
                 else
@@ -99,12 +108,12 @@ internal static class MemoryCommand
             }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[FAIL] unable to provision embedding model '{modelId}': {ex.Message}");
+                error.WriteLine($"[FAIL] unable to provision embedding model '{modelId}': {ex.Message}");
                 return 1;
             }
         }
 
-        Console.WriteLine($"Loading embedder '{provisioned.ModelId}' ({provisioned.Dimensions} dims)...");
+        output.WriteLine($"Loading embedder '{provisioned.ModelId}' ({provisioned.Dimensions} dims)...");
         using var embedder = await OnnxMemoryEmbedder.LoadAsync(
             provisioned.ModelPath, provisioned.VocabPath, provisioned.ModelId, provisioned.Dimensions, provisioned.QueryPrefix);
 
@@ -118,11 +127,11 @@ internal static class MemoryCommand
         var candidates = await store.GetDocumentsNeedingEmbeddingAsync(embedder.ModelId, force);
         if (candidates.Count == 0)
         {
-            Console.WriteLine("Nothing to backfill: all recallable documents already have a current-model embedding.");
+            output.WriteLine("Nothing to backfill: all recallable documents already have a current-model embedding.");
             return 0;
         }
 
-        Console.WriteLine($"Embedding {candidates.Count} document(s){(force ? " (--force)" : "")}...");
+        output.WriteLine($"Embedding {candidates.Count} document(s){(force ? " (--force)" : "")}...");
 
         const int batchSize = 16;
         var embedded = 0;
@@ -142,7 +151,7 @@ internal static class MemoryCommand
             catch (Exception ex)
             {
                 failed += batch.Length;
-                Console.Error.WriteLine($"[WARN] batch at offset {offset} failed to embed: {ex.Message}");
+                error.WriteLine($"[WARN] batch at offset {offset} failed to embed: {ex.Message}");
                 continue;
             }
 
@@ -168,15 +177,15 @@ internal static class MemoryCommand
                 catch (Exception ex)
                 {
                     failed++;
-                    Console.Error.WriteLine($"[WARN] failed to store embedding for {batch[i].DocumentId}: {ex.Message}");
+                    error.WriteLine($"[WARN] failed to store embedding for {batch[i].DocumentId}: {ex.Message}");
                 }
             }
 
-            Console.WriteLine($"  ...{Math.Min(offset + batch.Length, candidates.Count)}/{candidates.Count}");
+            output.WriteLine($"  ...{Math.Min(offset + batch.Length, candidates.Count)}/{candidates.Count}");
         }
 
-        Console.WriteLine();
-        Console.WriteLine($"Done: embedded={embedded} skipped-hash-unchanged={skippedUnchanged} failed={failed}");
+        output.WriteLine();
+        output.WriteLine($"Done: embedded={embedded} skipped-hash-unchanged={skippedUnchanged} failed={failed}");
         return failed > 0 ? 1 : 0;
     }
 }

@@ -17,7 +17,7 @@ namespace Netclaw.Cli.Tests.Memory;
 /// Covers the core loop of <c>netclaw memory backfill-embeddings</c>
 /// (memory-core-redesign Slice 2, task 2.9): provisioning, embedding, and the final
 /// embedded/skipped-hash-unchanged/failed summary. Uses the internal allowlist-injectable
-/// overload of <see cref="MemoryCommand.RunAsync(string[], NetclawPaths, IConfiguration, System.Collections.Generic.IReadOnlyDictionary{string, EmbeddingModelManifestEntry})"/>
+/// overload of <see cref="MemoryCommand.RunAsync(string[], NetclawPaths, IConfiguration, System.Collections.Generic.IReadOnlyDictionary{string, EmbeddingModelManifestEntry}, TextWriter, TextWriter)"/>
 /// pointed at the tiny fixture ONNX graph — no network access.
 /// </summary>
 public sealed class MemoryCommandTests
@@ -146,22 +146,10 @@ public sealed class MemoryCommandTests
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunCapturedWithStderrAsync(
         string[] args, NetclawPaths paths, IConfiguration config)
     {
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        Console.SetOut(stdout);
-        Console.SetError(stderr);
-        try
-        {
-            var exitCode = await MemoryCommand.RunAsync(args, paths, config, FixtureAllowlist());
-            return (exitCode, stdout.ToString(), stderr.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
-        }
+        var exitCode = await MemoryCommand.RunAsync(args, paths, config, FixtureAllowlist(), stdout, stderr);
+        return (exitCode, stdout.ToString(), stderr.ToString());
     }
 
     private static NetclawPaths CreateTempPaths(bool prePlaceValidModel)

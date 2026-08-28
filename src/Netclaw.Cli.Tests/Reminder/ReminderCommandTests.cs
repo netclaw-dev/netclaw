@@ -71,21 +71,9 @@ public sealed class ReminderCommandTests
 
     private static async Task<(int ExitCode, string Stdout, string Stderr)> RunCapturedWithStderrAsync(string[] args)
     {
-        var originalOut = Console.Out;
-        var originalError = Console.Error;
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
-        Console.SetOut(stdout);
-        Console.SetError(stderr);
-        try
-        {
-            var exitCode = await ReminderCommand.RunAsync(args, daemonApi: null);
-            return (exitCode, stdout.ToString(), stderr.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-            Console.SetError(originalError);
-        }
+        var exitCode = await ReminderCommand.RunAsync(args, daemonApi: null, output: stdout, error: stderr);
+        return (exitCode, stdout.ToString(), stderr.ToString());
     }
 }

@@ -22,18 +22,22 @@ internal static class ReminderCommand
         Converters = { new JsonStringEnumConverter() }
     };
 
-    public static async Task<int> RunAsync(string[] args, DaemonApi? daemonApi)
+    public static async Task<int> RunAsync(
+        string[] args,
+        DaemonApi? daemonApi,
+        TextWriter output,
+        TextWriter error)
     {
         if (args.Length == 1)
         {
-            WriteHelp();
+            WriteHelp(output);
             return 0;
         }
 
         var subcommand = args.Length > 1 ? args[1] : "help";
         if (subcommand is "help" or "-h" or "--help")
         {
-            WriteHelp();
+            WriteHelp(output);
             return 0;
         }
 
@@ -44,18 +48,18 @@ internal static class ReminderCommand
         // --help`). Scan the full argument list, not just the subcommand slot.
         if (CliArgsParser.HasTrailingHelpToken(args, startIndex: 2))
         {
-            WriteHelp();
+            WriteHelp(output);
             return 0;
         }
 
         // validate is offline — no daemon needed
         if (subcommand is "validate")
-            return RunValidate(args);
+            return RunValidate(args, output, error);
 
         if (daemonApi is null)
         {
-            Console.Error.WriteLine($"[FAIL] reminder {subcommand}: requires a running daemon.");
-            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            error.WriteLine($"[FAIL] reminder {subcommand}: requires a running daemon.");
+            error.WriteLine("       fix: run `netclaw daemon start` and retry.");
             return 1;
         }
 
@@ -71,7 +75,7 @@ internal static class ReminderCommand
             "show" => await RunShowAsync(daemonApi, args),
             "history" => await RunHistoryAsync(daemonApi, args),
             "status" => await RunStatusAsync(daemonApi, args),
-            _ => WriteHelp()
+            _ => WriteHelp(output)
         };
     }
 
@@ -391,18 +395,18 @@ internal static class ReminderCommand
         }
     }
 
-    private static int RunValidate(string[] args)
+    private static int RunValidate(string[] args, TextWriter output, TextWriter error)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw reminder validate <file>");
+            error.WriteLine("Usage: netclaw reminder validate <file>");
             return 1;
         }
 
         var filePath = args[2];
         if (!File.Exists(filePath))
         {
-            Console.Error.WriteLine($"[FAIL] file not found: {filePath}");
+            error.WriteLine($"[FAIL] file not found: {filePath}");
             return 1;
         }
 
@@ -412,23 +416,23 @@ internal static class ReminderCommand
             var definition = JsonSerializer.Deserialize<ReminderDefinition>(json, JsonOptions);
             if (definition is null)
             {
-                Console.Error.WriteLine("[FAIL] file does not contain a reminder definition.");
+                error.WriteLine("[FAIL] file does not contain a reminder definition.");
                 return 1;
             }
 
             var validationError = ValidateDefinition(definition);
             if (validationError is not null)
             {
-                Console.Error.WriteLine($"[FAIL] {validationError}");
+                error.WriteLine($"[FAIL] {validationError}");
                 return 1;
             }
 
-            Console.WriteLine($"Reminder definition is valid: {definition.Id}");
+            output.WriteLine($"Reminder definition is valid: {definition.Id}");
             return 0;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[FAIL] invalid JSON: {ex.Message}");
+            error.WriteLine($"[FAIL] invalid JSON: {ex.Message}");
             return 1;
         }
     }
@@ -663,36 +667,36 @@ internal static class ReminderCommand
         string? LastFailureReason,
         string CompletionStatus);
 
-    private static int WriteHelp()
+    private static int WriteHelp(TextWriter output)
     {
-        Console.WriteLine("Usage: netclaw reminder <subcommand>");
-        Console.WriteLine();
-        Console.WriteLine("Subcommands:");
-        Console.WriteLine("  list                                          List all active reminders");
-        Console.WriteLine("  create <id> <type> <schedule> \"<prompt>\"      Create or update a reminder");
-        Console.WriteLine("  cancel <id>                                   Cancel a reminder (disables, keeps definition)");
-        Console.WriteLine("  delete <id>                                   Permanently delete a reminder and its history");
-        Console.WriteLine("  disable <id>                                  Disable a reminder");
-        Console.WriteLine("  enable <id>                                   Enable a reminder");
-        Console.WriteLine("  import <file> [--replace|--upsert]            Import one reminder file");
-        Console.WriteLine("  validate <file>                               Validate reminder file");
-        Console.WriteLine("  show <id>                                     Show reminder details");
-        Console.WriteLine("  history <id> [--last N]                       Show recent execution history (default: 20)");
-        Console.WriteLine("  status <id>                                   Show execution, retry, terminal, and history status");
-        Console.WriteLine();
-        Console.WriteLine("Create options:");
-        Console.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");
-        Console.WriteLine("  --delivery <kind>        Delivery kind: none, channel (default: none)");
-        Console.WriteLine("  --transport <transport>  Transport for channel delivery (e.g. 'slack')");
-        Console.WriteLine("  --address <target>       Target for channel delivery (#channel, @user, ID)");
-        Console.WriteLine("  --expires-in <duration>  Auto-disable after duration (e.g. '24h', '7d')");
-        Console.WriteLine();
-        Console.WriteLine("If a reminder with the given ID already exists, it will be updated (upsert).");
-        Console.WriteLine();
-        Console.WriteLine("Schedule types: once, interval, cron");
-        Console.WriteLine("Schedule examples: '30m', '2h', '1d', '0 */6 * * *'");
-        Console.WriteLine();
-        Console.WriteLine("Requires daemon to be running (netclaw daemon start).");
+        output.WriteLine("Usage: netclaw reminder <subcommand>");
+        output.WriteLine();
+        output.WriteLine("Subcommands:");
+        output.WriteLine("  list                                          List all active reminders");
+        output.WriteLine("  create <id> <type> <schedule> \"<prompt>\"      Create or update a reminder");
+        output.WriteLine("  cancel <id>                                   Cancel a reminder (disables, keeps definition)");
+        output.WriteLine("  delete <id>                                   Permanently delete a reminder and its history");
+        output.WriteLine("  disable <id>                                  Disable a reminder");
+        output.WriteLine("  enable <id>                                   Enable a reminder");
+        output.WriteLine("  import <file> [--replace|--upsert]            Import one reminder file");
+        output.WriteLine("  validate <file>                               Validate reminder file");
+        output.WriteLine("  show <id>                                     Show reminder details");
+        output.WriteLine("  history <id>                                  Show recent execution history (default: 20)");
+        output.WriteLine("  status <id>                                   Show execution, retry, terminal, and history status");
+        output.WriteLine();
+        output.WriteLine("Create options:");
+        output.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");
+        output.WriteLine("  --delivery <kind>        Delivery kind: none, channel (default: none)");
+        output.WriteLine("  --transport <transport>  Transport for channel delivery (e.g. 'slack')");
+        output.WriteLine("  --address <target>       Target for channel delivery (#channel, @user, ID)");
+        output.WriteLine("  --expires-in <duration>  Auto-disable after duration (e.g. '24h', '7d')");
+        output.WriteLine();
+        output.WriteLine("If a reminder with the given ID already exists, it will be updated (upsert).");
+        output.WriteLine();
+        output.WriteLine("Schedule types: once, interval, cron");
+        output.WriteLine("Schedule examples: '30m', '2h', '1d', '0 */6 * * *'");
+        output.WriteLine();
+        output.WriteLine("Requires daemon to be running (netclaw daemon start).");
         return 0;
     }
 }

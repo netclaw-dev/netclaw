@@ -34,9 +34,11 @@ internal static class WebhooksCommand
         string[] args,
         NetclawPaths paths,
         TextWriter? output = null,
-        DaemonApi? daemonApi = null)
+        DaemonApi? daemonApi = null,
+        TextWriter? error = null)
     {
         output ??= Console.Out;
+        error ??= Console.Error;
         var subcommand = args.Length > 1 ? args[1] : "list";
 
         if (subcommand is "help" or "-h" or "--help")
@@ -56,8 +58,8 @@ internal static class WebhooksCommand
         {
             "list" => RunList(args, store, paths, output),
             "show" => RunShow(args, store, paths, output),
-            "set" => await RunSetAsync(args, store, paths, output, daemon),
-            "delete" => await RunDeleteAsync(args, output, daemon),
+            "set" => await RunSetAsync(args, store, paths, output, error, daemon),
+            "delete" => await RunDeleteAsync(args, output, error, daemon),
             "validate" => RunValidate(args, paths, output),
             _ => WriteHelp(output)
         };
@@ -297,6 +299,7 @@ internal static class WebhooksCommand
         WebhookRouteStore store,
         NetclawPaths paths,
         TextWriter output,
+        TextWriter error,
         WebhookRouteDaemonClient daemon)
     {
         if (args.Length < 3 || HasFlag(args, "--help") || HasFlag(args, "-h"))
@@ -577,14 +580,14 @@ internal static class WebhooksCommand
         var available = await daemon.EnsureAvailableAsync(CancellationToken.None);
         if (!available.Success)
         {
-            Console.Error.WriteLine($"[FAIL] {available.Error}");
+            error.WriteLine($"[FAIL] {available.Error}");
             return 1;
         }
 
         var saved = await daemon.UpsertAsync(routeName, BuildPatch(existing is null), CancellationToken.None);
         if (!saved.Success)
         {
-            Console.Error.WriteLine($"[FAIL] {saved.Error}");
+            error.WriteLine($"[FAIL] {saved.Error}");
             return 1;
         }
 
@@ -649,11 +652,12 @@ internal static class WebhooksCommand
     private static async Task<int> RunDeleteAsync(
         string[] args,
         TextWriter output,
+        TextWriter error,
         WebhookRouteDaemonClient daemon)
     {
         if (args.Length < 3)
         {
-            Console.Error.WriteLine("Usage: netclaw webhooks delete <route> [--force]");
+            error.WriteLine("Usage: netclaw webhooks delete <route> [--force]");
             return 1;
         }
 
@@ -676,7 +680,7 @@ internal static class WebhooksCommand
         var available = await daemon.EnsureAvailableAsync(CancellationToken.None);
         if (!available.Success)
         {
-            Console.Error.WriteLine($"[FAIL] {available.Error}");
+            error.WriteLine($"[FAIL] {available.Error}");
             return 1;
         }
 
@@ -685,13 +689,13 @@ internal static class WebhooksCommand
         var removed = await daemon.DeleteAsync(routeName, CancellationToken.None);
         if (!removed.Success && !removed.NotFound)
         {
-            Console.Error.WriteLine($"[FAIL] {removed.Error}");
+            error.WriteLine($"[FAIL] {removed.Error}");
             return 1;
         }
 
         if (!removed.Success)
         {
-            Console.Error.WriteLine($"[FAIL] Webhook route '{routeName}' not found.");
+            error.WriteLine($"[FAIL] Webhook route '{routeName}' not found.");
             return 1;
         }
 

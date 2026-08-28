@@ -17,12 +17,7 @@ namespace Netclaw.Cli.Tests.Webhooks;
 /// daemon-only: each test names the answer and asserts the observable effect —
 /// which HTTP call the command made, the exit code, and that no route file
 /// changed on any path.
-/// <para>
-/// The failure tests read <c>Console.Error</c>, so the class joins the console
-/// redirection collection.
-/// </para>
 /// </summary>
-[Collection(ConsoleRedirectionCollection.Name)]
 public sealed class WebhooksCommandModeSelectionTests : IDisposable
 {
     private const string RouteName = "mode-route";
@@ -113,10 +108,8 @@ public sealed class WebhooksCommandModeSelectionTests : IDisposable
         var stdout = new StringWriter();
         var stderr = new StringWriter();
 
-        var result = await RunWithStderrAsync(
-            stderr,
-            () => WebhooksCommand.RunAsync(
-                ["webhooks", "delete", RouteName, "--force"], _paths, stdout, daemon.Api));
+        var result = await WebhooksCommand.RunAsync(
+            ["webhooks", "delete", RouteName, "--force"], _paths, stdout, daemon.Api, stderr);
 
         Assert.Equal(1, result);
         Assert.True(File.Exists(RouteFilePath));
@@ -192,39 +185,18 @@ public sealed class WebhooksCommandModeSelectionTests : IDisposable
         Assert.True(File.Exists(RouteFilePath));
     }
 
-    private Task<int> RunSetAsync(TextWriter stdout, FakeWebhookDaemon daemon, TextWriter stderr)
-        => RunWithStderrAsync(stderr, () => RunSetAsync(stdout, daemon));
-
-    private async Task<int> RunSetAsync(TextWriter stdout, FakeWebhookDaemon daemon)
+    private async Task<int> RunSetAsync(TextWriter stdout, FakeWebhookDaemon daemon, TextWriter? stderr = null)
     {
         // --secret-env keeps the shell-history warning out of the command output.
         Environment.SetEnvironmentVariable("NETCLAW_TEST_WEBHOOK_SECRET", "test-secret-value");
         try
         {
-            return await WebhooksCommand.RunAsync(SetArguments(), _paths, stdout, daemon.Api);
+            return await WebhooksCommand.RunAsync(
+                SetArguments(), _paths, stdout, daemon.Api, stderr ?? TextWriter.Null);
         }
         finally
         {
             Environment.SetEnvironmentVariable("NETCLAW_TEST_WEBHOOK_SECRET", null);
-        }
-    }
-
-    /// <summary>
-    /// Captures the command's stderr. The command writes failures to
-    /// <see cref="Console.Error"/>, which is process-wide, so only the tests that
-    /// assert on a message pay the cost of redirecting it.
-    /// </summary>
-    private static async Task<int> RunWithStderrAsync(TextWriter stderr, Func<Task<int>> run)
-    {
-        var original = Console.Error;
-        Console.SetError(stderr);
-        try
-        {
-            return await run();
-        }
-        finally
-        {
-            Console.SetError(original);
         }
     }
 

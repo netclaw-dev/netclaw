@@ -17,7 +17,6 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
-[Collection(ConsoleRedirectionCollection.Name)]
 public sealed class UpdateCommandTests : IDisposable
 {
     /// <summary>
@@ -210,21 +209,12 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
 
         using var stdout = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(stdout);
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update"], _paths, true, UpdateChannel.Stable, TextReader.Null, stdout, TextWriter.Null);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(["update"], _paths, selfUpdateDisabled: true);
-
-            Assert.Equal(1, exitCode);
-            Assert.Contains("Self-update is disabled", stdout.ToString());
-            Assert.Contains("Pull a newer container image to upgrade.", stdout.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Self-update is disabled", stdout.ToString());
+        Assert.Contains("Pull a newer container image to upgrade.", stdout.ToString());
     }
 
     [Theory]
@@ -236,27 +226,15 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
 
         using var stdout = new StringWriter();
-        var originalOut = Console.Out;
-        var originalIn = Console.In;
-        Console.SetOut(stdout);
+        using var stdin = new StringReader("n\n");
         // An update is available; decline the install prompt so this exercises
         // only channel switching + persistence, not the download path.
-        Console.SetIn(new StringReader("n\n"));
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update", "--channel", arg], _paths, false, UpdateChannel.Stable, stdin, stdout, TextWriter.Null);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(
-                ["update", "--channel", arg], _paths);
-
-            Assert.Equal(0, exitCode);
-            Assert.Equal(expectedWire, ReadPersistedChannel());
-            Assert.Contains($"Update channel set to '{expectedWire}'", stdout.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-            Console.SetIn(originalIn);
-        }
+        Assert.Equal(0, exitCode);
+        Assert.Equal(expectedWire, ReadPersistedChannel());
+        Assert.Contains($"Update channel set to '{expectedWire}'", stdout.ToString());
     }
 
     [Fact]
@@ -266,44 +244,37 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
 
         using var stdout = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(stdout);
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update", "--check", "--channel", "beta"],
+            _paths,
+            false,
+            UpdateChannel.Stable,
+            TextReader.Null,
+            stdout,
+            TextWriter.Null);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(
-                ["update", "--check", "--channel", "beta"], _paths);
-
-            Assert.Equal(0, exitCode);
-            // --check is read-only: the channel is previewed for this run, not written to disk.
-            Assert.False(File.Exists(_paths.NetclawConfigPath));
-            Assert.Contains("Checking 'beta' channel", stdout.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        Assert.Equal(0, exitCode);
+        // --check is read-only: the channel is previewed for this run, not written to disk.
+        Assert.False(File.Exists(_paths.NetclawConfigPath));
+        Assert.Contains("Checking 'beta' channel", stdout.ToString());
     }
 
     [Fact]
     public async Task RunAsync_RejectsUnknownChannel()
     {
         using var stderr = new StringWriter();
-        var originalErr = Console.Error;
-        Console.SetError(stderr);
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update", "--channel", "nightly"],
+            _paths,
+            false,
+            UpdateChannel.Stable,
+            TextReader.Null,
+            TextWriter.Null,
+            stderr);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(["update", "--channel", "nightly"], _paths);
-
-            Assert.Equal(1, exitCode);
-            Assert.Contains("Unknown channel", stderr.ToString());
-            Assert.False(File.Exists(_paths.NetclawConfigPath));
-        }
-        finally
-        {
-            Console.SetError(originalErr);
-        }
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unknown channel", stderr.ToString());
+        Assert.False(File.Exists(_paths.NetclawConfigPath));
     }
 
     private string? ReadPersistedChannel()

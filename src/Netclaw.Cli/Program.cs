@@ -821,13 +821,17 @@ static async Task RunAsync(string[] args)
         var reminderSub = args.Length > 1 ? args[1] : "help";
         if (reminderSub is "help" or "-h" or "--help" or "validate" || args.Length == 1)
         {
-            Environment.ExitCode = await ReminderCommand.RunAsync(args, daemonApi: null);
+            Environment.ExitCode = await ReminderCommand.RunAsync(args, null, Console.Out, Console.Error);
         }
         else
         {
             var builder = CreateQuietHostBuilder(args);
             using var host = builder.Build();
-            Environment.ExitCode = await ReminderCommand.RunAsync(args, host.Services.GetRequiredService<DaemonApi>());
+            Environment.ExitCode = await ReminderCommand.RunAsync(
+                args,
+                host.Services.GetRequiredService<DaemonApi>(),
+                Console.Out,
+                Console.Error);
         }
         return;
     }
@@ -877,7 +881,7 @@ static async Task RunAsync(string[] args)
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
         // All memory subcommands are offline — direct SQLite/model-file access, no daemon needed
-        Environment.ExitCode = await MemoryCommand.RunAsync(args, paths, BuildCliConfig());
+        Environment.ExitCode = await MemoryCommand.RunAsync(args, paths, BuildCliConfig(), Console.Out, Console.Error);
         return;
     }
 
@@ -902,8 +906,9 @@ static async Task RunAsync(string[] args)
                 Environment.ExitCode = await WebhooksCommand.RunAsync(
                     args,
                     webhooksPaths,
-                    output: null,
-                    webhooksHost.Services.GetRequiredService<DaemonApi>());
+                    Console.Out,
+                    webhooksHost.Services.GetRequiredService<DaemonApi>(),
+                    Console.Error);
             }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
             {
@@ -917,7 +922,7 @@ static async Task RunAsync(string[] args)
 
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
-        Environment.ExitCode = await WebhooksCommand.RunAsync(args, paths);
+        Environment.ExitCode = await WebhooksCommand.RunAsync(args, paths, Console.Out, null, Console.Error);
         return;
     }
 
@@ -964,7 +969,14 @@ static async Task RunAsync(string[] args)
         using var host = builder.Build();
         var paths = host.Services.GetRequiredService<NetclawPaths>();
         var daemonConfig = host.Services.GetRequiredService<DaemonConfig>();
-        Environment.ExitCode = await UpdateCommand.RunAsync(args, paths, daemonConfig.DisableSelfUpdate, daemonConfig.UpdateChannel);
+        Environment.ExitCode = await UpdateCommand.RunAsync(
+            args,
+            paths,
+            daemonConfig.DisableSelfUpdate,
+            daemonConfig.UpdateChannel,
+            Console.In,
+            Console.Out,
+            Console.Error);
         return;
     }
 
