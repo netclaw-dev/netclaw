@@ -7,22 +7,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../scripts/smoke/lib/common.sh
 . "${SCRIPT_DIR}/../../../scripts/smoke/lib/common.sh"
 
-ALT_MODEL="${SMOKE_OLLAMA_ALT_MODEL:-all-minilm:latest}"
+ALT_MODEL="$SMOKE_MODEL"
 
-log "Testing provider add (local-ollama)..."
-nc provider add local-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
+log "Testing provider add (local-smoke)..."
+nc provider add local-smoke openai-compatible --endpoint "$SMOKE_LLM_ENDPOINT"
 
 log "Testing provider list..."
 provider_list="$(nc provider list 2>/dev/null || true)"
 echo "$provider_list"
-if [[ "$provider_list" == *"local-ollama"* ]]; then
-  pass "provider list: includes local-ollama"
+if [[ "$provider_list" == *"local-smoke"* ]]; then
+  pass "provider list: includes local-smoke"
 else
-  fail "provider list: expected local-ollama"
+  fail "provider list: expected local-smoke"
 fi
 
 log "Testing model set (main to $SMOKE_MODEL)..."
-nc model set main local-ollama "$SMOKE_MODEL"
+nc model set main local-smoke "$SMOKE_MODEL"
 
 log "Testing model list..."
 model_list="$(nc model list 2>/dev/null || true)"
@@ -34,7 +34,7 @@ else
 fi
 
 log "Testing model discover..."
-discover_output="$(nc model discover local-ollama 2>/dev/null || true)"
+discover_output="$(nc model discover local-smoke 2>/dev/null || true)"
 echo "$discover_output"
 if [[ "$discover_output" == *"$SMOKE_MODEL"* ]]; then
   pass "model discover: includes $SMOKE_MODEL"
@@ -43,7 +43,7 @@ else
 fi
 
 log "Testing model switch to alternate model ($ALT_MODEL)..."
-nc model set main local-ollama "$ALT_MODEL"
+nc model set main local-smoke "$ALT_MODEL"
 switched_list="$(nc model list 2>/dev/null || true)"
 echo "$switched_list"
 if [[ "$switched_list" == *"$ALT_MODEL"* ]]; then
@@ -53,7 +53,7 @@ else
 fi
 
 log "Testing model switch back to original ($SMOKE_MODEL)..."
-nc model set main local-ollama "$SMOKE_MODEL"
+nc model set main local-smoke "$SMOKE_MODEL"
 restored_list="$(nc model list 2>/dev/null || true)"
 echo "$restored_list"
 if [[ "$restored_list" == *"$SMOKE_MODEL"* ]]; then
@@ -63,27 +63,27 @@ else
 fi
 
 log "Testing provider add (second provider)..."
-nc provider add test-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
+nc provider add test-smoke openai-compatible --endpoint "$SMOKE_LLM_ENDPOINT"
 added_list="$(nc provider list 2>/dev/null || true)"
 echo "$added_list"
-if [[ "$added_list" == *"test-ollama"* ]]; then
-  pass "provider add: list includes test-ollama"
+if [[ "$added_list" == *"test-smoke"* ]]; then
+  pass "provider add: list includes test-smoke"
 else
-  fail "provider add: expected test-ollama"
+  fail "provider add: expected test-smoke"
 fi
 
 log "Testing provider remove..."
-nc provider remove test-ollama
+nc provider remove test-smoke
 removed_list="$(nc provider list 2>/dev/null || true)"
 echo "$removed_list"
-if [[ "$removed_list" == *"test-ollama"* ]]; then
-  fail "provider remove: test-ollama still present"
+if [[ "$removed_list" == *"test-smoke"* ]]; then
+  fail "provider remove: test-smoke still present"
 else
-  pass "provider remove: test-ollama removed"
+  pass "provider remove: test-smoke removed"
 fi
 
 log "Testing model set fallback then clear..."
-nc model set fallback local-ollama "$ALT_MODEL"
+nc model set fallback local-smoke "$ALT_MODEL"
 nc model clear fallback
 cleared_list="$(nc model list 2>/dev/null || true)"
 echo "$cleared_list"
@@ -101,7 +101,7 @@ cat >"$config_path" <<JSON
   "Providers": {
     "local-ollama": {
       "Type": "ollama",
-      "Endpoint": "${OLLAMA_ENDPOINT}"
+      "Endpoint": "${SMOKE_LLM_ENDPOINT}"
     }
   },
   "Models": {
@@ -142,7 +142,7 @@ cat >"$config_path" <<JSON
   "Providers": {
     "local-ollama": {
       "Type": "ollama",
-      "Endpoint": "${OLLAMA_ENDPOINT}"
+      "Endpoint": "${SMOKE_LLM_ENDPOINT}"
     }
   },
   "Models": {

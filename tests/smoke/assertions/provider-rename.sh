@@ -24,8 +24,8 @@ config_json="$(read_config_json)"
 
 assert_field '(.Providers | has("seed-ollama"))'      'false'                    "$config_json" || :
 assert_field '(.Providers | has("renamed-ollama"))'   'true'                     "$config_json" || :
-assert_field '.Providers["renamed-ollama"].Type'      'ollama'                   "$config_json" || :
-assert_field '.Providers["renamed-ollama"].Endpoint'  'http://localhost:11434'   "$config_json" || :
+assert_field '.Providers["renamed-ollama"].Type'      'openai-compatible'        "$config_json" || :
+assert_field '.Providers["renamed-ollama"].Endpoint'  "$SMOKE_LLM_ENDPOINT"     "$config_json" || :
 
 echo "provider-rename: cross-checking 'netclaw provider list'..."
 list_output="$("$NETCLAW_SMOKE_CLI" provider list 2>/dev/null | tr -d '\r')"
@@ -35,7 +35,7 @@ if echo "$list_output" | grep -qE '^seed-ollama[[:space:]]'; then
 else
   echo "  ok  'seed-ollama' absent from provider list"
 fi
-if ! echo "$list_output" | grep -qE '^renamed-ollama[[:space:]]+Ollama'; then
+if ! echo "$list_output" | grep -qE '^renamed-ollama[[:space:]]+OpenAI-compatible'; then
   echo "FAIL: 'renamed-ollama' missing from provider list." >&2
   printf -- '--- provider list ---\n%s\n' "$list_output" >&2
   assert_fail=1

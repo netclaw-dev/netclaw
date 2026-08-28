@@ -30,12 +30,12 @@ if ! printf '%s' "$config_json" | jq empty >/dev/null 2>&1; then
 fi
 
 echo "provider-add: checking 'smoke-add-ollama' in config..."
-assert_field '.Providers["smoke-add-ollama"].Type'     'ollama'                 "$config_json" || :
-assert_field '.Providers["smoke-add-ollama"].Endpoint' 'http://localhost:11434' "$config_json" || :
+assert_field '.Providers["smoke-add-ollama"].Type'     'openai-compatible'     "$config_json" || :
+assert_field '.Providers["smoke-add-ollama"].Endpoint' "$SMOKE_LLM_ENDPOINT"  "$config_json" || :
 
 echo "provider-add: cross-checking 'netclaw provider list'..."
 list_output="$("$NETCLAW_SMOKE_CLI" provider list 2>/dev/null | tr -d '\r')"
-if ! echo "$list_output" | grep -qE '^smoke-add-ollama[[:space:]]+Ollama'; then
+if ! echo "$list_output" | grep -qE '^smoke-add-ollama[[:space:]]+OpenAI-compatible'; then
   echo "FAIL: 'smoke-add-ollama' row missing or malformed in 'provider list' output." >&2
   printf -- '--- provider list ---\n%s\n' "$list_output" >&2
   assert_fail=1

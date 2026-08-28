@@ -8,13 +8,13 @@ Enter
 Wait+Screen@10s /Choose your LLM provider:/
 Wait+Screen@5s /8\. Venice\.ai/
 
-# Ollama is the fourth provider.
-Down 3
+# OpenAI-compatible is the sixth provider.
+Down 5
 Enter
 Wait+Screen@10s /endpoint:/
 Right 32
 Backspace 32
-Type "http://localhost:11434"
+Type "__SMOKE_LLM_ENDPOINT__"
 Enter
 
 Wait+Screen@45s /Select a model/

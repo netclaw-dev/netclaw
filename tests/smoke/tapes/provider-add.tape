@@ -32,8 +32,8 @@ Sleep 300ms
 
 # Provider type list (alphabetical by TypeKey): anthropic, deepseek,
 # github-copilot, ollama, openai, openai-compatible, openrouter, veniceai. With
-# Anthropic highlighted by default, three Downs land on Ollama.
-Down 3
+# Anthropic highlighted by default, five Downs land on OpenAI-compatible.
+Down 5
 Enter
 
 # ─── Step 1: Name your provider (NEW in #997) ────────────────────────
@@ -52,12 +52,11 @@ Sleep 300ms
 # Default is "http://localhost:11434" (22 chars).
 Right 32
 Backspace 32
-Type "http://localhost:11434"
+Type "__SMOKE_LLM_ENDPOINT__"
 Enter
 
 # ─── Step 3: Probe + persisted provider confirmation ─────────────────
-# Probe is async; with qwen2:0.5b + all-minilm baked into native
-# ollama, this resolves in seconds. The provider is persisted before
+# The deterministic provider probe resolves without model loading. The provider persists before
 # the success screen renders, so wait directly on the persisted-provider
 # confirmation (skips the transient "Validating..." frame).
 Wait+Screen@45s /Provider 'smoke-add-ollama' added/

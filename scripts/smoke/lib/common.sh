@@ -232,10 +232,10 @@ stop_daemon() {
 
 # ── Scenario helpers ─────────────────────────────────────────────────────────
 
-# Smoke model + Ollama endpoint defaults — shared by every scenario so
-# they cannot drift apart.
-SMOKE_MODEL="${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}"
-OLLAMA_ENDPOINT="${SMOKE_OLLAMA_ENDPOINT:-http://localhost:11434}"
+# Smoke model + OpenAI-compatible endpoint — set by run-smoke.sh.
+: "${SMOKE_LLM_MODEL:?SMOKE_LLM_MODEL must be set by run-smoke.sh}"
+: "${SMOKE_LLM_ENDPOINT:?SMOKE_LLM_ENDPOINT must be set by run-smoke.sh}"
+SMOKE_MODEL="$SMOKE_LLM_MODEL"
 
 # nc — run the netclaw CLI under the per-step timeout.
 nc() { run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" "$@"; }
@@ -246,8 +246,8 @@ die() { fail "$1"; summarize || true; exit 1; }
 # seed_provider_model — write a minimal provider + main-model config so a
 # fresh NETCLAW_HOME has a usable provider before the daemon starts.
 seed_provider_model() {
-  nc provider add local-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
-  nc model set main local-ollama "$SMOKE_MODEL"
+  nc provider add local-smoke openai-compatible --endpoint "$SMOKE_LLM_ENDPOINT"
+  nc model set main local-smoke "$SMOKE_MODEL"
 }
 
 # seed_and_start_daemon — the common scenario preamble: install the daemon

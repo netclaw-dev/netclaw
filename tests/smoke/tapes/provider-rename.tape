@@ -17,7 +17,7 @@ Output "/tmp/tape-provider-rename.gif"
 # ─── Seed an existing provider ───────────────────────────────────────
 # Non-interactive CLI add — bypasses the TUI entirely and writes
 # straight to netclaw.json.
-Type "netclaw provider add seed-ollama ollama --endpoint http://localhost:11434"
+Type "netclaw provider add seed-ollama openai-compatible --endpoint __SMOKE_LLM_ENDPOINT__"
 Enter
 Wait+Screen@10s /Added provider 'seed-ollama'|TAPE\$/
 
