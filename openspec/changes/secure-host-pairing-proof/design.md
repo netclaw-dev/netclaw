@@ -94,13 +94,17 @@ It does not use paired-client endpoint state.
 A dedicated client sends no device token and bypasses HTTP proxies.
 The client also rejects redirects.
 
+The command keeps two endpoint values.
+The direct local-control endpoint receives the proof.
+The advertised endpoint appears only in the remote pairing instruction.
+
 This rule keeps the proof on the host authority boundary.
 A remote client endpoint could otherwise receive a valid proof and a device token.
 
 Examples:
 
 - `Daemon.Host=0.0.0.0` maps the host request to `http://127.0.0.1:<port>`.
-- A saved `https://remote.example` client endpoint does not receive the proof.
+- A saved `https://remote.example` endpoint appears in the instruction but receives no proof.
 - A `307` redirect does not receive a second request.
 
 ### Treat key-ring access as host authority

@@ -24,6 +24,8 @@ It omits HTTP error mapping and the later remote pairing exchange.
 | Decision or data | Owner | Lifetime |
 |---|---|---|
 | Proof creation | Host CLI | Call-local |
+| Direct local-control endpoint | Host CLI from daemon configuration | Call-local |
+| Advertised remote pairing endpoint | Host CLI from operator client state | Durable input |
 | Proof validation | Local-control endpoint | Call-local |
 | Accepted nonces | Proof validator | Process-local |
 | Pending pairing code | Pairing code service | Process-local |
@@ -58,6 +60,8 @@ A device token, bootstrap token, loopback address, or proxy address SHALL NOT re
 
 The host CLI SHALL derive the local-control endpoint from the daemon configuration in the same Netclaw home.
 The host CLI SHALL NOT use paired-client endpoint state for this operation.
+The host CLI MAY display the paired-client endpoint as the remote exchange instruction.
+The CLI SHALL keep the request endpoint and advertised endpoint as separate values.
 The host CLI SHALL NOT send the proof through an HTTP proxy or an automatic redirect.
 The host CLI SHALL NOT attach a device or bootstrap bearer token to the proof request.
 
@@ -68,6 +72,7 @@ The host CLI SHALL NOT attach a device or bootstrap bearer token to the proof re
 - **WHEN** the operator runs `netclaw daemon pair`
 - **THEN** the CLI posts the proof directly to `http://127.0.0.1:5199`
 - **AND** the CLI sends no request to `https://remote.example`
+- **AND** the CLI can display `netclaw pair https://remote.example` for the remote device
 
 #### Scenario: Redirect cannot export the proof
 
