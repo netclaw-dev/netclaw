@@ -135,6 +135,8 @@ cat "$preamble" "$body" | sed \
   -e "s|__NETCLAW_DAEMON__|${NETCLAW_SMOKE_DAEMON}|g" \
   -e "s|__TAPE_NAME__|${TAPE_NAME}|g" \
   -e "s|__NETCLAW_SMOKE_MCP_SERVER__|${NETCLAW_SMOKE_MCP_SERVER:-}|g" \
+  -e "s|__SMOKE_LLM_ENDPOINT__|${SMOKE_LLM_ENDPOINT:-}|g" \
+  -e "s|__SMOKE_LLM_MODEL__|${SMOKE_LLM_MODEL:-}|g" \
   > "$combined"
 
 echo "==> Running native tape: ${TAPE_NAME} (timeout=${TAPE_TIMEOUT_S}s)"

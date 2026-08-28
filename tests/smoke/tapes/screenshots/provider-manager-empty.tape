@@ -7,7 +7,7 @@ Type "netclaw provider"
 Enter
 
 # The first list has no state transition before the capture.
-Wait+Screen@10s /Ollama/
+Wait+Screen@10s /OpenAI-compatible/
 Wait+Screen@5s /Venice/
 Wait+Screen@5s /\[Delete\] Remove/
 Sleep 250ms

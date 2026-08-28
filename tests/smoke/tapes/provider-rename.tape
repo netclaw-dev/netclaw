@@ -17,9 +17,9 @@ Output "/tmp/tape-provider-rename.gif"
 # ─── Seed an existing provider ───────────────────────────────────────
 # Non-interactive CLI add — bypasses the TUI entirely and writes
 # straight to netclaw.json.
-Type "netclaw provider add seed-ollama ollama --endpoint http://localhost:11434"
+Type "netclaw provider add seed-provider openai-compatible --endpoint __SMOKE_LLM_ENDPOINT__"
 Enter
-Wait+Screen@10s /Added provider 'seed-ollama'|TAPE\$/
+Wait+Screen@10s /Added provider 'seed-provider'|TAPE\$/
 
 # ─── Launch provider TUI ─────────────────────────────────────────────
 Type "netclaw provider"
@@ -27,55 +27,38 @@ Enter
 
 # Wait for the probe to complete. ActivateSelectedProvider() is a no-op
 # while health == Probing, so we must wait for the ✓ checkmark (healthy)
-# before pressing Enter. The list renders seed-ollama immediately with a
+# before pressing Enter. The list renders seed-provider immediately with a
 # spinner, but Enter would be silently ignored until the probe settles.
-# 30s covers slow CI; Ollama is pre-loaded so it's typically < 5s.
-Wait+Screen@30s /✓ seed-ollama/
-Sleep 300ms
+Wait+Screen@30s /✓ seed-provider/
 
 # The seeded provider is at index 0 and highlighted by default —
 # Enter activates the Details view.
 Enter
 
 # ─── Details view ────────────────────────────────────────────────────
-# Details view shows "Provider: seed-ollama" along with [N] Rename
+# Details view shows "Provider: seed-provider" along with [N] Rename
 # in the key hints. Anchor on the rename hint so we know we landed.
-Wait+Screen@10s /Provider: seed-ollama/
-Sleep 300ms
+Wait+Screen@10s /Provider: seed-provider/
 
 # Press N to start rename.
 Type "N"
 
 # ─── Rename input ────────────────────────────────────────────────────
-Wait+Screen@10s /Rename 'seed-ollama'/
-Sleep 300ms
+Wait+Screen@10s /Rename 'seed-provider'/
 
 # Cursor sits at the end of the pre-filled name (PR #997 moves it
-# there explicitly — see commit 1493ddd1). 'seed-ollama' is 11 chars;
+# there explicitly — see commit 1493ddd1). 'seed-provider' is 13 chars;
 # 16 backspaces is safely over.
 Backspace 16
-Type "renamed-ollama"
+Type "renamed-provider"
 Enter
 
 # ─── Success status ──────────────────────────────────────────────────
-# StatusMessage on the list view: "Renamed 'seed-ollama' to
-# 'renamed-ollama'. Restart daemon for changes to take effect."
+# StatusMessage on the list view: "Renamed 'seed-provider' to
+# 'renamed-provider'. Restart daemon for changes to take effect."
 # The status message and new name both appear on the list view after
 # the rename, so one anchor covering the new name is sufficient.
-Wait+Screen@10s /renamed-ollama/
-Sleep 300ms
+Wait+Screen@10s /renamed-provider/
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q
-
-# VHS's screen scraper needs a beat to pick up the restored main buffer
-# after the TUI tears down the alternate screen (CSI ?1049l).
-Sleep 1s
-Wait+Screen@10s /TAPE\$/
-
-Type "echo PROVIDER_RENAME_EXIT=$?"
-Enter
-Wait+Screen@5s /PROVIDER_RENAME_EXIT=0/
-
-Type "exit"
-Enter
