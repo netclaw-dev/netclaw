@@ -13,10 +13,10 @@ This delta uses terms from the
 ### Requirement: Subagent context announces managed session paths
 
 Before the first model call, the system SHALL include the exact bound
-`session_dir`, `temp_dir`, and `artifact_dir` in Personal and Team subagent
-working context. It SHALL state the distinct purpose of each path. Public
-subagent context SHALL NOT include these private paths. The guidance SHALL
-preserve an explicitly required platform temporary path.
+`session_dir`, `temp_dir`, `artifact_dir`, and `log_path` in Personal and Team
+subagent working context. It SHALL state the distinct purpose of each path.
+Public subagent context SHALL retain its existing private-path policy. The
+guidance SHALL preserve an explicitly required platform temporary path.
 
 The context SHALL derive from the child's existing bound run scope. It SHALL
 NOT add a public protocol field, persist a path as agent identity, or change
@@ -36,6 +36,7 @@ runtime prompts and tool schemas SHALL NOT call either path â€œsession scratch.â
 - **WHEN** Netclaw assembles its initial model context
 - **THEN** the context contains its exact session, temporary, and artifact
   directories
+- **AND** it contains the exact log path for that child run
 - **AND** it describes `temp_dir` as disposable working storage
 - **AND** it describes `artifact_dir` as the location for outputs that the
   parent or user must keep
@@ -46,6 +47,7 @@ runtime prompts and tool schemas SHALL NOT call either path â€œsession scratch.â
 - **GIVEN** a Team child has a valid bound run scope
 - **WHEN** Netclaw assembles its initial model context
 - **THEN** the context contains that run's exact managed paths
+- **AND** it identifies the current run's `log_path`
 - **AND** existing Team tool and shell policy remains unchanged
 
 #### Scenario: Counterexample - Public child cannot receive private paths

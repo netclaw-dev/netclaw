@@ -422,11 +422,11 @@ Current runtime text and identifiers must use the specific term.
 
 A raw session log is the diagnostic file for one main session or subagent run.
 New-layout raw logs are physically inside the session storage envelope but are
-outside the session directory and ordinary workspace-file safe roots.
+outside the session directory.
 
-This separation is an application authority boundary, not an operating-system
-process sandbox. An opaque log reference does not grant raw-file access. It can
-authorize one bounded and redacted projection through its owning tool.
+The owning agent can read, list, and search its same-session logs through the
+existing file tools. This read scope does not grant file-write, file-edit, or
+shell authority. Another session cannot use this scope.
 
 ### Managed temporary directory
 
@@ -448,7 +448,8 @@ directory. Netclaw does not apply a retention policy to either directory yet.
 A child run directory is the area below
 `<session-envelope>/subagents/<run-id>` for one subagent run. Its artifact,
 temporary, and raw-log areas share the same opaque run identifier. The parent
-owns the lineage; that ownership does not grant unrestricted raw-log access.
+owns the lineage and can read the child's log through the existing file tools.
+This ownership does not grant access to a different session.
 
 ### Session-owned directory
 

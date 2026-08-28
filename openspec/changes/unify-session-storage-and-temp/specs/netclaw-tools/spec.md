@@ -6,17 +6,16 @@ This delta uses terms from the
 ### Requirement: Spawned child references are machine-actionable
 
 A successful `spawn_agent` result SHALL return the child run identifier, an
-opaque reference for the child's activity log, and the exact child artifact
-directory. The current parent SHALL receive read and attach authority for that
-artifact directory through child ownership. The authority SHALL NOT include a
-sibling raw-log or temporary area. The result SHALL NOT disclose the raw log
-path. A failed spawn SHALL NOT return locations that appear usable.
+exact child log path, and the exact child artifact directory. The current
+parent SHALL receive read authority for the child log and read and attach
+authority for the artifact directory through child ownership. A failed spawn
+SHALL NOT return locations that appear usable.
 
 The result shape SHALL be equivalent to:
 
 ```text
 run_id: "run-7"
-activity_log_ref: "child-log:opaque-value"
+log_path: "/srv/netclaw/sessions/s-42/subagents/run-7/logs/session.log"
 artifact_dir: "/srv/netclaw/sessions/s-42/subagents/run-7/artifacts"
 ```
 
@@ -24,9 +23,8 @@ artifact_dir: "/srv/netclaw/sessions/s-42/subagents/run-7/artifacts"
 
 - **WHEN** a parent successfully starts a child run
 - **THEN** the tool result contains the child run identifier
-- **AND** it contains an opaque activity-log reference and exact artifact
-  directory
-- **AND** it does not contain a raw-log path
+- **AND** it contains the exact child log path and artifact directory
+- **AND** both paths belong to that parent session
 
 #### Scenario: Example - parent reads a child artifact with an existing tool
 
@@ -36,66 +34,72 @@ artifact_dir: "/srv/netclaw/sessions/s-42/subagents/run-7/artifacts"
 - **THEN** child ownership can satisfy the artifact-area authorization check
 - **AND** no new artifact-reference reader is required
 
-#### Scenario: Counterexample - artifact directory does not expose siblings
+#### Scenario: Example - parent reads child logs with existing tools
 
-- **GIVEN** the parent knows a child artifact directory
-- **WHEN** it requests a sibling file below the child's `logs/` or `tmp/` area
-- **THEN** the artifact-area authority does not authorize that request
-- **AND** normal policy decides the call
+- **GIVEN** a successful spawn returned the exact child log path
+- **WHEN** the owning parent uses `file_read`, `file_search`, or `file_list`
+- **THEN** the existing tool performs its normal bounded operation
+- **AND** no special child-log tool is required
+
+#### Scenario: Counterexample - log read scope does not grant writes
+
+- **GIVEN** the parent can read a same-session child log
+- **WHEN** it calls `file_write` or `file_edit` for that log
+- **THEN** the log-read scope does not authorize the mutation
+- **AND** normal write policy decides the call
 
 #### Scenario: Counterexample - failed spawn has no usable child references
 
 - **WHEN** the child run is not created
 - **THEN** the tool result reports failure
-- **AND** it contains no active log reference or artifact directory
+- **AND** it contains no child log path or artifact directory
 
-### Requirement: Parent can read bounded child activity without shell
+### Requirement: Existing file tools can inspect same-session logs
 
-The deferred `subagent_log_read` tool SHALL accept only a child activity-log
-reference owned by the current parent. It SHALL return a bounded, redacted
-activity projection with a continuation cursor. The request schema SHALL
-include an optional literal-query field. The tool SHALL NOT return system
-prompts, credentials, secrets, raw
-approval payloads, or unredacted tool arguments and results.
-The reference SHALL remain valid after parent actor recovery while the child
-raw-log lineage exists.
+The existing `file_read`, `file_search`, and `file_list` tools SHALL accept log
+paths from the current session envelope when their audience policy permits the
+tool. Each tool SHALL keep its existing output bounds, pagination, and query
+contract. This capability SHALL NOT add a new tool or a log-specific query
+language.
 
-#### Scenario: Example - parent reads the next child activity page
+The same-session log read scope SHALL include the main session log and its
+child logs. It SHALL NOT include another session. It SHALL NOT grant write,
+edit, attach, or shell authority.
 
-- **GIVEN** a parent owns a child activity-log reference
-- **WHEN** it calls `subagent_log_read` with that reference and no cursor
-- **THEN** the tool returns the first bounded page of redacted activity
-- **AND** it returns a continuation cursor when more activity exists
+#### Scenario: Example - parent reads the next child log page
 
-#### Scenario: Example - parent filters child activity with a literal query
+- **GIVEN** a parent owns the child log path from `spawn_agent`
+- **WHEN** it calls `file_read` with `StartLine=1` and a bounded `Limit`
+- **THEN** the tool returns that normal line range
+- **AND** the parent can request the next range with a later `StartLine`
 
-- **GIVEN** a parent owns a child activity-log reference
-- **WHEN** it supplies a literal query
-- **THEN** the result contains only bounded matching activity records
-- **AND** the query is not interpreted as an executable expression
+#### Scenario: Example - parent searches child logs with an existing tool
 
-#### Scenario: Counterexample - foreign child reference is denied
+- **GIVEN** a parent owns a child log path
+- **WHEN** it calls `file_search` on that path's directory in content mode
+- **THEN** the tool returns its normal bounded matches
+- **AND** the parent does not need a shell search
 
-- **GIVEN** a child activity-log reference belongs to another parent session
-- **WHEN** the current parent calls `subagent_log_read`
+#### Scenario: Example - agent lists its session logs
+
+- **GIVEN** an agent has same-session log read scope
+- **WHEN** it calls `file_list` for its session log area
+- **THEN** the tool lists only paths that its current session owns
+- **AND** it applies its normal result limit
+
+#### Scenario: Counterexample - foreign session log is denied
+
+- **GIVEN** a log path belongs to another session
+- **WHEN** the current agent passes that path to an existing file tool
 - **THEN** the tool denies the request
-- **AND** it does not reveal whether matching raw files exist
+- **AND** it does not reveal whether the foreign file exists
 
-#### Scenario: Counterexample - projection cannot expose sensitive records
+#### Scenario: Example - log path survives parent recovery
 
-- **GIVEN** a child raw log contains prompts, approval payloads, credentials,
-  or unredacted tool data
-- **WHEN** the parent reads the child activity projection
-- **THEN** those records are omitted or centrally redacted
-- **AND** the output remains within its configured byte and record limits
-
-#### Scenario: Example - child reference survives parent recovery
-
-- **GIVEN** a parent received a child activity-log reference before an actor
-  restart
-- **WHEN** the recovered parent uses that reference
-- **THEN** the tool resolves the same parent-owned child lineage
-- **AND** it applies the current redaction and output limits
+- **GIVEN** a parent received a child log path before an actor restart
+- **WHEN** the recovered parent reads that path
+- **THEN** current session ownership authorizes the same child lineage
+- **AND** the existing file tool applies its current output limits
 
 ### Requirement: Worktree creation uses a managed destination
 

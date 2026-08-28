@@ -24,9 +24,9 @@ the child tool calls, generated paths, and completion rather than relying on
 response prose.
 
 This eval SHALL measure model alignment only. It SHALL NOT serve as proof that
-the environment was injected, that raw logs are excluded from workspace
-authority, that a managed path grants authority, or that a headless run
-exercised interactive approval.
+the environment was injected, that same-session log scope blocks foreign logs,
+that a managed path grants authority, or that a headless run exercised
+interactive approval.
 
 #### Scenario: Example - delegated work uses standard temp behavior
 

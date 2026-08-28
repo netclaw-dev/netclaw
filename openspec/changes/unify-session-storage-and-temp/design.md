@@ -28,8 +28,7 @@ default root from moving to `/tmp` or `%TEMP%` in this change.
 **Goals:**
 
 - Give one session one physical storage envelope and one child-run lineage.
-- Keep raw logs outside ordinary workspace-file safe roots while the parent can
-  inspect bounded child activity.
+- Let agents inspect same-session logs through existing file tools.
 - Make standard temporary APIs resolve to a session-owned directory.
 - Preserve existing session path behavior without migrating its files.
 - Give worktrees a managed location and an explicit owner.
@@ -42,7 +41,7 @@ default root from moving to `/tmp` or `%TEMP%` in this change.
 - Delete a session, artifact, output, temporary file, or worktree.
 - Add a quota or retention policy.
 - Move an existing session to another configured Netclaw home.
-- Grant ordinary workspace tools unrestricted raw-log access.
+- Grant cross-session log access or log-write authority.
 - Claim that an application path boundary is an OS process sandbox.
 - Infer private command-line grammar in shell policy.
 - Add speculative Windows path patterns without observed evidence.
@@ -59,8 +58,8 @@ Each state item has one owner and one lifetime.
 | Managed temporary path | Parent or child run scope | Run lifetime; files persist until later cleanup | Process environment and working context |
 | Captured host temporary root | Shell approval policy | Daemon process lifetime | Generic path comparison |
 | Managed-temp correction key | Parent or child actor | One user turn | Approval bridge |
-| Child log reference | Parent session actor | Durable session lifetime | `subagent_log_read` |
-| Child raw-log records | Log dispatcher | Durable file lifetime | Redacted projection builder |
+| Session log paths | Session storage resolver | Durable session lifetime | Existing file tools and `spawn_agent` |
+| Session log records | Log dispatcher | Durable file lifetime | Same-session file-tool reads |
 | Worktree ownership record | Parent session actor | Durable until later cleanup | Future cleanup policy |
 
 The model does not own any authority state. Model text can request a new call,
@@ -83,7 +82,8 @@ tool authorization stages.
 9. The actor commits that correction and arms one turn-local retry key.
 10. A replacement call passes complete authorization as a new call.
 11. A child run writes its raw log below its child-run directory.
-12. The parent reads bounded child activity through the opaque reference.
+12. `spawn_agent` returns the exact child log path to the parent.
+13. The parent reads or searches that path with an existing file tool.
 ```
 
 Counterexample: A prompt cannot replace steps 1 through 8. A compliant model
@@ -115,17 +115,16 @@ that envelope, not the envelope itself.
             └── session.log               raw child log
 ```
 
-Normal session context adds `workspace/`, the applicable artifact directory,
-and the applicable temporary directory to their existing access policies. It
-does not add the complete envelope or `logs/` as an ordinary workspace-file or
-shell safe root. A default `find .` therefore starts in `workspace/` and does
-not recurse into sibling raw logs.
+Normal session context names `session_dir`, `artifact_dir`, `temp_dir`, and the
+current run's `log_path` when audience policy permits exact paths. A separate
+same-session read scope lets existing file tools inspect session logs. It does
+not grant log-write or shell authority. A default `find .` still starts in
+`workspace/` and does not recurse into sibling logs.
 
 This is an application authority boundary. It does not prevent an already
 authorized arbitrary process that runs as the Netclaw OS identity from opening
-a known raw-log path. OS-level containment is a separate capability. The
-bounded child-activity tool remains the supported model-facing route because it
-redacts records and avoids approval-heavy shell discovery.
+a known log path. OS-level containment is a separate capability. Existing file
+tools remain the supported model-facing route and avoid shell discovery.
 
 An alternative placed the complete tree below `/tmp/netclaw` or `%TEMP%`.
 Netclaw rejected this default because operating system cleanup can remove
@@ -137,8 +136,8 @@ that choice remains subject to the current doctor warning.
 raw log all resolve below `subagents/run-7/` in the parent's envelope.
 
 **Counterexample:** Netclaw does not use the complete envelope as the default
-shell cwd. Doing that would make `find .` include raw logs and internal child
-state without the model explicitly leaving its working directory.
+shell cwd. Log read authority does not make the complete envelope a shell safe
+root.
 
 ### Bind one envelope only for new-layout sessions
 
@@ -237,33 +236,32 @@ legacy diagnostic
 The dispatcher still owns one serialized writer per target. Daemon-global logs
 remain under the existing daemon log path.
 
-The parent does not receive raw filesystem access merely because the log is in
-its physical envelope. The `spawn_agent` result will return the child run ID,
-an opaque log reference, and the exact child artifact directory. Existing file
-tools can read and attach files from that directory after parent-ownership
-authorization; no opaque artifact-reference tool is required.
-A deferred `subagent_log_read` tool will return a bounded, redacted activity
-projection. It will support a cursor and an optional literal query. It will not
-return system prompts, credentials, approval payloads, or unredacted tool data.
+The `spawn_agent` result will return the child run ID, exact child log path,
+and exact child artifact directory. Existing file tools can read, list, and
+search same-session logs after session-ownership authorization. They keep their
+normal output bounds and pagination.
 
-This tool avoids two bad alternatives. Unbounded raw file access would expose
-the diagnostic trail. A shell search would require the model to know internal
-paths and would create approval friction.
+This design composes existing tools. It does not add a log reader, a new query
+language, or a second output contract. The same-session read scope does not
+grant log writes, file edits, attachments, or shell authority. Cross-session
+log access remains denied.
 
 ```text
 spawn_agent result
   run_id: "run-7"
-  activity_log_ref: "child-log:opaque-value"
+  log_path: "/srv/netclaw/sessions/s-42/subagents/run-7/logs/session.log"
   artifact_dir: "/srv/netclaw/sessions/s-42/subagents/run-7/artifacts"
 
-subagent_log_read(activity_log_ref, cursor: null)
-  -> bounded redacted records + next cursor
+file_read(log_path, StartLine: 1, Limit: 200)
+  -> normal bounded line range
 ```
 
-**Counterexample:** The result does not contain
-`/srv/netclaw/sessions/s-42/subagents/run-7/logs/session.log`. The parent does
-not use `find`, `grep`, or `cat` to inspect that file. The returned artifact
-directory does not authorize any sibling `logs/` or `tmp/` path.
+**Counterexample:** Netclaw does not add a special session-log reader. The
+parent does not need `find`, `grep`, or `cat`. It uses `file_read` on the path.
+It can use `file_search` or `file_list` on the path's directory.
+
+**Counterexample:** A path below another session envelope remains denied. A
+same-session log read does not let `file_write` modify the log.
 
 ### Give each run one managed temporary environment
 
@@ -283,9 +281,10 @@ Netclaw will set all three values on POSIX and Windows. The host process
 environment remains unchanged. On Windows, `TMP` and `TEMP` drive native and
 .NET temporary-path selection. `TMPDIR` supports cross-platform programs.
 
-The model context will name `session_dir`, `temp_dir`, and `artifact_dir` once.
-It will use one short rule for each path. The environment remains the primary
-mechanism. Prompt text is not the security or correctness boundary.
+The model context will name `session_dir`, `temp_dir`, `artifact_dir`, and
+`log_path` once. It will use one short rule for each path. The environment
+remains the primary mechanism. Prompt text is not the security or correctness
+boundary.
 
 **Example:** A .NET process calls `Path.GetTempPath()`. The result is the
 current run's `temp_dir` because Netclaw injected the environment first.
@@ -465,7 +464,8 @@ integration tests will prove:
 
 - versioned single-envelope path creation and recovery;
 - parent and child log routing;
-- raw-log workspace-authority exclusion;
+- same-session log reads and cross-session log denial;
+- separation between log-read, log-write, and shell authority;
 - POSIX and Windows environment values;
 - process-local environment isolation;
 - correction precedence and retry behavior;
@@ -515,7 +515,7 @@ The eval suite will add these behavioral cases:
 - an agent retries an explicit unmanaged POSIX write under `temp_dir` after a
   typed correction;
 - an explicit platform-temp task preserves the requested path;
-- a parent uses the returned child log reference without a shell search;
+- a parent uses the returned child log path with existing file tools;
 - an agent uses `worktree_create` instead of a shell worktree command.
 
 Each pre-change and post-change comparison will use the same prompts, model
@@ -540,14 +540,15 @@ That pass does not prove environment injection, access control, or recovery.
 - **A rollback cannot understand the new binding.** -> Keep pre-feature binary
   support for new-layout sessions out of scope. Existing sessions remain
   compatible because their paths do not move.
-- **The model tries to read raw logs.** -> Do not add the envelope or log areas
-  to ordinary workspace-file safe roots. Expose the redacted tool by default.
+- **The model tries to read a same-session log.** -> Return the exact path and
+  authorize existing file-read, file-list, and file-search operations.
+- **The model tries to change a log.** -> Keep write and edit authority separate
+  from the same-session log read scope.
+- **The model tries to read a foreign session log.** -> Deny the operation
+  without revealing whether the foreign file exists.
 - **An approved arbitrary process knows a raw-log path.** -> Treat this change
   as an application authority boundary, not an OS sandbox. Add process
   containment only through a separate security design.
-- **The child-log projection leaks private data.** -> Reuse central redaction,
-  omit prompt bodies, apply a strict byte limit, and expose only parent-owned
-  child run IDs.
 - **A library caches the host temp path before injection.** -> Set the process
   environment before child process creation and test representative SDKs.
 - **A model still authors `/tmp`.** -> Return the typed correction when generic
@@ -567,9 +568,11 @@ That pass does not prove environment injection, access control, or recovery.
    session and log resolvers unchanged. Do not move or copy their data.
 3. Route only newly bound sessions into one physical envelope.
 4. Add the managed environment and corrections after path recovery passes.
-5. Add the child-log and worktree tools after their authority tests pass.
-6. Update runbooks and eval assertions before the release.
-7. Upgrade one existing session and restart one newly bound session.
+5. Add same-session log read scope and exact child paths after authority tests
+   pass.
+6. Add the worktree tool after its authority tests pass.
+7. Update runbooks and eval assertions before the release.
+8. Upgrade one existing session and restart one newly bound session.
 
 Existing-session compatibility is intentionally narrow: a current binary keeps
 each unbound existing session on its established directories. A pre-feature

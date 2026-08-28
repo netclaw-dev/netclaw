@@ -140,14 +140,16 @@ SHALL use `<session-envelope>/logs/session.log` for the parent and
 - **THEN** it uses the daemon-global log location
 - **AND** it is not written to a session envelope
 
-### Requirement: Raw logs stay outside ordinary workspace authority
+### Requirement: Same-session logs use existing file-tool read authority
 
-The system SHALL NOT add the complete version-2 envelope or a raw-log area to
-ordinary workspace-file or shell safe roots through session context. The
-default no-project working directory SHALL be the `workspace/` child. Knowledge
-of the envelope path, session ownership, or an opaque child reference SHALL NOT
-grant raw-file access. The parent SHALL use a bounded, redacted child-activity
-interface for normal child-log inspection.
+The system SHALL give existing file-read, file-list, and file-search operations
+read access to logs in the current session envelope. The scope SHALL include
+the main session log and its child logs. It SHALL NOT include another session.
+
+This read scope SHALL NOT authorize file writes, file edits, attachments, or
+shell execution. The default no-project working directory SHALL remain the
+`workspace/` child. The system SHALL NOT add the complete envelope as a shell
+safe root.
 
 This requirement defines Netclaw application authorization. It SHALL NOT be
 documented or tested as OS-level containment of an arbitrary process that has
@@ -161,31 +163,45 @@ already received execution authority under the Netclaw identity.
 - **AND** a recursive search of `.` does not include the sibling `logs/` or
   `subagents/` areas by directory containment
 
-#### Scenario: Counterexample - workspace read cannot open a raw log
+#### Scenario: Example - agent reads its own session log
 
-- **GIVEN** an agent can read normal files below its session directory
-- **WHEN** it requests a raw parent or child log outside that directory
-- **THEN** normal workspace-file authority does not authorize the read
-- **AND** the denial does not disclose raw log content
+- **GIVEN** an agent uses a version-2 session envelope
+- **WHEN** it calls `file_read` for its main session log
+- **THEN** same-session log scope authorizes the read
+- **AND** `file_read` applies its normal output bounds
 
-#### Scenario: Counterexample - envelope ownership is not a broad allowed root
+#### Scenario: Example - parent reads an owned child log
 
-- **GIVEN** a parent owns the session envelope
-- **WHEN** policy builds ordinary file and shell safe roots
-- **THEN** it adds only the path areas required by their specific contracts
-- **AND** it does not add the envelope root as unrestricted authority
+- **GIVEN** a parent owns child run `run-7`
+- **WHEN** it calls `file_search` on the returned log path's directory
+- **THEN** same-session log scope authorizes the search
+- **AND** no special log tool is required
 
-#### Scenario: Example - parent can inspect bounded child activity
+#### Scenario: Counterexample - foreign session log is denied
 
-- **GIVEN** a parent owns a child run
-- **WHEN** it requests activity through the supported child-log interface
-- **THEN** the system returns a bounded and redacted projection
-- **AND** the parent does not need the raw log path
+- **GIVEN** a log path belongs to another session envelope
+- **WHEN** the current agent calls `file_read`, `file_list`, or `file_search`
+- **THEN** same-session log scope does not authorize the operation
+- **AND** the result does not reveal whether the foreign file exists
+
+#### Scenario: Counterexample - log read does not grant mutation
+
+- **GIVEN** an agent can read its same-session logs
+- **WHEN** it calls `file_write` or `file_edit` for a log path
+- **THEN** same-session log scope does not authorize that operation
+- **AND** normal write policy decides the call
+
+#### Scenario: Counterexample - envelope is not the shell root
+
+- **GIVEN** an agent can read logs in its session envelope
+- **WHEN** policy selects a default shell cwd or shell safe root
+- **THEN** it uses the session directory or existing project scope
+- **AND** it does not use the complete envelope because log reads are allowed
 
 #### Scenario: Counterexample - this layout is not a process sandbox
 
 - **GIVEN** an arbitrary process has already received execution authority as
   the Netclaw OS identity
-- **WHEN** it learns a raw-log path by some other authorized channel
+- **WHEN** it learns a same-session log path
 - **THEN** this storage layout alone does not claim to stop the OS file open
 - **AND** a future containment capability must define that stronger boundary

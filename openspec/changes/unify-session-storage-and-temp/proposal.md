@@ -16,11 +16,11 @@ use separate directory trees.
 - Keep legacy session roots and log paths in place. Do not move or delete them
   during an upgrade.
 - Place each child's artifacts, temporary files, and raw log below one child-run
-  directory inside the parent's envelope. Return an opaque log reference and
+  directory inside the parent's envelope. Return the exact child log path and
   the parent-readable child artifact directory.
-- Keep raw logs outside the session working directory and ordinary
-  workspace-file safe roots. Provide a bounded, redacted parent view of child
-  activity instead of requiring shell searches.
+- Let agents read, list, and search their same-session logs with the existing
+  file tools. Keep cross-session access, log writes, and shell authority out of
+  this read scope.
 - Set `TMPDIR`, `TMP`, and `TEMP` for each parent and child execution scope.
   The values must identify that run's managed temporary directory.
 - Retire the ambiguous “session scratch” vocabulary. Use `session_dir` for the
@@ -77,13 +77,12 @@ the same requirement. An eligible Personal session receives
 
 ### Child activity discovery
 
-`spawn_agent` returns an opaque child log reference and the child's artifact
-directory. The parent passes the reference to `subagent_log_read` and receives
-a bounded activity page. The raw file is physically below the same session
-envelope as the artifacts.
+`spawn_agent` returns the exact child log path and the child's artifact
+directory. The parent passes the path to `file_read`, `file_search`, or
+`file_list`. Those tools apply their normal output limits and session policy.
 
-Counterexample: The parent does not receive a raw log path. It does not search
-the daemon log tree with shell commands.
+Counterexample: The parent does not need a special child-log tool or a shell
+search. A different session cannot read the returned path.
 
 ### Managed worktree creation
 
@@ -106,8 +105,8 @@ None.
   their current path behavior.
 - `session-cwd`: Define managed temporary and worktree areas and inject the
   standard temporary environment for every run.
-- `netclaw-tools`: Expose bounded child-log discovery and a managed deferred
-  worktree operation without exposing raw log files.
+- `netclaw-tools`: Expose child log paths through existing file tools and add a
+  managed deferred worktree operation.
 - `tool-approval-gates`: Return a typed managed-temp correction for eligible
   explicit writes and define the deterministic and behavioral proof boundary.
 
@@ -119,13 +118,13 @@ None.
   the session envelope. Daemon-global logs remain unchanged.
 - **Tool execution:** Shell child processes receive session-specific temporary
   environment variables. File and worktree tools use managed destinations.
-- **Security:** Path knowledge grants no authority. Raw logs remain outside
-  ordinary workspace-file safe roots, and all replacement calls pass normal
+- **Security:** Session ownership grants read-only file-tool access to its logs.
+  Cross-session reads, log writes, and shell calls still pass their normal
   authorization. This change does not claim OS-level process isolation.
 - **Operations:** Runbooks and diagnostics must stop deriving session log paths.
   Cleanup must recognize both legacy and new layouts.
 - **Testing:** Contract and integration tests prove layout, environment,
   recovery, access, and correction behavior. Model evals measure agent choices
   and parent-child handoff quality only.
-- **Dependencies and public APIs:** No new package is required. Any new tool
-  schema remains internal to Netclaw's existing tool registry.
+- **Dependencies and public APIs:** No new package is required. This change
+  adds no child-log tool.
