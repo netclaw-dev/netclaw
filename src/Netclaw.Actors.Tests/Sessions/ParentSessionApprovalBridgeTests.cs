@@ -36,7 +36,9 @@ public sealed class ParentSessionApprovalBridgeTests
             hasThirdPartyAdoptedContext: true,
             adoptedSpeakerIds: ["user-123", "user-456"]);
 
-        var decision = await bridge.RequestApprovalAsync(
+        var authorizationAttemptId = AuthorizationAttemptId.New();
+        var decision = await ((IAuthorizationAttemptAwareParentApprovalBridge)bridge).RequestApprovalAsync(
+            authorizationAttemptId,
             new ToolCallId("call-1"),
             "shell_execute",
             "grep timeout logs/app.log | wc -l",
@@ -60,7 +62,8 @@ public sealed class ParentSessionApprovalBridgeTests
 
         Assert.Equal(ParentApprovalDecision.ApprovedOnce, decision);
         Assert.NotNull(emitted);
-        Assert.Equal("user-123", emitted!.RequesterSenderId?.Value);
+        Assert.Equal(authorizationAttemptId.Value, emitted!.AuthorizationAttemptId);
+        Assert.Equal("user-123", emitted.RequesterSenderId?.Value);
         Assert.Equal(PrincipalClassification.Operator, emitted.RequesterPrincipal);
         Assert.True(emitted.HasAdoptedContext);
         Assert.True(emitted.HasThirdPartyAdoptedContext);

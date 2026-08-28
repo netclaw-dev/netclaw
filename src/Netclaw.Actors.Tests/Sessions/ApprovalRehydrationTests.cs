@@ -106,6 +106,9 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(callId, request.CallId.Value);
         Assert.Equal("shell_execute", request.ToolName.Value);
+        Assert.True(Netclaw.Tools.AuthorizationAttemptId.TryParse(
+            request.AuthorizationAttemptId,
+            out var authorizationAttemptId));
 
         // First tool attempt threw the approval-required exception — the tool
         // has not actually executed yet.
@@ -146,6 +149,9 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         Assert.Equal(TurnOutcome.Completed, completed.Outcome);
 
         Assert.Equal(1, _toolExecutor.SuccessfulExecutions);
+        Assert.Equal(
+            [authorizationAttemptId, authorizationAttemptId],
+            _toolExecutor.AuthorizationAttempts.ToArray());
 
         // No duplicate approval prompt was emitted for the re-driven call.
         await subscriberB.ExpectNoMsgAsync(
@@ -1603,6 +1609,9 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
 
     public int SuccessfulExecutions => _successfulExecutions;
 
+    public System.Collections.Concurrent.ConcurrentQueue<Netclaw.Tools.AuthorizationAttemptId>
+        AuthorizationAttempts { get; } = new();
+
     public TaskCompletionSource<object?> BlockedExecutionStarted { get; private set; } =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -1640,6 +1649,10 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
         Netclaw.Tools.ToolExecutionContext? context = null,
         CancellationToken ct = default)
     {
+        AuthorizationAttempts.Enqueue(
+            context?.Approval.AuthorizationAttemptId
+            ?? throw new InvalidOperationException("Execution context is required."));
+
         if (GatedTools.Contains(toolCall.Name))
         {
             var hasOneTimeGrant = context is not null

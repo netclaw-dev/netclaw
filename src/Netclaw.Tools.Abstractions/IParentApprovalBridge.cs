@@ -134,3 +134,23 @@ public interface IParentApprovalBridge
         bool isMessy,
         CancellationToken ct);
 }
+
+/// <summary>
+/// Internal extension used by Netclaw-owned bridges to preserve diagnostic
+/// correlation without changing the public approval-bridge contract.
+/// </summary>
+internal interface IAuthorizationAttemptAwareParentApprovalBridge
+{
+    Task<ParentApprovalDecision> RequestApprovalAsync(
+        AuthorizationAttemptId authorizationAttemptId,
+        ToolCallId callId,
+        string toolName,
+        string displayText,
+        IReadOnlyList<string> patterns,
+        IReadOnlyList<string> candidateVerbs,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options,
+        bool isMessy,
+        CancellationToken ct);
+}

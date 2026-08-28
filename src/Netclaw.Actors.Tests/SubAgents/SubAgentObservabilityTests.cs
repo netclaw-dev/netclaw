@@ -132,9 +132,9 @@ public sealed class SubAgentObservabilityTests : TestKit
         };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
 
-        // A tool start event (distinct from the existing tool-result log) lets an
-        // operator see when a slow tool began, not just when it finished.
-        await EventFilter.Info(contains: "tool start callId=call-1 name=greet").ExpectAsync(1, async () =>
+        // The start event carries the call and authorization identities so an
+        // operator can distinguish concurrent calls and follow the lifecycle.
+        await EventFilter.Info(contains: "authorization attempt started").ExpectAsync(1, async () =>
         {
             await agent.Ask<SubAgentResult>(
                 NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -162,7 +162,7 @@ public sealed class SubAgentObservabilityTests : TestKit
             fakeClient,
             PermissivePolicy()));
 
-        await EventFilter.Info(message: "SubAgent tool outcome category=Success").ExpectAsync(1, async () =>
+        await EventFilter.Info(contains: "outcomeCategory=Success").ExpectAsync(1, async () =>
         {
             await agent.Ask<SubAgentResult>(
                 NewRun("Use the tool with a private payload marker."),

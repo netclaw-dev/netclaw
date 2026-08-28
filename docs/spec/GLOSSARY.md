@@ -192,6 +192,25 @@ the registration, runs authorization, invokes the tool, and records an outcome.
 Authorization is the runtime decision that allows, denies, or pauses a tool
 call. It evaluates the current audience, policy, path, and approval state.
 
+### Authorization attempt
+
+An authorization attempt is one tool call's authorization lifecycle. It starts
+before the first policy evaluation and ends with a correction, denial, or tool
+result. An interactive prompt, its decision, and a retry of that same call stay
+inside the same attempt. A replacement call that the model authors after a
+correction starts a new attempt.
+
+`AuthorizationAttemptId` is opaque diagnostic metadata for joining lifecycle
+events. It contains no user data and grants no authority. It is distinct from
+the provider-authored tool-call identifier and from a trace identifier.
+
+```text
+call c1 -> policy -> prompt -> approve -> retry -> result  = attempt a1
+call c2 after a correction                                = attempt a2
+```
+
+**Code anchor:** `AuthorizationAttemptId`
+
 ### Authority
 
 Authority is the set of actions that the current session is permitted to take.

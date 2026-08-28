@@ -650,8 +650,14 @@ public class SubAgentActorTests : TestKit
         };
 
         var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+        var logger = new AuthorizationRecordingLogger();
         var definition = CreateDefinition([fakeTool]);
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(definition, fakeClient, policy, approvalService: null));
+        var agent = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
+            definition,
+            fakeClient,
+            policy,
+            NullSystemPromptProvider.Instance,
+            toolExecutorLogger: logger));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
@@ -668,6 +674,12 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.Equal(1, approvalBridge.RequestCount);
+        var authorizationAttemptId = Assert.Single(approvalBridge.AuthorizationAttemptIds);
+        Assert.True(AuthorizationAttemptId.TryParse(authorizationAttemptId.Value, out _));
+        Assert.NotEmpty(logger.AuthorizationAttemptIds);
+        Assert.All(
+            logger.AuthorizationAttemptIds,
+            loggedAttemptId => Assert.Equal(authorizationAttemptId.Value, loggedAttemptId));
         Assert.Equal("/home/user/repos/foo", approvalBridge.RequestedCwd);
         Assert.Single(approvalBridge.RequestedCandidates);
         Assert.Equal("git push origin main", approvalBridge.RequestedCandidates[0].Verb);
@@ -2150,7 +2162,7 @@ public class SubAgentActorTests : TestKit
             fakeClient,
             PermissivePolicy()));
 
-        await EventFilter.Info(message: "SubAgent tool outcome category=AccessDenied").ExpectAsync(1, async () =>
+        await EventFilter.Info(contains: "outcomeCategory=AccessDenied").ExpectAsync(1, async () =>
         {
             var result = await agent.Ask<SubAgentResult>(
                 new RunSubAgent
@@ -2314,9 +2326,12 @@ internal sealed class DelayingParentApprovalBridge : IParentApprovalBridge
     }
 }
 
-internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decisionToReturn) : IParentApprovalBridge
+internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decisionToReturn) :
+    IParentApprovalBridge,
+    IAuthorizationAttemptAwareParentApprovalBridge
 {
     public int RequestCount { get; private set; }
+    public List<AuthorizationAttemptId> AuthorizationAttemptIds { get; } = [];
     public List<string> RequestedPatterns { get; } = [];
     public string? RequestedCwd { get; private set; }
     public IReadOnlyList<ParentApprovalCandidate> RequestedCandidates { get; private set; } = [];
@@ -2333,6 +2348,30 @@ internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decis
         IReadOnlyList<ParentApprovalOption> options,
         bool isMessy,
         CancellationToken ct)
+        => RecordRequest(patterns, candidates, cwd, options);
+
+    Task<ParentApprovalDecision> IAuthorizationAttemptAwareParentApprovalBridge.RequestApprovalAsync(
+        AuthorizationAttemptId authorizationAttemptId,
+        ToolCallId callId,
+        string toolName,
+        string displayText,
+        IReadOnlyList<string> patterns,
+        IReadOnlyList<string> candidateVerbs,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options,
+        bool isMessy,
+        CancellationToken ct)
+    {
+        AuthorizationAttemptIds.Add(authorizationAttemptId);
+        return RecordRequest(patterns, candidates, cwd, options);
+    }
+
+    private Task<ParentApprovalDecision> RecordRequest(
+        IReadOnlyList<string> patterns,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options)
     {
         RequestCount++;
         RequestedPatterns.AddRange(patterns);
@@ -2340,6 +2379,35 @@ internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decis
         RequestedCandidates = candidates;
         RequestedOptions = options;
         return Task.FromResult(decisionToReturn);
+    }
+}
+
+internal sealed class AuthorizationRecordingLogger : Microsoft.Extensions.Logging.ILogger
+{
+    public List<string> AuthorizationAttemptIds { get; } = [];
+
+    public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+    public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+
+    public void Log<TState>(
+        Microsoft.Extensions.Logging.LogLevel logLevel,
+        Microsoft.Extensions.Logging.EventId eventId,
+        TState state,
+        Exception? exception,
+        Func<TState, Exception?, string> formatter)
+    {
+        if (state is not IEnumerable<KeyValuePair<string, object?>> properties)
+            return;
+
+        foreach (var property in properties)
+        {
+            if (string.Equals(property.Key, "AuthorizationAttemptId", StringComparison.Ordinal)
+                && property.Value is string authorizationAttemptId)
+            {
+                AuthorizationAttemptIds.Add(authorizationAttemptId);
+            }
+        }
     }
 }
 

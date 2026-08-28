@@ -16,7 +16,9 @@ namespace Netclaw.Actors.Sessions;
 /// Wraps the session's <see cref="IApprovalChannel"/> and request emitter into the
 /// cross-layer <see cref="IParentApprovalBridge"/> contract.
 /// </summary>
-internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
+internal sealed class ParentSessionApprovalBridge :
+    IParentApprovalBridge,
+    IAuthorizationAttemptAwareParentApprovalBridge
 {
     private readonly IApprovalChannel _channel;
     private readonly Action<ToolInteractionRequestDispatch> _emitRequest;
@@ -62,6 +64,56 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         IReadOnlyList<ParentApprovalOption> options,
         bool isMessy,
         CancellationToken ct)
+        => await RequestApprovalCoreAsync(
+            AuthorizationAttemptId.New(),
+            callId,
+            toolName,
+            displayText,
+            patterns,
+            candidateVerbs,
+            candidates,
+            cwd,
+            options,
+            isMessy,
+            ct);
+
+    Task<ParentApprovalDecision> IAuthorizationAttemptAwareParentApprovalBridge.RequestApprovalAsync(
+        AuthorizationAttemptId authorizationAttemptId,
+        ToolCallId callId,
+        string toolName,
+        string displayText,
+        IReadOnlyList<string> patterns,
+        IReadOnlyList<string> candidateVerbs,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options,
+        bool isMessy,
+        CancellationToken ct)
+        => RequestApprovalCoreAsync(
+            authorizationAttemptId,
+            callId,
+            toolName,
+            displayText,
+            patterns,
+            candidateVerbs,
+            candidates,
+            cwd,
+            options,
+            isMessy,
+            ct);
+
+    private async Task<ParentApprovalDecision> RequestApprovalCoreAsync(
+        AuthorizationAttemptId authorizationAttemptId,
+        ToolCallId callId,
+        string toolName,
+        string displayText,
+        IReadOnlyList<string> patterns,
+        IReadOnlyList<string> candidateVerbs,
+        IReadOnlyList<ParentApprovalCandidate> candidates,
+        string? cwd,
+        IReadOnlyList<ParentApprovalOption> options,
+        bool isMessy,
+        CancellationToken ct)
     {
         EnsureAuthorityContext();
 
@@ -78,6 +130,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             SessionId = _sessionId,
             Kind = "approval",
             CallId = parentCallId,
+            AuthorizationAttemptId = authorizationAttemptId.Value,
             ToolName = new Netclaw.Tools.ToolName(toolName),
             DisplayText = displayText,
             RequesterSenderId = _requesterSenderId,
