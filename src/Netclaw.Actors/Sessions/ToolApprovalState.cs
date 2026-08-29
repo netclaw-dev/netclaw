@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -14,35 +15,26 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Sessions;
 
 internal sealed record PendingToolInteraction(
-    // Tool call id of the parked invocation. Carried explicitly (not just as
-    // the _pendingToolInteractions dictionary key) so the record can be
-    // persisted in a flat repeated list in the session snapshot.
-    string CallId,
+    ToolApprovalRequested Request,
     AuthorizationAttemptId AuthorizationAttemptId,
-    string ToolName,
-    IReadOnlyList<string> Patterns,
-    IReadOnlyList<string> CandidateVerbs,
-    TrustAudience Audience,
-    TrustBoundary? Boundary,
-    string? ChannelType,
-    bool? SupportsInteractiveApproval,
-    string? RequesterSenderId,
-    PrincipalClassification? RequesterPrincipal,
-    bool HasThirdPartyAdoptedContext,
-    IReadOnlyList<string> AdoptedSpeakerIds,
-    string? Cwd,
-    long RequestedAtMs,
     bool PersistApprovalState,
     TurnContext? TurnContext,
-    string? TurnContextRestoreFailure,
-    // Option keys that were actually offered to the user when the prompt was
-    // rendered. Persisted so a later response cannot select a pruned scope.
-    IReadOnlyList<string> OptionKeys,
-    // Per-clause (verb, directory) pairs preserved across the pause-for-approval
-    // round trip so persistent approvals can write folder-scoped grants from the
-    // path arguments the agent originally passed, rather than collapsing to cwd.
-    IReadOnlyList<ApprovalCandidate> Candidates,
-    string? SessionScratchDirectory) : INoSerializationVerificationNeeded;
+    string? TurnContextRestoreFailure) : INoSerializationVerificationNeeded
+{
+    public static PendingToolInteraction From(
+        ToolApprovalRequested evt,
+        bool persistApprovalState)
+    {
+        var turnContext = ToolApprovalTurnContext.Restore(evt, out var restoreFailure);
+        var authorizationAttemptId = ToolApprovalTurnContext.RestoreAuthorizationAttemptId(evt);
+        return new PendingToolInteraction(
+            evt,
+            authorizationAttemptId,
+            persistApprovalState,
+            turnContext,
+            restoreFailure);
+    }
+}
 
 // Internal actor message for approval prompts. The request is the public output
 // shape; PersistApprovalState is session routing policy that decides whether the
@@ -54,23 +46,15 @@ internal sealed record ToolInteractionRequestDispatch(
     internal string? SessionScratchDirectory { get; init; }
 }
 
-internal abstract record ApprovalTurnState : INoSerializationVerificationNeeded
+internal enum ApprovalTurnPhase
 {
-    public static ApprovalTurnState None { get; } = new NoActiveApprovalTurn();
+    None,
+    Running,
+    Waiting,
+    RecoveredWaiting,
+    Redriving,
+    Abandoning
 }
-
-internal sealed record NoActiveApprovalTurn : ApprovalTurnState;
-
-internal sealed record RunningApprovalTurn(TurnContext Context) : ApprovalTurnState;
-
-internal sealed record WaitingApprovalTurn(
-    TurnContext Context,
-    ISet<string> PendingCallIds,
-    bool Recovered) : ApprovalTurnState;
-
-internal sealed record RedrivingApprovalTurn(TurnContext Context, string CallId) : ApprovalTurnState;
-
-internal sealed record AbandoningApprovalTurn(TurnContext Context, string Reason) : ApprovalTurnState;
 
 internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
@@ -78,9 +62,213 @@ internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, string>? SessionScratchDenialDirectories,
     IReadOnlyDictionary<string, AuthorizationAttemptId>? AuthorizationAttemptIds);
 
+internal abstract record ToolApprovalCallState(PendingToolInteraction Pending);
+
+internal sealed record PendingToolApproval(PendingToolInteraction Pending)
+    : ToolApprovalCallState(Pending);
+
 internal sealed record ResolvedToolApproval(
     PendingToolInteraction Pending,
-    ApprovalDecision Decision);
+    ApprovalDecision Decision) : ToolApprovalCallState(Pending);
+
+/// <summary>
+/// Owns all actor-local approval state for one session.
+/// Durable events remain the source of truth after recovery.
+/// </summary>
+internal sealed class ToolApprovalState
+{
+    private readonly Dictionary<string, ToolApprovalCallState> _calls = new(StringComparer.Ordinal);
+
+    public int PendingCount => _calls.Values.Count(static call => call is PendingToolApproval);
+
+    public int ResolvedCount => _calls.Values.Count(static call => call is ResolvedToolApproval);
+
+    public ApprovalTurnPhase TurnPhase { get; private set; }
+
+    public TurnContext? TurnContext { get; private set; }
+
+    public PendingToolInteraction Request(
+        ToolApprovalRequested evt,
+        bool persistApprovalState,
+        bool recovered)
+    {
+        var pending = PendingToolInteraction.From(evt, persistApprovalState);
+        _calls[evt.CallId] = new PendingToolApproval(pending);
+
+        if (persistApprovalState && pending.TurnContext is { } context)
+        {
+            TurnContext = context;
+            TurnPhase = recovered
+                ? ApprovalTurnPhase.RecoveredWaiting
+                : ApprovalTurnPhase.Waiting;
+        }
+
+        return pending;
+    }
+
+    public bool TryGetPending(string callId, out PendingToolInteraction pending)
+    {
+        if (_calls.TryGetValue(callId, out var call)
+            && call is PendingToolApproval pendingCall)
+        {
+            pending = pendingCall.Pending;
+            return true;
+        }
+
+        pending = null!;
+        return false;
+    }
+
+    public bool TryGetResolved(string callId, out ResolvedToolApproval resolved)
+    {
+        if (_calls.TryGetValue(callId, out var call)
+            && call is ResolvedToolApproval resolvedCall)
+        {
+            resolved = resolvedCall;
+            return true;
+        }
+
+        resolved = null!;
+        return false;
+    }
+
+    public bool HasPending(string callId)
+        => _calls.TryGetValue(callId, out var call) && call is PendingToolApproval;
+
+    public bool HasResolved(string callId)
+        => _calls.TryGetValue(callId, out var call) && call is ResolvedToolApproval;
+
+    public bool RemovePending(string callId)
+        => _calls.TryGetValue(callId, out var call)
+           && call is PendingToolApproval
+           && _calls.Remove(callId);
+
+    public bool Resolve(
+        string callId,
+        ApprovalDecision decision,
+        out PendingToolInteraction pending)
+    {
+        if (!TryGetPending(callId, out pending))
+            return false;
+
+        _calls[callId] = new ResolvedToolApproval(pending, decision);
+        if (PendingCount == 0 && pending.TurnContext is { } context)
+        {
+            TurnContext = context;
+            TurnPhase = ApprovalTurnPhase.Running;
+        }
+
+        return true;
+    }
+
+    public PendingToolInteraction? FindLatestPending(
+        Func<PendingToolInteraction, bool> predicate)
+        => _calls.Values
+            .OfType<PendingToolApproval>()
+            .Select(static call => call.Pending)
+            .Where(predicate)
+            .OrderBy(static pending => pending.Request.RequestedAtMs)
+            .LastOrDefault();
+
+    public void StartTurn(TurnContext context)
+    {
+        TurnContext = context;
+        TurnPhase = ApprovalTurnPhase.Running;
+    }
+
+    public bool MarkAbandoning()
+    {
+        if (TurnPhase is not ApprovalTurnPhase.Waiting
+            and not ApprovalTurnPhase.RecoveredWaiting)
+        {
+            return false;
+        }
+
+        TurnPhase = ApprovalTurnPhase.Abandoning;
+        return true;
+    }
+
+    public bool MarkRedriving(PendingToolInteraction pending)
+    {
+        if (TurnPhase is not ApprovalTurnPhase.Running
+            || pending.TurnContext is not { } context)
+        {
+            return false;
+        }
+
+        TurnContext = context;
+        TurnPhase = ApprovalTurnPhase.Redriving;
+        return true;
+    }
+
+    public void MarkRunningAfterRedrive()
+    {
+        if (TurnPhase is not ApprovalTurnPhase.Redriving)
+            return;
+
+        TurnPhase = ApprovalTurnPhase.Running;
+    }
+
+    public ApprovalRedrivePlan BuildRedrivePlan(IEnumerable<string> callIds)
+    {
+        var builder = new ApprovalRedrivePlanBuilder();
+
+        foreach (var callId in callIds)
+        {
+            if (TryGetResolved(callId, out var resolved))
+                builder.Add(callId, resolved);
+        }
+
+        return builder.Build();
+    }
+
+    public void ClearCalls() => _calls.Clear();
+
+    public void ClearTurn()
+    {
+        TurnContext = null;
+        TurnPhase = ApprovalTurnPhase.None;
+    }
+
+    private sealed class ApprovalRedrivePlanBuilder
+    {
+        private readonly Dictionary<string, IReadOnlyList<string>> _preSeed = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, ApprovalDecision> _decisionOverride = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _sessionScratchDenialDirectories = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, AuthorizationAttemptId> _authorizationAttemptIds = new(StringComparer.Ordinal);
+
+        public void Add(string callId, ResolvedToolApproval resolved)
+        {
+            var request = resolved.Pending.Request;
+            _authorizationAttemptIds[callId] = resolved.Pending.AuthorizationAttemptId;
+
+            if (resolved.Decision.IsApprovalGrant())
+            {
+                _preSeed[callId] = OneTimeApprovalKeys.Create(
+                    request.Patterns,
+                    request.Candidates,
+                    request.Cwd);
+            }
+
+            if (resolved.Decision is not (ApprovalDecision.Denied or ApprovalDecision.TimedOut))
+                return;
+
+            _decisionOverride[callId] = resolved.Decision;
+            if (resolved.Decision == ApprovalDecision.Denied
+                && request.SessionScratchDirectory is { Length: > 0 } scratchDirectory)
+            {
+                _sessionScratchDenialDirectories[callId] = scratchDirectory;
+            }
+        }
+
+        public ApprovalRedrivePlan Build()
+            => new(
+                _preSeed.Count == 0 ? null : _preSeed,
+                _decisionOverride.Count == 0 ? null : _decisionOverride,
+                _sessionScratchDenialDirectories.Count == 0 ? null : _sessionScratchDenialDirectories,
+                _authorizationAttemptIds.Count == 0 ? null : _authorizationAttemptIds);
+    }
+}
 
 internal static class ToolApprovalTurnContext
 {
