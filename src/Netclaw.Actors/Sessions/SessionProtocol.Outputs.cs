@@ -361,6 +361,12 @@ public static partial class SessionProtocol
         /// <summary>The tool call ID that triggered this interaction.</summary>
         public required ToolCallId CallId { get; init; }
 
+        /// <summary>
+        /// Opaque diagnostic identity for the authorization lifecycle. This value
+        /// is not an approval key and grants no authority.
+        /// </summary>
+        public string? AuthorizationAttemptId { get; init; }
+
         /// <summary>The tool that requires interaction.</summary>
         public required ToolName ToolName { get; init; }
 

@@ -408,6 +408,13 @@ public sealed class ToolApprovalAttempt
         Array.Empty<string>().ToFrozenSet(StringComparer.OrdinalIgnoreCase);
     private IReadOnlySet<string>? _oneTimeApprovedPatterns;
 
+    public ToolApprovalAttempt()
+    {
+        AuthorizationAttemptId = AuthorizationAttemptId.New();
+    }
+
+    internal AuthorizationAttemptId AuthorizationAttemptId { get; private set; }
+
     public string? Cwd { get; private set; }
     public string? OneTimeApprovedToolName { get; private set; }
     public IReadOnlySet<string> OneTimeApprovedPatterns => _oneTimeApprovedPatterns ?? EmptyPatterns;
@@ -438,6 +445,14 @@ public sealed class ToolApprovalAttempt
     {
         AppliedDecision = null;
         AppliedPattern = null;
+    }
+
+    internal void RestoreAuthorizationAttemptId(AuthorizationAttemptId authorizationAttemptId)
+    {
+        if (string.IsNullOrEmpty(authorizationAttemptId.Value))
+            throw new ArgumentException("Authorization attempt id is required.", nameof(authorizationAttemptId));
+
+        AuthorizationAttemptId = authorizationAttemptId;
     }
 
 }

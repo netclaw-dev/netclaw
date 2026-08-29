@@ -1989,7 +1989,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         List<FunctionCallContent> toolCalls,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
-        IReadOnlyDictionary<string, string>? sessionScratchDenialDirectories = null)
+        IReadOnlyDictionary<string, string>? sessionScratchDenialDirectories = null,
+        IReadOnlyDictionary<string, AuthorizationAttemptId>? authorizationAttemptIds = null)
     {
         _activeToolBatch.Start(toolCalls);
 
@@ -1997,12 +1998,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
             toolCalls.Count,
             string.Join(",", toolCalls.Select(tc => tc.Name)));
-        foreach (var tc in toolCalls)
-        {
-            _log.Info("Invoking tool [{ToolName}] (call={CallId}) args={Args}",
-                tc.Name, tc.CallId,
-                tc.Arguments is not null ? JsonSerializer.Serialize(tc.Arguments) : "{}");
-        }
         var self = Self;
         var sessionDir = GetSessionDirectory();
         // Per-call inactivity watchdogs in the tool-execution pipeline govern
@@ -2079,6 +2074,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ?? new Dictionary<string, ApprovalDecision>(),
             SessionScratchDenialDirectories = sessionScratchDenialDirectories
                 ?? new Dictionary<string, string>(),
+            AuthorizationAttemptIds = authorizationAttemptIds
+                ?? new Dictionary<string, AuthorizationAttemptId>(),
             ScratchCorrections = _sessionScratchCorrections.Snapshot(),
             CancellationToken = toolExecutionCt
         };
@@ -3574,6 +3571,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             SessionId = _sessionId,
             CallId = msg.CallId.Value,
+            AuthorizationAttemptId = msg.AuthorizationAttemptId,
             ToolName = msg.ToolName.Value,
             Patterns = msg.Patterns,
             CandidateVerbs = msg.CandidateVerbs,
@@ -3617,8 +3615,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private void ApplyToolApprovalRequested(ToolApprovalRequested evt, bool persistApprovalState)
     {
         var turnContext = ToolApprovalTurnContext.Restore(evt, out var restoreFailure);
+        var authorizationAttemptId = ToolApprovalTurnContext.RestoreAuthorizationAttemptId(evt);
         _pendingToolInteractions[evt.CallId] = new PendingToolInteraction(
             evt.CallId,
+            authorizationAttemptId,
             evt.ToolName,
             evt.Patterns,
             evt.CandidateVerbs,
@@ -3639,6 +3639,14 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             evt.Candidates,
             evt.SessionScratchDirectory);
         _resolvedToolApprovals.Remove(evt.CallId);
+
+        _log.Info(
+            "Tool approval requested authorizationAttemptId={AuthorizationAttemptId} " +
+            "sessionId={SessionId} callId={CallId} toolName={ToolName}",
+            authorizationAttemptId.Value,
+            _sessionId.Value,
+            evt.CallId,
+            evt.ToolName);
 
         if (persistApprovalState && turnContext is not null)
             RecordWaitingApprovalState(turnContext, evt.CallId, recovered: _phase.Current == SessionPhase.Recovering);
@@ -3943,7 +3951,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }
 
         var decision = MapApprovalDecision(msg.SelectedKey.Value);
-        _log.Info("Approval response for {CallId}: {Decision}", msg.CallId, decision);
+        _log.Info(
+            "Tool approval decision authorizationAttemptId={AuthorizationAttemptId} " +
+            "sessionId={SessionId} callId={CallId} decision={Decision}",
+            pending.AuthorizationAttemptId.Value,
+            _sessionId.Value,
+            msg.CallId.Value,
+            decision);
 
         if (persistApprovalGrant)
             await PersistApprovalGrantIfNeededAsync(pending, decision, CancellationToken.None);
@@ -4160,7 +4174,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
-            PersistApprovalResolved(msg, decision, () =>
+            PersistApprovalResolved(pending, msg, decision, () =>
             {
                 approvalWait.Complete(decision);
                 TryReplyAck();
@@ -4175,6 +4189,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     }
 
     private void PersistApprovalResolved(
+        PendingToolInteraction pending,
         ToolInteractionResponse msg,
         ApprovalDecision decision,
         Action afterPersist)
@@ -4183,6 +4198,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             SessionId = _sessionId,
             CallId = msg.CallId.Value,
+            AuthorizationAttemptId = pending.AuthorizationAttemptId.Value,
             Decision = decision.ToString(),
             ResolvedAtMs = NowMs()
         }, evt =>
@@ -4256,7 +4272,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
-        PersistApprovalResolved(msg, decision, () =>
+        PersistApprovalResolved(pending, msg, decision, () =>
         {
             var outcome = TryRedriveToolBatchAfterApproval(callId);
             if (outcome == ApprovalRedriveOutcome.Failed)
@@ -4370,10 +4386,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var preSeed = new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal);
         var decisionOverride = new Dictionary<string, ApprovalDecision>(StringComparer.Ordinal);
         var sessionScratchDenialDirectories = new Dictionary<string, string>(StringComparer.Ordinal);
+        var authorizationAttemptIds = new Dictionary<string, AuthorizationAttemptId>(StringComparer.Ordinal);
         foreach (var call in assistantMessage.ToolCalls)
         {
             if (!_resolvedToolApprovals.TryGetValue(call.CallId.Value, out var resolved))
                 continue;
+
+            authorizationAttemptIds[call.CallId.Value] = resolved.Pending.AuthorizationAttemptId;
 
             if (resolved.Decision.IsApprovalGrant())
             {
@@ -4408,7 +4427,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return new ApprovalRedrivePlan(
             preSeed.Count == 0 ? null : preSeed,
             decisionOverride.Count == 0 ? null : decisionOverride,
-            sessionScratchDenialDirectories.Count == 0 ? null : sessionScratchDenialDirectories);
+            sessionScratchDenialDirectories.Count == 0 ? null : sessionScratchDenialDirectories,
+            authorizationAttemptIds.Count == 0 ? null : authorizationAttemptIds);
     }
 
     /// <summary>
@@ -4479,7 +4499,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             toolCalls,
             oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
             decisionOverride: redrivePlan.DecisionOverride,
-            sessionScratchDenialDirectories: redrivePlan.SessionScratchDenialDirectories);
+            sessionScratchDenialDirectories: redrivePlan.SessionScratchDenialDirectories,
+            authorizationAttemptIds: redrivePlan.AuthorizationAttemptIds);
         return true;
     }
 
@@ -4744,11 +4765,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             throw new InvalidOperationException(
                 $"Tool-result message for tool '{toolMessage.Name ?? "unknown"}' has no ToolCallId.");
 
-        var preview = toolMessage.Content is { Length: > 200 }
-            ? toolMessage.Content[..200] + "..."
-            : toolMessage.Content ?? "(null)";
-        _log.Info("Tool [{ToolName}] (call={CallId}) result: {Result}",
-            toolMessage.Name ?? "unknown", toolCallId.Value, preview);
+        _log.Info(
+            "Tool authorization attempt result authorizationAttemptId={AuthorizationAttemptId} " +
+            "sessionId={SessionId} callId={CallId} toolName={ToolName} " +
+            "outcomeCategory={OutcomeCategory} remediationCode={RemediationCode}",
+            result.AuthorizationAttemptId.Value,
+            _sessionId.Value,
+            toolCallId.Value,
+            toolMessage.Name ?? "unknown",
+            result.Receipt?.Category.ToString(),
+            result.Receipt?.RemediationCode?.ToString());
 
         EmitOutput(new ToolResultOutput
         {

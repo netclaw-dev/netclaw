@@ -134,6 +134,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         Assert.Single(completed.ToolResults);
         Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
+        Assert.True(AuthorizationAttemptId.TryParse(approvalRequest.AuthorizationAttemptId, out var attemptId));
+        Assert.Equal(attemptId, completed.AuthorizationAttemptIds["call-1"]);
+        Assert.Equal([attemptId, attemptId], executor.AttemptIds);
     }
 
     [Fact]
@@ -215,6 +218,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var result = Assert.Single(completed.ToolResults);
         Assert.Contains("no interactive approval requester is available", result.Content);
         Assert.Empty(approvals);
+        Assert.True(AuthorizationAttemptId.TryParse(
+            completed.AuthorizationAttemptIds["call-no-source"].Value,
+            out _));
     }
 
     [Fact]
@@ -257,6 +263,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             completed.ToolReceipts["call-1"].RemediationCode);
         Assert.Empty(approvals);
         Assert.Equal(1, executor.Attempts);
+        Assert.True(AuthorizationAttemptId.TryParse(
+            completed.AuthorizationAttemptIds["call-1"].Value,
+            out _));
     }
 
     [Theory]
@@ -318,6 +327,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                 [],
                 [],
                 [],
+                completed.AuthorizationAttemptIds[message.ToolCallId!.Value.Value],
                 Receipt: completed.ToolReceipts[message.ToolCallId!.Value.Value],
                 ExposureRequest: request.Value);
         }
@@ -331,6 +341,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal(ToolInvocationOutcomeCategory.RecoverableCorrection, result.Receipt?.Category);
         Assert.Equal(ToolRemediationCode.UseNativeTool, result.Receipt?.RemediationCode);
         Assert.Equal("file_read", result.ExposureRequest?.ToolName.Value);
+        Assert.True(AuthorizationAttemptId.TryParse(result.AuthorizationAttemptId.Value, out _));
         Assert.Empty(approvals);
         Assert.Equal(background ? 1 : 0, executor.AuthorizationAttempts);
         Assert.Equal(background ? 0 : 1, executor.ExecutionBoundaryAttempts);
@@ -776,6 +787,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal("fast_tool-ok", fast.Content);
         Assert.Contains("slow_tool", slow.Content);
         Assert.Contains("exceeded execution budget", slow.Content);
+        Assert.Equal(2, completed.AuthorizationAttemptIds.Count);
+        Assert.NotEqual(
+            completed.AuthorizationAttemptIds["call-fast"],
+            completed.AuthorizationAttemptIds["call-slow"]);
     }
 
     [Fact]
@@ -1176,12 +1191,16 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     {
         private int _attempt;
 
+        public List<AuthorizationAttemptId> AttemptIds { get; } = [];
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => ExecuteAsync(toolCall, context, ct);
 
         public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
         {
             _attempt++;
+            AttemptIds.Add(context?.Approval.AuthorizationAttemptId
+                ?? throw new InvalidOperationException("Execution context is required."));
 
             if (_attempt == 1)
             {

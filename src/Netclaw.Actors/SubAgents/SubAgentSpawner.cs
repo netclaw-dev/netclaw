@@ -212,7 +212,8 @@ public sealed class SubAgentSpawner
             _approvalService,
             SubAgentMaxToolIterations,
             _sessionMetrics,
-            exposure.CoreToolNames);
+            exposure.CoreToolNames,
+            _logger);
         var actorName = $"subagent-{definition.Name}-{runId}";
         IActorRef subAgent;
         try

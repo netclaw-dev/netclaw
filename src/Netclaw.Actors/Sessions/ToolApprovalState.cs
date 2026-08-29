@@ -8,6 +8,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Sessions;
@@ -17,6 +18,7 @@ internal sealed record PendingToolInteraction(
     // the _pendingToolInteractions dictionary key) so the record can be
     // persisted in a flat repeated list in the session snapshot.
     string CallId,
+    AuthorizationAttemptId AuthorizationAttemptId,
     string ToolName,
     IReadOnlyList<string> Patterns,
     IReadOnlyList<string> CandidateVerbs,
@@ -73,7 +75,8 @@ internal sealed record AbandoningApprovalTurn(TurnContext Context, string Reason
 internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
     IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride,
-    IReadOnlyDictionary<string, string>? SessionScratchDenialDirectories);
+    IReadOnlyDictionary<string, string>? SessionScratchDenialDirectories,
+    IReadOnlyDictionary<string, AuthorizationAttemptId>? AuthorizationAttemptIds);
 
 internal sealed record ResolvedToolApproval(
     PendingToolInteraction Pending,
@@ -81,6 +84,11 @@ internal sealed record ResolvedToolApproval(
 
 internal static class ToolApprovalTurnContext
 {
+    public static AuthorizationAttemptId RestoreAuthorizationAttemptId(ToolApprovalRequested evt)
+        => AuthorizationAttemptId.TryParse(evt.AuthorizationAttemptId, out var restoredAttemptId)
+            ? restoredAttemptId
+            : AuthorizationAttemptId.New();
+
     public static TurnContext? Restore(ToolApprovalRequested evt, out string? failure)
     {
         if (evt.TurnContext is not null)

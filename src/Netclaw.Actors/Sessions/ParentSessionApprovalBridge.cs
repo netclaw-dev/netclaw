@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -12,11 +13,32 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Sessions;
 
 /// <summary>
+/// Adds call-local correlation to the immutable approval context produced by policy.
+/// </summary>
+internal sealed record ParentApprovalRequest(
+    AuthorizationAttemptId AuthorizationAttemptId,
+    ToolCallId CallId,
+    ToolApprovalContext Approval);
+
+/// <summary>
+/// Internal extension used by Netclaw-owned bridges to preserve diagnostic
+/// correlation without changing the public approval-bridge contract.
+/// </summary>
+internal interface IAuthorizationAttemptAwareParentApprovalBridge
+{
+    Task<ParentApprovalDecision> RequestApprovalAsync(
+        ParentApprovalRequest request,
+        CancellationToken ct);
+}
+
+/// <summary>
 /// Bridges a sub-agent's approval requests to the parent session's interactive channel.
 /// Wraps the session's <see cref="IApprovalChannel"/> and request emitter into the
 /// cross-layer <see cref="IParentApprovalBridge"/> contract.
 /// </summary>
-internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
+internal sealed class ParentSessionApprovalBridge :
+    IParentApprovalBridge,
+    IAuthorizationAttemptAwareParentApprovalBridge
 {
     private readonly IApprovalChannel _channel;
     private readonly Action<ToolInteractionRequestDispatch> _emitRequest;
@@ -51,7 +73,7 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         _adoptedSpeakerIds = adoptedSpeakerIds;
     }
 
-    public async Task<ParentApprovalDecision> RequestApprovalAsync(
+    public Task<ParentApprovalDecision> RequestApprovalAsync(
         ToolCallId callId,
         string toolName,
         string displayText,
@@ -61,6 +83,37 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
         string? cwd,
         IReadOnlyList<ParentApprovalOption> options,
         bool isMessy,
+        CancellationToken ct)
+        => RequestApprovalCoreAsync(
+            new ParentApprovalRequest(
+                AuthorizationAttemptId.New(),
+                callId,
+                new ToolApprovalContext(
+                    toolName,
+                    displayText,
+                    patterns,
+                    candidateVerbs,
+                    options.Select(static option => new ToolApprovalOption(
+                        new ApprovalOptionKey(option.Key),
+                        option.Label)).ToList(),
+                    Cwd: cwd,
+                    IsMessy: isMessy,
+                    Candidates: candidates.Select(static candidate => new ApprovalCandidate(
+                        candidate.Verb,
+                        candidate.Directory)
+                    {
+                        Shell = candidate.Shell,
+                        VerbTokens = candidate.VerbTokens,
+                    }).ToList())),
+            ct);
+
+    Task<ParentApprovalDecision> IAuthorizationAttemptAwareParentApprovalBridge.RequestApprovalAsync(
+        ParentApprovalRequest request,
+        CancellationToken ct)
+        => RequestApprovalCoreAsync(request, ct);
+
+    private async Task<ParentApprovalDecision> RequestApprovalCoreAsync(
+        ParentApprovalRequest request,
         CancellationToken ct)
     {
         EnsureAuthorityContext();
@@ -78,25 +131,27 @@ internal sealed class ParentSessionApprovalBridge : IParentApprovalBridge
             SessionId = _sessionId,
             Kind = "approval",
             CallId = parentCallId,
-            ToolName = new Netclaw.Tools.ToolName(toolName),
-            DisplayText = displayText,
+            AuthorizationAttemptId = request.AuthorizationAttemptId.Value,
+            ToolName = new Netclaw.Tools.ToolName(request.Approval.ToolName),
+            DisplayText = request.Approval.DisplayText,
             RequesterSenderId = _requesterSenderId,
             RequesterPrincipal = _requesterPrincipal,
-            Patterns = patterns,
-            CandidateVerbs = candidateVerbs,
-            Candidates = candidates.Select(c => new ApprovalCandidate(c.Verb, c.Directory)
-            {
-                Shell = c.Shell,
-                VerbTokens = c.VerbTokens,
-            }).ToList(),
-            Cwd = cwd,
-            IsMessy = isMessy,
+            Patterns = request.Approval.Patterns,
+            CandidateVerbs = request.Approval.CandidateVerbs,
+            Candidates = (request.Approval.Candidates ?? [])
+                .Select(static candidate => new ApprovalCandidate(candidate.Verb, candidate.Directory)
+                {
+                    Shell = candidate.Shell,
+                    VerbTokens = candidate.VerbTokens,
+                }).ToList(),
+            Cwd = request.Approval.Cwd,
+            IsMessy = request.Approval.IsMessy,
             HasAdoptedContext = _hasAdoptedContext,
             HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,
             PersistedAdoptedContext = _hasAdoptedContext,
-            Options = options
-                .Select(o => new ToolInteractionOption(new ApprovalOptionKey(o.Key), o.Label))
+            Options = request.Approval.Options
+                .Select(static option => new ToolInteractionOption(option.Key, option.Label))
                 .ToList()
         }, PersistApprovalState: false));
 

@@ -10,6 +10,7 @@ using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -69,6 +70,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private readonly IChatClient _chatClient;
     private readonly ToolAccessPolicy _toolAccessPolicy;
     private readonly IToolApprovalService? _approvalService;
+    private readonly ILogger? _toolExecutorLogger;
     private readonly ISystemPromptProvider _promptProvider;
     private readonly int _maxToolIterations;
 
@@ -177,7 +179,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             approvalService,
             maxToolIterations,
             sessionMetrics,
-            coreToolNames: null)
+            coreToolNames: null,
+            toolExecutorLogger: null)
     {
     }
 
@@ -189,7 +192,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IToolApprovalService? approvalService,
         int maxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics,
-        IReadOnlySet<string>? coreToolNames)
+        IReadOnlySet<string>? coreToolNames,
+        ILogger? toolExecutorLogger)
     {
         if (maxToolIterations <= 0)
             throw new ArgumentOutOfRangeException(nameof(maxToolIterations), maxToolIterations,
@@ -205,6 +209,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         _toolAccessPolicy = toolAccessPolicy;
         _promptProvider = promptProvider;
         _approvalService = approvalService;
+        _toolExecutorLogger = toolExecutorLogger;
         _maxToolIterations = maxToolIterations;
         _projectInstructions = definition.ProjectInstructions;
         _log = Context.GetLogger();
@@ -278,7 +283,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IToolApprovalService? approvalService = null,
         int maxToolIterations = DefaultMaxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics = null,
-        IReadOnlySet<string>? coreToolNames = null)
+        IReadOnlySet<string>? coreToolNames = null,
+        ILogger? toolExecutorLogger = null)
     {
         ArgumentNullException.ThrowIfNull(promptProvider);
         return Props.CreateBy(new SubAgentActorProducer(
@@ -289,7 +295,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             approvalService,
             maxToolIterations,
             sessionMetrics,
-            coreToolNames));
+            coreToolNames,
+            toolExecutorLogger));
     }
 
     private sealed class SubAgentActorProducer(
@@ -300,7 +307,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IToolApprovalService? approvalService,
         int maxToolIterations,
         Telemetry.ISessionMetrics? sessionMetrics,
-        IReadOnlySet<string>? coreToolNames) : IIndirectActorProducer
+        IReadOnlySet<string>? coreToolNames,
+        ILogger? toolExecutorLogger) : IIndirectActorProducer
     {
         public Type ActorType => typeof(SubAgentActor);
 
@@ -313,7 +321,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 approvalService,
                 maxToolIterations,
                 sessionMetrics,
-                coreToolNames);
+                coreToolNames,
+                toolExecutorLogger);
 
         public void Release(ActorBase actor)
         {
@@ -559,7 +568,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
             RecordProgress("processing tool results");
 
-            // Append tool results as MEAI messages and log each result
+            // Append tool results as MEAI messages and log each result.
             foreach (var result in msg.ToolResults)
             {
                 _history.Add(ChatMessageConverter.ToAiMessage(result));
@@ -568,18 +577,24 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
                     _fileActivity.Apply(receipt);
                     TryApplyProjectDirectory(result.Name, receipt);
-                    if (receipt is not null)
-                        _log.Info("SubAgent tool outcome category={OutcomeCategory}", receipt.Category);
+                    if (msg.AuthorizationAttemptIds.TryGetValue(callId.Value, out var authorizationAttemptId))
+                    {
+                        _log.Info(
+                            "SubAgent authorization attempt result authorizationAttemptId={AuthorizationAttemptId} " +
+                            "sessionId={SessionId} subSessionId={SubSessionId} callId={CallId} " +
+                            "outcomeCategory={OutcomeCategory} remediationCode={RemediationCode}",
+                            authorizationAttemptId.Value,
+                            _parentSessionId,
+                            _subSessionId,
+                            callId.Value,
+                            receipt?.Category.ToString(),
+                            receipt?.RemediationCode?.ToString());
+                    }
                     if (msg.ToolExposureRequests.TryGetValue(callId.Value, out var exposureRequest))
                         TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
                 }
                 if (result.Name is "load_tool" && result.Content is not null)
                     TryActivateDiscoveredTool(result.Content.Trim());
-                var preview = result.Content is { Length: > 200 }
-                    ? result.Content[..200] + "..."
-                    : result.Content ?? "(null)";
-                _log.Info("SubAgent [{AgentName}] tool [{ToolName}] result: {Result}",
-                    _definition.Name, result.Name ?? "unknown", SecretOutputRedactor.Redact(preview));
             }
 
             foreach (var change in msg.ScratchCorrectionChanges)
@@ -809,11 +824,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 ? JsonSerializer.Serialize(toolCall.Arguments)
                 : null;
             _turnState.TrackToolCall(toolCall.Name, argsJson);
-            // Log tool START event so tool execution spans are visible in Seq
-            // (previously only tool results were logged, making it impossible to
-            // correlate tool start with tool end when tools take a long time).
-            _log.Info("SubAgent [{AgentName}] tool start callId={ToolCallId} name={ToolName}",
-                _definition.Name, toolCall.CallId ?? "unknown", toolCall.Name);
         }
 
         var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
@@ -822,7 +832,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _definition.Name, toolNames);
 
         var self = Self;
-        var executor = new DispatchingToolExecutor(_toolRegistry, _toolAccessPolicy, _approvalService);
+        var executor = _toolExecutorLogger is null
+            ? new DispatchingToolExecutor(_toolRegistry, _toolAccessPolicy, _approvalService)
+            : DispatchingToolExecutor.CreateWithLogger(
+                _toolRegistry,
+                _toolAccessPolicy,
+                _approvalService,
+                _toolExecutorLogger);
         var setWorkingDirectoryTool =
             _toolRegistry.GetByName(SetWorkingDirectoryTool.ToolName) as SetWorkingDirectoryTool;
         Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory =
@@ -845,7 +861,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             self,
             _approvalBridge,
             _sessionScratchCorrections.Snapshot(),
-            canDeclareWorkingDirectory);
+            canDeclareWorkingDirectory,
+            _log,
+            _definition.Name,
+            _parentSessionId,
+            _subSessionId);
     }
 
     private void FireLlmCall(bool forceNoTools = false)
@@ -1384,7 +1404,11 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IActorRef self,
         IParentApprovalBridge? approvalBridge,
         SessionScratchCorrectionDispatch scratchCorrections,
-        Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory)
+        Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory,
+        ILoggingAdapter logger,
+        AgentName agentName,
+        string? parentSessionId,
+        string? subSessionId)
     {
         try
         {
@@ -1399,6 +1423,16 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 // hint is materialized into the immutable per-tool context.
                 var interpretation = executor.InterpretToolCall(tc);
                 var toolContext = CreatePerToolExecutionContext(executionContext, interpretation.Meta);
+                logger.Info(
+                    "SubAgent [{AgentName}] authorization attempt started " +
+                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} " +
+                    "subSessionId={SubSessionId} callId={CallId} toolName={ToolName}",
+                    agentName,
+                    toolContext.Approval.AuthorizationAttemptId.Value,
+                    parentSessionId,
+                    subSessionId,
+                    tc.CallId,
+                    tc.Name);
                 if (interpretation.Rejection is { } rejection)
                 {
                     toolContext.Outputs.TryComplete(
@@ -1504,16 +1538,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             $"Tool '{tc.Name}' requires interactive approval, but no parent approval bridge is available.");
                     }
 
-                    var bridgeCandidates = ctx.Candidates is { Count: > 0 } c
-                        ? c.Select(x => new ParentApprovalCandidate(x.Verb, x.Directory)
-                        {
-                            Shell = x.Shell,
-                            VerbTokens = x.VerbTokens,
-                        }).ToList()
-                        : (IReadOnlyList<ParentApprovalCandidate>)[];
-                    var bridgeOptions = ctx.Options
-                        .Select(o => new ParentApprovalOption(o.Key.Value, o.Label))
-                        .ToList();
                     // Signal the actor that an approval wait is starting BEFORE
                     // the await so the inactivity watchdog cannot cancel the
                     // wait. The bridge call uses externalCt — only explicit
@@ -1525,17 +1549,41 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     ParentApprovalDecision decision;
                     try
                     {
-                        decision = await approvalBridge.RequestApprovalAsync(
-                            new ToolCallId(tc.CallId),
-                            ctx.ToolName,
-                            ctx.DisplayText,
-                            ctx.Patterns,
-                            ctx.CandidateVerbs,
-                            bridgeCandidates,
-                            ctx.Cwd,
-                            bridgeOptions,
-                            ctx.IsMessy,
-                            externalCt);
+                        if (approvalBridge is IAuthorizationAttemptAwareParentApprovalBridge awareBridge)
+                        {
+                            decision = await awareBridge.RequestApprovalAsync(
+                                new ParentApprovalRequest(
+                                    toolContext.Approval.AuthorizationAttemptId,
+                                    new ToolCallId(tc.CallId),
+                                    ctx),
+                                externalCt);
+                        }
+                        else
+                        {
+                            var bridgeCandidates = ctx.Candidates is { Count: > 0 } candidates
+                                ? candidates.Select(static candidate => new ParentApprovalCandidate(
+                                    candidate.Verb,
+                                    candidate.Directory)
+                                {
+                                    Shell = candidate.Shell,
+                                    VerbTokens = candidate.VerbTokens,
+                                }).ToList()
+                                : (IReadOnlyList<ParentApprovalCandidate>)[];
+                            var bridgeOptions = ctx.Options
+                                .Select(static option => new ParentApprovalOption(option.Key.Value, option.Label))
+                                .ToList();
+                            decision = await approvalBridge.RequestApprovalAsync(
+                                new ToolCallId(tc.CallId),
+                                ctx.ToolName,
+                                ctx.DisplayText,
+                                ctx.Patterns,
+                                ctx.CandidateVerbs,
+                                bridgeCandidates,
+                                ctx.Cwd,
+                                bridgeOptions,
+                                ctx.IsMessy,
+                                externalCt);
+                        }
                     }
                     finally
                     {
@@ -1549,6 +1597,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         // session's scope. Keep that retry-local so approve-once cannot bleed
                         // across parallel tool calls or later iterations.
                         var retryContext = CreatePerToolExecutionContext(executionContext, meta);
+                        retryContext.Approval.RestoreAuthorizationAttemptId(
+                            toolContext.Approval.AuthorizationAttemptId);
                         retryContext.Approval.SeedOneTimeApproval(tc.Name, OneTimeApprovalKeys.Create(ctx));
                         var result = await executor.ExecuteAsync(tc, retryContext, ct);
                         return BuildToolResult(
@@ -1652,7 +1702,13 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             : throw new InvalidOperationException("A child tool exposure request requires a call identity."),
                         result => result.ExposureRequest
                             ?? throw new InvalidOperationException("A selected child tool result requires an exposure request."),
-                        StringComparer.Ordinal)
+                        StringComparer.Ordinal),
+                AuthorizationAttemptIds = results.ToDictionary<SubAgentToolCallResult, string, AuthorizationAttemptId>(
+                    result => result.Message.ToolCallId is { } callId
+                        ? callId.Value
+                        : throw new InvalidOperationException("A child authorization attempt requires a call identity."),
+                    result => result.AuthorizationAttemptId,
+                    StringComparer.Ordinal)
             });
         }
         catch (Exception ex)
@@ -1700,7 +1756,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             materialization.MediaReferences,
             scratchCorrectionChange,
             receipt,
-            exposureRequest);
+            exposureRequest,
+            toolContext.Approval.AuthorizationAttemptId);
     }
 
     private static ModelInputMaterializationResult MaterializeModelInputFiles(
@@ -1725,7 +1782,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IReadOnlyList<SerializableMediaReference> ModelInputMediaReferences,
         SessionScratchCorrectionChange? ScratchCorrectionChange,
         ToolInvocationReceipt? Receipt,
-        ToolExposureRequest? ExposureRequest);
+        ToolExposureRequest? ExposureRequest,
+        AuthorizationAttemptId AuthorizationAttemptId);
 
     private string BuildSystemPrompt(
         SubAgentDefinition definition,
