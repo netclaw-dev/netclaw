@@ -297,7 +297,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         var releaseDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var vm = Create(DaemonStopped, path =>
         {
-            if (path == _paths.BasePath)
+            if (path == _paths.ConfigDirectory)
             {
                 deleteStarted.TrySetResult();
                 releaseDelete.Task.GetAwaiter().GetResult();
@@ -355,7 +355,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         var releaseDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var vm = Create(DaemonStopped, path =>
         {
-            if (path == _paths.BasePath)
+            if (path == _paths.ConfigDirectory)
             {
                 deleteStarted.TrySetResult();
                 releaseDelete.Task.GetAwaiter().GetResult();
