@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using SlackNet;
@@ -49,10 +50,15 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private SlackChannelId? _defaultChannelId;
     private volatile bool _connected;
 
-    // Cancels the background reconnect loop when the channel stops.
+    internal static readonly TimeSpan ConnectionCheckInterval = TimeSpan.FromSeconds(5);
+    internal static readonly TimeSpan MaxReconnectDelay = TimeSpan.FromMinutes(5);
+
+    // This token stops the connection supervisor before transport disposal.
     private readonly CancellationTokenSource _lifetimeCts = new();
-    private Task? _reconnectTask;
+    private Task? _connectionSupervisorTask;
     private volatile string? _connectFailureDetail;
+    private int _reconnectFailureCount;
+    private DateTimeOffset _nextReconnectAttemptAt = DateTimeOffset.MinValue;
 
     public SlackChannel(
         ISessionPipeline pipeline,
@@ -138,7 +144,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         if (!_options.Enabled)
             return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Degraded, "Slack channel disabled."));
 
-        if (_connected)
+        if (_connected && _socketModeClient.Connected)
             return ValueTask.FromResult(new ChannelHealth(ChannelHealthStatus.Healthy));
 
         return ValueTask.FromResult(new ChannelHealth(
@@ -193,6 +199,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         {
             await ConnectCoreAsync(cancellationToken);
             _logger.LogInformation("Channel connected as user {BotUserId}.", _botUserId);
+            StartConnectionSupervisor();
         }
         catch (Exception ex)
         {
@@ -261,18 +268,9 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     {
         _connectFailureDetail = failure.Message;
 
-        _notificationSink.Emit(OperationalAlert.Create(
-            _timeProvider,
-            "channel.disconnected",
-            AlertType.ChannelDisconnected,
+        EmitDisconnectedAlert(
             $"Slack channel failed to connect: {failure.Message}",
-            AlertSeverity.Warning,
-            source: "slack",
-            context: new Dictionary<string, string>
-            {
-                ["channel"] = "slack",
-                ["failure_kind"] = failure.Kind.ToString(),
-            }));
+            failure.Kind);
 
         if (failure.IsFatal)
         {
@@ -292,90 +290,167 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
             "Slack channel could not connect (transient). The daemon will keep running "
             + "and retry the connection in the background. {Reason}",
             failure.Message);
-        StartReconnectLoop();
+        StartConnectionSupervisor();
     }
 
-    private void StartReconnectLoop()
+    private void StartConnectionSupervisor()
     {
-        if (_reconnectTask is { IsCompleted: false })
+        if (_connectionSupervisorTask is { IsCompleted: false })
             return;
 
-        _reconnectTask = Task.Run(() => ReconnectLoopAsync(_lifetimeCts.Token));
+        _connectionSupervisorTask = RunConnectionSupervisorAsync(_lifetimeCts.Token);
     }
 
-    private async Task ReconnectLoopAsync(CancellationToken cancellationToken)
+    private async Task RunConnectionSupervisorAsync(CancellationToken cancellationToken)
     {
-        var delay = TimeSpan.FromSeconds(5);
-        var maxDelay = TimeSpan.FromMinutes(5);
-
-        while (!cancellationToken.IsCancellationRequested)
+        try
         {
-            try
+            using var timer = new PeriodicTimer(ConnectionCheckInterval, _timeProvider);
+            while (await timer.WaitForNextTickAsync(cancellationToken))
             {
-                await Task.Delay(delay, _timeProvider, cancellationToken);
-            }
-            catch (OperationCanceledException)
-            {
-                return;
-            }
-
-            // Reset transport state so the retry performs a clean connect.
-            try
-            {
-                _socketModeClient.Disconnect();
-            }
-            catch (Exception ex)
-            {
-                _logger.LogDebug(ex, "Transport reset before reconnect failed; continuing.");
-            }
-
-            try
-            {
-                await ConnectCoreAsync(cancellationToken);
-                _logger.LogInformation("Channel reconnected after a transient failure.");
-                return;
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                var classified = SlackConnectFailureClassifier.Classify(ex);
-                _connectFailureDetail = classified.Message;
-
-                if (classified.IsFatal)
-                {
-                    _logger.LogError(
-                        classified,
-                        "Slack reconnect hit a fatal failure; giving up until the daemon "
-                        + "is restarted. {Reason}",
-                        classified.Message);
+                if (!await CheckConnectionAsync(cancellationToken))
                     return;
-                }
-
-                _logger.LogWarning(
-                    classified,
-                    "Slack reconnect attempt failed; will retry. {Reason}",
-                    classified.Message);
-                delay = TimeSpan.FromTicks(Math.Min(delay.Ticks * 2, maxDelay.Ticks));
             }
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("Connection supervisor stopped with the channel.");
+        }
+    }
+
+    private async Task<bool> CheckConnectionAsync(CancellationToken cancellationToken)
+    {
+        if (_socketModeClient.Connected)
+            return true;
+
+        if (_connected)
+        {
+            _connected = false;
+            _connectFailureDetail = "Slack socket mode disconnected.";
+            EmitDisconnectedAlert(_connectFailureDetail, ChannelConnectFailureKind.Transient);
+            ChannelTelemetry.For(ChannelType).RecordExtra("connection_disconnected");
+            _logger.LogWarning("Channel socket disconnected. The channel will reconnect automatically.");
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        if (now < _nextReconnectAttemptAt)
+            return true;
+
+        var attempt = _reconnectFailureCount + 1;
+        ChannelTelemetry.For(ChannelType).RecordExtra("reconnect_attempt");
+        _logger.LogInformation("Channel reconnect attempt {Attempt} started.", attempt);
+
+        // A clean reset prevents a failed SlackNet reconnect task from retaining the transport.
+        try
+        {
+            _socketModeClient.Disconnect();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Transport reset before reconnect failed. The reconnect attempt will continue.");
+        }
+
+        try
+        {
+            await ConnectCoreAsync(cancellationToken);
+            ResetReconnectBackoff();
+            EmitReconnectedAlert();
+            ChannelTelemetry.For(ChannelType).RecordExtra("connection_recovered");
+            _logger.LogInformation("Channel reconnected after attempt {Attempt}.", attempt);
+            return true;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
+        {
+            var classified = SlackConnectFailureClassifier.Classify(ex);
+            _connected = false;
+            _connectFailureDetail = classified.Message;
+
+            if (classified.IsFatal)
+            {
+                _logger.LogError(
+                    classified,
+                    "Slack reconnect found a fatal failure. The channel will stay offline until the daemon restarts. {Reason}",
+                    classified.Message);
+                return false;
+            }
+
+            _reconnectFailureCount++;
+            var retryDelay = ComputeReconnectDelay(_reconnectFailureCount);
+            _nextReconnectAttemptAt = now + retryDelay;
+            _logger.LogWarning(
+                classified,
+                "Channel reconnect attempt {Attempt} failed. The next attempt starts in {RetryDelay}. {Reason}",
+                attempt,
+                retryDelay,
+                classified.Message);
+            return true;
+        }
+    }
+
+    internal static TimeSpan ComputeReconnectDelay(int failureCount)
+    {
+        if (failureCount <= 0)
+            return TimeSpan.Zero;
+
+        var exponent = Math.Min(failureCount - 1, 16);
+        var ticks = ConnectionCheckInterval.Ticks * (1L << exponent);
+        return TimeSpan.FromTicks(Math.Min(ticks, MaxReconnectDelay.Ticks));
+    }
+
+    private void ResetReconnectBackoff()
+    {
+        _reconnectFailureCount = 0;
+        _nextReconnectAttemptAt = DateTimeOffset.MinValue;
+    }
+
+    private void EmitDisconnectedAlert(string summary, ChannelConnectFailureKind failureKind)
+    {
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "channel.disconnected",
+            AlertType.ChannelDisconnected,
+            summary,
+            AlertSeverity.Warning,
+            source: "slack",
+            context: new Dictionary<string, string>
+            {
+                ["channel"] = "slack",
+                ["failure_kind"] = failureKind.ToString(),
+            }));
+    }
+
+    private void EmitReconnectedAlert()
+    {
+        _notificationSink.Emit(OperationalAlert.Create(
+            _timeProvider,
+            "channel.reconnected",
+            AlertType.ChannelReconnected,
+            "Slack channel reconnected.",
+            AlertSeverity.Info,
+            source: "slack",
+            context: new Dictionary<string, string>
+            {
+                ["channel"] = "slack",
+            }));
     }
 
     public async Task StopAsync(CancellationToken cancellationToken)
     {
-        // Stop the background reconnect loop before tearing down the transport.
+        // Stop the connection supervisor before transport disposal.
         await _lifetimeCts.CancelAsync();
-        if (_reconnectTask is { } reconnectTask)
+        if (_connectionSupervisorTask is { } connectionSupervisorTask)
         {
             try
             {
-                await reconnectTask;
+                await connectionSupervisorTask;
             }
             catch (Exception ex)
             {
-                _logger.LogDebug(ex, "Reconnect loop ended with an error during shutdown.");
+                _logger.LogDebug(ex, "Connection supervisor ended with an error during shutdown.");
             }
         }
 
