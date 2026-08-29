@@ -83,6 +83,7 @@ internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeed
     public Dictionary<string, string> ToolFailureCodes { get; init; } = new(StringComparer.Ordinal);
     public Dictionary<string, ToolInvocationReceipt> ToolReceipts { get; init; } = new(StringComparer.Ordinal);
     public Dictionary<string, ToolExposureRequest> ToolExposureRequests { get; init; } = new(StringComparer.Ordinal);
+    public Dictionary<string, AuthorizationAttemptId> AuthorizationAttemptIds { get; init; } = new(StringComparer.Ordinal);
 }
 
 internal sealed record ToolExecutionSingleCompleted(ToolCallResult Result) : INoSerializationVerificationNeeded;

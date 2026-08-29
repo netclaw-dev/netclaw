@@ -29,12 +29,35 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
 
     public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy,
         IToolApprovalService? approvalService = null, ILogger<DispatchingToolExecutor>? logger = null)
+        : this(registry, policy, approvalService, logger is null ? NullLogger.Instance : logger)
+    {
+    }
+
+    private DispatchingToolExecutor(
+        ToolRegistry registry,
+        ToolAccessPolicy policy,
+        IToolApprovalService? approvalService,
+        ILogger logger)
     {
         _registry = registry;
         _policy = policy;
         _approvalService = approvalService;
         _shellPolicyCoordinator = new ShellPolicyCoordinator(policy, approvalService);
-        _logger = logger ?? (ILogger)NullLogger.Instance;
+        _logger = logger;
+    }
+
+    internal static DispatchingToolExecutor CreateWithLogger(
+        ToolRegistry registry,
+        ToolAccessPolicy policy,
+        IToolApprovalService? approvalService,
+        ILogger logger)
+    {
+        ArgumentNullException.ThrowIfNull(logger);
+        return new DispatchingToolExecutor(
+            registry,
+            policy,
+            approvalService,
+            logger);
     }
 
     /// <inheritdoc />
@@ -140,7 +163,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
     {
         if (_registry.GetByName(toolCall.Name) is null)
         {
-            _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
+            _logger.LogWarning(
+                "Unknown tool requested: {ToolName} authorizationAttemptId={AuthorizationAttemptId} " +
+                "sessionId={SessionId} callId={CallId}",
+                toolCall.Name,
+                context.Approval.AuthorizationAttemptId.Value,
+                context.SessionId,
+                toolCall.CallId);
             context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.NotFound));
             return $"Unknown tool: {toolCall.Name}";
         }
@@ -151,8 +180,14 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (interpretation.Rejection is { } rejection)
         {
             _logger.LogWarning(
-                "Rejected tool call ({Reason}): {ToolName} — {Error}",
-                rejection.DenyReason, toolCall.Name, rejection.Message);
+                "Rejected tool call ({Reason}): {ToolName} — {Error} " +
+                "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                rejection.DenyReason,
+                toolCall.Name,
+                rejection.Message,
+                context.Approval.AuthorizationAttemptId.Value,
+                context.SessionId,
+                toolCall.CallId);
             context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
             return rejection.Message;
         }
@@ -193,8 +228,14 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
 
             sw.Stop();
             _logger.LogInformation(
-                "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
-                toolCall.Name, sw.ElapsedMilliseconds, result.Length);
+                "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars) " +
+                "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                toolCall.Name,
+                sw.ElapsedMilliseconds,
+                result.Length,
+                context.Approval.AuthorizationAttemptId.Value,
+                context.SessionId,
+                toolCall.CallId);
 
             return result;
         }
@@ -203,8 +244,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
             CompleteExceptionOutcome(context, ex, ct);
             sw.Stop();
             _logger.LogError(ex,
-                "Tool execution failed: {ToolName} ({Duration}ms)",
-                toolCall.Name, sw.ElapsedMilliseconds);
+                "Tool execution failed: {ToolName} ({Duration}ms) " +
+                "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                toolCall.Name,
+                sw.ElapsedMilliseconds,
+                context.Approval.AuthorizationAttemptId.Value,
+                context.SessionId,
+                toolCall.CallId);
             throw;
         }
     }
@@ -230,7 +276,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
     {
         if (_registry.GetByName(toolCall.Name) is null)
         {
-            _logger.LogWarning("Unknown tool requested: {ToolName}", toolCall.Name);
+            _logger.LogWarning(
+                "Unknown tool requested: {ToolName} authorizationAttemptId={AuthorizationAttemptId} " +
+                "sessionId={SessionId} callId={CallId}",
+                toolCall.Name,
+                context.Approval.AuthorizationAttemptId.Value,
+                context.SessionId,
+                toolCall.CallId);
             context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.NotFound));
             yield return new ToolCompletedUpdate($"Unknown tool: {toolCall.Name}");
             yield break;
@@ -241,8 +293,14 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (interpretation.Rejection is { } rejection)
         {
             _logger.LogWarning(
-                "Rejected tool call ({Reason}): {ToolName} — {Error}",
-                rejection.DenyReason, toolCall.Name, rejection.Message);
+                "Rejected tool call ({Reason}): {ToolName} — {Error} " +
+                "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                rejection.DenyReason,
+                toolCall.Name,
+                rejection.Message,
+                context.Approval.AuthorizationAttemptId.Value,
+                context.SessionId,
+                toolCall.CallId);
             context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
             yield return new ToolCompletedUpdate(rejection.Message);
             yield break;
@@ -283,8 +341,14 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                     modelResult = await ToolOutputSpill.BoundAndSpillAsync(
                         modelResult, redacted, toolCall.CallId, ResolveInlineBudget(tool, context), context.Invocation, ct);
                     _logger.LogInformation(
-                        "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars)",
-                        toolCall.Name, sw.ElapsedMilliseconds, modelResult.Length);
+                        "Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars) " +
+                        "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                        toolCall.Name,
+                        sw.ElapsedMilliseconds,
+                        modelResult.Length,
+                        context.Approval.AuthorizationAttemptId.Value,
+                        context.SessionId,
+                        toolCall.CallId);
                     yield return new ToolCompletedUpdate(modelResult);
                     break;
                 case ToolActivityUpdate { OutputChunk: not null } activity:
@@ -344,7 +408,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (tool is null)
         {
             var missingToolDecision = ToolAuthorizationDecision.Deny("tool_not_found");
-            LogAuthorizationDecision(toolCall.Name, missingToolDecision);
+            LogAuthorizationDecision(toolCall, context, missingToolDecision);
             return (missingToolDecision, null);
         }
 
@@ -390,7 +454,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                 shellAuthorization = ShellPolicyCoordinator.CompleteInternalFailure();
             }
 
-            LogAuthorizationDecision(toolCall.Name, shellAuthorization.Decision);
+            LogAuthorizationDecision(toolCall, context, shellAuthorization.Decision);
             return (shellAuthorization.Decision, shellAuthorization.AuthorizedAnalysis);
         }
 
@@ -454,7 +518,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         }
 
         var authorizationDecision = CompleteAuthorizationDecision(accessDecision, approvalMatches);
-        LogAuthorizationDecision(toolCall.Name, authorizationDecision);
+        LogAuthorizationDecision(toolCall, context, authorizationDecision);
         return (authorizationDecision, null);
     }
 
@@ -560,7 +624,10 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
           second.VerbTokens is not null &&
           first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
 
-    private void LogAuthorizationDecision(string toolName, ToolAuthorizationDecision decision)
+    private void LogAuthorizationDecision(
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        ToolAuthorizationDecision decision)
     {
         switch (decision.Outcome)
         {
@@ -569,46 +636,66 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                     ?? throw new InvalidOperationException("Allowed decision missing an allow reason.");
                 _logger.LogDebug(
                     "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} " +
-                    "reason={AuthorizationReason} explanation={AuthorizationExplanation}",
-                    toolName,
+                    "reason={AuthorizationReason} explanation={AuthorizationExplanation} " +
+                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                    toolCall.Name,
                     decision.Outcome.ToString(),
                     allowReason.ToString(),
-                    allowReason.GetDescription());
+                    allowReason.GetDescription(),
+                    context.Approval.AuthorizationAttemptId.Value,
+                    context.SessionId,
+                    toolCall.CallId);
                 break;
             case ToolAuthorizationOutcome.RequiresApproval:
                 _logger.LogInformation(
-                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome}",
-                    toolName,
-                    decision.Outcome.ToString());
+                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} " +
+                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                    toolCall.Name,
+                    decision.Outcome.ToString(),
+                    context.Approval.AuthorizationAttemptId.Value,
+                    context.SessionId,
+                    toolCall.CallId);
                 break;
             case ToolAuthorizationOutcome.RequiresAgentCorrection:
                 _logger.LogInformation(
-                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome}",
-                    toolName,
-                    decision.Outcome.ToString());
+                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} " +
+                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                    toolCall.Name,
+                    decision.Outcome.ToString(),
+                    context.Approval.AuthorizationAttemptId.Value,
+                    context.SessionId,
+                    toolCall.CallId);
                 break;
             case ToolAuthorizationOutcome.Denied:
                 _logger.LogWarning(
-                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} reason={AuthorizationReason}",
-                    toolName,
+                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} reason={AuthorizationReason} " +
+                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
+                    toolCall.Name,
                     decision.Outcome.ToString(),
-                    decision.DenyReason);
+                    decision.DenyReason,
+                    context.Approval.AuthorizationAttemptId.Value,
+                    context.SessionId,
+                    toolCall.CallId);
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(decision), decision.Outcome, "Unknown authorization outcome.");
         }
 
-        LogShellPolicyTrace(decision.ShellPolicyTrace);
+        LogShellPolicyTrace(toolCall, context, decision.ShellPolicyTrace);
     }
 
-    internal void LogShellPolicyTrace(ShellPolicyDecisionTrace trace)
+    internal void LogShellPolicyTrace(
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        ShellPolicyDecisionTrace trace)
     {
         foreach (var row in trace.Rows)
         {
             _logger.LogInformation(
                 "Shell policy trace: stage={PolicyStage} outcome={PolicyOutcome} reason={PolicyReason} " +
                 "candidate_id={CandidateId} executable={ExecutableBasename} " +
-                "coverage={CoverageKind} scope_relation={ScopeRelation} grant_timestamp={GrantTimestamp}",
+                "coverage={CoverageKind} scope_relation={ScopeRelation} grant_timestamp={GrantTimestamp} " +
+                "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
                 row.Stage.ToString(),
                 row.Outcome.ToString(),
                 row.Reason.ToString(),
@@ -616,7 +703,10 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                 row.ExecutableBasename,
                 row.Coverage.ToString(),
                 row.ScopeRelation.ToString(),
-                row.GrantTimestamp);
+                row.GrantTimestamp,
+                context.Approval.AuthorizationAttemptId.Value,
+                context.SessionId,
+                toolCall.CallId);
         }
     }
 

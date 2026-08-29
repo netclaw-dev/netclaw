@@ -137,7 +137,7 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
         var runtime = CreateRuntime(setup.DeniedPath);
         var current = new WorkingContext { ProjectDirectory = setup.ProjectDirectory };
 
-        await EventFilter.Info(message: "Tool outcome category=Success").ExpectAsync(1, async () =>
+        await EventFilter.Info(contains: "outcomeCategory=Success").ExpectAsync(1, async () =>
         {
             _ = await ExecuteAsync(runtime.Executor, setup, current, setup.Calls[0], "outcome-log");
         }, cancellationToken: TestContext.Current.CancellationToken);

@@ -180,6 +180,7 @@ message ToolApprovalRequestedProto {
   repeated string adopted_speaker_ids = 17;
   TurnContextRecordProto turn_context = 18;
   optional string session_scratch_directory = 19;
+  optional string authorization_attempt_id = 20;
 }
 
 message ToolApprovalResolvedProto {
@@ -187,6 +188,7 @@ message ToolApprovalResolvedProto {
   string call_id = 2;
   string decision = 3;
   int64 resolved_at_ms = 4;
+  optional string authorization_attempt_id = 5;
 }
 
 message ToolBatchAbandonedProto {
