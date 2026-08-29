@@ -36,7 +36,6 @@ public sealed class SubAgentSpawner
     private readonly ISystemPromptProvider _promptProvider;
     private readonly SubAgentConfig _subAgentConfig;
     private readonly ILogger<SubAgentSpawner> _logger;
-    private readonly ILogger? _toolExecutorLogger;
     private readonly IWorkingContextSnapshotProvider _workingContextSnapshots;
 
     // The process-wide daily-stats sink, handed to each spawned SubAgentActor so its
@@ -64,7 +63,6 @@ public sealed class SubAgentSpawner
         _workingContextSnapshots = workingContextSnapshots;
         _subAgentConfig = subAgentConfig ?? new SubAgentConfig();
         _logger = logger;
-        _toolExecutorLogger = logger;
         _sessionMetrics = sessionMetrics;
     }
 
@@ -215,7 +213,7 @@ public sealed class SubAgentSpawner
             SubAgentMaxToolIterations,
             _sessionMetrics,
             exposure.CoreToolNames,
-            _toolExecutorLogger);
+            _logger);
         var actorName = $"subagent-{definition.Name}-{runId}";
         IActorRef subAgent;
         try

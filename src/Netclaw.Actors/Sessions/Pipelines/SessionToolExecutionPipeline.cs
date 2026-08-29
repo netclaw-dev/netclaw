@@ -402,13 +402,15 @@ internal sealed class SessionToolExecutionPipeline
             var results = await Task.WhenAll(tasks);
             foreach (var result in results)
             {
+                var callId = result.Message.ToolCallId?.Value
+                    ?? throw new InvalidOperationException("An authorization attempt requires a call identity.");
                 if (result.Receipt is { } receipt)
                     _logger.Info(
                         "Tool authorization attempt completed authorizationAttemptId={AuthorizationAttemptId} " +
                         "sessionId={SessionId} callId={CallId} outcomeCategory={OutcomeCategory} remediationCode={RemediationCode}",
                         result.AuthorizationAttemptId.Value,
                         batch.SessionId.Value,
-                        result.Message.ToolCallId?.Value,
+                        callId,
                         receipt.Category,
                         receipt.RemediationCode?.ToString());
             }

@@ -1538,16 +1538,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             $"Tool '{tc.Name}' requires interactive approval, but no parent approval bridge is available.");
                     }
 
-                    var bridgeCandidates = ctx.Candidates is { Count: > 0 } c
-                        ? c.Select(x => new ParentApprovalCandidate(x.Verb, x.Directory)
-                        {
-                            Shell = x.Shell,
-                            VerbTokens = x.VerbTokens,
-                        }).ToList()
-                        : (IReadOnlyList<ParentApprovalCandidate>)[];
-                    var bridgeOptions = ctx.Options
-                        .Select(o => new ParentApprovalOption(o.Key.Value, o.Label))
-                        .ToList();
                     // Signal the actor that an approval wait is starting BEFORE
                     // the await so the inactivity watchdog cannot cancel the
                     // wait. The bridge call uses externalCt — only explicit
@@ -1559,20 +1549,30 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     ParentApprovalDecision decision;
                     try
                     {
-                        decision = approvalBridge is IAuthorizationAttemptAwareParentApprovalBridge awareBridge
-                            ? await awareBridge.RequestApprovalAsync(
-                                toolContext.Approval.AuthorizationAttemptId,
-                                new ToolCallId(tc.CallId),
-                                ctx.ToolName,
-                                ctx.DisplayText,
-                                ctx.Patterns,
-                                ctx.CandidateVerbs,
-                                bridgeCandidates,
-                                ctx.Cwd,
-                                bridgeOptions,
-                                ctx.IsMessy,
-                                externalCt)
-                            : await approvalBridge.RequestApprovalAsync(
+                        if (approvalBridge is IAuthorizationAttemptAwareParentApprovalBridge awareBridge)
+                        {
+                            decision = await awareBridge.RequestApprovalAsync(
+                                new ParentApprovalRequest(
+                                    toolContext.Approval.AuthorizationAttemptId,
+                                    new ToolCallId(tc.CallId),
+                                    ctx),
+                                externalCt);
+                        }
+                        else
+                        {
+                            var bridgeCandidates = ctx.Candidates is { Count: > 0 } candidates
+                                ? candidates.Select(static candidate => new ParentApprovalCandidate(
+                                    candidate.Verb,
+                                    candidate.Directory)
+                                {
+                                    Shell = candidate.Shell,
+                                    VerbTokens = candidate.VerbTokens,
+                                }).ToList()
+                                : (IReadOnlyList<ParentApprovalCandidate>)[];
+                            var bridgeOptions = ctx.Options
+                                .Select(static option => new ParentApprovalOption(option.Key.Value, option.Label))
+                                .ToList();
+                            decision = await approvalBridge.RequestApprovalAsync(
                                 new ToolCallId(tc.CallId),
                                 ctx.ToolName,
                                 ctx.DisplayText,
@@ -1583,6 +1583,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                                 bridgeOptions,
                                 ctx.IsMessy,
                                 externalCt);
+                        }
                     }
                     finally
                     {

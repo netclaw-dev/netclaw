@@ -2351,20 +2351,22 @@ internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decis
         => RecordRequest(patterns, candidates, cwd, options);
 
     Task<ParentApprovalDecision> IAuthorizationAttemptAwareParentApprovalBridge.RequestApprovalAsync(
-        AuthorizationAttemptId authorizationAttemptId,
-        ToolCallId callId,
-        string toolName,
-        string displayText,
-        IReadOnlyList<string> patterns,
-        IReadOnlyList<string> candidateVerbs,
-        IReadOnlyList<ParentApprovalCandidate> candidates,
-        string? cwd,
-        IReadOnlyList<ParentApprovalOption> options,
-        bool isMessy,
+        ParentApprovalRequest request,
         CancellationToken ct)
     {
-        AuthorizationAttemptIds.Add(authorizationAttemptId);
-        return RecordRequest(patterns, candidates, cwd, options);
+        AuthorizationAttemptIds.Add(request.AuthorizationAttemptId);
+        return RecordRequest(
+            request.Approval.Patterns,
+            (request.Approval.Candidates ?? [])
+                .Select(static candidate => new ParentApprovalCandidate(candidate.Verb, candidate.Directory)
+                {
+                    Shell = candidate.Shell,
+                    VerbTokens = candidate.VerbTokens,
+                }).ToList(),
+            request.Approval.Cwd,
+            request.Approval.Options
+                .Select(static option => new ParentApprovalOption(option.Key.Value, option.Label))
+                .ToList());
     }
 
     private Task<ParentApprovalDecision> RecordRequest(
@@ -2400,14 +2402,13 @@ internal sealed class AuthorizationRecordingLogger : Microsoft.Extensions.Loggin
         if (state is not IEnumerable<KeyValuePair<string, object?>> properties)
             return;
 
-        foreach (var property in properties)
-        {
-            if (string.Equals(property.Key, "AuthorizationAttemptId", StringComparison.Ordinal)
-                && property.Value is string authorizationAttemptId)
-            {
-                AuthorizationAttemptIds.Add(authorizationAttemptId);
-            }
-        }
+        AuthorizationAttemptIds.AddRange(properties
+            .Where(static property => string.Equals(
+                property.Key,
+                "AuthorizationAttemptId",
+                StringComparison.Ordinal))
+            .Select(static property => property.Value)
+            .OfType<string>());
     }
 }
 
