@@ -41,4 +41,4 @@
 - [x] 7.1 Clarify credential lifetimes, recovery steps, glossary terms, and the forwarded-loopback boundary.
 - [x] 7.2 Add status-specific pairing CLI guidance and tests that prove failures do not persist credentials.
 - [x] 7.3 Update the operations guide and public delivery text.
-- [ ] 7.4 Run all required checks and answer the pull request review threads.
+- [x] 7.4 Run all required checks and answer the pull request review threads.

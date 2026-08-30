@@ -614,11 +614,10 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     }
 
     /// <summary>
-    /// Coverage from old tests: the returned bearer token authenticates a subsequent
-    /// request to an authorized endpoint.
+    /// The returned bearer token stays valid after the pairing code lifetime ends.
     /// </summary>
     [Fact]
-    public async Task Exchange_returned_token_authenticates_against_authorized_endpoints()
+    public async Task Exchange_returned_token_remains_valid_after_pairing_code_lifetime()
     {
         var ct = TestContext.Current.CancellationToken;
         var (code, _) = _pairingCodeService.GenerateCode();
@@ -633,6 +632,7 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         var body = await exchangeResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
         var token = body.GetProperty("token").GetString()!;
 
+        _time.Advance(TimeSpan.FromMinutes(6));
         client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
