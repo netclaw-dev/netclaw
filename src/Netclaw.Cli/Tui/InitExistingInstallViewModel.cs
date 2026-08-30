@@ -240,8 +240,7 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
                 // live there and deleting them would brick the CLI mid-reset.
                 foreach (var entry in Directory.GetDirectories(_paths.BasePath))
                 {
-                    var name = Path.GetFileName(entry);
-                    if (string.Equals(name, "bin", StringComparison.OrdinalIgnoreCase))
+                    if (string.Equals(entry, _paths.BinDirectory, StringComparison.OrdinalIgnoreCase))
                         continue;
 
                     _deleteDirectory(entry);
