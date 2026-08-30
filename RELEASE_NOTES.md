@@ -1,5 +1,36 @@
 # NetClaw Release Notes
 
+## 0.27.0-beta.2 (2026-08-30)
+
+Follow-up beta to 0.27.0-beta.1. Slack replies now render with Slack's own Markdown blocks and tables, Socket Mode connections are supervised and self-heal, MCP auth failures stop firing false alarms, and a full reset no longer deletes the binaries it resets from.
+
+### Better Slack rendering
+
+- **Native Slack Markdown blocks for model replies.** Replies go out as a single Slack `MarkdownBlock` instead of a hand-built Block Kit rich-text tree, so formatting follows Slack's own renderer — including tables, which now render natively (no more custom table blocks or the ~1,100-line converter they needed). The fallback: replies over 12,000 characters go out as plain text ([#2095](https://github.com/netclaw-dev/netclaw/pull/2095)).
+
+### Reliability fixes
+
+- **Slack Socket Mode supervision** — A connection supervisor now checks the transport every 5 seconds, reconnects with exponential backoff up to 5 minutes, classifies fatal vs. transient failures, and alerts through the channel health contract ([#2089](https://github.com/netclaw-dev/netclaw/pull/2089)).
+- **MCP auth failures demote only when it's real** — A typed HTTP 401 marks any HTTP server `AuthFailed`; tool-result text demotes OAuth-capable servers only, so stdio and static-header servers no longer trip false `authentication_failed` alerts. The remedy names the credential you actually configured ([#2062](https://github.com/netclaw-dev/netclaw/pull/2062)).
+- **Full reset keeps installed binaries** — A full reset from the init TUI purges everything except `bin/`, so the CLI no longer deletes itself mid-reset ([#2085](https://github.com/netclaw-dev/netclaw/pull/2085), [#2086](https://github.com/netclaw-dev/netclaw/pull/2086)).
+
+### Observability
+
+- **Authorization attempts are correlated** — Each tool call carries a PII-free `AuthorizationAttemptId` through policy evaluation, approval prompt, decision, retry, and result, including across cold recovery and sub-agents. One query reconstructs a full authorization attempt ([#2078](https://github.com/netclaw-dev/netclaw/pull/2078)).
+
+### Internal
+
+- Session tool approval state refactored with expanded test coverage ([#2091](https://github.com/netclaw-dev/netclaw/pull/2091))
+- Unified session storage and managed temporary paths specified in OpenSpec ([#2068](https://github.com/netclaw-dev/netclaw/pull/2068))
+- Native smoke tests run against a deterministic local provider ([#2081](https://github.com/netclaw-dev/netclaw/pull/2081)); CLI command streams virtualized in tests ([#2076](https://github.com/netclaw-dev/netclaw/pull/2076))
+
+### Dependency Updates
+
+- **Bump Anthropic** — 12.40.0 → 12.44.0 ([#2080](https://github.com/netclaw-dev/netclaw/pull/2080))
+- **Bump OpenTelemetry** — 1.17.0 → 1.18.0 ([#2073](https://github.com/netclaw-dev/netclaw/pull/2073))
+- **Bump Akka group** — Akka.Cluster.Sharding and Akka.Persistence 1.5.70 → 1.5.71 ([#2079](https://github.com/netclaw-dev/netclaw/pull/2079))
+- **Bump Microsoft.Extensions.TimeProvider.Testing** — 10.8.0 → 10.9.0 ([#2070](https://github.com/netclaw-dev/netclaw/pull/2070))
+
 ## 0.27.0-beta.1 (2026-08-27)
 
 This beta opens the semantic memory cycle. NetClaw now embeds and recalls memories locally on your machine with ONNX — no cloud embeddings, no external services. Recall gets a relevance gate that keeps weak matches out, and `netclaw doctor` watches your embedding model's health.
