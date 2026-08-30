@@ -456,18 +456,20 @@ if [ "$SKIP_SHELL" = false ]; then
             write_posix_env_script
             modify_posix_rc_file "$RC_FILE"
             echo ""
-            echo "Installation complete! Run this to use netclaw now:"
+            echo "Installation complete! Netclaw will be available in new terminal sessions."
+            echo "To use Netclaw in this terminal now, run:"
             echo ""
-            echo "  source $RC_FILE"
+            echo "  $SOURCE_LINE"
             ;;
         zsh)
             if RC_FILE="$(get_rc_file "$SHELL_NAME" "${SHELL:-/bin/zsh}")"; then
                 write_posix_env_script
                 modify_posix_rc_file "$RC_FILE"
                 echo ""
-                echo "Installation complete! Run this to use netclaw now:"
+                echo "Installation complete! Netclaw will be available in new terminal sessions."
+                echo "To use Netclaw in this terminal now, run:"
                 echo ""
-                echo "  source $RC_FILE"
+                echo "  $SOURCE_LINE"
             else
                 echo "  Could not safely resolve zsh's effective ZDOTDIR."
                 echo "  No shell profile was changed. Add this to the appropriate zsh profile:"
@@ -478,10 +480,12 @@ if [ "$SKIP_SHELL" = false ]; then
         fish)
             write_fish_config
             FISH_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/netclaw.fish"
+            FISH_CONFIG_QUOTED="$(shell_quote "$FISH_CONFIG")"
             echo ""
-            echo "Installation complete! Run this to use netclaw now:"
+            echo "Installation complete! Netclaw will be available in new terminal sessions."
+            echo "To use Netclaw in this terminal now, run:"
             echo ""
-            echo "  source $FISH_CONFIG"
+            echo "  source $FISH_CONFIG_QUOTED"
             ;;
         *)
             echo "  Shell '$SHELL_NAME' is not supported for automatic PATH setup."

@@ -480,7 +480,7 @@ run_unix_installer() {
 
 # Bash: run the generated startup path through Bash itself, then repeat the
 # install to prove both profile mutation and PATH evaluation are idempotent.
-BASH_HOME="$WORK/shell-bash"
+BASH_HOME="$WORK/shell bash's"
 BASH_INSTALL="$BASH_HOME/netclaw install's/bin"
 mkdir -p "$BASH_HOME"
 if [ "$(uname -s)" = "Darwin" ]; then
@@ -495,10 +495,18 @@ fi
 if run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL" >/dev/null \
     && bash_install_out=$(run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL"); then
   BASH_INSTALL_PHYSICAL=$(cd "$BASH_INSTALL" && pwd -P)
-  if printf '%s' "$bash_install_out" | grep -qF "source $BASH_RC"; then
-    pass "bash: recommends sourcing the edited rc file"
+  bash_current_command=$(printf '%s\n' "$bash_install_out" | sed -n 's/^  \(\. .*\)$/\1/p' | head -1)
+  if printf '%s\n' "$bash_install_out" | grep -qxF "To use Netclaw in this terminal now, run:" \
+      && [ -n "$bash_current_command" ]; then
+    pass "bash: prints a quoted Netclaw env command"
   else
-    fail "bash: recommendation missing 'source $BASH_RC'"
+    fail "bash: current-terminal instruction is missing or incorrect"
+  fi
+  if bash_current_path=$(PATH="/usr/bin:/bin" HOME="$BASH_HOME" \
+      bash --noprofile --norc -c "$bash_current_command; $bash_current_command; printf '%s' \"\$PATH\""); then
+    assert_path_once "bash-current" "$bash_current_path" "$BASH_INSTALL_PHYSICAL"
+  else
+    fail "bash: displayed current-terminal command failed"
   fi
   bash_path=$(PATH="/usr/bin:/bin" HOME="$BASH_HOME" \
     bash --noprofile --rcfile "$BASH_RC" -i -c 'printf "%s" "$PATH"' 2>/dev/null)
@@ -510,7 +518,7 @@ if run_unix_installer "$(command -v bash)" "$BASH_HOME" "$BASH_INSTALL" >/dev/nu
   else
     fail "bash: empty PATH produced '$bash_empty_path'"
   fi
-  source_count=$(grep -cF "$BASH_HOME/.netclaw/env" "$BASH_RC" || true)
+  source_count=$(grep -cxF "$bash_current_command" "$BASH_RC" || true)
   if [ "$source_count" -eq 1 ]; then
     pass "bash: profile source line is idempotent"
   else
@@ -527,19 +535,27 @@ fi
 # startup file under zsh so a Bash-compatible false positive cannot pass.
 if command -v zsh >/dev/null 2>&1; then
   ZSH_EXECUTABLE="$(command -v zsh)"
-  ZSH_HOME="$WORK/shell-zsh"
+  ZSH_HOME="$WORK/shell zsh's"
   ZDOT_DIR="$ZSH_HOME/custom-zdotdir"
   ZSH_INSTALL="$ZSH_HOME/netclaw install's/bin"
   mkdir -p "$ZDOT_DIR"
-  printf "ZDOTDIR='%s'\n" "$ZDOT_DIR" > "$ZSH_HOME/.zshenv"
+  printf 'ZDOTDIR="%s"\n' "$ZDOT_DIR" > "$ZSH_HOME/.zshenv"
   printf '# existing zsh config\n' > "$ZDOT_DIR/.zshrc"
   if (unset ZDOTDIR; run_unix_installer "$ZSH_EXECUTABLE" "$ZSH_HOME" "$ZSH_INSTALL" >/dev/null) \
       && zsh_install_out=$(unset ZDOTDIR; run_unix_installer "$ZSH_EXECUTABLE" "$ZSH_HOME" "$ZSH_INSTALL"); then
     ZSH_INSTALL_PHYSICAL=$(cd "$ZSH_INSTALL" && pwd -P)
-    if printf '%s' "$zsh_install_out" | grep -qF "source $ZDOT_DIR/.zshrc"; then
-      pass "zsh: recommends sourcing the edited rc file"
+    zsh_current_command=$(printf '%s\n' "$zsh_install_out" | sed -n 's/^  \(\. .*\)$/\1/p' | head -1)
+    if printf '%s\n' "$zsh_install_out" | grep -qxF "To use Netclaw in this terminal now, run:" \
+        && [ -n "$zsh_current_command" ]; then
+      pass "zsh: prints a quoted Netclaw env command"
     else
-      fail "zsh: recommendation missing 'source $ZDOT_DIR/.zshrc'"
+      fail "zsh: current-terminal instruction is missing or incorrect"
+    fi
+    if zsh_current_path=$(PATH="/usr/bin:/bin" HOME="$ZSH_HOME" \
+        "$ZSH_EXECUTABLE" -f -c "$zsh_current_command; $zsh_current_command; print -rn -- \"\$PATH\""); then
+      assert_path_once "zsh-current" "$zsh_current_path" "$ZSH_INSTALL_PHYSICAL"
+    else
+      fail "zsh: displayed current-terminal command failed"
     fi
     zsh_path=$(PATH="/usr/bin:/bin" ZDOTDIR="$ZDOT_DIR" \
       "$ZSH_EXECUTABLE" -f -c 'source "$ZDOTDIR/.zshrc"; print -rn -- "$PATH"')
@@ -559,7 +575,7 @@ fi
 # Fish owns a native conf.d file. Execute that file with fish, not Bash.
 if command -v fish >/dev/null 2>&1; then
   FISH_EXECUTABLE="$(command -v fish)"
-  FISH_HOME="$WORK/shell-fish"
+  FISH_HOME="$WORK/shell fish's"
   FISH_INSTALL="$FISH_HOME/netclaw install's/bin"
   FISH_RC="$FISH_HOME/.config/fish/conf.d/netclaw.fish"
   if XDG_CONFIG_HOME="$FISH_HOME/.config" \
@@ -567,13 +583,21 @@ if command -v fish >/dev/null 2>&1; then
       && fish_install_out=$(XDG_CONFIG_HOME="$FISH_HOME/.config" \
           run_unix_installer "$FISH_EXECUTABLE" "$FISH_HOME" "$FISH_INSTALL"); then
     FISH_INSTALL_PHYSICAL=$(cd "$FISH_INSTALL" && pwd -P)
-    if printf '%s' "$fish_install_out" | grep -qF "source $FISH_RC"; then
-      pass "fish: recommends sourcing the edited conf.d file"
+    fish_current_command=$(printf '%s\n' "$fish_install_out" | sed -n 's/^  \(source .*\)$/\1/p' | head -1)
+    if printf '%s\n' "$fish_install_out" | grep -qxF "To use Netclaw in this terminal now, run:" \
+        && [ -n "$fish_current_command" ]; then
+      pass "fish: prints a quoted Netclaw config command"
     else
-      fail "fish: recommendation missing 'source $FISH_RC'"
+      fail "fish: current-terminal instruction is missing or incorrect"
+    fi
+    if fish_current_path=$(PATH="/usr/bin:/bin" "$FISH_EXECUTABLE" --no-config -c \
+        "$fish_current_command; $fish_current_command; string join : -- \$PATH"); then
+      assert_path_once "fish-current" "$fish_current_path" "$FISH_INSTALL_PHYSICAL"
+    else
+      fail "fish: displayed current-terminal command failed"
     fi
     fish_path=$(PATH="/usr/bin:/bin" "$FISH_EXECUTABLE" --no-config -c \
-      "source '$FISH_RC'; string join : -- \$PATH")
+      "$fish_current_command; string join : -- \$PATH")
     assert_path_once "fish" "$fish_path" "$FISH_INSTALL_PHYSICAL"
   else
     fail "fish: installer failed"
