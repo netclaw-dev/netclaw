@@ -162,7 +162,7 @@ Done when:
 - [x] Tests prove host success and remote denial in every exposure mode.
 - [x] Process smoke proves host recovery without a live tunnel dependency.
 - [x] The operations skill and next `0.27` beta website task describe the new procedure.
-- [x] The private advisory receives the fix before public disclosure.
+- [x] The public draft PR receives normal CI before the fixed beta.
 - [ ] The host command keeps proofs away from remote client endpoints, proxies, redirects, and bearer headers.
 
 ### Priority: Keep MCP HTTP Protocol Fallback Deterministic

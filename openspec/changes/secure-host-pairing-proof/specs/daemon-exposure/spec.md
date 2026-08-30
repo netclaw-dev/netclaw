@@ -2,6 +2,8 @@ This capability uses these [engineering glossary](../../../../../docs/spec/GLOSS
 
 - [Authority](../../../../../docs/spec/GLOSSARY.md#authority)
 - [Local-control proof](../../../../../docs/spec/GLOSSARY.md#local-control-proof)
+- [Pairing code](../../../../../docs/spec/GLOSSARY.md#pairing-code)
+- [Device token](../../../../../docs/spec/GLOSSARY.md#device-token)
 
 ## Recovery Flow
 

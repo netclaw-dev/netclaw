@@ -146,7 +146,7 @@ It omits rate limits, token hashing, and HTTP error mapping.
 
 ## Migration Plan
 
-1. Implement and verify the change in the temporary private advisory fork.
+1. Implement and verify the change in a public draft PR with normal CI.
 2. Update the daemon and CLI in the same `0.27` beta.
 3. Restart the daemon after the update.
 4. Preserve all device records, valid tokens, and exposure settings.

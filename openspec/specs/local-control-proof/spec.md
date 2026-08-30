@@ -7,6 +7,7 @@ Define a versioned proof that grants one daemon-host operation to a process with
 This capability uses these [engineering glossary](../../../docs/spec/GLOSSARY.md) terms:
 
 - [Local-control proof](../../../docs/spec/GLOSSARY.md#local-control-proof)
+- [Pairing code](../../../docs/spec/GLOSSARY.md#pairing-code)
 - [Authority](../../../docs/spec/GLOSSARY.md#authority)
 - [Durable and ephemeral](../../../docs/spec/GLOSSARY.md#durable-and-ephemeral)
 

@@ -35,3 +35,10 @@
 - [x] 6.2 Verify the proof never reaches a remote endpoint, redirect target, or HTTP proxy.
 - [x] 6.3 Restrict pairing-code mutation to the coordinator and expire replay entries with their proof windows.
 - [x] 6.4 Bound local-control request load and verify key-ring first use and corruption failures.
+
+## 7. Pull Request Review Follow-up
+
+- [x] 7.1 Clarify credential lifetimes, recovery steps, glossary terms, and the forwarded-loopback boundary.
+- [x] 7.2 Add status-specific pairing CLI guidance and tests that prove failures do not persist credentials.
+- [x] 7.3 Update the operations guide and public delivery text.
+- [ ] 7.4 Run all required checks and answer the pull request review threads.

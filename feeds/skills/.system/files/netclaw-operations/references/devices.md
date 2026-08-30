@@ -14,6 +14,8 @@ shell_execute: netclaw daemon pair
 This command proves access to the daemon host key ring.
 It creates a single-use pairing code with a five-minute lifetime.
 The command works in all exposure modes.
+Host authority follows the shared Netclaw home and key ring.
+It does not follow a physical host label, source address, tunnel, or proxy.
 
 Run the CLI inside the daemon container for a container deployment:
 
@@ -38,8 +40,28 @@ The user is prompted for the pairing code. On success, the bearer token is
 saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
 `~/.netclaw/client/config.json`.
 
+### Credential lifecycle
+
+| Credential | Lifetime | Next action after failure |
+|---|---|---|
+| Host proof | 30 seconds and one use | Run `netclaw daemon pair` again |
+| Pairing code | Five minutes and one successful exchange | Create a new code on the daemon host |
+| Device token | Until operator revocation | Use the normal pairing flow again |
+
+The device token has no automatic expiration or refresh flow.
+Pairing-code expiration does not invalidate a paired device token.
+
 If the daemon rejects a duplicate device name, select a unique name.
-The same valid code remains available after this conflict.
+Reuse the same code while it remains valid.
+
+Create a new host code after an invalid, expired, used, or missing code response.
+Wait before a retry when the daemon reports a request limit.
+The CLI does not save a device token or endpoint after a failed exchange.
+
+Use the normal pairing flow when a client loses its token.
+Select a unique replacement name if the old device record still exists.
+Revoke the old device record after the replacement token works.
+Use the same flow after an operator revokes a device and later restores access.
 
 Update the CLI and daemon together when the command reports a protocol mismatch.
 The command does not use the old hub method as a fallback.
@@ -61,6 +83,7 @@ The command does not use the old hub method as a fallback.
   scanners)
 - Tokens are stored as salted SHA-256 hashes on the daemon; the raw token is
   never persisted server-side
+- Device tokens remain valid until operator revocation; they have no refresh flow
 
 ### Config locations
 

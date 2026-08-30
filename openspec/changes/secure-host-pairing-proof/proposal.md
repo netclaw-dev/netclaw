@@ -38,5 +38,5 @@ The MVP scope excludes a general local IPC service, OIDC changes, and automatic 
 - The pairing exchange endpoint changes its code-consumption order.
 - Mixed old and new CLI or daemon versions fail with explicit upgrade guidance.
 - Container operators run the CLI inside the daemon container.
-- The security patch stays private until the fixed beta is available.
+- The public draft PR receives normal CI before the fixed beta.
 - The website update describes functionality and procedures, not the advisory.

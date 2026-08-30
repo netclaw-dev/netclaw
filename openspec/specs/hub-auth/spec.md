@@ -9,6 +9,8 @@ This capability uses these [engineering glossary](../../../docs/spec/GLOSSARY.md
 
 - [Authority](../../../docs/spec/GLOSSARY.md#authority)
 - [Local-control proof](../../../docs/spec/GLOSSARY.md#local-control-proof)
+- [Pairing code](../../../docs/spec/GLOSSARY.md#pairing-code)
+- [Device token](../../../docs/spec/GLOSSARY.md#device-token)
 
 ## Hub Authority Boundary
 

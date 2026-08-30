@@ -97,8 +97,28 @@ ephemeral: the ToolInvocationReceipt for that tool call
 A local-control proof shows that a process can use the Netclaw host key ring.
 It authorizes one named and time-bounded host operation.
 It is not a device token, source-address claim, or general operator session.
+Processes share this authority only when they use the same Netclaw home and key ring.
 
 **Code anchor:** `LocalControlPairingProofProtector`
+
+### Pairing code
+
+A pairing code is a temporary credential for one device registration.
+The daemon keeps one code in process memory for five minutes.
+A successful exchange consumes the code.
+An expired code requires a new `netclaw daemon pair` command.
+
+**Code anchor:** `PairingCodeService`
+
+### Device token
+
+A device token is a bearer credential that identifies one paired device.
+The client stores the raw token as a protected secret.
+The daemon stores a salted hash in the durable device registry.
+The token remains valid until the operator revokes the device.
+The token has no refresh flow, and pairing-code expiration does not affect it.
+
+**Code anchor:** `DeviceRegistry`
 
 ## Tool Lifecycle Terms
 

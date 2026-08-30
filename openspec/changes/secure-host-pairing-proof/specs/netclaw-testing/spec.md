@@ -1,6 +1,8 @@
 This capability uses these [engineering glossary](../../../../../docs/spec/GLOSSARY.md) terms:
 
 - [Local-control proof](../../../../../docs/spec/GLOSSARY.md#local-control-proof)
+- [Pairing code](../../../../../docs/spec/GLOSSARY.md#pairing-code)
+- [Device token](../../../../../docs/spec/GLOSSARY.md#device-token)
 - [Authority](../../../../../docs/spec/GLOSSARY.md#authority)
 - [Durable and ephemeral](../../../../../docs/spec/GLOSSARY.md#durable-and-ephemeral)
 
