@@ -8,7 +8,7 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.27.0-beta.2</VersionPrefix>
+    <VersionPrefix>0.27.0</VersionPrefix>
     <VersionSuffix>beta.2</VersionSuffix>
     <PackageReleaseNotes>Follow-up beta to 0.27.0-beta.1. Slack replies now render with Slack's own Markdown blocks and tables, Socket Mode connections are supervised and self-heal, MCP auth failures stop firing false alarms, and a full reset no longer deletes the binaries it resets from.
 
