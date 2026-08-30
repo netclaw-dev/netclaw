@@ -125,6 +125,23 @@ public sealed class SlackReplyClientTests
     }
 
     [Fact]
+    public async Task PostThreadReplyAsync_converts_markdown_table_to_table_block()
+    {
+        var fakeChat = new FakeChatApi(response: new PostMessageResponse { Ts = "1234.5678", Channel = "C123" });
+        var client = new SlackReplyClient(new FakeSlackApiClient(fakeChat));
+
+        await client.PostThreadReplyAsync(new SlackPostMessage(
+            ChannelId: new SlackChannelId("C123"),
+            ThreadTs: new SlackThreadTs("1234.5678"),
+            Text: "| Name | Status |\n| --- | --- |\n| API | Healthy |"),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(fakeChat.LastPostedMessage);
+        var table = Assert.Single(fakeChat.LastPostedMessage!.Blocks.OfType<TableBlock>());
+        Assert.Equal("Healthy", Assert.IsType<RawTextCell>(table.Rows[1][1]).Text);
+    }
+
+    [Fact]
     public async Task SetThreadStatusAsync_calls_assistant_thread_status_api()
     {
         var fakeAssistantThreads = new FakeAssistantThreadsApi();

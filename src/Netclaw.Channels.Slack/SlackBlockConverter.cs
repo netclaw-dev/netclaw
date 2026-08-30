@@ -26,6 +26,7 @@ public static partial class SlackBlockConverter
         var lines = markdown.Split('\n');
         var currentRichTextElements = new List<RichTextElement>();
         var i = 0;
+        var tableRendered = false;
 
         while (i < lines.Length)
         {
@@ -36,6 +37,15 @@ public static partial class SlackBlockConverter
             if (string.IsNullOrWhiteSpace(trimmed))
             {
                 i++;
+                continue;
+            }
+
+            if (!tableRendered && TryParseMarkdownTable(lines, i, out var table, out var tableLineCount))
+            {
+                FlushRichText(blocks, currentRichTextElements);
+                blocks.Add(table);
+                tableRendered = true;
+                i += tableLineCount;
                 continue;
             }
 
@@ -146,6 +156,99 @@ public static partial class SlackBlockConverter
 
         FlushRichText(blocks, currentRichTextElements);
         return blocks;
+    }
+
+    private static bool TryParseMarkdownTable(
+        IReadOnlyList<string> lines,
+        int startIndex,
+        out TableBlock table,
+        out int lineCount)
+    {
+        table = null!;
+        lineCount = 0;
+
+        if (startIndex + 1 >= lines.Count
+            || !TryParseTableRow(lines[startIndex], out var headerCells)
+            || headerCells.Count is 0 or > MaxTableColumns
+            || !IsTableDivider(lines[startIndex + 1], headerCells.Count))
+        {
+            return false;
+        }
+
+        var rows = new List<IList<TableCell>>
+        {
+            ToTableCells(headerCells)
+        };
+        var characterCount = headerCells.Sum(cell => cell.Length);
+        var nextIndex = startIndex + 2;
+
+        while (nextIndex < lines.Count && TryParseTableRow(lines[nextIndex], out var cells))
+        {
+            if (cells.Count != headerCells.Count
+                || rows.Count == MaxTableRows
+                || characterCount + cells.Sum(cell => cell.Length) > MaxTableCharacters)
+            {
+                return false;
+            }
+
+            rows.Add(ToTableCells(cells));
+            characterCount += cells.Sum(cell => cell.Length);
+            nextIndex++;
+        }
+
+        table = new TableBlock { Rows = rows };
+        lineCount = nextIndex - startIndex;
+        return true;
+    }
+
+    private static bool IsTableDivider(string line, int columnCount)
+    {
+        return TryParseTableRow(line, out var cells)
+            && cells.Count == columnCount
+            && cells.All(cell => TableDividerCellRegex().IsMatch(cell));
+    }
+
+    private static bool TryParseTableRow(string line, out List<string> cells)
+    {
+        var trimmed = line.Trim();
+        cells = [];
+
+        if (!trimmed.Contains('|', StringComparison.Ordinal))
+            return false;
+
+        var startIndex = trimmed.StartsWith('|') ? 1 : 0;
+        var endIndex = trimmed.EndsWith('|') ? trimmed.Length - 1 : trimmed.Length;
+        var currentCell = new System.Text.StringBuilder();
+
+        for (var index = startIndex; index < endIndex; index++)
+        {
+            var character = trimmed[index];
+            if (character == '\\' && index + 1 < endIndex && trimmed[index + 1] == '|')
+            {
+                currentCell.Append('|');
+                index++;
+                continue;
+            }
+
+            if (character == '|')
+            {
+                cells.Add(currentCell.ToString().Trim());
+                currentCell.Clear();
+                continue;
+            }
+
+            currentCell.Append(character);
+        }
+
+        cells.Add(currentCell.ToString().Trim());
+        return cells.Count > 0;
+    }
+
+    private static IList<TableCell> ToTableCells(IEnumerable<string> cells)
+    {
+        return cells
+            .Select(cell => (TableCell)new RawTextCell { Text = cell })
+            .ToList();
     }
 
     private static void FlushRichText(List<Block> blocks, List<RichTextElement> elements)
@@ -372,6 +475,9 @@ public static partial class SlackBlockConverter
     [GeneratedRegex(@"^\d+\.\s")]
     private static partial Regex OrderedListPrefix();
 
+    [GeneratedRegex(@"^:?-{3,}:?$")]
+    private static partial Regex TableDividerCellRegex();
+
     // Slack user mention: <@U0123ABC> or <@W0123ABC>, optionally with a
     // fallback label (<@U0123ABC|david>).
     [GeneratedRegex(@"<@([UW][0-9A-Z]+)(?:\|[^>]+)?>")]
@@ -389,4 +495,8 @@ public static partial class SlackBlockConverter
     // and group DMs), optionally with a label.
     [GeneratedRegex(@"<#([CGD][0-9A-Z]+)(?:\|[^>]+)?>")]
     private static partial Regex ChannelMentionRegex();
+
+    private const int MaxTableRows = 100;
+    private const int MaxTableColumns = 20;
+    private const int MaxTableCharacters = 10_000;
 }

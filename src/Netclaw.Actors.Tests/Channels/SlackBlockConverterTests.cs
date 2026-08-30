@@ -247,6 +247,88 @@ public class SlackBlockConverterTests
     }
 
     [Fact]
+    public void MarkdownTable_ProducesTableBlockWithRawTextCells()
+    {
+        var input = """
+            | Name | Status |
+            | --- | --- |
+            | API | Healthy |
+            | Worker | Degraded |
+            """;
+
+        var blocks = SlackBlockConverter.Convert(input);
+
+        var table = Assert.Single(blocks.OfType<TableBlock>());
+        Assert.Equal(3, table.Rows.Count);
+        Assert.Equal(2, table.Rows[0].Count);
+        Assert.Equal("Name", Assert.IsType<RawTextCell>(table.Rows[0][0]).Text);
+        Assert.Equal("Healthy", Assert.IsType<RawTextCell>(table.Rows[1][1]).Text);
+        Assert.Equal("Degraded", Assert.IsType<RawTextCell>(table.Rows[2][1]).Text);
+    }
+
+    [Fact]
+    public void MarkdownTable_WithEscapedPipe_PreservesCellText()
+    {
+        var input = """
+            | Expression | Value |
+            | --- | --- |
+            | a \| b | true |
+            """;
+
+        var blocks = SlackBlockConverter.Convert(input);
+
+        var table = Assert.Single(blocks.OfType<TableBlock>());
+        Assert.Equal("a | b", Assert.IsType<RawTextCell>(table.Rows[1][0]).Text);
+    }
+
+    [Fact]
+    public void MarkdownTable_WithMoreThanTwentyColumns_RemainsRichText()
+    {
+        var header = string.Join(" | ", Enumerable.Range(1, 21).Select(column => $"H{column}"));
+        var divider = string.Join(" | ", Enumerable.Repeat("---", 21));
+        var row = string.Join(" | ", Enumerable.Range(1, 21).Select(column => $"V{column}"));
+
+        var blocks = SlackBlockConverter.Convert($"{header}\n{divider}\n{row}");
+
+        Assert.Empty(blocks.OfType<TableBlock>());
+        var richText = Assert.Single(blocks.OfType<RichTextBlock>());
+        Assert.Equal(3, richText.Elements.OfType<RichTextSection>().Count());
+    }
+
+    [Fact]
+    public void MarkdownTable_WithMoreThanOneHundredRows_RemainsRichText()
+    {
+        var rows = string.Join("\n", Enumerable.Range(1, 100).Select(row => $"| {row} |"));
+        var input = $"| Value |\n| --- |\n{rows}";
+
+        var blocks = SlackBlockConverter.Convert(input);
+
+        Assert.Empty(blocks.OfType<TableBlock>());
+    }
+
+    [Fact]
+    public void MarkdownTable_AfterFirstTable_RemainsRichText()
+    {
+        var input = """
+            | Name |
+            | --- |
+            | API |
+
+            | Name |
+            | --- |
+            | Worker |
+            """;
+
+        var blocks = SlackBlockConverter.Convert(input);
+
+        Assert.Single(blocks.OfType<TableBlock>());
+        var richText = Assert.Single(blocks.OfType<RichTextBlock>());
+        Assert.Contains(
+            richText.Elements.OfType<RichTextSection>(),
+            section => section.Elements.OfType<RichTextText>().Any(text => text.Text == "| Worker |"));
+    }
+
+    [Fact]
     public void Blockquote_ProducesRichTextQuote()
     {
         var blocks = SlackBlockConverter.Convert("> This is a quoted passage");
