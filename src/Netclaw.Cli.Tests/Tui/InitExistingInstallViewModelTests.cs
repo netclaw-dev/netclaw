@@ -103,6 +103,9 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
     {
         File.WriteAllText(_paths.NetclawConfigPath, "{}");
         File.WriteAllText(_paths.SqliteDbPath, "db");
+        // bin/ holds the installed binaries; a full reset must purge data but keep it.
+        var binaryPath = Path.Combine(_paths.BinDirectory, "netclaw");
+        File.WriteAllText(binaryPath, "binary");
 
         var vm = Create();
         string? route = null;
@@ -113,7 +116,9 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         Select(vm, 1); // Yes → perform
         await WaitForProgressAsync(vm, 3);
 
-        Assert.False(Directory.Exists(_paths.BasePath));
+        Assert.False(Directory.Exists(_paths.ConfigDirectory), "Config should be purged.");
+        Assert.False(File.Exists(_paths.SqliteDbPath), "Memory db should be purged.");
+        Assert.True(File.Exists(binaryPath), "Installed binaries in bin/ must survive a full reset.");
         await CompleteResetAsync(vm);
         Assert.Equal(InitExistingInstallViewModel.WizardRoute, route);
     }
@@ -292,7 +297,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         var releaseDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var vm = Create(DaemonStopped, path =>
         {
-            if (path == _paths.BasePath)
+            if (path == _paths.ConfigDirectory)
             {
                 deleteStarted.TrySetResult();
                 releaseDelete.Task.GetAwaiter().GetResult();
@@ -350,7 +355,7 @@ public sealed class InitExistingInstallViewModelTests : IDisposable
         var releaseDelete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var vm = Create(DaemonStopped, path =>
         {
-            if (path == _paths.BasePath)
+            if (path == _paths.ConfigDirectory)
             {
                 deleteStarted.TrySetResult();
                 releaseDelete.Task.GetAwaiter().GetResult();
