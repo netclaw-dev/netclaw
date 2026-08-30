@@ -247,6 +247,7 @@ public class DispatchingToolExecutorTests
         };
         var mcpCommandPolicy = new ShellCommandPolicy(ShellEnvironment);
         var mcpPathPolicy = new ToolPathPolicy(ShellEnvironment, []);
+        var logger = new RecordingLogger<DispatchingToolExecutor>();
         var executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(
@@ -257,7 +258,8 @@ public class DispatchingToolExecutorTests
                     ShellExecutionMode.HostAllowed,
                     UsedStrictFallback: false),
                 mcpCommandPolicy,
-                mcpPathPolicy));
+                mcpPathPolicy),
+            logger: logger);
 
         var toolCall = CreateToolCall("call-mcp", adapter.Name, new Dictionary<string, object?>());
         var context = TestToolExecutionContext.CreateBound("signalr/thread-1", null, new TestToolExecutionContextOptions
@@ -270,6 +272,22 @@ public class DispatchingToolExecutorTests
         // MCP output is trusted-by-configuration, so the model gets the full, usable URL.
         Assert.Contains("abc123def456ghijklmnop", result);
         Assert.DoesNotContain("***REDACTED***", result);
+
+        var correlatedEntries = logger.Entries
+            .Where(entry => entry.ContainsKey("AuthorizationAttemptId"))
+            .ToArray();
+        Assert.NotEmpty(correlatedEntries);
+        Assert.All(correlatedEntries, entry =>
+        {
+            Assert.Equal(
+                context.Approval.AuthorizationAttemptId.Value,
+                entry["AuthorizationAttemptId"]);
+            Assert.Equal(context.SessionId, entry["SessionId"]);
+            Assert.Equal(toolCall.CallId, entry["CallId"]);
+            Assert.DoesNotContain(
+                entry.Values.OfType<string>(),
+                value => value.Contains("abc123def456ghijklmnop", StringComparison.Ordinal));
+        });
     }
 
     [Fact]
@@ -1732,7 +1750,9 @@ public class DispatchingToolExecutorTests
         var trace = builder.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.SafeVerbInTrustedScope));
 
-        executor.LogShellPolicyTrace(trace);
+        var call = new FunctionCallContent("call-malicious-trace", ShellTool.ToolName);
+        var context = CreateInteractivePersonalContext("signalr/malicious-trace");
+        executor.LogShellPolicyTrace(call, context, trace);
 
         Assert.Equal(trace.Rows.Count, logger.Entries.Count);
         var candidateLog = logger.Entries[0];
@@ -1743,6 +1763,11 @@ public class DispatchingToolExecutorTests
         Assert.Contains("\\u202E", executable, StringComparison.Ordinal);
         Assert.DoesNotContain('\r', executable);
         Assert.DoesNotContain('\n', executable);
+        Assert.Equal(
+            context.Approval.AuthorizationAttemptId.Value,
+            candidateLog["AuthorizationAttemptId"]);
+        Assert.Equal(context.SessionId, candidateLog["SessionId"]);
+        Assert.Equal(call.CallId, candidateLog["CallId"]);
     }
 
     [Theory]

@@ -1120,6 +1120,10 @@ Done when:
   still produce terminal failed `spawn_agent` results.
 - [ ] No turn loop can report success while a tool result is still pending.
 - [ ] Logs/traces correlate model call, tool call, approval, and session turn.
+  `openspec/changes/correlate-tool-authorization-attempts/` implements the
+  call-local authorization-attempt link across policy, correction, prompt,
+  decision, retry, recovery, and result. Model-call and session-turn links
+  remain part of the broader observability item.
 
 ### Phase 5: Memory, Identity, Scheduling, And Persistence Contracts
 

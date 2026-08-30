@@ -39,8 +39,9 @@ public enum AlertType
     UpdateAvailable,
     MemoryEmbeddingModelUnavailable,
     MemoryRelevanceModelUnavailable,
-    // Appended at the end so prior ordinal values remain stable.
+    // New values stay at the end so prior ordinal values remain stable.
     ReminderScheduleFailed,
+    ChannelReconnected,
 }
 
 /// <summary>

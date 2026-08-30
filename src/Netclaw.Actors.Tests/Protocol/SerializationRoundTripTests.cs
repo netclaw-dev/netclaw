@@ -812,6 +812,7 @@ public sealed class SerializationRoundTripTests : TestKit
         {
             SessionId = new SessionId("C123/1700000000.000001"),
             CallId = "call-pending-1",
+            AuthorizationAttemptId = "auth-0123456789abcdef0123456789abcdef",
             ToolName = "shell_execute",
             Patterns = ["git status", "ls"],
             CandidateVerbs = ["git", "ls"],
@@ -871,6 +872,7 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.Equal(wrapped.SessionId, result.SessionId);
         Assert.Equal(wrapped.CallId, result.CallId);
+        Assert.Equal(wrapped.AuthorizationAttemptId, result.AuthorizationAttemptId);
         Assert.Equal(wrapped.ToolName, result.ToolName);
         Assert.Equal(wrapped.Patterns, result.Patterns);
         Assert.Equal(wrapped.CandidateVerbs, result.CandidateVerbs);
@@ -916,6 +918,27 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void ToolApprovalResolved_round_trips_authorization_attempt_id()
+    {
+        var wrapped = new ToolApprovalResolved
+        {
+            SessionId = new SessionId("C123/1700000000.000001"),
+            CallId = "call-resolved-1",
+            AuthorizationAttemptId = "auth-fedcba9876543210fedcba9876543210",
+            Decision = ApprovalDecision.ApprovedOnce.ToString(),
+            ResolvedAtMs = 1700000001000
+        };
+
+        var result = RoundTrip(wrapped);
+
+        Assert.Equal(wrapped.SessionId, result.SessionId);
+        Assert.Equal(wrapped.CallId, result.CallId);
+        Assert.Equal(wrapped.AuthorizationAttemptId, result.AuthorizationAttemptId);
+        Assert.Equal(wrapped.Decision, result.Decision);
+        Assert.Equal(wrapped.ResolvedAtMs, result.ResolvedAtMs);
+    }
+
+    [Fact]
     public void ToolApprovalRequested_legacy_event_round_trips_without_turn_context()
     {
         var wrapped = new ToolApprovalRequested
@@ -948,6 +971,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.SupportsInteractiveApproval, result.SupportsInteractiveApproval);
         Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
         Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
+        Assert.Null(result.AuthorizationAttemptId);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Null(result.TurnContext);
         Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);
