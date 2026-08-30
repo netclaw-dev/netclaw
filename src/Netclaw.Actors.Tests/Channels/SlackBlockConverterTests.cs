@@ -282,6 +282,31 @@ public class SlackBlockConverterTests
     }
 
     [Fact]
+    public void MarkdownTable_WithInlineMarkdown_ProducesRichTextCells()
+    {
+        var input = """
+            | Item | Guide |
+            | --- | --- |
+            | **Deploy** | [Read the guide](https://example.com/guide) |
+            """;
+
+        var blocks = SlackBlockConverter.Convert(input);
+
+        var table = Assert.Single(blocks.OfType<TableBlock>());
+        var itemCell = Assert.IsType<RichTextCell>(table.Rows[1][0]);
+        var itemSection = Assert.Single(itemCell.Elements.OfType<RichTextSection>());
+        var itemText = Assert.Single(itemSection.Elements.OfType<RichTextText>());
+        Assert.Equal("Deploy", itemText.Text);
+        Assert.True(itemText.Style?.Bold);
+
+        var guideCell = Assert.IsType<RichTextCell>(table.Rows[1][1]);
+        var guideSection = Assert.Single(guideCell.Elements.OfType<RichTextSection>());
+        var guideLink = Assert.Single(guideSection.Elements.OfType<RichTextLink>());
+        Assert.Equal("Read the guide", guideLink.Text);
+        Assert.Equal("https://example.com/guide", guideLink.Url);
+    }
+
+    [Fact]
     public void MarkdownTable_WithMoreThanTwentyColumns_RemainsRichText()
     {
         var header = string.Join(" | ", Enumerable.Range(1, 21).Select(column => $"H{column}"));

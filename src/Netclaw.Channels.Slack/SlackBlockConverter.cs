@@ -247,8 +247,41 @@ public static partial class SlackBlockConverter
     private static IList<TableCell> ToTableCells(IEnumerable<string> cells)
     {
         return cells
-            .Select(cell => (TableCell)new RawTextCell { Text = cell })
+            .Select(ToTableCell)
             .ToList();
+    }
+
+    private static TableCell ToTableCell(string cell)
+    {
+        var elements = ParseInlineElements(cell);
+        if (!elements.Any(RequiresRichTextCell))
+            return new RawTextCell { Text = cell };
+
+        return new RichTextCell
+        {
+            Elements =
+            [
+                new RichTextSection { Elements = elements }
+            ]
+        };
+    }
+
+    private static bool RequiresRichTextCell(RichTextSectionElement element)
+    {
+        return element is not RichTextText
+        {
+            Style:
+            {
+                Bold: false,
+                Italic: false,
+                Strike: false,
+                Code: false,
+                Highlight: false,
+                ClientHighlight: false,
+                Underline: false,
+                Unlink: false
+            }
+        };
     }
 
     private static void FlushRichText(List<Block> blocks, List<RichTextElement> elements)
