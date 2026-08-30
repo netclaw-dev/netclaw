@@ -125,6 +125,43 @@ public sealed class SlackReplyClientTests
     }
 
     [Fact]
+    public async Task PostThreadReplyAsync_uses_a_markdown_block_for_model_output()
+    {
+        var fakeChat = new FakeChatApi(response: new PostMessageResponse { Ts = "1234.5678", Channel = "C123" });
+        var client = new SlackReplyClient(new FakeSlackApiClient(fakeChat));
+        const string markdown =
+            "**[Netclaw](https://netclaw.dev)**\n\n| Name | Status |\n| --- | --- |\n| API | Healthy |";
+
+        await client.PostThreadReplyAsync(new SlackPostMessage(
+            ChannelId: new SlackChannelId("C123"),
+            ThreadTs: new SlackThreadTs("1234.5678"),
+            Text: markdown),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(fakeChat.LastPostedMessage);
+        var block = Assert.IsType<MarkdownBlock>(Assert.Single(fakeChat.LastPostedMessage!.Blocks));
+        Assert.Equal(markdown, block.Text);
+    }
+
+    [Fact]
+    public async Task PostThreadReplyAsync_uses_the_text_fallback_above_the_markdown_limit()
+    {
+        var fakeChat = new FakeChatApi(response: new PostMessageResponse { Ts = "1234.5678", Channel = "C123" });
+        var client = new SlackReplyClient(new FakeSlackApiClient(fakeChat));
+        var markdown = new string('a', 12_001);
+
+        await client.PostThreadReplyAsync(new SlackPostMessage(
+            ChannelId: new SlackChannelId("C123"),
+            ThreadTs: new SlackThreadTs("1234.5678"),
+            Text: markdown),
+            TestContext.Current.CancellationToken);
+
+        Assert.NotNull(fakeChat.LastPostedMessage);
+        Assert.Empty(fakeChat.LastPostedMessage!.Blocks);
+        Assert.Equal(markdown, fakeChat.LastPostedMessage.Text);
+    }
+
+    [Fact]
     public async Task SetThreadStatusAsync_calls_assistant_thread_status_api()
     {
         var fakeAssistantThreads = new FakeAssistantThreadsApi();

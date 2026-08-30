@@ -46,10 +46,8 @@ namespace Netclaw.Channels.Slack;
 ///   copy).</item>
 /// </list>
 /// <para>
-/// The Block Kit (<c>Blocks</c>) representation of the same message is
-/// handled by <see cref="SlackBlockConverter"/> using the same
-/// <see cref="IsRewriteProne"/> and <see cref="NormaliseScopeList"/>
-/// helpers so the two surfaces stay in lockstep.
+/// The Slack Markdown block keeps the original model text. This helper protects
+/// only the plain-text message fallback.
 /// </para>
 /// </remarks>
 public static partial class SlackTextProtector
@@ -198,8 +196,7 @@ public static partial class SlackTextProtector
     // CommonMark link-destination semantics. One level of paren
     // nesting is supported, which covers every URL shape seen in
     // practice; deeper nesting falls back to first-')' termination.
-    // Shared with SlackBlockConverter so both outbound surfaces
-    // tokenize markdown links identically.
+    // Used by the plain-text fallback for standard Markdown links.
     [GeneratedRegex(@"\[([^\]]+)\]\(((?:[^()]|\([^()]*\))*)\)")]
     internal static partial Regex MarkdownLinkRegex();
 
@@ -209,9 +206,7 @@ public static partial class SlackTextProtector
     // punctuation (.,!?;:) so a URL at the end of a sentence —
     // "see https://x.com." — does not swallow the period into the
     // clickable link target. Mid-URL punctuation is preserved because
-    // only the final character is constrained. Shared with
-    // SlackBlockConverter so both outbound surfaces tokenize URLs
-    // identically.
+    // only the final character is constrained.
     [GeneratedRegex(@"https?://[^\s<>)\]|]*[^\s<>)\]|.,!?;:]")]
     internal static partial Regex BareUrlRegex();
 }
