@@ -75,7 +75,16 @@ jobs:
         # 30-min job cap) and is diagnosable from the CI log + the uploaded dump instead of a silent
         # timeout. The full dump carries every thread's stack — needed to confirm the suspected
         # macOS/ARM64 weak-memory-ordering hang in the TUI view-models.
-        run: dotnet test -c Release --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
+        # The NativeShell category is excluded here and runs alone in the next step.
+        run: dotnet test -c Release --filter "Category!=NativeShell" --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
+
+      - name: "dotnet test (native shell, serial)"
+        if: runner.os == 'Windows'
+        shell: bash
+        # The live Windows PowerShell 5.1 test launches a real powershell.exe. It runs after the
+        # parallel run so it does not share CPU with other test collections; on a starved runner
+        # that contention is what pushed it past its 90 s budget.
+        run: dotnet test -c Release --no-build --filter "Category=NativeShell" --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
 
       # Diagnostic: surface the blame Sequence file (names the stuck test) in the CI log so a
       # platform-specific hang can be pinpointed even without downloading the dump artifact.

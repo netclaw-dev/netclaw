@@ -14,11 +14,19 @@ using static Netclaw.Actors.Tools.ToolApprovalProtocol;
 
 namespace Netclaw.Actors.Tools;
 
+// Every Ask below uses AskTimeout as its budget.
+//
+// The approval actor opens the approvals file on its own mailbox. A fixed 5 second budget was too
+// small for the first cold read on a slow host. The budget covers that file round-trip only. It
+// does not cover the wait for a person to approve the tool call. The budget stays finite because
+// some callers pass CancellationToken.None. A lost reply then suspends the caller mailbox forever.
 public sealed class AkkaToolApprovalService :
     IToolApprovalService,
     IStructuredToolApprovalService,
     IShellApprovalMatchService
 {
+    private static readonly TimeSpan AskTimeout = TimeSpan.FromSeconds(30);
+
     private readonly IRequiredActor<ToolApprovalActorKey> _actorProvider;
     private readonly ShellExecutionEnvironment? _compatibilityEnvironment;
 
@@ -78,7 +86,7 @@ public sealed class AkkaToolApprovalService :
         var protocolSessionId = sessionId.HasValue ? (SessionId)sessionId.Value.Value : (SessionId?)null;
         var response = await actor.Ask<UnapprovedPatternsResponse>(
             new GetUnapprovedPatterns(protocolSessionId, audience, toolName, candidates, cwd),
-            TimeSpan.FromSeconds(5),
+            AskTimeout,
             ct);
 
         return response.Result;
@@ -99,7 +107,7 @@ public sealed class AkkaToolApprovalService :
                 request.ToolName,
                 request.Environment,
                 request.Candidates),
-            TimeSpan.FromSeconds(5),
+            AskTimeout,
             cancellationToken);
 
         return response.Result;
@@ -151,7 +159,7 @@ public sealed class AkkaToolApprovalService :
         var actor = await _actorProvider.GetAsync(ct);
         var result = await actor.Ask<ToolApprovalRecorded>(
             new RecordToolApproval((SessionId)sessionId.Value, audience, toolName, patterns, persistent, cwd),
-            TimeSpan.FromSeconds(5),
+            AskTimeout,
             ct);
         if (result.Failure is { } failure)
         {
@@ -175,7 +183,7 @@ public sealed class AkkaToolApprovalService :
                 toolName,
                 grants,
                 persistent),
-            TimeSpan.FromSeconds(5),
+            AskTimeout,
             ct);
         if (result.Failure is { } failure)
         {
