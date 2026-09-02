@@ -66,7 +66,6 @@ public class ShellToolTests
         Assert.Contains("do not join them with separators or labels", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not use shell only to verify successful structured results", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("Do not submit variants while the decision is pending", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("do not retry that call during the same user turn", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("A later explicit user request can start a new call", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Apply one 'Tool execution deferred:' correction unchanged", _tool.Description, StringComparison.Ordinal);
@@ -90,7 +89,6 @@ public class ShellToolTests
         Assert.Contains("do not join them with separators or labels", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not verify successful structured results with shell", commandDescription, StringComparison.Ordinal);
-        Assert.Contains("Wait for the user's decision when a call requires approval", commandDescription, StringComparison.Ordinal);
         Assert.Contains("do not retry that call during the same user turn", commandDescription, StringComparison.Ordinal);
         Assert.Contains("A later explicit user request can start a new call", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Apply one 'Tool execution deferred:' correction unchanged", commandDescription, StringComparison.Ordinal);

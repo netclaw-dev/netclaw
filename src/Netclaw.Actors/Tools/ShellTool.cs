@@ -27,7 +27,6 @@ namespace Netclaw.Actors.Tools;
     "Start with the smallest operation that answers the request. Use one operation per call. " +
     "Keep independent searches and diagnostics separate; do not join them with separators or labels. " +
     "Add a pipeline only when the requested result requires it. Do not use shell only to verify successful structured results. " +
-    "When a call requires approval, wait for the user's decision. Do not submit variants while the decision is pending. " +
     "After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. " +
     "A later explicit user request can start a new call under normal approval policy. " +
     "Apply one 'Tool execution deferred:' correction unchanged. " +
@@ -53,7 +52,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
     public record Params(
         [param: Description(
-            "The smallest shell operation that answers the request. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels. Add a pipeline only when the requested result requires it. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. Wait for the user's decision when a call requires approval. After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. A later explicit user request can start a new call under normal approval policy. Apply one 'Tool execution deferred:' correction unchanged.")]
+            "The smallest shell operation that answers the request. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels. Add a pipeline only when the requested result requires it. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. A later explicit user request can start a new call under normal approval policy. Apply one 'Tool execution deferred:' correction unchanged.")]
         string Command,
         [param: Description(
             "Set only for one call in a named child directory or worktree. Omit for declared-project work. Use session_dir for disposable writable work outside a project; do not substitute platform temporary storage.")]
