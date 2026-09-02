@@ -33,8 +33,10 @@ internal static class ToolChoiceGuidance
         1. Start with the smallest single shell operation that directly answers the request.
         2. Use one operation per call. Add a pipeline only when the requested result requires it.
         3. Do not use shell only to verify a successful structured tool result.
-        4. After an approval-required result, do not retry or substitute shell variants.
-        5. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
-        6. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
+        4. When a call requires approval, wait for the user's decision; do not submit variants while the decision is pending.
+        5. After an access denial, do not retry that call during the same user turn.
+        6. Do not change its scope or substitute another tool to evade the denial.
+        7. A later explicit user request can start a new call. Apply the normal approval policy to that call.
+        8. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
         """;
 }

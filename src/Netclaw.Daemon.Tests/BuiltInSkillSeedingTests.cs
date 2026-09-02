@@ -72,8 +72,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Contains("Add a pipeline only when the requested result requires it", skill, StringComparison.Ordinal);
         Assert.Contains("disposable writable work outside a project", skill, StringComparison.Ordinal);
         Assert.Contains("do not substitute platform temporary storage", skill, StringComparison.Ordinal);
-        Assert.Contains("After an approval-required result", skill, StringComparison.Ordinal);
-        Assert.Contains("A `Tool access denied:` result is terminal", skill, StringComparison.Ordinal);
+        Assert.Contains("After an access denial, do not retry that call during the same user turn", skill, StringComparison.Ordinal);
+        Assert.Contains("A later explicit user request can start a new call", skill, StringComparison.Ordinal);
         Assert.Contains("Do not probe a named project path before declaring it", skill, StringComparison.Ordinal);
         Assert.Contains("user-provided fallback before other tools", skill, StringComparison.Ordinal);
         Assert.Contains("Use the task's first project path exactly", skill, StringComparison.Ordinal);
@@ -91,8 +91,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
             "Keep independent searches and diagnostics separate",
             "do not join them with separators or labels",
             "Add a pipeline only when the requested result requires it",
-            "After an approval-required result",
-            "A `Tool access denied:` result is terminal",
+            "After an access denial, do not retry that call during the same user turn",
+            "A later explicit user request can start a new call",
             "Apply one `Tool execution deferred:` correction unchanged"
         };
         foreach (var statement in statements)

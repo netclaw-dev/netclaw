@@ -1291,6 +1291,107 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Denied_approval_does_not_block_a_later_user_directed_call()
+    {
+        const string firstCallId = "call-shell-denied-first";
+        const string secondCallId = "call-shell-user-directed-second";
+        _toolExecutor.GatedTools.Add("shell_execute");
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(firstCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+        _fakeChatClient.PlannedResponses.Enqueue(
+            [new TextContent("The user denied the first call.")]);
+        _fakeChatClient.PlannedResponses.Enqueue(
+        [
+            new FunctionCallContent(secondCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ]);
+        _fakeChatClient.PlannedResponses.Enqueue(
+            [new TextContent("The user denied the second call.")]);
+
+        var sessionId = new SessionId("test-channel/user-directed-call-after-denial");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("user-directed-call-after-denial-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var firstCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var firstRequest = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(firstCallId, firstCall.CallId.Value);
+        Assert.Equal(firstCallId, firstRequest.CallId.Value);
+
+        var firstDenial = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(firstCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+            SenderId = new SenderId("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.IsType<CommandAck>(firstDenial);
+
+        var firstResult = await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains("approval_denied_by_user", firstResult.Result, StringComparison.Ordinal);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Try the command again",
+            Source = RequesterSource("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var secondCall = await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var secondRequest = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(secondCallId, secondCall.CallId.Value);
+        Assert.Equal(secondCallId, secondRequest.CallId.Value);
+        Assert.NotEqual(firstRequest.AuthorizationAttemptId, secondRequest.AuthorizationAttemptId);
+        Assert.Equal(2, _toolExecutor.AuthorizationAttempts.Count);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        var secondDenial = await sessionManager.Ask<ISessionResponse>(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(secondCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
+            SenderId = new SenderId("local-user")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.IsType<CommandAck>(secondDenial);
+
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+    }
+
+    [Fact]
     public async Task Cold_recovered_denied_scratch_retry_preserves_session_directory_hint()
     {
         const string callId = "call-shell-scratch-denied";

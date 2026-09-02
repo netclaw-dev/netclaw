@@ -66,8 +66,9 @@ public class ShellToolTests
         Assert.Contains("do not join them with separators or labels", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not use shell only to verify successful structured results", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("After approval-required results, do not retry or substitute variants", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("Treat 'Tool access denied:' as terminal; do not change scope", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Do not submit variants while the decision is pending", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("do not retry that call during the same user turn", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("A later explicit user request can start a new call", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Apply one 'Tool execution deferred:' correction unchanged", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Do not use shell for known file reads", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("or disposable text unless shell behavior is requested", _tool.Description, StringComparison.Ordinal);
@@ -89,8 +90,9 @@ public class ShellToolTests
         Assert.Contains("do not join them with separators or labels", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Add a pipeline only when the requested result requires it", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not verify successful structured results with shell", commandDescription, StringComparison.Ordinal);
-        Assert.Contains("Do not retry approval-required variants", commandDescription, StringComparison.Ordinal);
-        Assert.Contains("Treat 'Tool access denied:' as terminal; do not change scope", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("Wait for the user's decision when a call requires approval", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("do not retry that call during the same user turn", commandDescription, StringComparison.Ordinal);
+        Assert.Contains("A later explicit user request can start a new call", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Apply one 'Tool execution deferred:' correction unchanged", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not use shell for disposable text unless shell behavior is requested", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Set only for one call", description, StringComparison.Ordinal);

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.65.3"
+  version: "2.65.4"
 ---
 
 # Netclaw Operations
@@ -61,9 +61,11 @@ Keep shell approval friction bounded:
 2. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels.
 3. Add a pipeline only when the requested result requires it.
 4. Do not use shell only to verify a successful structured tool result.
-5. After an approval-required result, do not retry or substitute shell variants.
-6. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
-7. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
+5. When a call requires approval, wait for the user's decision; do not submit variants while the decision is pending.
+6. After an access denial, do not retry that call during the same user turn.
+7. Do not change its scope or substitute another tool to evade the denial.
+8. A later explicit user request can start a new call. Apply the normal approval policy to that call.
+9. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
 
 ## Project Directory
 

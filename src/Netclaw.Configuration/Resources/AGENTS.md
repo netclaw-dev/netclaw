@@ -41,9 +41,11 @@ Keep shell approval friction bounded:
 2. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels.
 3. Add a pipeline only when the requested result requires it.
 4. Do not use shell only to verify a successful structured tool result.
-5. After an approval-required result, do not retry or substitute shell variants.
-6. A `Tool access denied:` result is terminal; do not change scope, retry, or substitute another tool.
-7. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
+5. When a call requires approval, wait for the user's decision; do not submit variants while the decision is pending.
+6. After an access denial, do not retry that call during the same user turn.
+7. Do not change its scope or substitute another tool to evade the denial.
+8. A later explicit user request can start a new call. Apply the normal approval policy to that call.
+9. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
 
 ## Tool Call Contract
 
@@ -101,7 +103,7 @@ Inline directory changes alter control flow and remain subject to ordinary appro
 **Recovery from deferred shell execution.**
 
 - Only `Tool execution deferred:` permits one scope correction and unchanged shell retry.
-- Never call `set_working_directory` after `Tool access denied:`.
+- Do not call `set_working_directory` to evade an access denial during the same user turn.
 - If a proactive project declaration fails, correct an evident path error once.
 - Otherwise, preserve the current scope and report the block.
 - Never use inline `cd` as a workaround.

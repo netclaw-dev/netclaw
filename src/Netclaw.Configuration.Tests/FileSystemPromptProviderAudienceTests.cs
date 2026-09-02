@@ -110,7 +110,7 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("Do not repeat", prompt);
         Assert.Contains("`project_dir` already names the correct project", prompt);
         Assert.Contains("Only `Tool execution deferred:` permits one scope correction", prompt);
-        Assert.Contains("Never call `set_working_directory` after `Tool access denied:`", prompt);
+        Assert.Contains("Do not call `set_working_directory` to evade an access denial during the same user turn", prompt);
         Assert.Contains("correct an evident path error once", prompt);
         Assert.Contains("preserve the current scope and report the block", prompt);
         Assert.DoesNotContain("Recovery from a denied shell call", prompt);
@@ -140,8 +140,8 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("Add a pipeline only when the requested result requires it", prompt);
         Assert.Contains("disposable writable work outside a project", prompt);
         Assert.Contains("do not substitute platform temporary storage", prompt);
-        Assert.Contains("After an approval-required result", prompt);
-        Assert.Contains("A `Tool access denied:` result is terminal", prompt);
+        Assert.Contains("After an access denial, do not retry that call during the same user turn", prompt);
+        Assert.Contains("A later explicit user request can start a new call", prompt);
         Assert.Contains("Apply one `Tool execution deferred:` correction unchanged", prompt);
         Assert.Contains("Use `load_tool` directly for a known exact tool name", prompt);
         Assert.Contains("Use `search_tools` when the capability is known", prompt);
