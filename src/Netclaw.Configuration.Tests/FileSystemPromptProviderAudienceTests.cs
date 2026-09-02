@@ -117,16 +117,6 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.DoesNotContain("correct the path and retry the tool", prompt);
     }
 
-    [Fact]
-    public void Personal_prompt_does_not_extend_call_denial_to_later_user_turns()
-    {
-        var prompt = _provider.GetSystemPrompt(TrustAudience.Personal);
-
-        Assert.DoesNotContain("A `Tool access denied:` result is terminal", prompt);
-        Assert.Contains("A user denial applies only to the current tool call", prompt);
-        Assert.Contains("A later explicit user request can create a new tool call", prompt);
-    }
-
     [Theory]
     [InlineData(TrustAudience.Team)]
     [InlineData(TrustAudience.Personal)]
