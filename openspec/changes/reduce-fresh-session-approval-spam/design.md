@@ -135,10 +135,11 @@ The same surfaces will state one shell-composition order:
    them with shell separators or presentation labels.
 3. Add a pipeline only when the requested result requires it.
 4. Do not use shell only to verify a successful structured tool result.
-5. Do not retry or substitute shell variants after an approval-required result.
-6. Treat a `Tool access denied:` result as terminal. Do not change scope, retry,
-   or substitute another tool.
-7. Apply one `Tool execution deferred:` correction unchanged. Otherwise use an
+5. If approval is unavailable, do not retry or substitute the call during that turn.
+6. After an access denial, do not retry that call during the same user turn.
+7. Do not change its scope or substitute another tool to evade the denial.
+8. A later explicit user request can start a new call under normal approval policy.
+9. Apply one `Tool execution deferred:` correction unchanged. Otherwise use an
    available structured tool or report the blocked operation once.
 
 A successful `file_write` or `file_edit` result is the confirmation for that
@@ -250,6 +251,8 @@ context. A failed declaration leaves the prior project unchanged.
   remains active, and the follow-up eval records the redundant attempt.
 - **The model retries after a policy denial.** → Normal approval remains active,
   and the no-retry assertion records the additional call.
+- **The model retries when no interactive requester exists.** → Guidance ends
+  the current attempt, and normal policy remains active.
 - **A tool is unavailable.** → Guidance does not invent it. The model uses an
   available tool under normal policy.
 - **A parser fact is incomplete.** → The command remains promptable. No fallback

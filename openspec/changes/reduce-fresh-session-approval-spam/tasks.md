@@ -98,6 +98,7 @@
 - [x] 10.18 Freeze sanitized post-#1990 batching evidence and a strict five-run 3/5 behavior baseline.
 - [x] 10.19 Strengthen generic independent-operation guidance and rerun the unchanged five-session eval.
 - [ ] 10.20 Deliver, swap the exact merged binary, and validate multiple new live sessions.
+- [x] 10.21 Preserve the no-requester loop guard and limit user-denial guidance to the current user turn.
 
 ## 11. Completion Audit
 
