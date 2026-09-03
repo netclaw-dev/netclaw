@@ -12,15 +12,22 @@ This capability uses these [engineering glossary](../../../../../docs/spec/GLOSS
 ## Authority and State Flow
 
 ```text
-durable host key ring
-  -> host CLI creates one ephemeral operation proof
-  -> direct host endpoint authenticates the proof
-  -> process-local replay cache records the nonce
-  -> pairing coordinator creates one ephemeral pairing code
+Host authority path
+  durable host key ring
+    -> host CLI creates one ephemeral operation proof
+    -> configured daemon endpoint authenticates the proof
+    -> process-local replay cache records the nonce
+    -> pairing coordinator creates one ephemeral pairing code
+
+Remote pairing path
+  remote CLI
+    -> advertised proxy or tunnel endpoint exchanges the pairing code
+    -> device registry stores the token hash
+    -> remote CLI receives the device token
 ```
 
 The diagram is schematic.
-It omits HTTP error mapping and the later remote pairing exchange.
+It omits HTTP error mapping, rate limits, and transport encryption.
 
 | Decision or data | Owner | Lifetime |
 |---|---|---|
@@ -32,6 +39,14 @@ It omits HTTP error mapping and the later remote pairing exchange.
 | Pending pairing code | Pairing code service | Process-local |
 | Pairing transaction order | Pairing coordinator | Process-local |
 | Host key ring | Data Protection provider | Durable |
+
+| Request fact | Host authority | Expected result |
+|---|---|---|
+| Valid proof in any exposure mode | Granted | Create one pairing code |
+| Loopback address without a proof | Denied | Return unauthorized |
+| Forwarded loopback address without a proof | Denied | Return unauthorized |
+| Device bearer token without a proof | Denied | Return unauthorized |
+| Valid repeated proof | Denied | Return unauthorized |
 
 ## ADDED Requirements
 
@@ -65,6 +80,11 @@ The host CLI MAY display the paired-client endpoint as the remote exchange instr
 The CLI SHALL keep the request endpoint and advertised endpoint as separate values.
 The host CLI SHALL NOT send the proof through an HTTP proxy or an automatic redirect.
 The host CLI SHALL NOT attach a device or bootstrap bearer token to the proof request.
+The direct endpoint MAY use a configured loopback or non-loopback daemon bind address.
+The selected exposure mode SHALL NOT prevent a valid host proof from creating a pairing code.
+
+The proof authenticates key-ring possession instead of network location.
+The proof does not provide channel confidentiality for a plain HTTP non-loopback path.
 
 #### Scenario: Remote client endpoint does not receive the proof
 
@@ -88,6 +108,39 @@ The host CLI SHALL NOT attach a device or bootstrap bearer token to the proof re
 - **WHEN** the host CLI requests a pairing code
 - **THEN** the CLI connects directly to the daemon endpoint
 - **AND** the proxy receives no proof or device token
+
+#### Scenario: Reverse-proxy mode keeps host recovery available
+
+- **GIVEN** the daemon uses `reverse-proxy` mode
+- **AND** the host has no device token
+- **AND** the host CLI has the shared key ring
+- **WHEN** the host CLI sends a valid proof to the configured daemon endpoint
+- **THEN** the daemon creates a pairing code
+- **AND** the operator does not change the exposure mode
+
+#### Scenario: Explicit non-loopback bind remains available
+
+- **GIVEN** the daemon binds to `192.168.1.20:5199` in a remote exposure mode
+- **AND** the host CLI has the shared key ring
+- **WHEN** the CLI sends a valid proof to `http://192.168.1.20:5199`
+- **THEN** the daemon creates a pairing code
+- **AND** the daemon does not require a device token for this operation
+
+#### Scenario: Forwarded local appearance does not grant authority
+
+- **GIVEN** a remote caller reaches the local-control endpoint through a proxy
+- **AND** the request contains a loopback source address or forwarded loopback header
+- **AND** the request has no valid local-control proof
+- **WHEN** the caller requests a pairing code
+- **THEN** the daemon returns an unauthorized response
+- **AND** the daemon creates no pairing code
+
+#### Scenario: A copied proof shows the transport limit
+
+- **GIVEN** an on-path observer copies a valid unused proof from a plain HTTP request
+- **WHEN** the observer submits that proof before the host request succeeds
+- **THEN** the daemon can accept only the first request
+- **AND** the single-use nonce cannot identify which caller owns the copied proof
 
 ### Requirement: The local-control proof has strict bounds
 

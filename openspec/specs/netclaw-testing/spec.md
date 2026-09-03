@@ -32,6 +32,19 @@ Labels that do not configure the tested exposure mode or credential are not suff
 | `reverse-proxy` + no proof + valid device bearer | Unauthorized; no code |
 | `local` + cross-home proof + bootstrap bearer | Unauthorized; no code |
 | Any mode + repeated proof | Unauthorized; original code unchanged |
+| `reverse-proxy` + forwarded loopback + device bearer + no proof | Unauthorized; no code |
+| Any remote mode + valid host proof + no device bearer | Code created |
+
+```text
+One authority rule
+  +-> configured daemon route + valid proof, any mode -> success
+  +-> proxy route + local address, no proof ----------> denial
+  +-> any route + device token only ------------------> denial
+```
+
+The diagram is schematic.
+It omits the proof format and the pairing-code exchange.
+
 ## Requirements
 ### Requirement: CI-required tests are provider-independent
 
@@ -147,6 +160,13 @@ The required suite SHALL not require a live tunnel provider.
 - **GIVEN** the test matrix contains every supported exposure mode
 - **WHEN** a host caller submits a valid proof in each mode
 - **THEN** each case creates one pairing code
+
+#### Scenario: Route metadata does not change the authority decision
+
+- **GIVEN** the suite sends requests through direct and proxy-shaped routes
+- **WHEN** each request changes its source address, forwarded headers, and device bearer
+- **THEN** only requests with a valid local-control proof create a code
+- **AND** each denied request leaves the prior code state unchanged
 
 #### Scenario: Remote credentials never replace a host proof
 

@@ -307,6 +307,18 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
     }
 
     [Fact]
+    public void ResolveLocalControlEndpoint_preserves_explicit_non_loopback_daemon_bind()
+    {
+        File.WriteAllText(
+            _paths.NetclawConfigPath,
+            "{\"configVersion\":1,\"Daemon\":{\"Host\":\"192.168.1.20\",\"Port\":6200,\"ExposureMode\":\"reverse-proxy\"}}");
+
+        var endpoint = DaemonApi.ResolveLocalControlEndpoint(_paths);
+
+        Assert.Equal("http://192.168.1.20:6200", endpoint);
+    }
+
+    [Fact]
     public async Task ProbeReadinessAsync_ReportsHealthyAndParsesGenerationHeader()
     {
         HttpRequestMessage? captured = null;

@@ -42,3 +42,10 @@
 - [x] 7.2 Add status-specific pairing CLI guidance and tests that prove failures do not persist credentials.
 - [x] 7.3 Update the operations guide and public delivery text.
 - [x] 7.4 Run all required checks and answer the pull request review threads.
+
+## 8. Exposure-Mode Review Clarification
+
+- [x] 8.1 Document the two pairing paths and the authority matrix for every exposure mode.
+- [x] 8.2 Add positive and negative reverse-proxy examples, including the copied-proof transport limit.
+- [x] 8.3 Sync the main specifications and rerun strict OpenSpec validation.
+- [x] 8.4 Add direct regression tests for non-loopback host access and forwarded-loopback denial.

@@ -4,6 +4,8 @@ See `proposal.md` for the security problem.
 The daemon and host CLI already share `NetclawPaths.KeysDirectory` and the `Netclaw` Data Protection application name.
 The tunnel can forward remote requests through the same loopback listener that the host CLI uses.
 The current pairing exchange consumes a code before the device registry accepts the new device.
+Pairing has a host code-creation path and a remote code-exchange path.
+An exposure mode must keep both paths available without granting remote callers host authority.
 
 ## Goals / Non-Goals
 
@@ -94,6 +96,10 @@ It does not use paired-client endpoint state.
 A dedicated client sends no device token and bypasses HTTP proxies.
 The client also rejects redirects.
 
+Direct means that the CLI uses the daemon bind endpoint instead of the advertised remote endpoint.
+Direct does not require `local` exposure mode or a loopback-only daemon bind.
+The host command must work after an operator enables any exposure mode.
+
 The command keeps two endpoint values.
 The direct local-control endpoint receives the proof.
 The advertised endpoint appears only in the remote pairing instruction.
@@ -101,11 +107,51 @@ The advertised endpoint appears only in the remote pairing instruction.
 This rule keeps the proof on the host authority boundary.
 A remote client endpoint could otherwise receive a valid proof and a device token.
 
+The exposure path can make a remote request appear to come from loopback.
+That path does not grant authority because the endpoint requires a valid key-ring proof.
+
+| Exposure mode | Host code-creation path | Remote code-exchange path | Code-creation authority |
+|---|---|---|---|
+| `local` | Configured daemon endpoint | Direct daemon endpoint | Valid key-ring proof |
+| `reverse-proxy` | Configured daemon endpoint | Advertised proxy endpoint | Valid key-ring proof |
+| `tailscale-serve` | Configured daemon endpoint | Advertised Tailscale endpoint | Valid key-ring proof |
+| `tailscale-funnel` | Configured daemon endpoint | Advertised Tailscale endpoint | Valid key-ring proof |
+| `cloudflare-tunnel` | Configured daemon endpoint | Advertised Cloudflare endpoint | Valid key-ring proof |
+
+```text
+Daemon host                                      Exposure boundary
+
+Host CLI -- key-ring proof --> local-control endpoint -- creates --> pairing code
+                                                               |
+                                                               v
+Remote CLI -- pairing code --> proxy or tunnel --> exchange endpoint -- returns --> device token
+
+Remote caller -- loopback claim or device token --> local-control endpoint -- rejects
+```
+
+The diagram is schematic.
+It omits rate limits, proof replay checks, and TLS termination.
+
+| Presented fact | Grants host code-creation authority | Reason |
+|---|---|---|
+| Loopback source address | No | A proxy or tunnel can produce this address |
+| Forwarded loopback header | No | The caller controls or influences routing metadata |
+| Valid device or bootstrap token | No | The token grants remote device access only |
+| Valid unused key-ring proof | Yes | The proof demonstrates possession of the host key ring |
+| Captured valid unused proof | Yes, until first use or expiration | The proof is a short-lived bearer capability |
+
 Examples:
 
 - `Daemon.Host=0.0.0.0` maps the host request to `http://127.0.0.1:<port>`.
+- `Daemon.Host=192.168.1.20` keeps that configured bind address for the direct host request.
 - A saved `https://remote.example` endpoint appears in the instruction but receives no proof.
 - A `307` redirect does not receive a second request.
+
+Counterexamples:
+
+- A remote caller cannot add `X-Forwarded-For: 127.0.0.1` instead of a proof.
+- A device token cannot authorize code creation through a reverse proxy.
+- A copied unused proof can win a first-use race because the proof does not provide channel confidentiality.
 
 ### Treat key-ring access as host authority
 
@@ -143,6 +189,8 @@ It omits rate limits, token hashing, and HTTP error mapping.
 - Immediate removal breaks mixed versions. → The CLI prints explicit joint-update guidance and never uses an unsafe fallback.
 - A registry write can fail after token creation. → The coordinator discards the raw token and preserves the code.
 - A general HTTP client can export the proof. → A dedicated direct client disables proxies, redirects, and bearer attachment.
+- A non-loopback HTTP path can expose the proof. → The deployment must protect the direct host path from an on-path observer.
+- A copied proof can win its first-use race. → The proof expires after 30 seconds and the daemon accepts its nonce once.
 
 ## Migration Plan
 

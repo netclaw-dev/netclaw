@@ -288,6 +288,30 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         Assert.Null(_pairingCodeService.GetPendingExpiry());
     }
 
+    [Fact]
+    public async Task Forwarded_loopback_and_device_token_cannot_replace_host_proof()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (rawToken, device) = DeviceTestHelpers.MakeDevice("remote-device", _time.GetUtcNow());
+        await _registry.AddAsync(device, ct);
+        await using var app = await CreateAppAsync(
+            remoteIp: IPAddress.Parse("10.0.0.5"),
+            trustedProxies: ["10.0.0.5"],
+            exposureMode: ExposureMode.ReverseProxy);
+        var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/local-control/v1/pairing-code")
+        {
+            Content = JsonContent.Create(new { proof = "" }),
+            Headers = { Authorization = new("Bearer", rawToken) },
+        };
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "127.0.0.1");
+
+        using var response = await client.SendAsync(request, ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Null(_pairingCodeService.GetPendingExpiry());
+    }
+
     [Theory]
     [InlineData("malformed", HttpStatusCode.Unauthorized)]
     [InlineData("changed", HttpStatusCode.Unauthorized)]
