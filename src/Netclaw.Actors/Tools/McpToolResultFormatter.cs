@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
 
@@ -26,6 +27,17 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 public static class McpToolResultFormatter
 {
+    public static string FormatWithReceipt(
+        object? result,
+        string toolName,
+        ToolInvocationContext context)
+    {
+        var text = Format(result, toolName);
+        return TryGetErrorDetail(result, out _)
+            ? context.TransientFailure(text)
+            : text;
+    }
+
     public static string Format(object? result, string toolName)
     {
         if (result is JsonElement element && IsCallToolResult(element))

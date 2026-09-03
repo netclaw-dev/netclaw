@@ -99,3 +99,13 @@ remain an isolated worker by default:
 - **WHEN** the subagent executes tool calls
 - **THEN** tool execution uses the `team` audience
 - **AND** routed execution does not widen the audience
+
+## REMOVED Requirements
+
+### Requirement: Sub-agent runs are bounded by inactivity and iteration count
+
+**Reason**: The exact cycle detector replaces the static child iteration limit
+after all replay and rollout gates pass. The inactivity watchdog remains active.
+
+**Migration**: Keep the child limit as a temporary rollout guard. Remove it only
+after the detector correction and terminal-stop paths pass the acceptance gates.

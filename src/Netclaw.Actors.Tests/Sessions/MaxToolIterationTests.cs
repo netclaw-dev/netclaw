@@ -103,8 +103,8 @@ public class MaxToolIterationTests : LlmSessionTestBase
         // 4 LLM calls total: 3 returned tool calls + 1 forced text (no tools)
         Assert.Equal(4, _fakeChatClient.CallCount);
 
-        // 3 tool executions
-        Assert.Equal(3, _fakeToolExecutor.CallCount);
+        // The cycle guard blocks the third execution and returns a paired correction.
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
     }
 
     [Fact]
@@ -149,7 +149,7 @@ public class MaxToolIterationTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(4, _fakeChatClient.CallCount);
-        Assert.Equal(3, _fakeToolExecutor.CallCount);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
     }
 
     [Fact]
@@ -208,8 +208,8 @@ public class MaxToolIterationTests : LlmSessionTestBase
         // 8 LLM calls total: 2 turns × (3 tool + 1 text)
         Assert.Equal(8, _fakeChatClient.CallCount);
 
-        // 6 tool executions total: 2 turns × 3
-        Assert.Equal(6, _fakeToolExecutor.CallCount);
+        // Each turn executes twice before the cycle guard blocks the third batch.
+        Assert.Equal(4, _fakeToolExecutor.CallCount);
     }
 
     [Fact]

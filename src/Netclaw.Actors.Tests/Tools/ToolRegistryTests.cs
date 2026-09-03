@@ -326,6 +326,24 @@ public class ToolRegistryTests
     }
 
     [Fact]
+    public void List_only_canonicalization_preserves_the_provider_history_alias()
+    {
+        var registry = new ToolRegistry();
+        registry.Register(new McpToolAdapter(
+            CreateFakeTool("create-pages"), "notion", "create-pages"));
+        var historyCall = new FunctionCallContent("call-1", "notion__create-pages");
+        var assistantMessage = new ChatMessage(ChatRole.Assistant, [historyCall]);
+        var dispatchCalls = new List<FunctionCallContent> { historyCall };
+
+        registry.CanonicalizeToolCalls(dispatchCalls);
+
+        Assert.Equal("notion/create-pages", dispatchCalls[0].Name);
+        Assert.Equal(
+            "notion__create-pages",
+            Assert.IsType<FunctionCallContent>(assistantMessage.Contents[0]).Name);
+    }
+
+    [Fact]
     public void ToLlmFacingName_maps_canonical_to_sanitized_alias_for_McpTool()
     {
         var registry = new ToolRegistry();

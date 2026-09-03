@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -61,6 +63,43 @@ public class McpToolResultFormatterTests
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
         Assert.Contains("no detail provided", message);
+    }
+
+    [Fact]
+    public void Typed_error_completes_a_transient_failure_receipt()
+    {
+        var result = Json("""{"content":[{"type":"text","text":"declared failure"}],"isError":true}""");
+        var context = TestToolExecutionContext.CreateBound(
+            "test/thread",
+            null,
+            TrustAudience.Personal);
+
+        var message = McpToolResultFormatter.FormatWithReceipt(
+            result,
+            "srv/tool",
+            context.Invocation);
+
+        Assert.Contains("declared failure", message);
+        Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
+        Assert.Empty(context.Receipt!.FileActivity);
+    }
+
+    [Fact]
+    public void Error_prefix_with_typed_success_keeps_the_success_path()
+    {
+        var result = Json("""{"content":[{"type":"text","text":"Error: this is data"}],"isError":false}""");
+        var context = TestToolExecutionContext.CreateBound(
+            "test/thread",
+            null,
+            TrustAudience.Personal);
+
+        var message = McpToolResultFormatter.FormatWithReceipt(
+            result,
+            "srv/tool",
+            context.Invocation);
+
+        Assert.Equal("Error: this is data", message);
+        Assert.Null(context.Receipt);
     }
 
     [Fact]

@@ -29,6 +29,8 @@ internal static class ToolRemediationPresenter
                 "Next action: retry file_edit with a unique OldString, or set ReplaceAll=true when every match should change.",
             ToolRemediationCode.UseNativeTool =>
                 "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
+            ToolRemediationCode.BreakToolCycle =>
+                "Next action: choose a different action, load a missing tool, or finish the task.",
             _ => throw new InvalidOperationException("Unsupported tool remediation code.")
         };
 

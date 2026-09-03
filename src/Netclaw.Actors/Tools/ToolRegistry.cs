@@ -194,6 +194,39 @@ public sealed class ToolRegistry
     public string ToCanonicalName(string name) =>
         FindRegistration(name)?.Tool.Name ?? name;
 
+    internal void CanonicalizeToolCalls(
+        ChatMessage assistantMessage,
+        List<FunctionCallContent> toolCalls)
+    {
+        CanonicalizeToolCalls(toolCalls);
+
+        for (var i = 0; i < assistantMessage.Contents.Count; i++)
+        {
+            if (assistantMessage.Contents[i] is not FunctionCallContent call)
+                continue;
+
+            var canonicalName = ToCanonicalName(call.Name);
+            if (!string.Equals(canonicalName, call.Name, StringComparison.Ordinal))
+            {
+                assistantMessage.Contents[i] = new FunctionCallContent(
+                    call.CallId,
+                    canonicalName,
+                    call.Arguments);
+            }
+        }
+    }
+
+    internal void CanonicalizeToolCalls(List<FunctionCallContent> toolCalls)
+    {
+        for (var i = 0; i < toolCalls.Count; i++)
+        {
+            var call = toolCalls[i];
+            var canonicalName = ToCanonicalName(call.Name);
+            if (!string.Equals(canonicalName, call.Name, StringComparison.Ordinal))
+                toolCalls[i] = new FunctionCallContent(call.CallId, canonicalName, call.Arguments);
+        }
+    }
+
     private ToolRegistration? FindRegistration(string name)
     {
         // One volatile read. Both passes below scan the same array, so a concurrent

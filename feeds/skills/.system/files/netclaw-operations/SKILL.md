@@ -177,6 +177,12 @@ fix and re-issue once, do not retry the same shape:
 - **Ambiguous meta spelling** — supplying two keys that map to the same meta
   field (e.g. both `_timeout_seconds` and `TimeoutSeconds`) rejects; send one.
 
+A repeated action-and-outcome correction means that no requested call ran.
+Choose a different action or finish the task from the available evidence.
+Do not repeat the blocked batch.
+Netclaw disables tools for the turn if the same blocked batch appears again.
+Report incomplete work and do not claim that the blocked operation succeeded.
+
 ## Large tool output
 
 Tool output is bounded to a small inline budget

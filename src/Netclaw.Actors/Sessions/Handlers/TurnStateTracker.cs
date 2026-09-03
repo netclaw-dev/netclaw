@@ -3,10 +3,18 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers.Binary;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+using Microsoft.Extensions.AI;
+using Netclaw.Actors.Tools;
+using Netclaw.Tools;
+
 namespace Netclaw.Actors.Sessions.Handlers;
 
 /// <summary>
-/// Owns tool-loop control flow decisions: budget tracking, duplicate detection,
+/// Owns tool-loop control flow decisions: tool budgets, exact cycle detection,
 /// empty-response retry logic, and force-no-tools state. The actor asks
 /// "what should I do?" and the tracker answers based on accumulated state.
 /// </summary>
@@ -14,7 +22,6 @@ internal sealed class TurnStateTracker
 {
     private const int MaxPreToolEmptyRetries = 5;
     private const int MaxPostToolEmptyRetries = 8;
-    private const int DuplicateToolThreshold = 3;
     private const double BudgetNudgeRatio = 0.75;
 
     // Nudge for a thinking-only response: the model emitted reasoning but no
@@ -42,7 +49,8 @@ internal sealed class TurnStateTracker
     private const string EmptyResponseFailureMessage =
         "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
 
-    private readonly Dictionary<ToolCallFingerprint, int> _toolCallCounts = [];
+    private readonly List<CompletedToolCycleIteration> _completedToolCycles = [];
+    private ToolActionSignature? _lastBlockedAction;
 
     public int ToolCallCount { get; private set; }
     public int ToolIterationCount { get; private set; }
@@ -51,7 +59,6 @@ internal sealed class TurnStateTracker
     private bool _budgetNudgeSent;
     private int _postToolEmptyResponseCount;
     private int _preToolEmptyResponseCount;
-    private bool _duplicateNudgeSent;
 
     /// <summary>
     /// Reset all per-turn state. Called at the start of each user turn.
@@ -64,20 +71,18 @@ internal sealed class TurnStateTracker
         _postToolEmptyResponseCount = 0;
         _preToolEmptyResponseCount = 0;
         ForceNoToolsActive = false;
-        _toolCallCounts.Clear();
-        _duplicateNudgeSent = false;
+        _completedToolCycles.Clear();
+        _lastBlockedAction = null;
     }
 
     /// <summary>
-    /// Partial reset for mid-turn buffer drain: clears tool counters and hashes
+    /// Partial reset for mid-turn buffer drain: clears tool counters
     /// but preserves empty-response and force-no-tools state.
     /// </summary>
     public void ResetToolCounters()
     {
         ToolCallCount = 0;
         ToolIterationCount = 0;
-        _toolCallCounts.Clear();
-        _duplicateNudgeSent = false;
     }
 
     /// <summary>
@@ -89,19 +94,60 @@ internal sealed class TurnStateTracker
     {
         _postToolEmptyResponseCount = 0;
         _preToolEmptyResponseCount = 0;
-        ForceNoToolsActive = false;
     }
 
-    // ── Tool call tracking ──
+    public int CompletedCycleHistoryCount => _completedToolCycles.Count;
 
-    /// <summary>
-    /// Record a tool call for duplicate detection.
-    /// </summary>
-    public void TrackToolCall(string toolName, string? argumentsJson)
+    public ToolCycleDecision EvaluateBeforeDispatch(ToolActionSignature candidate)
     {
-        var fingerprint = new ToolCallFingerprint(toolName, argumentsJson ?? "{}");
-        _toolCallCounts.TryGetValue(fingerprint, out var count);
-        _toolCallCounts[fingerprint] = count + 1;
+        if (_lastBlockedAction == candidate)
+            return new ToolCycleDecision(ToolCycleDecisionKind.Stop);
+
+        for (var period = 1; period <= ToolCycleSignatureFactory.MaximumPeriod; period++)
+        {
+            var required = period * 2;
+            if (_completedToolCycles.Count < required)
+                continue;
+
+            var start = _completedToolCycles.Count - required;
+            if (!HasEqualCycleCopies(start, period)
+                || candidate != _completedToolCycles[start].Action)
+            {
+                continue;
+            }
+
+            _lastBlockedAction = candidate;
+            return new ToolCycleDecision(
+                ToolCycleDecisionKind.Correct,
+                Period: period,
+                Repetitions: 2);
+        }
+
+        return new ToolCycleDecision(ToolCycleDecisionKind.Execute);
+    }
+
+    public void ObserveCompleted(CompletedToolCycleIteration iteration)
+    {
+        _completedToolCycles.Add(iteration);
+        if (_completedToolCycles.Count > ToolCycleSignatureFactory.MaximumHistory)
+            _completedToolCycles.RemoveAt(0);
+
+        if (_lastBlockedAction is { } blocked && iteration.Action != blocked)
+            _lastBlockedAction = null;
+    }
+
+    private bool HasEqualCycleCopies(int start, int period)
+    {
+        for (var offset = 0; offset < period; offset++)
+        {
+            if (_completedToolCycles[start + offset]
+                != _completedToolCycles[start + period + offset])
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     // ── Tool budget decisions ──
@@ -142,33 +188,6 @@ internal sealed class TurnStateTracker
         }
 
         return ToolBudgetStatus.Ok.Instance;
-    }
-
-    // ── Duplicate detection decisions ──
-
-    /// <summary>
-    /// Check for duplicate tool calls and return a nudge if the threshold is met.
-    /// Returns null if no duplicates warrant a nudge.
-    /// </summary>
-    public DuplicateToolNudge? CheckForDuplicates()
-    {
-        if (_duplicateNudgeSent)
-            return null;
-
-        foreach (var (fingerprint, count) in _toolCallCounts)
-        {
-            if (count < DuplicateToolThreshold) continue;
-
-            _duplicateNudgeSent = true;
-            return new DuplicateToolNudge(
-                fingerprint.ToolName, count,
-                $"You have called the tool '{fingerprint.ToolName}' with the same arguments {count} times this turn. "
-                + "This strongly indicates you are repeating work you already completed. "
-                + "Review your prior tool results — the information you need is already in the conversation. "
-                + "If the task is complete, produce your final response.");
-        }
-
-        return null;
     }
 
     // ── Empty response decisions ──
@@ -229,7 +248,203 @@ internal sealed class TurnStateTracker
     }
 }
 
-internal readonly record struct ToolCallFingerprint(string ToolName, string ArgumentsJson);
+internal sealed record ToolActionSignature(string Value);
+
+internal sealed record CompletedToolCycleIteration(
+    ToolActionSignature Action,
+    string OutcomeValue);
+
+internal sealed record PreparedToolCycleCall(
+    string CallId,
+    string ToolName,
+    string ArgumentsHash);
+
+internal sealed record PreparedToolCycleBatch
+{
+    public PreparedToolCycleBatch(
+        ToolActionSignature action,
+        IEnumerable<PreparedToolCycleCall> calls)
+    {
+        Action = action;
+        Calls = Array.AsReadOnly(calls.ToArray());
+    }
+
+    public ToolActionSignature Action { get; }
+
+    public IReadOnlyList<PreparedToolCycleCall> Calls { get; }
+}
+
+internal readonly record struct ToolCycleResult(
+    ToolInvocationOutcomeCategory Category,
+    string ModelVisibleText);
+
+internal enum ToolCycleDecisionKind
+{
+    Execute,
+    Correct,
+    Stop
+}
+
+internal readonly record struct ToolCycleDecision(
+    ToolCycleDecisionKind Kind,
+    int Period = 0,
+    int Repetitions = 0);
+
+internal static class ToolCycleMessages
+{
+    public const string Correction =
+        "Netclaw stopped this tool batch because it would continue a repeated action-and-outcome cycle. "
+        + "The same sequence completed twice without a changed result. No requested call executed.";
+
+    public const string Final =
+        "Netclaw stopped this run after you repeated a tool batch that the cycle guard already blocked. "
+        + "Report completed work, incomplete work, and the last repeated result. "
+        + "Do not claim that the blocked operation succeeded.";
+}
+
+internal static class ToolCycleSignatureFactory
+{
+    internal const int MaximumPeriod = 3;
+    internal const int MaximumHistory = MaximumPeriod * 2;
+
+    public static PreparedToolCycleBatch Prepare(
+        IReadOnlyList<FunctionCallContent> calls,
+        IToolExecutor executor)
+    {
+        var prepared = calls.Select(call =>
+        {
+            var (_, cleaned) = executor.PrepareToolCall(call);
+            return new PreparedToolCycleCall(
+                call.CallId,
+                cleaned.Name,
+                HashCanonicalArguments(cleaned.Arguments));
+        }).ToArray();
+
+        var action = new ToolActionSignature(HashFields(
+            OrderedCalls(prepared).SelectMany(static call =>
+                new[] { call.ToolName, call.ArgumentsHash })));
+        return new PreparedToolCycleBatch(action, prepared);
+    }
+
+    public static CompletedToolCycleIteration Complete(
+        PreparedToolCycleBatch batch,
+        IReadOnlyDictionary<string, ToolCycleResult> results)
+    {
+        if (results.Count != batch.Calls.Count)
+            throw new InvalidOperationException("A completed cycle iteration requires one result for each call.");
+
+        var outcomes = batch.Calls.Select(call =>
+        {
+            if (!results.TryGetValue(call.CallId, out var result))
+                throw new InvalidOperationException("A completed cycle iteration has an unmatched tool result.");
+
+            return new ToolCycleOutcome(
+                call.ToolName,
+                call.ArgumentsHash,
+                result.Category,
+                HashFields([result.ModelVisibleText]));
+        }).OrderBy(static outcome => outcome.ToolName, StringComparer.Ordinal)
+          .ThenBy(static outcome => outcome.ArgumentsHash, StringComparer.Ordinal)
+          .ThenBy(static outcome => outcome.Category)
+          .ThenBy(static outcome => outcome.ResultHash, StringComparer.Ordinal);
+
+        var outcomeHash = HashFields(outcomes.SelectMany(static outcome => new[]
+        {
+            outcome.ToolName,
+            outcome.ArgumentsHash,
+            outcome.Category.ToString(),
+            outcome.ResultHash
+        }));
+        return new CompletedToolCycleIteration(batch.Action, outcomeHash);
+    }
+
+    private static IOrderedEnumerable<PreparedToolCycleCall> OrderedCalls(
+        IEnumerable<PreparedToolCycleCall> calls)
+        => calls.OrderBy(static call => call.ToolName, StringComparer.Ordinal)
+            .ThenBy(static call => call.ArgumentsHash, StringComparer.Ordinal);
+
+    private static string HashCanonicalArguments(IDictionary<string, object?>? arguments)
+    {
+        using var stream = new MemoryStream();
+        using (var writer = new Utf8JsonWriter(stream))
+        {
+            if (arguments is null or { Count: 0 })
+            {
+                writer.WriteStartObject();
+                writer.WriteEndObject();
+            }
+            else
+            {
+                var element = JsonSerializer.SerializeToElement(arguments);
+                WriteCanonical(writer, element);
+            }
+        }
+
+        return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
+    }
+
+    private static void WriteCanonical(Utf8JsonWriter writer, JsonElement value)
+    {
+        switch (value.ValueKind)
+        {
+            case JsonValueKind.Object:
+                writer.WriteStartObject();
+                foreach (var property in value.EnumerateObject()
+                             .OrderBy(static property => property.Name, StringComparer.Ordinal))
+                {
+                    writer.WritePropertyName(property.Name);
+                    WriteCanonical(writer, property.Value);
+                }
+
+                writer.WriteEndObject();
+                break;
+            case JsonValueKind.Array:
+                writer.WriteStartArray();
+                foreach (var item in value.EnumerateArray())
+                    WriteCanonical(writer, item);
+                writer.WriteEndArray();
+                break;
+            case JsonValueKind.String:
+                writer.WriteStringValue(value.GetString());
+                break;
+            case JsonValueKind.Number:
+                writer.WriteRawValue(value.GetRawText());
+                break;
+            case JsonValueKind.True:
+                writer.WriteBooleanValue(true);
+                break;
+            case JsonValueKind.False:
+                writer.WriteBooleanValue(false);
+                break;
+            case JsonValueKind.Null:
+                writer.WriteNullValue();
+                break;
+            default:
+                throw new InvalidOperationException("Tool arguments contain an unsupported JSON value.");
+        }
+    }
+
+    private static string HashFields(IEnumerable<string> fields)
+    {
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        Span<byte> length = stackalloc byte[sizeof(int)];
+        foreach (var field in fields)
+        {
+            var bytes = Encoding.UTF8.GetBytes(field);
+            BinaryPrimitives.WriteInt32BigEndian(length, bytes.Length);
+            hash.AppendData(length);
+            hash.AppendData(bytes);
+        }
+
+        return Convert.ToHexString(hash.GetHashAndReset());
+    }
+
+    private readonly record struct ToolCycleOutcome(
+        string ToolName,
+        string ArgumentsHash,
+        ToolInvocationOutcomeCategory Category,
+        string ResultHash);
+}
 
 // ── Result types ──
 
@@ -248,9 +463,6 @@ internal abstract record ToolBudgetStatus
     /// <summary>Budget exhausted — force text-only response.</summary>
     internal sealed record Exhausted(string NudgeText) : ToolBudgetStatus;
 }
-
-/// <summary>Result of <see cref="TurnStateTracker.CheckForDuplicates"/>.</summary>
-internal sealed record DuplicateToolNudge(string ToolName, int Count, string NudgeText);
 
 /// <summary>Result of <see cref="TurnStateTracker.EvaluateEmptyResponse"/>.</summary>
 internal abstract record EmptyResponseAction

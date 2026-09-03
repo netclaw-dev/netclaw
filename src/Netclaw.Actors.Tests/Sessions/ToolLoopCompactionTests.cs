@@ -11,6 +11,7 @@ using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -59,7 +60,14 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
         registry.Register(
             AIFunctionFactory.Create(() => "search result", "web_search"),
             "web_search");
+        registry.RegisterCore(
+            AIFunctionFactory.Create(() => "deferred_probe", "load_tool"),
+            "builtin");
+        registry.Register(
+            AIFunctionFactory.Create(() => "deferred result", "deferred_probe"),
+            "builtin");
         services.AddSingleton(registry);
+        services.AddSingleton(TestToolAccessPolicy.Create(new ToolConfig()));
     }
 
     [Fact]
@@ -121,5 +129,106 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
         await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<UsageOutput>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Exact_cycle_state_survives_successful_compaction()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("cycle-call", "web_search",
+                new Dictionary<string, object?> { ["query"] = "same" })
+        ];
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(true);
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(true);
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(true);
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(false);
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails { InputTokenCount = 800 });
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails { InputTokenCount = 100 });
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails { InputTokenCount = 100 });
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails { InputTokenCount = 100 });
+        _fakeToolExecutor.Results["web_search"] = "same result";
+
+        var sessionId = new SessionId("test-channel/cycle-compaction");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("cycle-compaction-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Repeat a search across compaction."
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        var correction = await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains("repeated action-and-outcome cycle", correction.Result, StringComparison.Ordinal);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+    }
+
+    [Fact]
+    public async Task Successful_compaction_preserves_a_loaded_deferred_tool()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("load-call", "load_tool",
+                new Dictionary<string, object?> { ["name"] = "deferred_probe" })
+        ];
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(true);
+        _fakeChatClient.PlannedToolCallDecisions.Enqueue(false);
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails { InputTokenCount = 800 });
+        _fakeChatClient.PlannedUsageOverrides.Enqueue(new UsageDetails { InputTokenCount = 100 });
+        _fakeToolExecutor.Results["load_tool"] = "deferred_probe";
+
+        var sessionId = new SessionId("test-channel/schema-compaction");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("schema-compaction-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Load a deferred tool before compaction."
+        }, TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<UsageOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains("deferred_probe", _fakeChatClient.ReceivedToolNames[^1]);
     }
 }

@@ -439,7 +439,17 @@ public sealed class McpClientManagerLifecycleTests
         await using var harness = CreateHarness(runtime);
         await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
 
-        await InvokeAsync(harness.Manager, TestContext.Current.CancellationToken);
+        var context = TestToolExecutionContext.CreateBound(
+            "slack/thread-1",
+            null,
+            TrustAudience.Team,
+            "slack");
+        await harness.Manager.InvokeAsync(
+            ServerName.Value,
+            "run",
+            null,
+            context.Invocation,
+            TestContext.Current.CancellationToken);
 
         // The detail reaches the model either way. Logging it is what gives an operator
         // something to debug from, instead of only the result length.
@@ -450,6 +460,7 @@ public sealed class McpClientManagerLifecycleTests
         Assert.Equal(
             McpConnectionState.Connected,
             harness.Manager.GetServerStatuses()[ServerName].State);
+        Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
     }
 
     [Fact]
