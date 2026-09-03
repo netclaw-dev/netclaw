@@ -40,6 +40,7 @@ public readonly record struct SubAgentOutcomeReason(string Value)
     public static readonly SubAgentOutcomeReason MissingAudience = new("missing_audience");
     public static readonly SubAgentOutcomeReason ToolIterationBudgetExhausted = new("tool_iteration_budget_exhausted");
     public static readonly SubAgentOutcomeReason ToolIterationBudgetExceededAfterDisable = new("tool_iteration_budget_exceeded_after_disable");
+    public static readonly SubAgentOutcomeReason ToolCycleStopped = new("tool_cycle_stopped");
     public static readonly SubAgentOutcomeReason EmptyFinalResponse = new("empty_final_response");
     public static readonly SubAgentOutcomeReason MalformedFinalOutput = new("malformed_final_output");
     public static readonly SubAgentOutcomeReason ToolExecutionFailed = new("tool_execution_failed");

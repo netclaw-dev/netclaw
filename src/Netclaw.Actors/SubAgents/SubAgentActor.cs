@@ -88,6 +88,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private ILoggingAdapter _log;
     private readonly MemoryPolicyEvaluator _policyEvaluator = new();
     private readonly TurnStateTracker _turnState = new();
+    private PreparedToolCycleBatch? _activeCycleBatch;
 
     // Stopwatch tracking the total wall-clock duration of the sub-agent run.
     // Used for the summary log on completion (ProcessingWatchdog is only a
@@ -568,6 +569,26 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
             RecordProgress("processing tool results");
 
+            if (_activeCycleBatch is { } cycleBatch)
+            {
+                var cycleResults = msg.ToolResults.ToDictionary(
+                    result => result.ToolCallId is { } callId
+                        ? callId.Value
+                        : throw new InvalidOperationException("A tool cycle result requires a call identity."),
+                    result =>
+                    {
+                        var callId = result.ToolCallId
+                            ?? throw new InvalidOperationException("A tool cycle result requires a call identity.");
+                        msg.ToolReceipts.TryGetValue(callId.Value, out var receipt);
+                        return new ToolCycleResult(
+                            receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
+                            result.Content ?? string.Empty);
+                    },
+                    StringComparer.Ordinal);
+                _turnState.ObserveCompleted(ToolCycleSignatureFactory.Complete(cycleBatch, cycleResults));
+                _activeCycleBatch = null;
+            }
+
             // Append tool results as MEAI messages and log each result.
             foreach (var result in msg.ToolResults)
             {
@@ -603,18 +624,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             AddModelInputMediaNudge(msg.ModelInputMediaReferences);
 
             var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _maxToolIterations);
-            var dupNudge = _turnState.CheckForDuplicates();
-            if (dupNudge is not null)
-            {
-                _log.Warning(
-                    "SubAgent [{AgentName}] duplicate tool detected tool={ToolName} count={Count} iteration={Iteration}",
-                    _definition.Name,
-                    dupNudge.ToolName,
-                    dupNudge.Count,
-                    _turnState.ToolIterationCount);
-                AddSystemNudge(dupNudge.NudgeText);
-            }
-
             switch (budgetStatus)
             {
                 case ToolBudgetStatus.Exhausted exhausted:
@@ -643,6 +652,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         Receive<ToolExecutionFailed>(msg =>
         {
             _toolExecutionWatchdogState = ToolExecutionWatchdogState.None;
+            _activeCycleBatch = null;
             _log.Error(msg.Cause, "SubAgent [{AgentName}] tool execution failed", _definition.Name);
             Complete(false, $"Tool execution failed: {msg.Cause.Message}", SubAgentRunOutcome.Failed, SubAgentOutcomeReason.ToolExecutionFailed);
         });
@@ -815,23 +825,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     {
         _turnState.ResetEmptyResponseGuards();
 
-        // Add assistant message (with tool calls) to history
-        _history.Add(assistantMessage);
-
-        foreach (var toolCall in toolCalls)
-        {
-            var argsJson = toolCall.Arguments is not null
-                ? JsonSerializer.Serialize(toolCall.Arguments)
-                : null;
-            _turnState.TrackToolCall(toolCall.Name, argsJson);
-        }
-
-        var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
-        RecordProgress($"running tools: {toolNames}");
-        _log.Info("SubAgent [{AgentName}] calling tools: [{ToolNames}]",
-            _definition.Name, toolNames);
-
-        var self = Self;
+        // The child keeps the provider alias in transient history.
+        // Internal dispatch and cycle state use the canonical name.
+        _toolRegistry.CanonicalizeToolCalls(toolCalls);
         var executor = _toolExecutorLogger is null
             ? new DispatchingToolExecutor(_toolRegistry, _toolAccessPolicy, _approvalService)
             : DispatchingToolExecutor.CreateWithLogger(
@@ -839,6 +835,42 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _toolAccessPolicy,
                 _approvalService,
                 _toolExecutorLogger);
+        var preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, executor);
+        var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
+        if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
+        {
+            _log.Warning(
+                "Subagent tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
+                cycleDecision.Kind,
+                cycleDecision.Period,
+                cycleDecision.Repetitions);
+        }
+
+        if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
+        {
+            _forcedFinalOutcomeReason = SubAgentOutcomeReason.ToolCycleStopped;
+            AddSystemNudge(ToolCycleMessages.Final);
+            FireLlmCall(forceNoTools: true);
+            return;
+        }
+
+        // Add assistant message (with tool calls) to history
+        _history.Add(assistantMessage);
+
+        if (cycleDecision.Kind == ToolCycleDecisionKind.Correct)
+        {
+            EmitToolCycleCorrection(toolCalls);
+            return;
+        }
+
+        _activeCycleBatch = preparedCycleBatch;
+
+        var toolNames = string.Join(", ", toolCalls.Select(tc => tc.Name));
+        RecordProgress($"running tools: {toolNames}");
+        _log.Info("SubAgent [{AgentName}] calling tools: [{ToolNames}]",
+            _definition.Name, toolNames);
+
+        var self = Self;
         var setWorkingDirectoryTool =
             _toolRegistry.GetByName(SetWorkingDirectoryTool.ToolName) as SetWorkingDirectoryTool;
         Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory =
@@ -868,9 +900,42 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             _subSessionId);
     }
 
+    private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
+    {
+        var receipts = new Dictionary<string, ToolInvocationReceipt>(StringComparer.Ordinal);
+        var authorizationAttemptIds = new Dictionary<string, AuthorizationAttemptId>(StringComparer.Ordinal);
+        var results = new List<SerializableChatMessage>(toolCalls.Count);
+        foreach (var call in toolCalls)
+        {
+            var receipt = new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.RecoverableCorrection,
+                remediationCode: ToolRemediationCode.BreakToolCycle);
+            receipts.Add(call.CallId, receipt);
+            authorizationAttemptIds.Add(call.CallId, AuthorizationAttemptId.New());
+            results.Add(ToolRemediationPresenter.Present(
+                new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.Tool,
+                    Content = ToolCycleMessages.Correction,
+                    ToolCallId = new ToolCallId(call.CallId),
+                    Name = call.Name
+                },
+                receipt,
+                setWorkingDirectoryAvailable: false));
+        }
+
+        Self.Tell(new ToolExecutionCompleted
+        {
+            ToolResults = results,
+            ToolReceipts = receipts,
+            AuthorizationAttemptIds = authorizationAttemptIds
+        });
+    }
+
     private void FireLlmCall(bool forceNoTools = false)
     {
-        _turnState.ForceNoToolsActive = forceNoTools;
+        _turnState.ForceNoToolsActive |= forceNoTools;
+        forceNoTools = _turnState.ForceNoToolsActive;
         // Each LLM call starts fresh on the generous prefill budget; the watchdog
         // promotes to the inter-delta budget on the first substantive delta. The
         // no-progress deadline is armed alongside it and only real tokens reset it.

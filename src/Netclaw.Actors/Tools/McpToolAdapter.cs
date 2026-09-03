@@ -125,7 +125,7 @@ public sealed class McpToolAdapter : INetclawTool
         CancellationToken ct = default)
     {
         if (_invoker is null)
-            return await ExecuteViaBoundToolAsync(arguments, ct);
+            return await ExecuteViaBoundToolAsync(arguments, context, ct);
 
         try
         {
@@ -169,7 +169,10 @@ public sealed class McpToolAdapter : INetclawTool
         }
     }
 
-    private async Task<string> ExecuteViaBoundToolAsync(IDictionary<string, object?>? arguments, CancellationToken ct)
+    private async Task<string> ExecuteViaBoundToolAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        CancellationToken ct)
     {
         if (_mcpTool is not AIFunction func)
             return "Error: MCP tool is not invocable.";
@@ -183,7 +186,7 @@ public sealed class McpToolAdapter : INetclawTool
                 ? new AIFunctionArguments(coerced)
                 : null;
             var result = await func.InvokeAsync(aiArgs, ct);
-            return McpToolResultFormatter.Format(result, Name);
+            return McpToolResultFormatter.FormatWithReceipt(result, Name, context);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

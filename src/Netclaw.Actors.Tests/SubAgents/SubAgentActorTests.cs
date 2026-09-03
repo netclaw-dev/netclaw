@@ -1635,6 +1635,64 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
+    public async Task Exact_tool_cycle_gets_one_correction_then_stops()
+    {
+        var executionCount = 0;
+        var fakeTool = new FakeNetclawTool(
+            "mutate_state",
+            "loop result",
+            onExecute: _ => Interlocked.Increment(ref executionCount));
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                CreateToolCall("call-loop", "mutate_state")
+            ],
+            AlwaysReturnToolCalls = true,
+            ResponseTextsByCall =
+            [
+                "unused",
+                "unused",
+                "unused",
+                "unused",
+                string.Empty,
+                "Final partial report."
+            ]
+        };
+
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy(),
+            maxToolIterations: 10));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(),
+                Task = "Repeat the same tool.",
+                Timeout = TimeSpan.FromSeconds(10)
+            },
+            TimeSpan.FromSeconds(10),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
+        Assert.Equal(SubAgentOutcomeReason.ToolCycleStopped, result.OutcomeReason);
+        Assert.Equal(6, fakeClient.CallCount);
+        Assert.Equal(2, executionCount);
+        Assert.Equal("Final partial report.", result.Output);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        var toolResults = fakeClient.LastReceivedMessages
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .Select(static toolResult => toolResult.Result?.ToString() ?? string.Empty)
+            .ToList();
+        Assert.Equal(2, toolResults.Count(static text => text == "loop result"));
+        Assert.Single(toolResults, static text =>
+            text.Contains("repeated action-and-outcome cycle", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task Timeout_returns_failure()
     {
         var fakeClient = new FakeChatClient

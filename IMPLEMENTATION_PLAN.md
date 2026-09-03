@@ -164,6 +164,28 @@ Done when:
 - [x] Approval authority, scratch retry state, durable messages, and public APIs remain unchanged.
 - [ ] The stacked follow-up handles `attach_file` exposure and native-tool shell mistakes separately.
 
+### Priority: Stop Repeated Tool Cycles
+
+**PRDs:** `docs/prd/PRD-001-netclaw-mvp.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
+**Spec:** `openspec/changes/stop-repeated-tool-cycles/`
+**Surface area:** turn state, tool results, compaction, parent and child actors
+**Verification:** standalone deterministic proof, private replay, L2, and observe-only evidence
+
+Active tool loops can produce valid model, tool, and actor activity. The static
+iteration limits stop productive work and stop exact cycles too late.
+
+Done when:
+
+- [ ] Successful normal compaction preserves loaded deferred schemas.
+- [ ] LLM failure and context overflow evict loaded schemas.
+- [ ] A six-entry detector blocks exact periods one through three before execution.
+- [ ] The first block returns paired correction results without a side effect.
+- [ ] A repeated blocked action forces a truthful text-only response.
+- [ ] Parent and child actors produce equal decisions from equal histories.
+- [ ] Replay and observe-only evidence contain no confirmed false execution block.
+- [ ] The parent and child iteration limits are removed only after all gates pass.
+- [ ] Logs contain decisions and counts, but no arguments, results, hashes, or identities.
+
 ### Priority: Prevent Native-Tool Shell Mistakes
 
 **Stack parent:** PR #2046 (`fix/repair-tool-rollout-contracts`).

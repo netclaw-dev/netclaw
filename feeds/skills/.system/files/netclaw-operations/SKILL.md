@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.65.4"
+  version: "2.65.5"
 ---
 
 # Netclaw Operations
@@ -142,6 +142,12 @@ fix and re-issue once, do not retry the same shape:
   "1200ms"`, `_background: "yes"`) rejects instead of falling back to a default.
 - **Ambiguous meta spelling** — supplying two keys that map to the same meta
   field (e.g. both `_timeout_seconds` and `TimeoutSeconds`) rejects; send one.
+
+A repeated action-and-outcome correction means that no requested call ran.
+Choose a different action or finish the task from the available evidence.
+Do not repeat the blocked batch.
+Netclaw disables tools for the turn if the same blocked batch appears again.
+Report incomplete work and do not claim that the blocked operation succeeded.
 
 ## Large tool output
 

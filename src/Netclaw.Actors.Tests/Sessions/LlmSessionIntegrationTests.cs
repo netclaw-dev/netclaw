@@ -851,6 +851,181 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "cycle-call",
+                "search_tools",
+                new Dictionary<string, object?> { ["query"] = "browser" })
+        ];
+        _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+
+        var sessionId = new SessionId("channel-cycle/exact-stop");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("exact-cycle-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Repeat the same search."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var results = new List<ToolResultOutput>();
+        for (var i = 0; i < 3; i++)
+        {
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+            results.Add(await subscriber.ExpectMsgAsync<ToolResultOutput>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken));
+        }
+
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("same result", results[0].Result);
+        Assert.Equal("same result", results[1].Result);
+        Assert.Contains("repeated action-and-outcome cycle", results[2].Result, StringComparison.Ordinal);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+        Assert.Equal(5, _fakeChatClient.CallCount);
+    }
+
+    [Fact]
+    public async Task Parallel_cycle_correction_preserves_every_call_result_pair()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("cycle-a", "search_tools",
+                new Dictionary<string, object?> { ["query"] = "alpha" }),
+            new FunctionCallContent("cycle-b", "search_tools",
+                new Dictionary<string, object?> { ["query"] = "beta" }),
+            new FunctionCallContent("cycle-c", "search_tools",
+                new Dictionary<string, object?> { ["query"] = "gamma" })
+        ];
+        _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+
+        var sessionId = new SessionId("channel-cycle/parallel-pairs");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("parallel-cycle-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Repeat the parallel search."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var correctionResults = new List<ToolResultOutput>();
+        for (var batch = 0; batch < 3; batch++)
+        {
+            for (var call = 0; call < 3; call++)
+                await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            for (var call = 0; call < 3; call++)
+            {
+                var toolResult = await subscriber.ExpectMsgAsync<ToolResultOutput>(
+                    cancellationToken: TestContext.Current.CancellationToken);
+                if (batch == 2)
+                    correctionResults.Add(toolResult);
+            }
+        }
+
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["cycle-a", "cycle-b", "cycle-c"],
+            correctionResults.Select(static result => result.CallId.Value)
+                .OrderBy(static callId => callId, StringComparer.Ordinal));
+        Assert.All(correctionResults, static result =>
+            Assert.Contains("No requested call executed", result.Result, StringComparison.Ordinal));
+        Assert.Equal(6, _fakeToolExecutor.CallCount);
+    }
+
+    [Fact]
+    public async Task Text_only_cycle_stop_survives_overflow_compaction_and_empty_retry()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "cycle-call",
+                "search_tools",
+                new Dictionary<string, object?> { ["query"] = "browser" })
+        ];
+        _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeChatClient.AfterToolCallResponse = callCount =>
+        {
+            if (callCount == 4)
+            {
+                _fakeChatClient.PlannedExceptions.Enqueue(new ProviderException(
+                    "maximum context length exceeded",
+                    "HTTP 400: maximum context length exceeded",
+                    statusCode: 400));
+            }
+        };
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("Final partial report.")]);
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+
+        var sessionId = new SessionId("channel-cycle/text-only-retry");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("text-only-retry-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Repeat the same search and then report."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<ToolResultOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        await subscriber.ExpectMsgAsync<ErrorOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("Final partial report.", text.Text);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+        Assert.Equal(6, _fakeChatClient.CallCount);
+        Assert.All(_fakeChatClient.ReceivedToolNames.TakeLast(2), Assert.Empty);
+    }
+
+    [Fact]
     public async Task Native_correction_exposes_deferred_tool_on_next_request_but_not_after_recovery()
     {
         const string deferredToolName = "deferred_native_probe";
@@ -929,6 +1104,62 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         await recoveredSubscriber.ExpectMsgAsync<TurnCompleted>(
             TimeSpan.FromSeconds(6),
             cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(deferredToolName, _fakeChatClient.ReceivedToolNames[^1]);
+    }
+
+    [Fact]
+    public async Task Context_overflow_evicts_a_loaded_deferred_tool_before_retry()
+    {
+        const string deferredToolName = "browser_chrome_devtools__navigate_page";
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-load-overflow", "load_tool",
+                new Dictionary<string, object?> { ["Name"] = "browser_chrome_devtools/navigate_page" })
+        ];
+        _fakeToolExecutor.Results["load_tool"] = "browser_chrome_devtools/navigate_page";
+
+        var sessionId = new SessionId("channel-discovery/overflow-eviction");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("overflow-eviction-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Load the browser tool."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains(deferredToolName, _fakeChatClient.ReceivedToolNames[^1]);
+
+        _fakeChatClient.PlannedExceptions.Enqueue(new ProviderException(
+            "maximum context length exceeded",
+            "HTTP 400: maximum context length exceeded",
+            statusCode: 400));
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Continue after the overflow."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ErrorOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain(deferredToolName, _fakeChatClient.ReceivedToolNames[^1]);
     }
@@ -2188,6 +2419,8 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
+    public Action<int>? AfterToolCallResponse { get; set; }
+
     /// <summary>
     /// When populated, exceptions are dequeued and thrown before processing the
     /// response. Used to simulate provider errors (502, 400 context overflow, etc.).
@@ -2322,6 +2555,7 @@ internal sealed class FakeChatClient : IChatClient
                 var toolResponse = new ChatResponse(toolCallMessage);
                 if (usageOverride is not null)
                     toolResponse.Usage = usageOverride;
+                AfterToolCallResponse?.Invoke(_callCount);
                 return toolResponse;
             }
         }
