@@ -28,6 +28,13 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    private static readonly string ManagedTemporarySessionDirectory = Path.GetFullPath(
+        Path.Combine(Path.GetTempPath(), "netclaw-test-sessions", "example"));
+    private static readonly string TestManagedTemporaryDirectory = Path.Combine(
+        ManagedTemporarySessionDirectory,
+        "tmp",
+        "parent");
+
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
     }
@@ -63,7 +70,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             turnContext,
             new SessionToolRunEnvironment
             {
-                SessionDirectory = Path.GetTempPath(),
+                Storage = SessionStoragePaths.CreateLegacy(
+                    Path.GetTempPath(),
+                    Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),
+                    "test-session"),
                 InlineOutputBudget = new InlineOutputBudget(4096),
                 SpawnChildActor = static (_, _, _) => Task.FromResult<object>(new object())
             })
@@ -414,19 +424,19 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     [Fact]
     public async Task Parallel_platform_temp_calls_all_return_corrections_before_prompt()
     {
-        var executor = new ScratchCorrectionRequiredExecutor();
-        var probe = CreateTestProbe("scratch-parallel-correction-probe");
+        var executor = new ManagedTemporaryCorrectionRequiredExecutor();
+        var probe = CreateTestProbe("managed-temporary-parallel-correction-probe");
         var approvals = new List<ToolInteractionRequest>();
-        var sessionId = new SessionId("D1/scratch-parallel-correction");
+        var sessionId = new SessionId("D1/managed-temporary-parallel-correction");
         var calls = new List<FunctionCallContent>
         {
-            ScratchCall("scratch-1"),
-            ScratchCall("scratch-2")
+            PlatformTemporaryCall("managed-temporary-1"),
+            PlatformTemporaryCall("managed-temporary-2")
         };
 
         var pipelineTask = new SessionToolPipelineTestFixture(executor, calls, sessionId, probe.Ref)
             .WithTurnContext(InteractiveTurnContext(sessionId))
-            .InSessionDirectory("/home/user/.netclaw/sessions/example")
+            .InSessionDirectory(ManagedTemporarySessionDirectory)
             .WithApprovals(
                 new ApprovalChannel(),
                 request => approvals.Add(request.Request),
@@ -441,37 +451,37 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal(2, completed.ToolResults.Count);
         Assert.All(completed.ToolResults, result =>
             Assert.Equal(
-                "Tool execution deferred: shared_temporary_directory\n" +
-                "Session scratch directory: '/home/user/.netclaw/sessions/example'.\n" +
-                "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths.",
+                "Tool execution deferred: use_managed_temporary_directory\n" +
+                $"Managed temporary directory: '{TestManagedTemporaryDirectory}'.\n" +
+                "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths.",
                 result.Content));
         Assert.All(completed.ToolReceipts.Values, receipt =>
-            Assert.Equal(ToolRemediationCode.UseSessionScratch, receipt.RemediationCode));
-        Assert.Equal(2, completed.ScratchCorrectionChanges.Count);
-        Assert.All(completed.ScratchCorrectionChanges,
-            change => Assert.IsType<SessionScratchCorrectionChange.Arm>(change));
+            Assert.Equal(ToolRemediationCode.UseManagedTemporaryDirectory, receipt.RemediationCode));
+        Assert.Equal(2, completed.ManagedTemporaryCorrectionChanges.Count);
+        Assert.All(completed.ManagedTemporaryCorrectionChanges,
+            change => Assert.IsType<ManagedTemporaryCorrectionChange.Arm>(change));
         Assert.Empty(approvals);
     }
 
     [Fact]
     public async Task Later_exact_retry_consumes_key_and_offers_once_or_deny()
     {
-        var key = ScratchCorrectionRequiredExecutor.Key;
-        var executor = new ScratchRetryApprovalExecutor();
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var executor = new ManagedTemporaryRetryApprovalExecutor();
         var approvalChannel = new ApprovalChannel();
-        var probe = CreateTestProbe("scratch-retry-probe");
+        var probe = CreateTestProbe("managed-temporary-retry-probe");
         var approvalRequest = new TaskCompletionSource<ToolInteractionRequest>(
             TaskCreationOptions.RunContinuationsAsynchronously);
-        var sessionId = new SessionId("D1/scratch-retry");
+        var sessionId = new SessionId("D1/managed-temporary-retry");
 
         var pipelineTask = new SessionToolPipelineTestFixture(
                 executor,
-                [ScratchCall("scratch-retry")],
+                [PlatformTemporaryCall("managed-temporary-retry")],
                 sessionId,
                 probe.Ref)
             .WithTurnContext(InteractiveTurnContext(sessionId))
-            .InSessionDirectory(key.SessionDirectory)
-            .WithScratchCorrections(key)
+            .InSessionDirectory(key.Target.ManagedTemporaryDirectory)
+            .WithManagedTemporaryCorrections(key)
             .WithApprovals(
                 approvalChannel,
                 request => approvalRequest.TrySetResult(request.Request),
@@ -490,16 +500,15 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             cancellationToken: TestContext.Current.CancellationToken);
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
-        Assert.True(executor.RetryMarked);
-        var change = Assert.Single(completed.ScratchCorrectionChanges);
-        Assert.Equal(key, Assert.IsType<SessionScratchCorrectionChange.Consume>(change).Key);
+        var change = Assert.Single(completed.ManagedTemporaryCorrectionChanges);
+        Assert.Equal(key, Assert.IsType<ManagedTemporaryCorrectionChange.Consume>(change).Key);
     }
 
     [Fact]
-    public void Scratch_retry_key_is_consumed_once()
+    public void Managed_temporary_retry_key_is_consumed_once()
     {
-        var key = ScratchCorrectionRequiredExecutor.Key;
-        var dispatch = new SessionScratchCorrectionDispatch([key]);
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var dispatch = new ManagedTemporaryCorrectionDispatch([key]);
 
         Assert.True(dispatch.TryConsume(key.Call, out var consumed));
         Assert.Equal(key, consumed);
@@ -507,25 +516,24 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Theory]
-    [InlineData("different-command", true, "/tmp", false, 5)]
-    [InlineData("gh api repos/example/project", false, null, false, 5)]
-    [InlineData("gh api repos/example/project", true, "/var/tmp", false, 5)]
-    [InlineData("gh api repos/example/project", true, "/tmp", true, 5)]
-    [InlineData("gh api repos/example/project", true, "/tmp", false, 30)]
-    public void Execution_change_does_not_consume_scratch_retry_key(
+    [InlineData("different-command", "/tmp", false, 5)]
+    [InlineData("gh api repos/example/project", null, false, 5)]
+    [InlineData("gh api repos/example/project", "/var/tmp", false, 5)]
+    [InlineData("gh api repos/example/project", "/tmp", true, 5)]
+    [InlineData("gh api repos/example/project", "/tmp", false, 30)]
+    public void Execution_change_does_not_consume_managed_temporary_retry_key(
         string command,
-        bool hasExplicitWorkingDirectory,
         string? workingDirectory,
         bool background,
         int timeoutSeconds)
     {
-        var key = ScratchCorrectionRequiredExecutor.Key;
-        var dispatch = new SessionScratchCorrectionDispatch([key]);
-        var changedCall = key.Call with
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var dispatch = new ManagedTemporaryCorrectionDispatch([key]);
+        var originalCall = Assert.IsType<ManagedTemporaryCallSemantics.ShellCall>(key.Call);
+        var changedCall = originalCall with
         {
             Command = command,
-            HasExplicitWorkingDirectory = hasExplicitWorkingDirectory,
-            ExplicitWorkingDirectory = workingDirectory,
+            WorkingDirectory = workingDirectory,
             Background = background,
             Timeout = TimeSpan.FromSeconds(timeoutSeconds)
         };
@@ -534,14 +542,14 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
-    public void Rationale_is_not_part_of_scratch_retry_semantics()
+    public void Rationale_is_not_part_of_managed_temporary_retry_semantics()
     {
-        var call = ScratchCall("scratch-rationale");
-        var first = SessionToolExecutionPipeline.BuildSessionScratchCallSemantics(
+        var call = PlatformTemporaryCall("managed-temporary-rationale");
+        var first = ManagedTemporaryCorrection.BuildCallSemantics(
             call,
             new ToolCallMeta { Rationale = "first explanation" },
             TimeSpan.FromSeconds(5));
-        var second = SessionToolExecutionPipeline.BuildSessionScratchCallSemantics(
+        var second = ManagedTemporaryCorrection.BuildCallSemantics(
             call,
             new ToolCallMeta { Rationale = "different explanation" },
             TimeSpan.FromSeconds(5));
@@ -550,39 +558,40 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
-    public void Shell_change_does_not_consume_scratch_retry_key()
+    public void Shell_change_does_not_consume_managed_temporary_retry_key()
     {
-        var key = ScratchCorrectionRequiredExecutor.Key;
-        var dispatch = new SessionScratchCorrectionDispatch([key]);
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var dispatch = new ManagedTemporaryCorrectionDispatch([key]);
+        var originalCall = Assert.IsType<ManagedTemporaryCallSemantics.ShellCall>(key.Call);
 
         Assert.False(dispatch.TryConsume(
-            key.Call with { Shell = ApprovalShell.PowerShell },
+            originalCall with { Shell = ApprovalShell.PowerShell },
             out _));
     }
 
     [Fact]
-    public void Scratch_correction_state_clears_lifecycle_authority()
+    public void Managed_temporary_correction_state_clears_lifecycle_authority()
     {
-        var key = ScratchCorrectionRequiredExecutor.Key;
-        var state = new SessionScratchCorrectionState();
-        state.Apply(new SessionScratchCorrectionChange.Arm(key));
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var state = new ManagedTemporaryCorrectionState();
+        state.Apply(new ManagedTemporaryCorrectionChange.Arm(key));
         state.Clear();
 
         Assert.False(state.Snapshot().TryConsume(key.Call, out _));
     }
 
     [Fact]
-    public void Scratch_correction_state_removes_consumed_key_after_history_commit()
+    public void Managed_temporary_correction_state_removes_consumed_key_after_history_commit()
     {
-        var key = ScratchCorrectionRequiredExecutor.Key;
-        var state = new SessionScratchCorrectionState();
-        state.Apply(new SessionScratchCorrectionChange.Arm(key));
-        state.Apply(new SessionScratchCorrectionChange.Consume(key));
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var state = new ManagedTemporaryCorrectionState();
+        state.Apply(new ManagedTemporaryCorrectionChange.Arm(key));
+        state.Apply(new ManagedTemporaryCorrectionChange.Consume(key));
 
         Assert.False(state.Snapshot().TryConsume(key.Call, out _));
     }
 
-    private static FunctionCallContent ScratchCall(string callId)
+    private static FunctionCallContent PlatformTemporaryCall(string callId)
         => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
         {
             ["Command"] = "gh api repos/example/project",
@@ -1239,15 +1248,14 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             CancellationToken ct = default)
         {
             Attempts++;
-            throw new ToolApprovalRequiredException(new ToolApprovalContext(
-                ToolName: toolCall.Name,
-                DisplayText: "head -40 src/file.cs",
-                Patterns: ["head"],
-                CandidateVerbs: ["head"],
-                Options: [])
-            {
-                SuggestedProjectDirectory = directory
-            });
+            throw new ToolApprovalRequiredException(
+                new ToolApprovalContext(
+                    ToolName: toolCall.Name,
+                    DisplayText: "head -40 src/file.cs",
+                    Patterns: ["head"],
+                    CandidateVerbs: ["head"],
+                    Options: []),
+                new ToolCorrection.ProjectDirectorySuggested(directory));
         }
     }
 
@@ -1297,22 +1305,24 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             throw CreateCorrection();
         }
 
-        private static ToolAgentCorrectionRequiredException CreateCorrection()
-            => new(new ToolAgentCorrection.NativeToolSuggested(new ToolName("file_read")));
+        private static ToolCorrectionRequiredException CreateCorrection()
+            => new(new ToolCorrection.NativeToolSuggested(new ToolName("file_read")));
     }
 
-    private sealed class ScratchCorrectionRequiredExecutor : IToolExecutor
+    private sealed class ManagedTemporaryCorrectionRequiredExecutor : IToolExecutor
     {
-        internal static SessionScratchCorrectionKey Key { get; } = new(
-            new SessionScratchCallSemantics(
-                ApprovalShell.Bash,
-                "gh api repos/example/project",
-                HasExplicitWorkingDirectory: true,
-                ExplicitWorkingDirectory: "/tmp",
+        private const string Command = "gh api repos/example/project";
+
+        internal static ManagedTemporaryCorrectionKey Key { get; } = new(
+            new ManagedTemporaryCallSemantics.ShellCall(
+                Shell: ApprovalShell.Bash,
+                Command: Command,
+                WorkingDirectory: "/tmp",
                 Background: false,
                 Timeout: TimeSpan.FromSeconds(5)),
-            TemporaryRoot: "/tmp",
-            SessionDirectory: "/home/user/.netclaw/sessions/example");
+            new ManagedTemporaryCorrectionTarget(
+                TestManagedTemporaryDirectory,
+                "/tmp"));
 
         public Task AuthorizeAsync(
             FunctionCallContent toolCall,
@@ -1324,31 +1334,20 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             FunctionCallContent toolCall,
             ToolExecutionContext? context = null,
             CancellationToken ct = default)
-            => throw new ToolApprovalRequiredException(new ToolApprovalContext(
-                ToolName: toolCall.Name,
-                DisplayText: Key.Call.Command,
-                Patterns: ["gh api"],
-                CandidateVerbs: ["gh api"],
-                Options: [])
-            {
-                AgentCorrection = new ToolAgentCorrection.SessionScratchSuggested(
-                    Key.SessionDirectory,
-                    Key.TemporaryRoot,
-                    Key.Call.Shell)
-            });
+            => throw new ToolApprovalRequiredException(
+                new ToolApprovalContext(
+                    ToolName: toolCall.Name,
+                    DisplayText: Command,
+                    Patterns: ["gh api"],
+                    CandidateVerbs: ["gh api"],
+                    Options: []),
+                new ToolCorrection.ManagedTemporaryDirectorySuggested(Key.Target));
     }
 
-    private sealed class ScratchRetryApprovalExecutor
-        : IToolExecutor, ISessionScratchRetryAwareExecutor
+    private sealed class ManagedTemporaryRetryApprovalExecutor
+        : IToolExecutor, IApprovalShellProvider
     {
         public ApprovalShell Shell => ApprovalShell.Bash;
-
-        public bool RetryMarked { get; private set; }
-
-        public void MarkSessionScratchRetry(
-            ToolExecutionContext context,
-            ToolAgentCorrection.SessionScratchSuggested correction)
-            => RetryMarked = true;
 
         public Task AuthorizeAsync(
             FunctionCallContent toolCall,
@@ -1361,7 +1360,8 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ToolExecutionContext? context = null,
             CancellationToken ct = default)
         {
-            var options = RetryMarked
+            var retryMarked = context?.Approval.ManagedTemporaryRetry is not null;
+            var options = retryMarked
                 ? new ToolApprovalOption[]
                 {
                     new(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
@@ -1376,9 +1376,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                 Options: options,
                 Cwd: "/tmp")
             {
-                IsSessionScratchRetry = RetryMarked,
-                SessionScratchDirectory = ScratchCorrectionRequiredExecutor.Key.SessionDirectory,
-                PlatformTemporaryRoot = ScratchCorrectionRequiredExecutor.Key.TemporaryRoot
+                IsManagedTemporaryRetry = retryMarked,
+                ManagedTemporaryDirectory = ManagedTemporaryCorrectionRequiredExecutor.Key.Target.ManagedTemporaryDirectory,
+                PlatformTemporaryRoot = ManagedTemporaryCorrectionRequiredExecutor.Key.Target.PlatformTemporaryRoot
             });
         }
     }

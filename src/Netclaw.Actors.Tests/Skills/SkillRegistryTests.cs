@@ -423,7 +423,7 @@ public class SkillRegistryTests
         registry.PublishMcpPromptSkills("gigatron", [MakePromptEntry("summary")]);
         var layer = new SkillIndexContextLayer();
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

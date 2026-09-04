@@ -29,7 +29,7 @@ public sealed class McpToolAudienceGrantsTests
     {
         var config = CreateConfigWithTeamServer("memorizer");
         // McpServerToolGrants is null by default
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = CreateMcpTool("memorizer", "store");
 
         Assert.True(policy.IsToolExposed(tool, TeamContext()));
@@ -43,7 +43,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = []
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = CreateMcpTool("memorizer", "store");
 
         Assert.False(policy.IsToolExposed(tool, TeamContext()));
@@ -57,7 +57,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories", "get"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         Assert.True(policy.IsToolExposed(CreateMcpTool("memorizer", "search_memories"), TeamContext()));
         Assert.True(policy.IsToolExposed(CreateMcpTool("memorizer", "get"), TeamContext()));
@@ -71,7 +71,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories", "get"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         Assert.False(policy.IsToolExposed(CreateMcpTool("memorizer", "store"), TeamContext()));
         Assert.False(policy.IsToolExposed(CreateMcpTool("memorizer", "delete"), TeamContext()));
@@ -85,7 +85,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         // github has no entry in grants → all tools pass
         Assert.True(policy.IsToolExposed(CreateMcpTool("github", "create_issue"), TeamContext()));
@@ -100,7 +100,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["github"] = ["create_issue"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         // github server is not in AllowedMcpServers → blocked at server level
         Assert.False(policy.IsToolExposed(CreateMcpTool("github", "create_issue"), TeamContext()));
@@ -116,7 +116,7 @@ public sealed class McpToolAudienceGrantsTests
             ["memorizer"] = ["search_memories", "get"]
         };
         // Personal has McpServersMode=All by default, no grants → sees everything
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         var storeTool = CreateMcpTool("memorizer", "store");
 
@@ -136,7 +136,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         var decision = policy.AuthorizeInvocation(
             CreateMcpTool("memorizer", "store"),
@@ -154,7 +154,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         var decision = policy.AuthorizeInvocation(
             CreateMcpTool("memorizer", "search_memories"),
@@ -168,7 +168,7 @@ public sealed class McpToolAudienceGrantsTests
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         // Team has no AllowedMcpServers → server-level deny
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         var decision = policy.AuthorizeInvocation(
             CreateMcpTool("memorizer", "search_memories"),
@@ -196,7 +196,7 @@ public sealed class McpToolAudienceGrantsTests
 
         var tool = new SearchToolsTool(
             registry,
-            new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
+            new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "memor"),
@@ -223,7 +223,7 @@ public sealed class McpToolAudienceGrantsTests
         };
         var tool = new SearchToolsTool(
             registry,
-            new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
+            new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "archive"),
@@ -249,7 +249,7 @@ public sealed class McpToolAudienceGrantsTests
         };
         var tool = new SearchToolsTool(
             registry,
-            new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
+            new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([])));
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Query", "servers"),
@@ -276,7 +276,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         var trustContext = new EffectiveTrustContext(
             DeploymentPosture.Personal,
@@ -312,7 +312,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = new LoadToolTool(registry, policy);
 
         var hiddenResult = await tool.ExecuteAsync(
@@ -343,7 +343,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = new LoadToolTool(registry, policy);
 
         var result = await tool.ExecuteAsync(
@@ -372,7 +372,7 @@ public sealed class McpToolAudienceGrantsTests
                 ["memorizer/store"] = ToolApprovalMode.Approval
             }
         };
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             Defaults,
             new ShellCommandPolicy(),
@@ -410,7 +410,7 @@ public sealed class McpToolAudienceGrantsTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         Assert.True(policy.IsToolExposed(
             CreateMcpTool("memorizer", "search_memories"),
@@ -431,7 +431,7 @@ public sealed class McpToolAudienceGrantsTests
             ["memorizer"] = ["search_memories"],
             ["github"] = ["create_issue", "list_issues"]
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         // memorizer grants don't affect github
         Assert.True(policy.IsToolExposed(CreateMcpTool("github", "create_issue"), TeamContext()));
@@ -475,7 +475,7 @@ public sealed class McpToolAudienceGrantsTests
         Assert.Equal(["search_memories", "get"], config.AudienceProfiles.Team.McpServerToolGrants["memorizer"]);
 
         // Verify it actually enforces correctly when wired through the policy
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         Assert.True(policy.IsToolExposed(CreateMcpTool("memorizer", "search_memories"), TeamContext()));
         Assert.False(policy.IsToolExposed(CreateMcpTool("memorizer", "store"), TeamContext()));
     }
@@ -499,7 +499,7 @@ public sealed class McpToolAudienceGrantsTests
                 ["dropbox"] = serverDefault
             }
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var newTool = CreateMcpTool("dropbox", "get_upload_url");
 
         Assert.True(policy.IsToolExposed(newTool, PersonalContext()));
@@ -529,7 +529,7 @@ public sealed class McpToolAudienceGrantsTests
                 ["dropbox/delete"] = ToolApprovalMode.Deny
             }
         };
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
 
         var filtered = policy.FilterExposedTools(
             [deniedTool.ToAITool(), newTool.ToAITool()],

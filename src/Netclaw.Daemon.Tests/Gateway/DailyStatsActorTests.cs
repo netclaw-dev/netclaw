@@ -76,6 +76,4 @@ public sealed class DailyStatsActorTests : IDisposable
         SqliteConnection.ClearAllPools();
         _dir.Dispose();
     }
-
-
 }

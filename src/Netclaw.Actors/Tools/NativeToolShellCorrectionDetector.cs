@@ -10,7 +10,7 @@ namespace Netclaw.Actors.Tools;
 
 internal static class NativeToolShellCorrectionDetector
 {
-    internal static ToolAgentCorrection.NativeToolSuggested? Detect(
+    internal static ToolCorrection.NativeToolSuggested? Detect(
         ShellCommandAnalysis analysis,
         ToolRegistry registry,
         ToolAccessPolicy policy,
@@ -45,7 +45,7 @@ internal static class NativeToolShellCorrectionDetector
                 continue;
             }
 
-            return new ToolAgentCorrection.NativeToolSuggested(new ToolName(registration.Tool.Name));
+            return new ToolCorrection.NativeToolSuggested(new ToolName(registration.Tool.Name));
         }
 
         return null;

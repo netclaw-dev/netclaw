@@ -17,20 +17,58 @@ public enum SubAgentRunOutcome
 }
 
 /// <summary>Spawner-generated subagent run id used to correlate logs and notifications.</summary>
-public readonly record struct SubAgentRunId(string Value)
+public readonly record struct SubAgentRunId
 {
+    /// <summary>Creates a validated run identifier.</summary>
+    public SubAgentRunId(string value)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(value);
+        if (value.Any(static character =>
+                !char.IsLetterOrDigit(character) && character is not '-' and not '_'))
+        {
+            throw new ArgumentException(
+                "A subagent run identifier can contain letters, numbers, hyphens, and underscores only.",
+                nameof(value));
+        }
+
+        Value = value;
+    }
+
+    /// <summary>Gets the validated identifier.</summary>
+    public string Value { get; }
+
+    /// <summary>Creates a new random run identifier.</summary>
     public static SubAgentRunId New() => new(Guid.NewGuid().ToString("N"));
 
+    /// <summary>Converts a string into a validated run identifier.</summary>
     public static explicit operator SubAgentRunId(string value) => new(value);
 
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 
 /// <summary>Subagent execution scope id used in structured logs.</summary>
 public readonly record struct SubAgentScopeId(string Value)
 {
+    /// <summary>Converts a string into a child execution scope identifier.</summary>
     public static explicit operator SubAgentScopeId(string value) => new(value);
 
+    /// <summary>Extracts the final run identifier from a composite child scope.</summary>
+    public bool TryGetRunId(out SubAgentRunId runId)
+    {
+        var marker = Value.LastIndexOf("/subagent/", StringComparison.Ordinal);
+        var separator = Value.LastIndexOf('/');
+        if (marker < 0 || separator <= marker + "/subagent/".Length || separator == Value.Length - 1)
+        {
+            runId = default;
+            return false;
+        }
+
+        runId = new SubAgentRunId(Value[(separator + 1)..]);
+        return true;
+    }
+
+    /// <inheritdoc />
     public override string ToString() => Value;
 }
 

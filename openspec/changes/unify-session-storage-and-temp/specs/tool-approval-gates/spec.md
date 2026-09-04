@@ -24,9 +24,9 @@ the child tool calls, generated paths, and completion rather than relying on
 response prose.
 
 This eval SHALL measure model alignment only. It SHALL NOT serve as proof that
-the environment was injected, that same-session log scope blocks foreign logs,
-that a managed path grants authority, or that a headless run exercised
-interactive approval.
+the environment was injected, that trusted-root containment works, that
+managed-path guidance grants authority, or that a headless run exercised interactive
+approval.
 
 #### Scenario: Example - delegated work uses standard temp behavior
 
@@ -164,8 +164,8 @@ results SHALL take precedence. One call SHALL return at most one correction.
 
 - **GIVEN** the native Windows environment captured its actual platform
   temporary root before managed environment injection
-- **WHEN** an eligible call explicitly authors that exact root or a safe
-  descendant
+- **WHEN** an eligible call explicitly authors that exact root or a canonical
+  descendant that crosses no filesystem link
 - **THEN** the agent receives the same typed correction with its Windows
   managed temporary path
 - **AND** the policy does not depend on `C:\Windows\Temp` or another fixed
@@ -254,7 +254,7 @@ results SHALL take precedence. One call SHALL return at most one correction.
 - **GIVEN** an eligible unmanaged temporary write
 - **WHEN** the dispatcher creates its recoverable-correction receipt
 - **THEN** the remediation code is `UseManagedTemporaryDirectory`
-- **AND** the trusted correction path is the current run's `temp_dir`
+- **AND** the correction destination is the current run's `temp_dir`
 - **AND** neither the code nor presenter calls `session_dir` session scratch
 
 #### Scenario: Counterexample - legacy persisted path is not reinterpreted
@@ -375,8 +375,9 @@ approval bridges.
 
 The change SHALL use deterministic tests as the acceptance boundary for path
 layout, persistence, access control, environment injection, correction
-selection, retry behavior, and worktree authority. Model evals SHALL measure
-tool choice, managed-path use, correction recovery, and parent-child handoff.
+selection, retry behavior, and ordinary shell and file authority. Model evals
+SHALL measure tool choice, managed-path use, parent-child handoff, and Git
+worktree composition.
 A model-eval result SHALL NOT replace a failed or missing deterministic test.
 
 #### Scenario: Counterexample - model success cannot hide contract failure
@@ -401,6 +402,24 @@ A model-eval result SHALL NOT replace a failed or missing deterministic test.
 - **THEN** the agent uses `file_write` and `file_read` below `temp_dir`
 - **AND** it does not use the complete session envelope as disposable scratch
 - **AND** it does not call the shell
+
+#### Scenario: Example - worktree eval proves the composed workflow
+
+- **GIVEN** session context announces `worktree_dir`
+- **WHEN** the agent must create and work from a Git worktree
+- **THEN** the eval requires a successful `shell_execute` call whose resulting
+  worktree path is below `worktree_dir`
+- **AND** it requires a successful `set_working_directory` call for that path
+- **AND** it fails on a tool call, prose claim, or path string without the
+  successful creation and adoption sequence
+
+#### Scenario: Counterexample - replacement eval is not locked comparison evidence
+
+- **GIVEN** an eval changes its prompt, tools, or assertions for this design
+- **WHEN** results are reported
+- **THEN** the report identifies the result as replacement behavioral evidence
+- **AND** it does not claim a direct before-and-after comparison with the old
+  case
 
 #### Scenario: Counterexample - eval evidence cannot contain PII
 

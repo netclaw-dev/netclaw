@@ -68,7 +68,7 @@ internal static class WorkspaceFileToolSupport
                          path,
                          FileMode.Open,
                          FileAccess.Read,
-                         FileShare.Read,
+                         FileShare.ReadWrite | FileShare.Delete,
                          bufferSize: 4096,
                          useAsync: true))
         {

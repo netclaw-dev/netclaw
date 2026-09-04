@@ -562,7 +562,7 @@ public sealed class DiscordProactiveThreadActorTests(ITestOutputHelper output) :
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
-            Paths: TestDiscordGatewayDeps.NewTestPaths(),
+                        StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
             PromptInjectionDetector: SafePromptInjectionDetector.Instance,
             SessionPropsFactory: sessionPropsFactory);
     }

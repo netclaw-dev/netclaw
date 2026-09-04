@@ -18,6 +18,11 @@ public sealed class ToolApprovalGateTests
 {
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
+    private static string ApprovalTestRoot { get; } = Path.Combine(
+        Path.GetPathRoot(Path.GetFullPath(AppContext.BaseDirectory))
+        ?? throw new InvalidOperationException("The test process has no filesystem root."),
+        "netclaw-approval-test");
+
     private static ToolAccessPolicy CreatePolicy(ToolApprovalMode shellApprovalMode)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
@@ -30,6 +35,7 @@ public sealed class ToolApprovalGateTests
         };
 
         return new ToolAccessPolicy(
+            new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -48,6 +54,19 @@ public sealed class ToolApprovalGateTests
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         return new ShellTool(config, new ToolPathPolicy([]), new ShellCommandPolicy());
+    }
+
+    [Theory]
+    [InlineData("shell_disabled", null, "Tool access denied: shell_disabled")]
+    [InlineData("path_access_denied", "Error: Path is outside trusted roots.", "Error: Path is outside trusted roots.")]
+    public void Access_denial_uses_one_agent_result_format(
+        string reason,
+        string? detail,
+        string expected)
+    {
+        var exception = new ToolAccessDeniedException(reason, detail);
+
+        Assert.Equal(expected, exception.ToAgentResult());
     }
 
     [Fact]
@@ -131,7 +150,7 @@ public sealed class ToolApprovalGateTests
         var config = CreateShellConfig(mode);
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, [protectedRoot]);
-        var policy = new ToolAccessPolicy(config, Defaults(), commandPolicy, pathPolicy);
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults(), commandPolicy, pathPolicy);
         var tool = new ShellTool(config, pathPolicy, commandPolicy);
 
         var decision = policy.AuthorizeInvocation(
@@ -144,9 +163,9 @@ public sealed class ToolApprovalGateTests
     }
 
     [Theory]
-    [InlineData(ToolApprovalMode.Auto, "shell_trust_zone_policy_not_configured")]
-    [InlineData(ToolApprovalMode.Deny, "tool_denied_by_approval_policy")]
-    public void Shell_approval_mode_preserves_noninteractive_trust_zone(
+    [InlineData(ToolApprovalMode.Auto, "shell_path_outside_trust_zone")]
+    [InlineData(ToolApprovalMode.Deny, "shell_path_outside_trust_zone")]
+    public void Shell_approval_mode_preserves_unattended_path_authorization(
         ToolApprovalMode mode,
         string expectedDenyReason)
     {
@@ -184,7 +203,7 @@ public sealed class ToolApprovalGateTests
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = null;
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -282,7 +301,7 @@ public sealed class ToolApprovalGateTests
     {
         var config = new ToolConfig();
         config.AudienceProfiles.Personal.ApprovalPolicy = approvalPolicy;
-        return new ToolAccessPolicy(
+        return new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -296,6 +315,70 @@ public sealed class ToolApprovalGateTests
 
     private static INetclawTool FileWriteToolInstance() => new FileWriteTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
     private static INetclawTool FileEditToolInstance() => new FileEditTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
+
+    [Fact]
+    public void File_grant_tool_without_path_descriptor_fails_closed()
+    {
+        var registry = new ToolRegistry();
+        registry.RegisterCore(
+            AIFunctionFactory.Create(() => "result", "future_file_tool"),
+            "file");
+        var tool = Assert.IsAssignableFrom<INetclawTool>(registry.GetByName("future_file_tool"));
+
+        var decision = CreateFileWritePolicy().AuthorizeInvocation(
+            tool,
+            PersonalContext(),
+            ToolInput.Create("Path", "/tmp/example.txt"));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("path_access_descriptor_missing", decision.DenyReason);
+        Assert.Null(decision.ApprovalContext);
+    }
+
+    [Fact]
+    public void Structured_file_protection_precedes_approval_mode()
+    {
+        using var directory = new DisposableTempDir();
+        var paths = new NetclawPaths(directory.Path);
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ReadFiles.Mode = ToolFilesystemMode.None;
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [FileReadTool.ToolName] = ToolApprovalMode.Deny
+            }
+        };
+        var protectedPaths = new ToolPathPolicy([paths.ConfigDirectory]);
+        var policy = new ToolAccessPolicy(
+            paths,
+            config,
+            Defaults(),
+            new ShellCommandPolicy(),
+            protectedPaths);
+
+        var decision = policy.AuthorizeInvocation(
+            new FileReadTool(config, paths, protectedPaths),
+            PersonalContext(),
+            ToolInput.Create("Path", paths.NetclawConfigPath));
+
+        Assert.False(decision.Allowed);
+        Assert.Equal("path_access_denied", decision.DenyReason);
+        Assert.NotNull(decision.DenyMessage);
+        Assert.Null(decision.ApprovalContext);
+    }
+
+    [Fact]
+    public void Policy_owns_path_access_policy_for_required_paths()
+    {
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
+            new ToolConfig(),
+            Defaults(),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        Assert.NotNull(policy.SharedPathAccessPolicy);
+    }
 
     [Fact]
     public void file_write_to_netclaw_json_requires_approval_under_fail_closed_default()
@@ -442,7 +525,7 @@ public sealed class ToolApprovalGateTests
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.AllowedMcpServers.Add("notion");
         config.AudienceProfiles.Personal.ApprovalPolicy = approvalPolicy;
-        return new ToolAccessPolicy(
+        return new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -611,6 +694,7 @@ public sealed class ToolApprovalGateTests
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = approvalPolicy;
         var policy = new ToolAccessPolicy(
+            new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -685,7 +769,7 @@ public sealed class ToolApprovalGateTests
         {
             DefaultMode = ToolApprovalMode.Approval
         };
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -714,7 +798,7 @@ public sealed class ToolApprovalGateTests
         {
             DefaultMode = ToolApprovalMode.Approval
         };
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -745,7 +829,7 @@ public sealed class ToolApprovalGateTests
         {
             DefaultMode = ToolApprovalMode.Approval
         };
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -768,14 +852,13 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_path_outside_trust_zone_is_denied()
+    public void Non_interactive_shell_with_path_outside_trusted_roots_is_denied()
     {
         using var dir = new DisposableTempDir();
-        var trustRoot = CreateTrustZoneRoot(dir.Path);
+        var trustedRoot = CreateTrustedRoot(dir.Path);
         var outsidePath = Path.Combine(dir.Path, "outside", "secrets.txt");
 
-        var trustZone = new FakeShellTrustZonePolicy([trustRoot]);
-        var policy = CreatePolicyWithTrustZone(trustZone);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -790,14 +873,13 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_path_inside_trust_zone_proceeds_to_approval()
+    public void Non_interactive_shell_with_path_inside_trusted_root_proceeds_to_approval()
     {
         using var dir = new DisposableTempDir();
-        var trustRoot = CreateTrustZoneRoot(dir.Path);
-        var insidePath = Path.Combine(trustRoot, "project", "README.md");
+        var trustedRoot = CreateTrustedRoot(dir.Path);
+        var insidePath = Path.Combine(trustedRoot, "project", "README.md");
 
-        var trustZone = new FakeShellTrustZonePolicy([trustRoot]);
-        var policy = CreatePolicyWithTrustZone(trustZone);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -807,7 +889,7 @@ public sealed class ToolApprovalGateTests
                 ["command"] = TestShellEnvironment.ReadFileCommand(insidePath)
             });
 
-        // Path is within trust zone — proceeds to the approval gate (RequiresApproval)
+        // Path authorization allows the trusted-root path, so approval runs next.
         Assert.True(decision.NeedsApproval);
     }
 
@@ -815,10 +897,9 @@ public sealed class ToolApprovalGateTests
     public void Non_interactive_shell_without_path_args_proceeds_to_approval()
     {
         using var dir = new DisposableTempDir();
-        var trustRoot = CreateTrustZoneRoot(dir.Path);
+        var trustedRoot = CreateTrustedRoot(dir.Path);
 
-        var trustZone = new FakeShellTrustZonePolicy([trustRoot]);
-        var policy = CreatePolicyWithTrustZone(trustZone);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -830,17 +911,17 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Interactive_shell_skips_trust_zone_check()
+    public void Interactive_shell_with_unrestricted_write_profile_reaches_approval_for_external_path()
     {
         using var dir = new DisposableTempDir();
-        var trustRoot = CreateTrustZoneRoot(dir.Path);
+        var trustedRoot = CreateTrustedRoot(dir.Path);
 
-        var trustZone = new FakeShellTrustZonePolicy([trustRoot]);
-        var policy = CreatePolicyWithTrustZone(trustZone);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: true);
 
-        // Interactive channels don't enforce trust zones — the human approves
+        // The default Personal WriteFiles=All profile admits the path. The
+        // approval layer still decides whether the shell call can execute.
         var decision = policy.AuthorizeInvocation(tool, ctx,
             new Dictionary<string, object?> { ["command"] = "cat /etc/passwd" });
 
@@ -848,34 +929,199 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_nested_shell_path_outside_trust_zone_is_denied()
+    public void Disabled_shell_stops_before_file_protection()
     {
         using var dir = new DisposableTempDir();
-        var trustRoot = CreateTrustZoneRoot(dir.Path);
-        var outsidePath = Path.Combine(dir.Path, "outside", "shadow.txt");
+        var trustedRoot = CreateTrustedRoot(dir.Path);
+        var policy = CreatePolicyWithTrustedRoot(
+            trustedRoot,
+            ShellExecutionMode.Off,
+            ToolFilesystemMode.None);
 
-        var trustZone = new FakeShellTrustZonePolicy([trustRoot]);
-        var policy = CreatePolicyWithTrustZone(trustZone);
-        var tool = ShellTool();
-        var ctx = PersonalContext(supportsApproval: false);
-
-        var decision = policy.AuthorizeInvocation(tool, ctx,
-            new Dictionary<string, object?> { ["command"] = $"bash -c \"cat {outsidePath}\"" });
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            new Dictionary<string, object?>
+            {
+                ["command"] = $"cat \"{Path.Combine(trustedRoot, "project", "README.md")}\""
+            });
 
         Assert.False(decision.Allowed);
+        Assert.Equal("shell_disabled", decision.DenyReason);
+    }
+
+    [Fact]
+    public void Team_file_write_does_not_require_shell_capability()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.Off };
+        config.AudienceProfiles.Team.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [FileWriteTool.ToolName] = ToolApprovalMode.Auto
+            }
+        };
+        var protectedPaths = new ToolPathPolicy([]);
+        var policy = new ToolAccessPolicy(
+            paths,
+            config,
+            Defaults(),
+            new ShellCommandPolicy(),
+            protectedPaths);
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/team-file-write",
+            paths.SessionsDirectory,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Team,
+                Boundary = TrustBoundary.Team
+            });
+        var target = Path.Combine(paths.SessionsDirectory, "result.txt");
+
+        var decision = policy.AuthorizeInvocation(
+            new FileWriteTool(config, paths, protectedPaths),
+            context,
+            ToolInput.Create("Path", target, "Content", "result"));
+
+        Assert.True(decision.Allowed);
+        Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
+    }
+
+    [Fact]
+    public void Shell_invocation_requires_write_file_authority_before_approval()
+    {
+        using var dir = new DisposableTempDir();
+        var trustedRoot = CreateTrustedRoot(dir.Path);
+        var workingDirectory = Path.Combine(trustedRoot, "project");
+        var outsidePath = Path.Combine(dir.Path, "outside", "README.md");
+        var policy = CreatePolicyWithTrustedRoot(
+            trustedRoot,
+            ShellExecutionMode.HostAllowed,
+            ToolFilesystemMode.Roots);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            new Dictionary<string, object?>
+            {
+                ["command"] = $"cat \"{outsidePath}\"",
+                ["WorkingDirectory"] = workingDirectory
+            });
+
+        Assert.False(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+    }
+
+    [Theory]
+    [InlineData(ToolApprovalMode.Approval)]
+    [InlineData(ToolApprovalMode.Auto)]
+    public void Shell_write_none_denies_before_approval_mode(ToolApprovalMode approvalMode)
+    {
+        using var dir = new DisposableTempDir();
+        var trustedRoot = CreateTrustedRoot(dir.Path);
+        var policy = CreatePolicyWithTrustedRoot(
+            trustedRoot,
+            ShellExecutionMode.HostAllowed,
+            ToolFilesystemMode.None,
+            approvalMode);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            new Dictionary<string, object?>
+            {
+                ["command"] = "git status",
+                ["WorkingDirectory"] = trustedRoot
+            });
+
+        Assert.False(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
+        Assert.Equal("shell_working_directory_outside_trust_zone", decision.DenyReason);
+    }
+
+    [SlopwatchSuppress("SW001", "This regression requires POSIX symbolic-link semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Directory symlink creation is privilege-gated on Windows.")]
+    public void Shell_file_protection_checks_exact_path_for_link_escape()
+    {
+        using var dir = new DisposableTempDir();
+        var trustedRoot = CreateTrustedRoot(dir.Path);
+        var workingDirectory = Path.Combine(trustedRoot, "project");
+        var outsideDirectory = Path.Combine(dir.Path, "outside");
+        var outsideFile = Path.Combine(outsideDirectory, "README.md");
+        var linkedFile = Path.Combine(workingDirectory, "linked.md");
+        Directory.CreateDirectory(outsideDirectory);
+        File.WriteAllText(outsideFile, "outside");
+        File.CreateSymbolicLink(linkedFile, outsideFile);
+        var policy = CreatePolicyWithTrustedRoot(
+            trustedRoot,
+            ShellExecutionMode.HostAllowed,
+            ToolFilesystemMode.Roots);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            new Dictionary<string, object?>
+            {
+                ["command"] = $"cat \"{linkedFile}\"",
+                ["WorkingDirectory"] = workingDirectory
+            });
+
+        Assert.False(decision.Allowed);
+        Assert.False(decision.NeedsApproval);
         Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
     }
 
     [Fact]
-    public void Non_interactive_shell_with_working_directory_outside_trust_zone_is_denied()
+    public void Unresolved_interactive_shell_path_retains_one_shot_approval()
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Approval);
+
+        var decision = policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "custom-command \"$TARGET_FILE\""));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.Null(decision.DenyReason);
+    }
+
+    [Fact]
+    public void Non_interactive_shell_with_nested_shell_path_outside_trusted_roots_is_denied()
     {
         using var dir = new DisposableTempDir();
-        var trustRoot = CreateTrustZoneRoot(dir.Path);
+        var trustedRoot = CreateTrustedRoot(dir.Path);
+        var outsidePath = Path.Combine(dir.Path, "outside", "shadow.txt");
+
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
+        var tool = ShellTool();
+        var ctx = PersonalContext(supportsApproval: false);
+
+        var command = OperatingSystem.IsWindows()
+            ? $"pwsh -NoProfile -Command \"Get-Content '{outsidePath}'\""
+            : $"bash -c \"cat '{outsidePath}'\"";
+        var decision = policy.AuthorizeInvocation(tool, ctx,
+            new Dictionary<string, object?> { ["command"] = command });
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(
+            OperatingSystem.IsWindows()
+                ? "shell_unresolved_trust_zone_input"
+                : "shell_path_outside_trust_zone",
+            decision.DenyReason);
+    }
+
+    [Fact]
+    public void Non_interactive_shell_with_working_directory_outside_trusted_roots_is_denied()
+    {
+        using var dir = new DisposableTempDir();
+        var trustedRoot = CreateTrustedRoot(dir.Path);
         var outsideDir = Path.Combine(dir.Path, "outside");
         Directory.CreateDirectory(outsideDir);
 
-        var trustZone = new FakeShellTrustZonePolicy([trustRoot]);
-        var policy = CreatePolicyWithTrustZone(trustZone);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -891,15 +1137,14 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_in_zone_working_directory_and_relative_path_proceeds_to_approval()
+    public void Non_interactive_shell_with_trusted_working_directory_and_relative_path_proceeds_to_approval()
     {
         using var dir = new DisposableTempDir();
-        var trustRoot = CreateTrustZoneRoot(dir.Path);
-        var workingDirectory = Path.Combine(trustRoot, "project");
+        var trustedRoot = CreateTrustedRoot(dir.Path);
+        var workingDirectory = Path.Combine(trustedRoot, "project");
         Directory.CreateDirectory(workingDirectory);
 
-        var trustZone = new FakeShellTrustZonePolicy([trustRoot]);
-        var policy = CreatePolicyWithTrustZone(trustZone);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -914,9 +1159,10 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_path_denied_when_no_trust_zone_configured()
+    public void Non_interactive_shell_with_path_outside_default_trusted_roots_is_denied()
     {
-        // No trust zone policy = fail-closed for non-interactive path commands
+        // The mandatory path policy contains Netclaw's default trusted roots,
+        // but an unrelated system path remains outside them.
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
@@ -925,11 +1171,11 @@ public sealed class ToolApprovalGateTests
             new Dictionary<string, object?> { ["command"] = "cat /etc/passwd" });
 
         Assert.False(decision.Allowed);
-        Assert.Equal("shell_trust_zone_policy_not_configured", decision.DenyReason);
+        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
     }
 
     [Fact]
-    public void Non_interactive_shell_with_working_directory_denied_when_no_trust_zone_configured()
+    public void Non_interactive_shell_with_working_directory_outside_default_trusted_roots_is_denied()
     {
         using var dir = new DisposableTempDir();
         var policy = CreatePolicy(ToolApprovalMode.Approval);
@@ -944,7 +1190,7 @@ public sealed class ToolApprovalGateTests
             });
 
         Assert.False(decision.Allowed);
-        Assert.Equal("shell_trust_zone_policy_not_configured", decision.DenyReason);
+        Assert.Equal("shell_working_directory_outside_trust_zone", decision.DenyReason);
     }
 
     [Fact]
@@ -952,11 +1198,10 @@ public sealed class ToolApprovalGateTests
     {
         // Regression for #1244: the old empty-roots check denied EVERY
         // non-interactive Personal shell command (including path-less ones) with
-        // shell_no_trust_zone_roots, because GetTrustZoneRoots returned [] for
-        // Personal (WriteFiles.Mode == All). With the real policy a path-less
+        // shell_no_trust_zone_roots. The stable compatibility code retains the
+        // legacy token. With the real policy a path-less
         // command now extracts no path tokens and falls through to the approval
-        // gate. (Path-bearing out-of-zone commands are confined by the autonomous
-        // zone — see AutonomousZoneClampTests.)
+        // gate. Path-bearing commands are covered by UnattendedPathAccessTests.
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
@@ -966,18 +1211,15 @@ public sealed class ToolApprovalGateTests
             }
         };
 
-        // Real policy — Personal profile resolves WriteFiles.Mode == All.
-        var trustZone = new ShellTrustZonePolicy(config, new NetclawPaths());
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
+            UsedStrictFallback: false),
             shellCommandPolicy: new ShellCommandPolicy(),
-            toolPathPolicy: new ToolPathPolicy([]),
-            shellTrustZonePolicy: trustZone);
+            toolPathPolicy: new ToolPathPolicy([]));
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -988,35 +1230,44 @@ public sealed class ToolApprovalGateTests
         Assert.True(decision.NeedsApproval);
     }
 
-    private static string CreateTrustZoneRoot(string tempDir)
+    private static string CreateTrustedRoot(string tempDir)
     {
         var root = Path.Combine(tempDir, ".netclaw", "workspaces");
         Directory.CreateDirectory(Path.Combine(root, "project"));
         return root;
     }
 
-    private static ToolAccessPolicy CreatePolicyWithTrustZone(IShellTrustZonePolicy trustZone)
+    private static ToolAccessPolicy CreatePolicyWithTrustedRoot(
+        string trustedRoot,
+        ShellExecutionMode shellMode = ShellExecutionMode.HostAllowed,
+        ToolFilesystemMode writeFilesMode = ToolFilesystemMode.All,
+        ToolApprovalMode approvalMode = ToolApprovalMode.Approval)
     {
         var environment = TestShellEnvironment.Current;
-        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        var config = new ToolConfig { ShellMode = shellMode };
+        config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = writeFilesMode,
+            Roots = [trustedRoot]
+        };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
         {
             ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
             {
-                ["shell_execute"] = ToolApprovalMode.Approval
+                ["shell_execute"] = approvalMode
             }
         };
 
         return new ToolAccessPolicy(
+            new NetclawPaths(Directory.GetParent(trustedRoot)!.FullName, trustedRoot),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
-                UsedStrictFallback: false),
+            UsedStrictFallback: false),
             shellCommandPolicy: new ShellCommandPolicy(environment),
-            toolPathPolicy: new ToolPathPolicy(environment, []),
-            shellTrustZonePolicy: trustZone);
+            toolPathPolicy: new ToolPathPolicy(environment, []));
     }
 
     private static ToolConfig CreateShellConfig(ToolApprovalMode mode)
@@ -1039,18 +1290,6 @@ public sealed class ToolApprovalGateTests
             ShellExecutionMode.HostAllowed,
             UsedStrictFallback: false);
 
-    // Simulates a Mode.Roots audience: a path is write-authorized iff it falls
-    // within one of the configured roots (the same IsWithinAnyRoot semantics the
-    // real ScopedFileAccessPolicy applies for Mode.Roots).
-    private sealed class FakeShellTrustZonePolicy : IShellTrustZonePolicy
-    {
-        private readonly IReadOnlyList<string> _roots;
-
-        public FakeShellTrustZonePolicy(IReadOnlyList<string> roots) => _roots = roots;
-
-        public bool IsShellWritePathAuthorized(string fullPath, ToolInvocationContext context)
-            => PathUtility.IsWithinAnyRoot(fullPath, _roots);
-    }
 
     // ── v2 candidate-verb extraction (replaces v1 directory-root extraction) ──
 
@@ -1058,7 +1297,8 @@ public sealed class ToolApprovalGateTests
     public void Shell_path_command_extracts_path_aware_verb_chain_with_no_directory_roots()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = ToolInput.Create("Command", "cat /home/user/.netclaw/logs/crash.log");
+        var logPath = Path.Combine(ApprovalTestRoot, "logs", "crash.log");
+        var args = ToolInput.Create("Command", $"cat \"{logPath}\"");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -1074,7 +1314,7 @@ public sealed class ToolApprovalGateTests
         Assert.Equal("cat", candidate.Verb);
         Assert.NotNull(candidate.Directory);
         Assert.Equal(
-            "/home/user/.netclaw/logs",
+            Path.GetDirectoryName(logPath)!.Replace('\\', '/'),
             candidate.Directory!.Replace('\\', '/'));
     }
 
@@ -1082,39 +1322,38 @@ public sealed class ToolApprovalGateTests
     public void Shell_path_command_uses_fixed_labels()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var args = ToolInput.Create("Command", "grep 'error' /home/user/.netclaw/logs/app.log");
+        var logPath = Path.Combine(ApprovalTestRoot, "logs", "app.log");
+        var args = ToolInput.Create("Command", $"grep 'error' \"{logPath}\"");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;
-        var sessionOption = options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession);
-        var alwaysOption = options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways);
-        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, sessionOption.Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, alwaysOption.Label);
+        AssertFixedApprovalLabels(options);
     }
 
     [Fact]
     public void Shell_multi_root_command_uses_fixed_labels()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
+        var inputPath = Path.Combine(ApprovalTestRoot, "logs", "app.log");
+        var outputPath = Path.Combine(ApprovalTestRoot, "output", "report.txt");
         var args = ToolInput.Create(
             "Command",
-            "cat /netclaw-approval-test/logs/app.log > /netclaw-approval-test/output/report.txt");
+            $"cat \"{inputPath}\" > \"{outputPath}\"");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;
-        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
+        AssertFixedApprovalLabels(options);
     }
 
     [Fact]
     public void Shell_relative_path_command_extracts_verb_chain_without_directory_roots()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        const string root = "/netclaw-approval-test/workspace";
+        var root = Path.Combine(ApprovalTestRoot, "workspace");
 
         var args = ToolInput.Create(
             "Command", "grep timeout logs/app.log | wc -l",
@@ -1129,12 +1368,7 @@ public sealed class ToolApprovalGateTests
         Assert.Contains(decision.ApprovalContext!.CandidateVerbs, v => v.StartsWith("grep", StringComparison.Ordinal));
         // Button labels are fixed; Slack's 76-char and Discord's 80-char
         // button caps make dynamic labels structurally unsafe.
-        Assert.Equal(
-            ApprovalOptionKeys.ApproveSessionLabel,
-            decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
-        Assert.Equal(
-            ApprovalOptionKeys.ApproveAlwaysLabel,
-            decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
+        AssertFixedApprovalLabels(decision.ApprovalContext.Options);
     }
 
     [Fact]
@@ -1154,9 +1388,10 @@ public sealed class ToolApprovalGateTests
         // verb family (`git push *`), making them safer by construction.
         Assert.Equal(["git push origin main"], decision.ApprovalContext!.CandidateVerbs);
         var sessionOption = decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession);
-        var alwaysOption = decision.ApprovalContext.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, sessionOption.Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, alwaysOption.Label);
+        Assert.DoesNotContain(
+            decision.ApprovalContext.Options,
+            option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
     }
 
     // Regression pin for issue #931 — long directory paths must not produce
@@ -1165,10 +1400,19 @@ public sealed class ToolApprovalGateTests
     public void Shell_command_with_long_directory_path_keeps_labels_within_button_caps()
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
-        var deepPath = "/home/user/repositories/petabridge/testlab-setup/services/kubernetes/ingress/configs/app.log";
+        var deepPath = Path.Combine(
+            ApprovalTestRoot,
+            "repositories",
+            "example-organization",
+            "test-environment",
+            "services",
+            "kubernetes",
+            "ingress",
+            "configs",
+            "app.log");
         Assert.True(deepPath.Length > ApprovalOptionKeys.MaxLabelLength);
 
-        var args = ToolInput.Create("Command", $"grep error {deepPath}");
+        var args = ToolInput.Create("Command", $"grep error \"{deepPath}\"");
 
         var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
 
@@ -1177,11 +1421,13 @@ public sealed class ToolApprovalGateTests
         Assert.All(options, option => Assert.True(
             option.Label.Length <= ApprovalOptionKeys.MaxLabelLength,
             $"Option '{option.Key}' label '{option.Label}' is {option.Label.Length} chars; must stay within {ApprovalOptionKeys.MaxLabelLength}."));
-        Assert.Equal(ApprovalOptionKeys.ApproveOnceLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveOnce).Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
-        Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
-        Assert.Equal(ApprovalOptionKeys.DenyLabel, options.Single(o => o.Key.Value == ApprovalOptionKeys.Deny).Label);
+        AssertFixedApprovalLabels(options);
     }
+
+    private static void AssertFixedApprovalLabels(IReadOnlyList<ToolApprovalOption> options)
+        => Assert.All(options, option => Assert.Equal(
+            ApprovalOptionKeys.LabelFor(option.Key.Value),
+            option.Label));
 
     [Fact]
     public void Narrow_shell_context_omits_reusable_options_for_incomplete_phrase_facts()
@@ -1202,12 +1448,60 @@ public sealed class ToolApprovalGateTests
         var narrowed = ToolAccessPolicy.NarrowShellApprovalContext(
             original,
             [candidate],
-            sessionDirectory: null,
+            sessionOwnedDirectories: [],
             ShellPathStyle.Posix);
 
         Assert.Equal(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
             narrowed.Options.Select(static option => option.Key.Value));
+    }
+
+    [Theory]
+    [InlineData("session")]
+    [InlineData("temporary")]
+    [InlineData("artifact")]
+    [InlineData("worktree")]
+    public void Narrow_shell_context_omits_always_here_for_named_session_storage_directory(
+        string directoryKind)
+    {
+        using var directory = new DisposableTempDir();
+        var storage = SessionStoragePaths.CreateVersion2(
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(directory.Path)));
+        var context = TestToolExecutionContext.CreateBoundWithStorage(
+            "signalr/storage-paths",
+            storage,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal });
+        var selectedDirectory = directoryKind switch
+        {
+            "session" => storage.SessionDirectory.Value,
+            "temporary" => storage.ManagedTemporary.Directory.Value,
+            "artifact" => storage.ArtifactDirectory.Value,
+            "worktree" => storage.WorktreeDirectory.Value,
+            _ => throw new ArgumentOutOfRangeException(nameof(directoryKind))
+        };
+        var candidate = new ApprovalCandidate("git status", selectedDirectory)
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = ["git", "status"]
+        };
+        var original = new ToolApprovalContext(
+            Netclaw.Actors.Tools.ShellTool.ToolName,
+            "git status",
+            ["git status"],
+            ["git status"],
+            [],
+            Cwd: selectedDirectory,
+            Candidates: [candidate]);
+
+        var narrowed = ToolAccessPolicy.NarrowShellApprovalContext(
+            original,
+            [candidate],
+            ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context),
+            ShellPathStyle.Posix);
+
+        Assert.DoesNotContain(
+            narrowed.Options,
+            option => option.Key.Value == ApprovalOptionKeys.ApproveAlways);
     }
 
     [Theory]
@@ -1254,7 +1548,7 @@ public sealed class ToolApprovalGateTests
         var narrowed = ToolAccessPolicy.NarrowShellApprovalContext(
             original,
             [candidate],
-            sessionDirectory: null,
+            sessionOwnedDirectories: [],
             pathStyle);
 
         Assert.Equal(

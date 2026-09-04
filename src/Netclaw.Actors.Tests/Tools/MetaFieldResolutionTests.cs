@@ -65,12 +65,7 @@ public class MetaFieldResolutionTests
         var pathPolicy = new Netclaw.Security.ToolPathPolicy([]);
         var commandPolicy = new Netclaw.Security.ShellCommandPolicy();
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            pathPolicy,
-            commandPolicy,
-            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var collisions = new List<string>();
         foreach (var registration in registry.GetAllRegistrations())

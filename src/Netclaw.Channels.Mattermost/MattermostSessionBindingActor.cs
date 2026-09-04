@@ -853,8 +853,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         var dataContents = new List<DataContent>();
         var rejections = new List<string>();
 
-        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(_sessionId, _dependencies.Paths.SessionsDirectory);
-        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(_sessionId, _dependencies.Paths.SessionsDirectory);
+        var storage = _dependencies.StorageResolver.Resolve(_sessionId);
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(storage);
+        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(storage);
 
         foreach (var file in files)
         {

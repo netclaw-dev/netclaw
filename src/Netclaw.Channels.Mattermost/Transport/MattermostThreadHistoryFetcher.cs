@@ -55,7 +55,7 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
     private readonly string? _botUserId;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
-    private readonly NetclawPaths _paths;
+    private readonly ISessionStorageResolver _storageResolver;
     private readonly ILogger<MattermostThreadHistoryFetcher> _logger;
 
     public MattermostThreadHistoryFetcher(
@@ -66,8 +66,8 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         Func<string?> botUserIdFactory,
         ToolAudienceProfiles audienceProfiles,
         ModelCapabilities modelCapabilities,
-        NetclawPaths paths,
-        ILogger<MattermostThreadHistoryFetcher> logger)
+        ILogger<MattermostThreadHistoryFetcher> logger,
+        ISessionStorageResolver storageResolver)
         : this(
             (rootPostId, cancellationToken) => FetchRawMessagesAsync(client, rootPostId, botUserIdFactory(), serverUrl, cancellationToken, logger),
             (fileId, stagingDir, maxBytes, ct) => DownloadFileViaSdkAsync(client, fileId, stagingDir, maxBytes, ct),
@@ -77,8 +77,8 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
             botUserIdFactory(), // safe: ConnectAsync resolves BotUserId before this constructor runs
             audienceProfiles,
             modelCapabilities,
-            paths,
-            logger)
+            logger,
+            storageResolver)
     {
     }
 
@@ -91,8 +91,8 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         string? botUserId,
         ToolAudienceProfiles audienceProfiles,
         ModelCapabilities modelCapabilities,
-        NetclawPaths paths,
-        ILogger<MattermostThreadHistoryFetcher> logger)
+        ILogger<MattermostThreadHistoryFetcher> logger,
+        ISessionStorageResolver storageResolver)
     {
         _messageFetcher = messageFetcher;
         _fileDownloader = fileDownloader;
@@ -102,8 +102,8 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         _botUserId = botUserId;
         _audienceProfiles = audienceProfiles;
         _modelCapabilities = modelCapabilities;
-        _paths = paths;
         _logger = logger;
+        _storageResolver = storageResolver;
     }
 
     public async Task<IReadOnlyList<ChannelInput>> FetchThreadHistoryAsync(
@@ -130,8 +130,9 @@ public sealed class MattermostThreadHistoryFetcher : IThreadHistoryFetcher
         var profile = ToolAudienceProfileDefaults.GetResolvedProfile(_audienceProfiles, audience);
         var attachmentPolicy = profile.ChannelAttachments ?? ChannelAttachmentPolicy.Empty;
         var inlineImages = _modelCapabilities.InputModalities.HasFlag(ModelModality.Image);
-        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
-        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(sessionId, _paths.SessionsDirectory);
+        var storage = _storageResolver.Resolve(sessionId);
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(storage);
+        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(storage);
 
         try
         {

@@ -40,14 +40,13 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     public override bool SuppressOutputRedaction => true;
 
     private readonly ToolConfig _config;
-    private readonly ToolPathPolicy _pathPolicy;
-    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+    private readonly PathAccessPolicy _pathAccessPolicy;
     private readonly SkillRegistry? _skillRegistry;
     private readonly ISessionMetrics? _sessionMetrics;
     private readonly ILogger? _logger;
 
     public record Params(
-        [property: Description("File path to read. Relative paths use the current project, then session scratch.")] string Path,
+        [property: Description("File path to read. Relative paths use the current project, then session_dir.")] string Path,
         [property: Description("Line number to start reading at, 1-based: the first line is line 1, matching the line numbers shown in this tool's output and in editors/grep/sed. To read line N, pass StartLine=N. Use with Limit to read sections of large files and avoid context window truncation.")] int? StartLine = null,
         [property: Description("Maximum number of lines to read. Use with StartLine to paginate through large files instead of reading the whole file.")] int? Limit = null);
 
@@ -58,10 +57,24 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         SkillRegistry? skillRegistry = null,
         ISessionMetrics? sessionMetrics = null,
         ILogger<FileReadTool>? logger = null)
+        : this(
+            config,
+            new PathAccessPolicy(config, paths, pathPolicy),
+            skillRegistry,
+            sessionMetrics,
+            logger)
+    {
+    }
+
+    internal FileReadTool(
+        ToolConfig config,
+        PathAccessPolicy pathAccessPolicy,
+        SkillRegistry? skillRegistry = null,
+        ISessionMetrics? sessionMetrics = null,
+        ILogger<FileReadTool>? logger = null)
     {
         _config = config;
-        _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
+        _pathAccessPolicy = pathAccessPolicy;
         _skillRegistry = skillRegistry;
         _sessionMetrics = sessionMetrics;
         _logger = logger;
@@ -72,18 +85,11 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         if (string.IsNullOrWhiteSpace(args.Path))
             return context.InvalidInput("Error: 'path' parameter is required.");
 
-        if (!_fileAccessPolicy.TryResolveReadPath(
-                args.Path,
-                context,
-                out var authorizedPath,
-                out var accessError,
-                out var resolutionFailure))
-        {
-            return context.PathResolutionFailure(accessError, resolutionFailure);
-        }
+        var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Read);
+        if (!access.Allowed)
+            return context.PathAccessFailure(access.Error, access.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied);
 
-        if (_pathPolicy.IsReadDenied(authorizedPath))
-            return context.AccessDenied(FileToolErrors.CredentialReadDenied(authorizedPath));
+        var authorizedPath = access.CanonicalPath;
 
         if (!File.Exists(authorizedPath))
             return context.NotFound($"Error: File not found: {authorizedPath}");
@@ -184,7 +190,7 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
         var sampleLength = (int)Math.Min(info.Length, MaxInspectionBytes);
         var buffer = new byte[sampleLength];
-        await using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        await using (var stream = OpenSharedRead(path, useAsync: true))
         {
             var read = await stream.ReadAsync(buffer.AsMemory(0, sampleLength), ct);
             if (read < buffer.Length)
@@ -501,7 +507,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     private static async Task<(string Content, bool Truncated)> ReadBoundedHeadAsync(
         string path, Encoding encoding, int maxChars, CancellationToken ct)
     {
-        using var reader = new StreamReader(path, encoding, detectEncodingFromByteOrderMarks: true);
+        using var reader = new StreamReader(
+            OpenSharedRead(path, useAsync: true),
+            encoding,
+            detectEncodingFromByteOrderMarks: true);
         var sb = new StringBuilder();
         var buf = new char[4096];
         while (sb.Length < maxChars)
@@ -529,7 +538,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         var lineNumber = 0;
         var linesRead = 0;
 
-        using var reader = new StreamReader(path, encoding, detectEncodingFromByteOrderMarks: true);
+        using var reader = new StreamReader(
+            OpenSharedRead(path, useAsync: true),
+            encoding,
+            detectEncodingFromByteOrderMarks: true);
         while (await reader.ReadLineAsync(ct) is { } line)
         {
             lineNumber++;
@@ -550,6 +562,14 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 
         return sb.ToString();
     }
+
+    private static FileStream OpenSharedRead(string path, bool useAsync) => new(
+        path,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete,
+        bufferSize: 4096,
+        useAsync);
 
     private sealed record FileInspection(
         MimeType MimeType,

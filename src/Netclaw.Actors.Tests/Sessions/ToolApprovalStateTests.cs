@@ -139,7 +139,7 @@ public sealed class ToolApprovalStateTests
         var approved = CreateRequest("call-approved", requestedAtMs: 10);
         var denied = CreateRequest("call-denied", requestedAtMs: 20) with
         {
-            SessionScratchDirectory = "/session/tmp"
+            ManagedTemporaryDirectory = "/session/tmp"
         };
         var pending = CreateRequest("call-pending", requestedAtMs: 30);
 
@@ -153,11 +153,11 @@ public sealed class ToolApprovalStateTests
 
         Assert.NotNull(plan.OneTimeApprovalPreSeed);
         Assert.NotNull(plan.DecisionOverride);
-        Assert.NotNull(plan.SessionScratchDenialDirectories);
+        Assert.NotNull(plan.ManagedTemporaryDenialDirectories);
         Assert.NotNull(plan.AuthorizationAttemptIds);
         Assert.Equal(approved.Patterns, plan.OneTimeApprovalPreSeed[approved.CallId]);
         Assert.Equal(ApprovalDecision.Denied, plan.DecisionOverride[denied.CallId]);
-        Assert.Equal("/session/tmp", plan.SessionScratchDenialDirectories[denied.CallId]);
+        Assert.Equal("/session/tmp", plan.ManagedTemporaryDenialDirectories[denied.CallId]);
         var attempts = plan.AuthorizationAttemptIds;
         Assert.Equal(approved.AuthorizationAttemptId, attempts[approved.CallId].Value);
         Assert.Equal(denied.AuthorizationAttemptId, attempts[denied.CallId].Value);

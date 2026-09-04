@@ -43,7 +43,7 @@ public sealed class MattermostGatewayContractTests(ITestOutputHelper output)
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestMattermostGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
-            Paths: TestMattermostGatewayDeps.NewTestPaths(),
+                        StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
             SessionPropsFactory: (sid, chId, rootPostId, d) =>
                 Props.Create(() => new ForwardActor(TestActor)));
 

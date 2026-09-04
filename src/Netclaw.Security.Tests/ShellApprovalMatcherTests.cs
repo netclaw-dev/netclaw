@@ -1612,7 +1612,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         // slash but isn't an anchored path token), so before the
         // BashParser rewrite its candidate ended up
         // (git checkout, null) → effective directory fell back to
-        // session_dir at persistence time → the session-scratch guard
+        // session_dir at persistence time → the session-owned guard
         // dropped the grant → retry threw ToolApprovalRequiredException.
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),

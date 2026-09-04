@@ -1,6 +1,6 @@
 ## Why
 
-PRD-002 SEC-009 requires project or scratch scope for shell work. PRD-006
+PRD-002 SEC-009 requires a project or session-owned scope for shell work. PRD-006
 requires tool guidance to preserve approval gates. A post-swap sample from three
 fresh sessions produced 30 shell prompts. At least eight prompts came from
 read-only project review, despite the current scope and file-tool guidance.
@@ -11,10 +11,10 @@ read-only project review, despite the current scope and file-tool guidance.
   window. Replace every identity, repository, host, URL, session, and path.
 - Execute representative allow, prompt, and deny cases through the real shell
   coordinator. Lock each expected approval shape and actor contact count.
-- Require project commands to retain the declared project scope. Session scratch
-  remains the default only for disposable artifacts and unscoped work.
+- Require project commands to retain the declared project scope. The managed
+  temporary directory holds disposable artifacts and unscoped temporary work.
 - Strengthen the shell tool schema and always-loaded guidance. A successful
-  project declaration must not be replaced by session scratch or an inline
+  project declaration must not be replaced by the managed temporary directory or an inline
   directory change for later project commands.
 - Strengthen first-party tool selection for known file operations and external
   web retrieval. Local search, builds, tests, VCS, and process work remain shell
@@ -43,8 +43,8 @@ None.
 
 - `tool-approval-gates`: Add sanitized fresh-session regressions and require
   durable project-scope and structured-tool guidance without new authority.
-- `session-cwd`: Define project and session-scratch selection after a successful
-  project declaration, including parent and subagent behavior.
+- `session-cwd`: Define project and managed-temporary selection after a
+  successful project declaration, including parent and subagent behavior.
 
 ## Impact
 
@@ -52,7 +52,7 @@ None.
   projection only when evidence proves a defect.
 - **Tests and evidence:** Netclaw coordinator fixtures, PII checks, model evals,
   and ShellSyntaxTree unit or corpus regressions.
-- **Security:** The change adds no grant, safe root, parser guess, or approval
+- **Security:** The change adds no grant, trusted root, parser guess, or approval
   bypass. Unknown, incomplete, external, and prompt-worthy work stays strict.
 - **Operations:** Fresh sessions should produce fewer avoidable prompts. Live
   measurement will report prompt reduction and retained legitimate prompts.

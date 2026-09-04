@@ -50,7 +50,7 @@ public sealed class McpPromptSkillTests
         var result = await harness.Manager.LoadAsync(
             source,
             arguments,
-            TestToolExecutionContext.CreateUnbound(TrustAudience.Personal).Invocation,
+            TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal).Invocation,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
@@ -72,7 +72,7 @@ public sealed class McpPromptSkillTests
         var result = await harness.Manager.LoadAsync(
             source,
             new Dictionary<string, string> { ["property"] = "petabridge-com" },
-            TestToolExecutionContext.CreateUnbound(TrustAudience.Personal).Invocation,
+            TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal).Invocation,
             TestContext.Current.CancellationToken);
 
         Assert.True(result.Success, result.Error);
@@ -108,7 +108,7 @@ public sealed class McpPromptSkillTests
         var result = await harness.Manager.LoadAsync(
             source,
             new Dictionary<string, string> { ["property"] = "petabridge-com" },
-            TestToolExecutionContext.CreateUnbound(audience).Invocation,
+            TestToolExecutionContext.CreateUnboundWithoutApproval(audience).Invocation,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
@@ -161,7 +161,7 @@ public sealed class McpPromptSkillTests
         var result = await harness.Manager.LoadAsync(
             oldSource,
             new Dictionary<string, string> { ["property"] = "petabridge-com" },
-            TestToolExecutionContext.CreateUnbound(TrustAudience.Personal).Invocation,
+            TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal).Invocation,
             TestContext.Current.CancellationToken);
         Assert.False(result.Success);
         Assert.Contains("stale generation 1", result.Error, StringComparison.Ordinal);
@@ -233,7 +233,7 @@ public sealed class McpPromptSkillTests
         var result = await harness.Manager.LoadAsync(
             source,
             new Dictionary<string, string> { ["property"] = "petabridge-com" },
-            TestToolExecutionContext.CreateUnbound(TrustAudience.Personal).Invocation,
+            TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal).Invocation,
             TestContext.Current.CancellationToken);
 
         Assert.False(result.Success);
@@ -264,7 +264,7 @@ public sealed class McpPromptSkillTests
         var result = await harness.Manager.LoadAsync(
             source,
             new Dictionary<string, string> { ["property"] = "petabridge-com" },
-            TestToolExecutionContext.CreateUnbound(TrustAudience.Personal).Invocation,
+            TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal).Invocation,
             TestContext.Current.CancellationToken);
 
         // The load owns this failure. An escaped exception would reach the tool dispatcher,

@@ -121,8 +121,10 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         builder.AppendLine($"Outcome: {result.Outcome.ToString().ToLowerInvariant()}");
         if (result.OutcomeReason is { } reason)
             builder.AppendLine($"Reason: {reason.Value}");
-        if (result.ScopeId is { } scopeId)
-            builder.AppendLine($"Diagnostics: session log entries include SubSessionId {scopeId.Value}.");
+        if (result.Success && result.LogPath is { } logPath)
+            builder.AppendLine($"LogPath: {logPath}");
+        if (result.Success && result.ArtifactDirectory is { } artifactDirectory)
+            builder.AppendLine($"ArtifactDirectory: {artifactDirectory}");
 
         builder.AppendLine();
         builder.AppendLine(result.Success ? "Summary:" : "Error:");

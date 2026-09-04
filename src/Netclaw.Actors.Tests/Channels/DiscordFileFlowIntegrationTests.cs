@@ -235,8 +235,9 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
             m => m.Text.Contains("Couldn't scan `drawing.png`", StringComparison.Ordinal));
 
         var sessionId = new SessionId("ch-3/msg-3000");
-        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
-        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(sessionId, _paths.SessionsDirectory);
+        var storage = new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths).Resolve(sessionId);
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(storage);
+        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(storage);
         Assert.Empty(Directory.GetFiles(inboxDir));
         Assert.Empty(Directory.GetFiles(stagingDir));
     }
@@ -306,7 +307,7 @@ public sealed class DiscordFileFlowIntegrationTests : TestKit
             ContentScanner: contentScanner ?? new NullContentScanner(),
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             BotUserId: new DiscordUserId("UBOT"),
             HttpClient: httpClient,
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);

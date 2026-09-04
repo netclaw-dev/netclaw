@@ -10,13 +10,23 @@ persist an immutable storage binding with the layout version and absolute
 session storage envelope root. The system SHALL use that binding when it
 resumes the session. A configuration change, environment override, or binary
 upgrade SHALL NOT reinterpret the envelope root. The binding SHALL NOT contain
-a second log root.
+a second log root. Two distinct raw session identifiers SHALL NOT resolve to
+the same physical envelope, even when their human-readable sanitized forms are
+equal.
 
 Channel ingress, the parent actor, child-run creation, and the log dispatcher
 SHALL resolve storage through one shared get-or-bind operation. That operation
 SHALL be atomic for concurrent first consumers. A filesystem helper SHALL NOT
 independently choose a new-layout path from only the session identifier and
 current configuration.
+
+The system SHALL use exactly one SQLite database at
+`NetclawPaths.SqliteDbPath`. This Netclaw database SHALL be the source of truth
+for actor journal and snapshot data, durable reminders, the session catalog,
+daily statistics, memory, and session storage bindings. Production
+configuration SHALL NOT expose another database path or an in-memory
+persistence provider. A supplied `Persistence` section SHALL be rejected by
+configuration validation and daemon startup.
 
 #### Scenario: Example - new session binds one envelope before use
 
@@ -42,12 +52,21 @@ current configuration.
 - **THEN** the operation fails before it writes session-owned data
 - **AND** the system does not derive a fallback root from current configuration
 
-#### Scenario: Example - ingress binds before it writes media
+#### Scenario: Example - ingress binds before it stages an attachment
 
 - **GIVEN** the first message for a new session contains an attachment
-- **WHEN** channel ingress prepares the media file before actor processing
+- **WHEN** channel ingress downloads the attachment before actor processing
 - **THEN** it resolves and persists the storage binding first
-- **AND** it writes the file below `<session-envelope>/workspace/media`
+- **AND** it stages the untrusted bytes below
+  `<session-envelope>/attachment-staging`
+- **AND** it moves an accepted file below `<session-envelope>/workspace/inbox`
+
+#### Scenario: Counterexample - storage location does not bypass admission
+
+- **GIVEN** an attachment exists below the session envelope staging directory
+- **WHEN** its content scan rejects the attachment
+- **THEN** the pipeline does not move it into `workspace/inbox`
+- **AND** the session does not create agent-visible media from it
 
 #### Scenario: Example - concurrent first messages share one binding
 
@@ -55,6 +74,14 @@ current configuration.
 - **WHEN** both call the shared storage resolver
 - **THEN** one atomic binding wins
 - **AND** both requests receive the same persisted envelope root
+
+#### Scenario: Counterexample - sanitized identifiers cannot collide
+
+- **GIVEN** raw session identifiers `channel/a_b` and `channel/a/b`
+- **AND** their display-safe forms would otherwise be equal
+- **WHEN** the resolver binds storage for both sessions
+- **THEN** it persists two different envelope roots
+- **AND** later recovery maps each raw identifier to its original root
 
 #### Scenario: Counterexample - helper cannot bypass layout selection
 
@@ -64,12 +91,27 @@ current configuration.
   and configured base
 - **AND** no file is created before the shared resolver selects the layout
 
+#### Scenario: Example - live deployment uses one database
+
+- **GIVEN** a live Netclaw daemon
+- **WHEN** it persists actor, reminder, catalog, statistics, memory, or storage data
+- **THEN** all SQLite records use `NetclawPaths.SqliteDbPath`
+- **AND** no second SQLite database is created
+
+#### Scenario: Counterexample - test persistence is not operator configuration
+
+- **GIVEN** a test harness uses an in-memory actor journal
+- **WHEN** a live deployment supplies a `Persistence` configuration section
+- **THEN** configuration validation and daemon startup reject it
+- **AND** no independent setting can redirect the Netclaw database
+
 ### Requirement: Existing sessions resume without migration
 
 The system SHALL leave the storage binding absent for a session that predates
-the new layout. It SHALL continue to use the existing session-directory and
+the new layout. It SHALL use the current legacy session-directory and
 session-log path resolvers for that session. An upgrade SHALL NOT move, copy,
-rename, or delete its data.
+rename, or delete its data. If an operator changes a legacy root, the system
+SHALL NOT claim that it relocates or rediscovers files below the old root.
 
 #### Scenario: Example - legacy session resumes after upgrade
 
@@ -86,6 +128,13 @@ rename, or delete its data.
 - **THEN** both existing path resolvers remain in use
 - **AND** the system does not route new logs into a new-layout envelope
 
+#### Scenario: Counterexample - legacy root change does not migrate files
+
+- **GIVEN** an unbound session has files below a configured legacy root
+- **WHEN** the operator changes that root
+- **THEN** the old files remain in their original location
+- **AND** this capability does not promise discovery below the old root
+
 #### Scenario: Counterexample - old binary support for new sessions is out of scope
 
 - **GIVEN** an older binary does not understand the storage binding
@@ -94,11 +143,20 @@ rename, or delete its data.
 - **AND** it does not promise that a pre-feature binary can resume a newly
   bound session
 
+#### Scenario: Example - journal-only legacy session remains discoverable
+
+- **GIVEN** an existing session has journal records but no snapshot and no
+  storage binding
+- **WHEN** the current resolver checks whether the session predates the new
+  layout
+- **THEN** it recognizes the shipped journal schema and table
+- **AND** it resumes the existing path behavior without creating a new binding
+
 ### Requirement: Version 2 uses one physical session envelope
 
 For a session with a version-2 binding, the system SHALL place the parent
-session directory, artifacts, temporary files, worktrees, raw log, and all
-child-run directories below the persisted session storage envelope. Each child
+session directory, attachment staging, artifacts, temporary files, worktrees,
+raw log, and all child-run directories below the persisted session storage envelope. Each child
 run SHALL place its artifacts, temporary files, and raw log below
 `<session-envelope>/subagents/<run-id>`. Daemon-global logs SHALL remain outside
 the session envelope.
@@ -140,109 +198,55 @@ SHALL use `<session-envelope>/logs/session.log` for the parent and
 - **THEN** it uses the daemon-global log location
 - **AND** it is not written to a session envelope
 
-### Requirement: Same-session logs use existing file-tool read authority
+### Requirement: Session storage supplies the shared sessions root
 
-The system SHALL give existing file-read, file-list, and file-search operations
-read access to logs in the current session envelope. The scope SHALL include
-the main session log and every child log. Every parent and child run in that
-session SHALL receive the same log-read scope. The scope SHALL NOT include
-another session.
+The system SHALL store every new session envelope below the trusted Netclaw
+sessions root. Parent and child runs SHALL receive this root as filesystem
+authorization input. The session capability SHALL supply storage paths and
+SHALL NOT decide file-operation authority.
 
-For an existing unbound session, the system SHALL build the same read scope
-from the unchanged legacy main-log resolver and durable child lineage. It SHALL
-NOT move or copy a legacy log to make it readable.
+Existing unbound sessions SHALL keep their established data paths. The system
+SHALL also supply the legacy session-log root while those sessions remain
+supported. It SHALL NOT move or copy legacy files.
 
-This read scope SHALL NOT authorize file writes, file edits, attachments, or
-shell execution. The default no-project working directory SHALL remain the
-`workspace/` child. The system SHALL NOT add the complete envelope as a shell
-safe root.
+The `netclaw-tools` capability SHALL own the path access decision. Session
+identity SHALL NOT add another allow list, deny list, or ownership check.
 
-The implementation SHALL NOT redefine `{session_dir}` as the session envelope.
-It SHALL NOT add the complete envelope or `subagents/` directory as a read
-root. It SHALL authorize only normalized main-log and child-log path shapes.
-Existing link, reparse-point, and protected-path checks SHALL still apply.
+This shared root intentionally lets one session analyze another session's
+logs. Audience policy and file-operation permissions still decide each
+request.
 
-This requirement defines Netclaw application authorization. It SHALL NOT be
-documented or tested as OS-level containment of an arbitrary process that has
-already received execution authority under the Netclaw identity.
+#### Scenario: Example - all new sessions share one trusted root
 
-#### Scenario: Example - default recursive search stays in workspace
+- **GIVEN** sessions `s-1` and `s-2` use version 2
+- **WHEN** the system creates their envelopes
+- **THEN** both envelopes are descendants of the Netclaw sessions root
+- **AND** parent and child runs receive that common root
 
-- **GIVEN** a version-2 session has no project scope
-- **WHEN** a shell starts without an explicit working directory
-- **THEN** its cwd is `<session-envelope>/workspace`
-- **AND** a recursive search of `.` does not include the sibling `logs/` or
-  `subagents/` areas by directory containment
+#### Scenario: Example - one session analyzes another session's log
 
-#### Scenario: Example - agent reads its own session log
+- **GIVEN** a run can use `file_read` under the Netclaw sessions root
+- **WHEN** it requests the canonical log path for another session
+- **THEN** `netclaw-tools` evaluates one `Read` path access decision
+- **AND** session identity adds no separate restriction
 
-- **GIVEN** an agent uses a version-2 session envelope
-- **WHEN** it calls `file_read` for its main session log
-- **THEN** same-session log scope authorizes the read
-- **AND** `file_read` applies its normal output bounds
+#### Scenario: Counterexample - storage location does not grant an operation
 
-#### Scenario: Example - parent reads an owned child log
+- **GIVEN** an audience cannot use `file_write`
+- **WHEN** it requests a write below the sessions root
+- **THEN** the path relationship does not grant the write
+- **AND** `netclaw-tools` denies the operation
 
-- **GIVEN** a parent owns child run `run-7`
-- **WHEN** it calls `file_search` on the returned log path's directory
-- **THEN** same-session log scope authorizes the search
-- **AND** no special log tool is required
+#### Scenario: Counterexample - the sessions root is not a shell grant
 
-#### Scenario: Example - child reads another log in the same session
-
-- **GIVEN** child runs `run-7` and `run-8` belong to one session
-- **WHEN** `run-7` reads the main log or the log for `run-8`
-- **THEN** same-session log scope authorizes the read
-- **AND** the request remains subject to normal file-tool limits
-
-#### Scenario: Example - legacy session keeps readable log paths
-
-- **GIVEN** an existing unbound session uses separate data and log roots
-- **WHEN** its parent or child calls an existing file tool for a resolved
-  same-session log path
-- **THEN** same-session log scope authorizes the operation
-- **AND** no file moves into a new envelope
-
-#### Scenario: Counterexample - foreign session log is denied
-
-- **GIVEN** a log path belongs to another session envelope
-- **WHEN** the current agent calls `file_read`, `file_list`, or `file_search`
-- **THEN** same-session log scope does not authorize the operation
-- **AND** the result does not reveal whether the foreign file exists
-
-#### Scenario: Counterexample - log read does not grant mutation
-
-- **GIVEN** an agent can read its same-session logs
-- **WHEN** it calls `file_write` or `file_edit` for a log path
-- **THEN** same-session log scope does not authorize that operation
-- **AND** normal write policy decides the call
-
-#### Scenario: Counterexample - broad child root is not authorized
-
-- **GIVEN** a version-2 session has child logs, artifacts, and temporary files
-- **WHEN** policy constructs the same-session log read scope
-- **THEN** it does not add `<session-envelope>/subagents` as a broad root
-- **AND** log-read scope cannot read a child artifact or temporary file
-
-#### Scenario: Counterexample - linked path cannot escape log scope
-
-- **GIVEN** a same-session log directory contains a filesystem link to another
-  session
-- **WHEN** an agent reads, lists, or searches through that link
-- **THEN** existing path safety policy denies the operation
-- **AND** same-session ownership does not bypass that denial
-
-#### Scenario: Counterexample - envelope is not the shell root
-
-- **GIVEN** an agent can read logs in its session envelope
-- **WHEN** policy selects a default shell cwd or shell safe root
-- **THEN** it uses the session directory or existing project scope
-- **AND** it does not use the complete envelope because log reads are allowed
+- **GIVEN** a shell path is below the sessions root
+- **WHEN** the agent submits a shell command
+- **THEN** normal shell syntax and approval policy still apply
+- **AND** storage membership alone does not authorize execution
 
 #### Scenario: Counterexample - this layout is not a process sandbox
 
-- **GIVEN** an arbitrary process has already received execution authority as
-  the Netclaw OS identity
-- **WHEN** it learns a same-session log path
-- **THEN** this storage layout alone does not claim to stop the OS file open
-- **AND** a future containment capability must define that stronger boundary
+- **GIVEN** a process already runs as the Netclaw operating-system identity
+- **WHEN** it learns a session path
+- **THEN** the storage layout does not claim to block an operating-system file open
+- **AND** a separate containment capability must define that stronger boundary

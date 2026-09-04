@@ -45,7 +45,7 @@ public class SpawnAgentStreamingTests : TestKit
         var paths = new NetclawPaths(dir.Path);
         paths.EnsureDirectoriesExist();
 
-        var toolAccessPolicy = new ToolAccessPolicy(
+        var toolAccessPolicy = new ToolAccessPolicy(new NetclawPaths(),
             new ToolConfig(),
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -140,7 +140,7 @@ public class SpawnAgentStreamingTests : TestKit
         var paths = new NetclawPaths(dir.Path);
         paths.EnsureDirectoriesExist();
 
-        var toolAccessPolicy = new ToolAccessPolicy(
+        var toolAccessPolicy = new ToolAccessPolicy(new NetclawPaths(),
             new ToolConfig(),
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

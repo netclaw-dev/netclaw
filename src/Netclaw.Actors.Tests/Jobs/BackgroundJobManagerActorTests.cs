@@ -89,6 +89,8 @@ public class BackgroundJobManagerActorTests : TestKit
     {
         Id = new BackgroundJobId(jobId),
         Command = "echo hello",
+        ManagedTemporaryDirectory = Path.Combine(_dir.Path, "managed-temp"),
+        ManagedTemporaryAuthorityRoot = _dir.Path,
         SessionId = new SessionId("test/thread"),
         Rationale = "test run",
         Status = status,
@@ -103,6 +105,8 @@ public class BackgroundJobManagerActorTests : TestKit
     private StartBackgroundJob MakeStartCommand(string command = "echo hello") => new()
     {
         Command = command,
+        ManagedTemporaryDirectory = Path.Combine(Path.GetTempPath(), "netclaw-tests", "managed-temp"),
+        ManagedTemporaryStorageRoot = Path.Combine(Path.GetTempPath(), "netclaw-tests"),
         SessionId = new SessionId("test/thread"),
         Rationale = "test run",
         Audience = TrustAudience.Personal,
@@ -286,6 +290,8 @@ public class BackgroundJobManagerActorTests : TestKit
         {
             Id = orphanId,
             Command = "jekyll serve",
+            ManagedTemporaryDirectory = Path.Combine(_dir.Path, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _dir.Path,
             SessionId = sessionId,
             Rationale = "dev server",
             Status = BackgroundJobStatus.Running,
@@ -335,6 +341,8 @@ public class BackgroundJobManagerActorTests : TestKit
         {
             Id = new BackgroundJobId("orphan-123"),
             Command = "sleep 999",
+            ManagedTemporaryDirectory = Path.Combine(_dir.Path, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _dir.Path,
             SessionId = new Netclaw.Actors.Protocol.SessionId("test/thread"),
             Rationale = "orphaned test",
             Status = BackgroundJobStatus.Running,
@@ -403,6 +411,57 @@ public class BackgroundJobManagerActorTests : TestKit
         Assert.Contains(sink.Alerts, alert =>
             alert.Category == AlertType.BackgroundJobSchemaDropped
             && alert.Summary.Contains(jobId, StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StartupReconciliation_MarksOldJobWithoutManagedTemporaryFieldsAsLost()
+    {
+        await GetReadyManagerAsync();
+        var sessionId = new SessionId("legacy-temp/session");
+        var gatewayProbe = CreateTestProbe("legacy-temp-gateway");
+        ActorRegistry.For(Sys).Register<SignalRGatewayActorKey>(gatewayProbe.Ref, overwrite: true);
+
+        const string jobId = "legacy-temp-orphan";
+        var filePath = Path.Combine(_dir.Path, "jobs", $"{jobId}.json");
+        File.WriteAllText(filePath,
+            $$"""
+              {
+                "id": "{{jobId}}",
+                "command": "dotnet test",
+                "sessionId": "{{sessionId.Value}}",
+                "rationale": "legacy persisted job",
+                "status": "Running",
+                "timeoutSeconds": 600,
+                "startedAtMs": 1,
+                "audience": "Personal",
+                "boundary": "Personal",
+                "originChannelType": "Tui"
+              }
+              """);
+
+        var manager = Sys.ActorOf(
+            Props.Create(() => new BackgroundJobManagerActor(
+                _store,
+                TimeProvider.System,
+                TestShellEnvironment.Current)),
+            "legacy-temp-reconcile-manager");
+
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+
+        var reconciled = _store.Get(new BackgroundJobId(jobId));
+        Assert.NotNull(reconciled);
+        Assert.Equal(BackgroundJobStatus.Lost, reconciled!.Status);
+        Assert.Null(reconciled.ManagedTemporaryDirectory);
+        Assert.Null(reconciled.ManagedTemporaryAuthorityRoot);
+
+        var delivery = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, delivery.SessionId);
+        Assert.Contains("was lost", delivery.Content, StringComparison.Ordinal);
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink

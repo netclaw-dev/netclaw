@@ -12,8 +12,13 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Daemon.Configuration;
 
+/// <summary>Registers the daemon's console and partitioned file logging providers.</summary>
 public static class LoggingRegistrationExtensions
 {
+    /// <summary>Configures Netclaw logging and returns the effective minimum level.</summary>
+    /// <param name="builder">The daemon application builder.</param>
+    /// <param name="paths">Optional explicit Netclaw paths.</param>
+    /// <returns>The effective minimum log level.</returns>
     public static LogLevel ConfigureNetclawLogging(this WebApplicationBuilder builder, NetclawPaths? paths = null)
     {
         var level = ResolveLogLevel(builder.Configuration);

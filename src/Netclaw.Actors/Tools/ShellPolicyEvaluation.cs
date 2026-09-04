@@ -16,7 +16,7 @@ internal abstract record ShellPolicyPreflightResult
     internal sealed record Complete : ShellPolicyPreflightResult
     {
         internal Complete(
-            ToolAccessDecision decision,
+            ToolAuthorizationDecision decision,
             ShellCommandAnalysis? authorizedAnalysis)
         {
             ArgumentNullException.ThrowIfNull(decision);
@@ -32,7 +32,7 @@ internal abstract record ShellPolicyPreflightResult
             AuthorizedAnalysis = authorizedAnalysis;
         }
 
-        internal ToolAccessDecision Decision { get; }
+        internal ToolAuthorizationDecision Decision { get; }
 
         internal ShellCommandAnalysis? AuthorizedAnalysis { get; }
     }
@@ -42,7 +42,8 @@ internal abstract record ShellPolicyPreflightResult
         internal Continue(
             ShellCommandAnalysis analysis,
             ToolApprovalContext approvalContext,
-            ShellExecutionEnvironment environment)
+            ShellExecutionEnvironment environment,
+            ToolCorrection? correction)
         {
             ArgumentNullException.ThrowIfNull(analysis);
             ArgumentNullException.ThrowIfNull(approvalContext);
@@ -51,6 +52,7 @@ internal abstract record ShellPolicyPreflightResult
             Analysis = analysis;
             ApprovalContext = approvalContext;
             Environment = environment;
+            Correction = correction;
         }
 
         internal ShellCommandAnalysis Analysis { get; }
@@ -58,31 +60,9 @@ internal abstract record ShellPolicyPreflightResult
         internal ToolApprovalContext ApprovalContext { get; }
 
         internal ShellExecutionEnvironment Environment { get; }
+
+        internal ToolCorrection? Correction { get; }
     }
-}
-
-internal sealed record ShellPolicyAuthorization
-{
-    internal ShellPolicyAuthorization(
-        ToolAuthorizationDecision decision,
-        ShellCommandAnalysis? authorizedAnalysis)
-    {
-        ArgumentNullException.ThrowIfNull(decision);
-        if (authorizedAnalysis is not null
-            && decision.Outcome != ToolAuthorizationOutcome.Allowed)
-        {
-            throw new ArgumentException(
-                "Only an allowed shell decision can carry analysis.",
-                nameof(authorizedAnalysis));
-        }
-
-        Decision = decision;
-        AuthorizedAnalysis = authorizedAnalysis;
-    }
-
-    internal ToolAuthorizationDecision Decision { get; }
-
-    internal ShellCommandAnalysis? AuthorizedAnalysis { get; }
 }
 
 internal sealed class ShellPolicyEvaluation
@@ -90,7 +70,6 @@ internal sealed class ShellPolicyEvaluation
     private readonly ShellPolicyCoverageSource[] _coverage;
     private readonly ShellPolicyDecisionTraceBuilder _trace = new();
     private ValidatedShellGrantEvidence? _grantEvidence;
-    private (string? SessionDirectory, ToolApprovalContext Context)? _uncoveredApprovalContext;
 
     internal ShellPolicyEvaluation(ShellPolicyProjection projection)
     {
@@ -118,27 +97,20 @@ internal sealed class ShellPolicyEvaluation
 
     internal bool HasOneTimeCoverage => _coverage.Contains(ShellPolicyCoverageSource.OneTime);
 
-    internal ToolApprovalContext GetUncoveredApprovalContext(string? sessionDirectory)
+    internal ToolApprovalContext GetUncoveredApprovalContext(
+        IReadOnlyCollection<string> sessionOwnedDirectories)
     {
         var uncovered = UncoveredCandidates;
         if (uncovered.Count == 0)
             throw new InvalidOperationException("No uncovered shell candidates remain.");
 
-        if (_uncoveredApprovalContext is { } cached
-            && string.Equals(cached.SessionDirectory, sessionDirectory, StringComparison.Ordinal))
-        {
-            return cached.Context;
-        }
-
-        var context = Projection.HasCausalIntent
+        return Projection.HasCausalIntent
             ? Projection.ApprovalContext
             : ToolAccessPolicy.NarrowShellApprovalContext(
                 Projection.ApprovalContext,
                 uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                sessionDirectory,
+                sessionOwnedDirectories,
                 Projection.Environment.PathStyle);
-        _uncoveredApprovalContext = (sessionDirectory, context);
-        return context;
     }
 
     internal ShellPolicyCoverageSource CoverageFor(ShellPolicyCandidateId candidateId)
@@ -212,7 +184,6 @@ internal sealed class ShellPolicyEvaluation
 
         _trace.AddCoverage(source, candidate, grantTimestamp);
         _coverage[index] = source;
-        _uncoveredApprovalContext = null;
     }
 
     internal ToolAuthorizationDecision Complete(

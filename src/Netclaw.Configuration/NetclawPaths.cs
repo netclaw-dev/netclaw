@@ -53,9 +53,6 @@ public sealed class NetclawPaths
     public string CacheDirectory => Path.Combine(BasePath, "cache");
     public string RestartManifestPath => Path.Combine(CacheDirectory, "restart-manifest.json");
 
-    // ── Memory ──
-    public string MemorySqliteDbPath => SqliteDbPath;
-
     // ── Binary directory (install location for self-contained binaries) ──
     public string BinDirectory => Path.Combine(BasePath, "bin");
     public string BinarySyncStatePath => Path.Combine(BinDirectory, ".sync-state.json");
@@ -113,10 +110,9 @@ public sealed class NetclawPaths
     public string LogsDirectory => Path.Combine(BasePath, "logs");
     public string RuntimeDirectory => Path.Combine(BasePath, "runtime");
     /// <summary>
-    /// Per-session log files live at <c>{SessionLogsDirectory}/{sanitized_id}/session.log</c>.
-    /// This tree is deliberately kept outside <see cref="SessionsDirectory"/> so
-    /// the agent's file_read tool (scoped to <c>{session_dir}</c>) cannot observe
-    /// its own audit trail.
+    /// Legacy per-session log files live at
+    /// <c>{SessionLogsDirectory}/{sanitized_id}/session.log</c>. Versioned
+    /// sessions store logs inside their session storage envelope.
     /// </summary>
     public string SessionLogsDirectory => Path.Combine(LogsDirectory, "sessions");
     public string DaemonLogPath => Path.Combine(LogsDirectory, "daemon.log");

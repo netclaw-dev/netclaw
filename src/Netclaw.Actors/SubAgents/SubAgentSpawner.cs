@@ -134,6 +134,10 @@ public sealed class SubAgentSpawner
             ? $"{context.SessionId}/subagent/{definition.Name}/{runId}"
             : $"subagent/{definition.Name}/{runId}";
         var scopeId = new SubAgentScopeId(subAgentScopeId);
+        var parentStorage = context.SessionStorage
+            ?? throw new InvalidOperationException("A subagent run requires resolved session storage.");
+        var childStorage = parentStorage.ForChild(runId, scopeId);
+        CreateChildLogTarget(childStorage.LogPath.Value);
         var parentWorkingContext = new WorkingContext
         {
             ProjectDirectory = context.ProjectDirectory,
@@ -179,7 +183,7 @@ public sealed class SubAgentSpawner
             ScopeId = scopeId,
             Authority = new ToolRunScope
             {
-                Session = new ToolSessionScope.Bound(scopeId.Value, context.SessionDirectory),
+                Session = new ToolSessionScope.Bound(scopeId.Value, childStorage),
                 Audience = context.Audience,
                 InlineOutputBudget = InlineOutputBudget.Default,
                 Boundary = context.Boundary,
@@ -331,7 +335,9 @@ public sealed class SubAgentSpawner
             return result with
             {
                 RunId = runId,
-                ScopeId = scopeId
+                ScopeId = scopeId,
+                LogPath = result.Success ? childStorage.LogPath.Value : null,
+                ArtifactDirectory = result.Success ? childStorage.ArtifactDirectory.Value : null
             };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -481,6 +487,18 @@ public sealed class SubAgentSpawner
     private static void TryStopSubAgent(IActorRef subAgent)
     {
         subAgent.Tell(PoisonPill.Instance);
+    }
+
+    private static void CreateChildLogTarget(string logPath)
+    {
+        var directory = Path.GetDirectoryName(logPath)
+            ?? throw new InvalidOperationException("A child log path requires a parent directory.");
+        Directory.CreateDirectory(directory);
+        using var stream = new FileStream(
+            logPath,
+            FileMode.OpenOrCreate,
+            FileAccess.Write,
+            FileShare.ReadWrite | FileShare.Delete);
     }
 
     private static string AppendSystemPromptOverlay(string basePrompt, string? overlay)

@@ -38,7 +38,11 @@ public sealed class RestartRecoveryServiceTests : IDisposable
         var warmedSessions = new ConcurrentQueue<WarmSession>();
         var actor = _system.ActorOf(Props.Create(() => new WarmSessionActor(warmedSessions)));
         var manifestStore = new RestartManifestStore(_paths);
-        var catalog = new SessionCatalogService(_paths, TimeProvider.System, NullLogger<SessionCatalogService>.Instance);
+        var catalog = new SessionCatalogService(
+            _paths,
+            TimeProvider.System,
+            new TestSessionStorageResolver(_paths),
+            NullLogger<SessionCatalogService>.Instance);
         var sessionId = new SessionId("slack/C123/1710000000.000001");
 
         catalog.OnSessionActivated(sessionId, Netclaw.Actors.Channels.ChannelType.Slack);

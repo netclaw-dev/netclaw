@@ -14,7 +14,7 @@ netclaw status
 2. Confirm memory status section shows:
    - `provider: sqlite`
    - `status: healthy` (or `degraded` when unavailable)
-   - `databasePath: ~/.netclaw/memory/netclaw-memory.db`
+   - `databasePath: <NETCLAW_HOME>/netclaw.db`
    - `pendingCheckpoints: <n>`
 
 3. Run offline diagnostics:
@@ -30,12 +30,12 @@ netclaw doctor
 ## Inspect Pending Checkpoints Directly
 
 ```bash
-sqlite3 "$HOME/.netclaw/memory/netclaw-memory.db" \
+sqlite3 "${NETCLAW_HOME:-$HOME/.netclaw}/netclaw.db" \
   "select status, count(*) from memory_checkpoints group by status;"
 ```
 
 ```bash
-sqlite3 "$HOME/.netclaw/memory/netclaw-memory.db" \
+sqlite3 "${NETCLAW_HOME:-$HOME/.netclaw}/netclaw.db" \
   "select checkpoint_id, trigger_type, priority, retry_count, created_at from memory_checkpoints where status='pending' order by priority desc, created_at asc limit 20;"
 ```
 

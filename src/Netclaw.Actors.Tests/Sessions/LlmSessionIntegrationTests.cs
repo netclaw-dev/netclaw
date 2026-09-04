@@ -863,7 +863,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["command"] = $"{deferredToolName} --inspect" })
         ];
         _fakeToolExecutor.Corrections["shell_execute"] =
-            new ToolAgentCorrection.NativeToolSuggested(new ToolName(deferredToolName));
+            new ToolCorrection.NativeToolSuggested(new ToolName(deferredToolName));
 
         var sessionId = new SessionId("channel-discovery/native-correction-recovery");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -944,7 +944,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["command"] = "load_tool --help" })
         ];
         _fakeToolExecutor.Corrections["shell_execute"] =
-            new ToolAgentCorrection.NativeToolSuggested(new ToolName("load_tool"));
+            new ToolCorrection.NativeToolSuggested(new ToolName("load_tool"));
 
         var sessionId = new SessionId("channel-discovery/native-core-noop");
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
@@ -1023,7 +1023,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["command"] = toolName })
         ];
         _fakeToolExecutor.Corrections["shell_execute"] =
-            new ToolAgentCorrection.NativeToolSuggested(new ToolName(toolName));
+            new ToolCorrection.NativeToolSuggested(new ToolName(toolName));
 
         var sessionId = new SessionId("channel-discovery/" + sessionSuffix);
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();

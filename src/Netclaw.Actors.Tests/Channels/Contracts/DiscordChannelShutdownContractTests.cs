@@ -46,7 +46,7 @@ public sealed class DiscordChannelShutdownContractTests : ChannelShutdownContrac
                 AudienceProfiles = TestDiscordGatewayDeps.DefaultAudienceProfiles
             },
             modelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
-            paths: TestDiscordGatewayDeps.NewTestPaths());
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
     }
 
     /// <summary>

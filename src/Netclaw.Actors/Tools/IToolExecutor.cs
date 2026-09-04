@@ -84,13 +84,10 @@ public interface IToolExecutor
     }
 }
 
-internal interface ISessionScratchRetryAwareExecutor
+/// <summary>Exposes the shell grammar used to compare one managed-temporary correction retry.</summary>
+internal interface IApprovalShellProvider
 {
     ApprovalShell Shell { get; }
-
-    void MarkSessionScratchRetry(
-        ToolExecutionContext context,
-        ToolAgentCorrection.SessionScratchSuggested correction);
 }
 
 /// <summary>

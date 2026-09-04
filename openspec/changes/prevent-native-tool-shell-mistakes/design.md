@@ -4,8 +4,8 @@ Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for the
 cross-cutting terms in this design.
 
 Before this change, the core exposed general workspace tools but deferred
-`attach_file`. An agent without that schema could copy a file into session
-scratch before it discovered the attachment tool. Agents also put known
+`attach_file`. An agent without that schema could copy a file into managed
+temporary storage before it discovered the attachment tool. Agents also put known
 Netclaw tool names in `shell_execute`. The authorization pipeline then treated
 those names as ordinary process requests and could prompt the user.
 
@@ -158,7 +158,11 @@ dispatch authorization.
 
 ### Add `attach_file` to the policy-filtered parent-session core
 
-`ToolRegistrationExtensions` will register `attach_file` as Core. Parent sessions will receive its schema when current policy exposes it. Its description will state that the caller passes the authorized source path directly and Netclaw performs any required safe copy into the current session. Existing `ScopedFileAccessPolicy`, proximity checks, and `ToolPathPolicy` remain unchanged.
+`ToolRegistrationExtensions` will register `attach_file` as Core. Parent
+sessions will receive its schema when current policy exposes it. Its
+description will state that the caller passes the source path directly.
+Netclaw performs any required safe copy into the current session. The normal
+`netclaw-tools` path access decision remains authoritative.
 
 Sub-agents will exclude `attach_file` from core exposure, discovery, loading, and direct dispatch. A child tool context can create an attachment, but the current child completion path has no internal handoff that can carry that attachment to the parent invocation and channel. Exclusion prevents a false-success result without adding attachment state to the public `SubAgentResult` contract. A later change can remove the exclusion after it adds an internal child-to-parent attachment handoff.
 

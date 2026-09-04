@@ -112,7 +112,7 @@ Alternative considered: provide each subagent a task-specific static tool list.
 Observed models choose unexpected but legitimate workflows, and static lists
 would either recreate overexposure or create brittle missing-tool failures.
 
-### 3. Workspace paths resolve from explicit session-owned roots
+### 3. Session cwd selects a base and Netclaw tools authorizes the path
 
 First-party filesystem tools will resolve a relative authored path against:
 
@@ -120,18 +120,15 @@ First-party filesystem tools will resolve a relative authored path against:
 2. otherwise the immutable session directory;
 3. otherwise fail with `invalid_context`.
 
-The resolved canonical path then enters the existing read/write/attach policy.
-Absolute paths retain their existing policy behavior. Resolution never uses the
-daemon process current directory. A relative path that escapes its selected base
-through traversal is still evaluated as the resulting canonical absolute path
-and denied when outside the applicable roots.
-
-This is implemented once in `ScopedFileAccessPolicy`, not independently in each
-tool.
+The selected base and authored path enter the filesystem authorization contract
+that `netclaw-tools` owns. Absolute paths enter that same contract without base
+selection. Resolution never uses the daemon process current directory. The
+path access decision evaluates the canonical result and its trusted-root
+relationship.
 
 Alternative considered: require absolute paths forever. Live evidence shows
-models invent `/tmp` or use shell to obtain an absolute path; the requirement
-creates friction without adding authority because a trusted base already exists.
+models invent `/tmp` or use shell to obtain an absolute path. This requirement
+creates friction without adding authority because a relative base already exists.
 
 ### 4. Add narrow workspace primitives instead of more guidance
 
@@ -242,8 +239,8 @@ names, authored content, credentials, or raw paths from production.
 - [Structured tools duplicate mature CLI behavior] -> Implement only generic
   filesystem/data primitives with strict bounds; keep private executable
   semantics out.
-- [Cross-platform traversal differs] -> Use .NET filesystem APIs and existing
-  canonical path policy; run native Windows and Linux tests.
+- [Cross-platform traversal differs] -> Use the shared path access decision and
+  native filesystem tests on Windows and Linux.
 - [Typed outcome adoption becomes a broad rewrite] -> Convert workspace tools
   first, retain a conservative adapter for untouched tools, and remove legacy
   argument scraping only after parity tests pass.

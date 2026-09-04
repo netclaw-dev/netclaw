@@ -82,7 +82,11 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
             Assert.Equal(
                 policyCase.ExpectedApprovalRequired,
                 authorization.Outcome == ToolAuthorizationOutcome.RequiresApproval);
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, authorization.Outcome);
+            Assert.Equal(
+                policyCase.ExpectedOutcome == "access_denied"
+                    ? ToolAuthorizationOutcome.Denied
+                    : ToolAuthorizationOutcome.Allowed,
+                authorization.Outcome);
 
             var completed = await ExecuteAsync(
                 runtime.Executor,
@@ -198,14 +202,13 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
     {
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var commandPolicy = new ShellCommandPolicy(environment);
-        var authorizationPathPolicy = new ToolPathPolicy(environment, []);
-        var toolPathPolicy = new ToolPathPolicy(environment, [deniedPath]);
+        var protectedPathPolicy = new ToolPathPolicy(environment, [deniedPath]);
         var config = new ToolConfig
         {
             ShellMode = ShellExecutionMode.HostAllowed,
             AudienceProfiles = ToolAudienceProfileDefaults.CreateProfilesForPosture(DeploymentPosture.Personal)
         };
-        var accessPolicy = new ToolAccessPolicy(
+        var accessPolicy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -213,14 +216,9 @@ public sealed class ToolFrictionReplayTests(ITestOutputHelper output) : TestKit(
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
             commandPolicy,
-            authorizationPathPolicy);
+            protectedPathPolicy);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            toolPathPolicy,
-            commandPolicy,
-            toolAccessPolicy: accessPolicy);
+        registry.WithFirstPartyTools(accessPolicy);
         return new RuntimeSetup(registry, new DispatchingToolExecutor(registry, accessPolicy), accessPolicy);
     }
 

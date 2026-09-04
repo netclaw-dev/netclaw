@@ -69,7 +69,7 @@ public sealed class MemoryEmbeddingDoctorCheck(
                     "Memory.Embeddings.AutoDownload is false — provision the model manually, or enable AutoDownload and restart the daemon.");
             }
 
-            var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+            var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
             await store.InitializeAsync(cancellationToken);
             var coverage = await store.GetEmbeddingCoverageAsync(modelId, cancellationToken);
 

@@ -14,7 +14,7 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Lists the immediate entries of a directory. Read-only: it never reads file
 /// contents and never recurses into subdirectories. The target directory is
-/// authorized through <see cref="ScopedFileAccessPolicy"/> read access, so the
+/// authorized through <see cref="PathAccessPolicy"/> read access, so the
 /// directories an audience may list are exactly that audience's read roots.
 /// </summary>
 [NetclawTool(ToolName,
@@ -27,16 +27,19 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
 
     private const int MaxEntries = 1000;
 
-    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
-    private readonly ToolPathPolicy _pathPolicy;
+    private readonly PathAccessPolicy _pathAccessPolicy;
 
     public record Params(
-        [property: Description("Directory path to list. Relative paths use the current project, then session scratch.")] string Path);
+        [property: Description("Directory path to list. Relative paths use the current project, then session_dir.")] string Path);
 
     public FileListTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
+        : this(new PathAccessPolicy(config, paths, pathPolicy))
     {
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
-        _pathPolicy = pathPolicy;
+    }
+
+    internal FileListTool(PathAccessPolicy pathAccessPolicy)
+    {
+        _pathAccessPolicy = pathAccessPolicy;
     }
 
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -47,18 +50,11 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
         // Authorize through the read-access policy: this confines the listable
         // directories to the audience's read roots and emits an
         // audience-sanitized error (no configured root paths leaked to Public).
-        if (!_fileAccessPolicy.TryResolveReadPath(
-                args.Path,
-                context,
-                out var authorizedPath,
-                out var accessError,
-                out var resolutionFailure))
-        {
-            return Task.FromResult(context.PathResolutionFailure(accessError, resolutionFailure));
-        }
+        var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Read);
+        if (!access.Allowed)
+            return Task.FromResult(context.PathAccessFailure(access.Error, access.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied));
 
-        if (_pathPolicy.IsReadDenied(authorizedPath))
-            return Task.FromResult(context.AccessDenied(FileToolErrors.CredentialReadDenied(authorizedPath)));
+        var authorizedPath = access.CanonicalPath;
 
         if (!Directory.Exists(authorizedPath))
         {
@@ -69,7 +65,7 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
 
         try
         {
-            return Task.FromResult(context.Success(FormatListing(authorizedPath, _pathPolicy)));
+            return Task.FromResult(context.Success(FormatListing(authorizedPath, context)));
         }
         catch (UnauthorizedAccessException)
         {
@@ -85,15 +81,15 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
         }
     }
 
-    private static string FormatListing(string directory, ToolPathPolicy? pathPolicy)
+    private string FormatListing(string directory, ToolInvocationContext context)
     {
         var dirs = Directory.EnumerateDirectories(directory)
-            .Where(path => pathPolicy?.IsReadDenied(path) != true)
+            .Where(path => _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read).Allowed)
             .Select(Path.GetFileName)
             .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
         var files = Directory.EnumerateFiles(directory)
-            .Where(path => pathPolicy?.IsReadDenied(path) != true)
+            .Where(path => _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read).Allowed)
             .Select(Path.GetFileName)
             .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();

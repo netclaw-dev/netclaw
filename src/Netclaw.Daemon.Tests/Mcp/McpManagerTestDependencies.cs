@@ -42,7 +42,7 @@ internal sealed class McpManagerTestDependencies
     {
         var skillRegistry = new SkillRegistry();
         var skillIndex = new SkillIndexContextLayer();
-        var toolAccessPolicy = new ToolAccessPolicy(
+        var toolAccessPolicy = new ToolAccessPolicy(new NetclawPaths(),
             toolConfig,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

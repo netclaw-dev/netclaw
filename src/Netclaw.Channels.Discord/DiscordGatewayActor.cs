@@ -102,7 +102,7 @@ public sealed record DiscordGatewayDependencies(
     IContentScanner ContentScanner,
     ToolAudienceProfiles AudienceProfiles,
     ModelCapabilities ModelCapabilities,
-    NetclawPaths Paths,
+    ISessionStorageResolver StorageResolver,
     DiscordUserId? BotUserId = null,
     IPromptInjectionDetector? PromptInjectionDetector = null,
     IThreadHistoryFetcher? ThreadHistoryFetcher = null,

@@ -26,14 +26,14 @@ model
        -> optional approval request
        -> tool implementation
        -> factual tool result -> redaction and output bound --+
-       -> internal tool receipt ------------------------------+---> correction presenter
+       -> internal tool receipt ------------------------------+---> remediation presenter
                                                                   -> model-facing result
 
 internal tool receipt
   -> optional actor working-context update
 ```
 
-The result and receipt are sibling outputs of execution. The correction
+The result and receipt are sibling outputs of execution. The remediation
 presenter can use both to build the final model-facing result. The actor uses a
 successful receipt only when that receipt contains a defined state effect.
 
@@ -42,7 +42,7 @@ A terminal non-cancellation exception follows a different delivery branch:
 ```text
 dispatcher classifies the receipt and throws
   -> parent or child actor creates the factual failure result
-  -> correction presenter
+  -> remediation presenter
   -> model-facing result
 ```
 
@@ -229,6 +229,15 @@ schema exposed + approval required + no approval
   -> Netclaw does not execute the tool
 ```
 
+### Reviewed-safe policy
+
+Reviewed-safe policy is a shell approval rule for a small configured set of
+read-only command phrases. It can avoid a prompt only after parsing succeeds
+and the shared path access policy allows every relevant path. It does not
+define trusted roots or grant filesystem authority by itself.
+
+**Code anchors:** `ReviewedSafeShellPolicy`, `ReviewedSafePolicy`
+
 ### Tool result
 
 The tool result is the text that Netclaw returns to the model. Normal dispatcher
@@ -256,7 +265,7 @@ receipt:
 
 ### File activity
 
-File activity is a canonical path and an operation kind recorded in a successful
+File activity is a canonical path and file operation recorded in a successful
 receipt. The working context uses it instead of guessing paths from authored
 arguments or result text.
 
@@ -268,10 +277,13 @@ recoverable correction.
 
 **Code anchor:** `ToolInvocationOutcomeCategory`
 
-### Remediation code or next-action code
+### Remediation and remediation code
 
-A remediation code is a closed internal value for one bounded correction
-strategy. It contains no path or free-form instruction.
+A remediation is bounded advice for the model after a denied or correctable
+request. It does not change the path access decision or grant authority.
+
+A remediation code is a closed internal value that selects one remediation.
+It contains no path or free-form instruction.
 
 **Code anchor:** `ToolRemediationCode`
 
@@ -289,9 +301,9 @@ receipt:
 The prose phrase "typed remediation" means that the receipt uses this enum. It
 does not mean that Netclaw executes the action or grants new authority.
 
-### Correction presenter
+### Remediation presenter
 
-The correction presenter converts a valid remediation code into one fixed model
+The remediation presenter converts a valid remediation code into one fixed model
 instruction. It does not inspect arguments, execute tools, or grant authority.
 
 **Code anchor:** `ToolRemediationPresenter`
@@ -403,11 +415,13 @@ session-owned files for a new-layout session. Its path is fixed when the
 session binds its versioned storage binding. Its contents are mutable.
 
 The envelope contains distinct working, artifact, temporary, worktree, log,
-and child-run areas. Physical containment does not make the complete envelope
-a project scope, a shell safe space, or an authority grant.
+and child-run areas. Netclaw supplies the current envelope as an implicit
+trusted root. It is not a project scope, the default shell cwd, or an
+unconditional shell grant.
 
 ```text
 <session-envelope>/
+├── attachment-staging/        # untrusted inbound bytes before admission
 ├── workspace/                 # default no-project working directory
 ├── artifacts/                 # retained parent outputs
 ├── tmp/parent/                # disposable parent files
@@ -419,12 +433,34 @@ a project scope, a shell safe space, or an authority grant.
     └── logs/session.log       # raw child log
 ```
 
+### Attachment staging directory
+
+An attachment staging directory holds inbound bytes before the attachment
+pipeline accepts them. A version-2 session stores this directory below its
+session storage envelope and outside `workspace/`.
+
+The storage location does not mark the content as trusted. The attachment
+pipeline scans each file before it moves an accepted file to
+`workspace/inbox/`. A rejected file does not become agent-visible media.
+
 ### Session storage binding
 
 A session storage binding is the durable layout version and absolute envelope
 root for a new-layout session. It has one root. A later configuration change
 does not recompute that root. Existing sessions keep the binding absent and use
 their established path behavior; absence is not a second descriptor shape.
+
+### Netclaw database
+
+The Netclaw database is the single SQLite database at
+`NetclawPaths.SqliteDbPath`. It is the source of truth for all SQLite-backed
+production data, including actor journal and snapshots, durable reminders, the
+session catalog, daily statistics, memory, and session storage bindings.
+
+Production configuration cannot select another database path or an in-memory
+persistence provider. Test harnesses may replace actor persistence internally,
+but that test seam is not part of the runtime configuration contract. A
+supplied `Persistence` section is invalid and fails daemon startup.
 
 ### Session directory
 
@@ -443,10 +479,10 @@ A raw session log is the diagnostic file for one main session or subagent run.
 New-layout raw logs are physically inside the session storage envelope but are
 outside the session directory.
 
-Every parent and child run can read, list, and search logs from its own session
-through the existing file tools. The session is the log-read trust boundary.
-This read scope does not grant file-write, file-edit, attach, or shell
-authority. Another session cannot use this scope.
+All session storage is below the configured trusted sessions root. Parent and
+child runs inherit this root, so one session can access another session's data.
+This permits one session to analyze another session's logs on a busy agent.
+The normal audience and file-operation permissions still apply.
 
 These reads return normal bounded file-tool output. A raw session log does not
 use a separate activity projection or log-specific redaction layer.
@@ -466,59 +502,126 @@ An artifact directory contains outputs that a parent or user must keep or
 attach. It is separate from the session directory and managed temporary
 directory. Netclaw does not apply a retention policy to either directory yet.
 
+### Worktree directory
+
+A worktree directory is the `worktree_dir` area inside the session storage
+envelope. It is separate from each run's managed temporary directory because a
+Git worktree can contain valuable source state.
+
+Netclaw announces this path in the existing session context. Agents compose
+`shell_execute` and `set_working_directory` to create and adopt Git worktrees.
+The path uses the ordinary shell path access decision. It does not create a
+special worktree tool or bypass shell syntax, hard-deny, or approval policy.
+
 ### Child run directory
 
 A child run directory is the area below
 `<session-envelope>/subagents/<run-id>` for one subagent run. Its artifact,
 temporary, and raw-log areas share the same opaque run identifier. The parent
-owns the lineage and can read the child's log through the existing file tools.
-This ownership does not grant access to a different session.
+and child use the ordinary path access decision to inspect it.
 
 ### Session-owned directory
 
-A session-owned directory has a lifetime or authority scope tied to one
-session or run. Session directories, managed temporary directories, artifact
-directories, and managed worktree directories are session-owned, but they do
-not have the same purpose or access policy. Approval code uses this broader
-term only when the rule intentionally applies to more than one of them.
+A session-owned directory has a storage lifetime tied to one session or run.
+Session directories, managed temporary directories, artifact directories, and
+managed worktree directories are session-owned, but the label grants no
+filesystem authority. Authorization still comes from a path access decision.
 
-### Allowed root
+### Trusted root
 
-An allowed root is a configured or context-derived directory boundary for a
-specific access type. A path inside one root can still fail another security
-check.
+A trusted root is a configured or context-derived directory boundary that can
+supply filesystem authority. A path below this root can still fail an audience,
+file-operation, link, or protected-path check.
+
+The `netclaw-tools` capability owns the trusted-root interpretation and the
+filesystem authorization decision. Session and cwd capabilities only supply
+roots and candidate paths.
+
+Stable machine-readable reason codes can retain legacy tokens such as
+`trust_zone`. These tokens are compatibility keys, not current engineering
+terms. Specifications and operator prose must use the canonical terms here.
+
+### Ordinary configuration
+
+Ordinary configuration is the non-secret persisted configuration in
+`netclaw.json`. It can be read through structured file tools when normal roots,
+audience policy, and operation permissions allow it. Read authority does not
+grant write, attach, or shell authority.
+
+Secret configuration belongs in protected stores such as
+`secrets.json`, key storage, OAuth credential files, or webhook secret files.
+Those stores and control-plane state remain read-denied.
 
 ### Canonical path
 
 A canonical path is a fully qualified, normalized path with no unresolved dot
 segments. Canonical form does not by itself grant access.
 
-### Safe, unavailable, and unsafe path bases
+### Path relationship
 
-These states describe a candidate base for a relative path:
+A path relationship states whether a canonical path is the trusted root, is a
+descendant of that root, or is outside that root. This fact does not grant
+access.
 
-- **Safe:** The base is usable and passes the required authority and link checks.
-- **Unavailable:** The base is absent, not a fully qualified path, or is a
-  missing project directory. Policy can try the next documented base before
-  authorization starts.
-- **Unsafe:** The base is present but normalization or inspection fails, has no
-  owning authority root, or crosses a link boundary. Netclaw denies the call and
-  does not try another base.
+### File operation
+
+A file operation is the requested authorization category for a path. `Read`
+includes reading, listing, and searching. `Write` includes creating and
+editing. `Attach` and `DeclareProjectScope` remain distinct because they have
+different policy rules. One path can have a different decision for each
+operation.
+
+### Path access decision
+
+A path access decision is the typed allow or deny result for one canonical
+path and file operation. A denied decision contains a failure category and
+human-readable detail. The `netclaw-tools` capability owns this decision and
+applies these inputs:
+
+- the path relationship to each trusted root;
+- the file operation;
+- the audience policy;
+- link and protected-path facts.
+
+Structured file tools and project-directory declarations provide their exact
+file operation to this decision. A shell call first passes tool capability and
+shell command policy. Every known shell path then uses the conservative `Write`
+operation because Netclaw does not infer whether arbitrary shell syntax reads or
+mutates a path.
+
+This dependency is one-way. File protection can deny an otherwise eligible
+shell call, but file authority cannot grant shell capability or bypass shell
+policy. A denial is terminal. Approval does not widen an explicit `Roots` or
+`None` file profile. An unresolved interactive shell path may still reach the
+existing one-shot approval flow, but it cannot receive reviewed-safe or
+persistent coverage.
+
+Temporary-path correction does not consume, make, or override a path access
+decision. After terminal authorization checks pass, it may use path and syntax
+facts to offer remediation before an approval prompt. The replacement call is
+authorized from the beginning.
+
+### Relative base availability
+
+Relative base availability states whether `session-cwd` can select a base for a
+relative path. An available base can enter filesystem authorization. An
+unavailable base is absent or unusable before authorization starts.
+
+Availability does not mean that a path is safe or authorized. After
+`session-cwd` selects a base, `netclaw-tools` creates the path access decision.
+Netclaw does not try another base after that decision denies access.
 
 Example:
 
 ```text
-project missing
-  -> Unavailable
+project base unavailable
   -> try the session directory
 
 project ancestor is a link to /outside
-  -> Unsafe
-  -> AccessDenied
+  -> selected project base
+  -> path access decision = Denied(link boundary)
   -> do not try the session directory
 ```
-
-**Code anchor:** `ScopedFileAccessPolicy`
 
 ### Spill and output continuation
 

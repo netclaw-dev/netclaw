@@ -40,7 +40,7 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
     private readonly SlackChannelOptions _options;
     private readonly HttpClient _httpClient;
     private readonly IContentScanner _contentScanner;
-    private readonly NetclawPaths _paths;
+    private readonly ISessionStorageResolver _storageResolver;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
     private readonly ILogger<SlackThreadHistoryFetcher> _logger;
@@ -50,19 +50,19 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         SlackChannelOptions options,
         HttpClient httpClient,
         IContentScanner contentScanner,
-        NetclawPaths paths,
         ToolAudienceProfiles audienceProfiles,
         ModelCapabilities modelCapabilities,
-        ILogger<SlackThreadHistoryFetcher> logger)
+        ILogger<SlackThreadHistoryFetcher> logger,
+        ISessionStorageResolver storageResolver)
     {
         _repliesFetcher = repliesFetcher;
         _options = options;
         _httpClient = httpClient;
         _contentScanner = contentScanner;
-        _paths = paths;
         _audienceProfiles = audienceProfiles;
         _modelCapabilities = modelCapabilities;
         _logger = logger;
+        _storageResolver = storageResolver;
     }
 
     /// <summary>
@@ -73,14 +73,14 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
         SlackChannelOptions options,
         HttpClient httpClient,
         IContentScanner contentScanner,
-        NetclawPaths paths,
         ToolAudienceProfiles audienceProfiles,
         ModelCapabilities modelCapabilities,
-        ILogger<SlackThreadHistoryFetcher> logger)
+        ILogger<SlackThreadHistoryFetcher> logger,
+        ISessionStorageResolver storageResolver)
         : this(
             (channelId, threadTs, limit, cursor, ct) =>
                 conversationsApi.Replies(channelId.Value, threadTs.Value, limit: limit, cursor: cursor, cancellationToken: ct),
-            options, httpClient, contentScanner, paths, audienceProfiles, modelCapabilities, logger)
+            options, httpClient, contentScanner, audienceProfiles, modelCapabilities, logger, storageResolver)
     {
     }
 
@@ -124,8 +124,9 @@ public sealed class SlackThreadHistoryFetcher : IThreadHistoryFetcher
 
         var results = new List<ChannelInput>();
         string? cursor = null;
-        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(sessionId, _paths.SessionsDirectory);
-        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(sessionId, _paths.SessionsDirectory);
+        var storage = _storageResolver.Resolve(sessionId);
+        var inboxDir = SessionDirectoryHelper.GetOrCreateInboxDirectory(storage);
+        var stagingDir = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(storage);
 
         do
         {

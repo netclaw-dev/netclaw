@@ -19,6 +19,19 @@ public class ShellToolStreamingTests
 
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
+    private static ToolExecutionContext CreateExecutionContext()
+    {
+        var sessionDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "netclaw-shell-stream-tests",
+            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(sessionDirectory);
+        return TestToolExecutionContext.CreateBound(
+            "test/shell-stream",
+            sessionDirectory,
+            TrustAudience.Personal);
+    }
+
     private static ShellTool CreateTool(ToolConfig? config = null)
     {
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
@@ -59,7 +72,7 @@ public class ShellToolStreamingTests
         var activities = new List<ToolActivityUpdate>();
         ToolCompletedUpdate? completion = null;
 
-        await foreach (var update in tool.ExecuteStreamAsync(args, context ?? TestToolExecutionContext.CreateUnbound(), ct))
+        await foreach (var update in tool.ExecuteStreamAsync(args, context ?? CreateExecutionContext(), ct))
         {
             switch (update)
             {
@@ -222,7 +235,7 @@ public class ShellToolStreamingTests
     {
         var args = ToolInput.Create("Command", TestShellEnvironment.TwoOutputLinesCommand);
 
-        var nonStreaming = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
+        var nonStreaming = await _tool.ExecuteAsync(args, CreateExecutionContext(), TestContext.Current.CancellationToken);
         var (_, completion) = await CollectStreamAsync(_tool, args, ct: TestContext.Current.CancellationToken);
 
         Assert.NotNull(completion);

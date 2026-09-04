@@ -189,10 +189,18 @@ public static class PathUtility
     ///
     /// Errors reading attributes are conservatively treated as a positive
     /// detection: if we cannot determine whether a segment is a symlink, we
-    /// assume it is.
+    /// assume it is. Set <paramref name="includeRoot"/> when the root itself is
+    /// an authority boundary. Leave it false for a root that was already
+    /// resolved from an accepted platform alias.
     /// </summary>
-    public static bool ContainsSymlinkSegment(string allowedRoot, string fullPath)
+    public static bool ContainsSymlinkSegment(
+        string allowedRoot,
+        string fullPath,
+        bool includeRoot = false)
     {
+        if (includeRoot && IsReparsePointOrUnreadable(allowedRoot))
+            return true;
+
         var relativePath = Path.GetRelativePath(allowedRoot, fullPath);
         if (string.IsNullOrWhiteSpace(relativePath) || relativePath == ".")
             return false;
@@ -208,22 +216,29 @@ public static class PathUtility
             if (!File.Exists(currentPath) && !Directory.Exists(currentPath))
                 continue;
 
-            try
-            {
-                var attributes = File.GetAttributes(currentPath);
-                if ((attributes & FileAttributes.ReparsePoint) != 0)
-                    return true;
-            }
-            catch (IOException)
-            {
+            if (IsReparsePointOrUnreadable(currentPath))
                 return true;
-            }
-            catch (UnauthorizedAccessException)
-            {
-                return true;
-            }
         }
 
         return false;
+    }
+
+    private static bool IsReparsePointOrUnreadable(string path)
+    {
+        if (!File.Exists(path) && !Directory.Exists(path))
+            return false;
+
+        try
+        {
+            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+        }
+        catch (IOException)
+        {
+            return true;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            return true;
+        }
     }
 }

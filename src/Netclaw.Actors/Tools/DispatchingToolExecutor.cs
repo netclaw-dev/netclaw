@@ -19,7 +19,7 @@ namespace Netclaw.Actors.Tools;
 /// Routes <see cref="FunctionCallContent"/> to the correct tool by name via the <see cref="ToolRegistry"/>.
 /// Logs every tool execution with name, duration, and result preview.
 /// </summary>
-public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetryAwareExecutor
+public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvider
 {
     private readonly ToolRegistry _registry;
     private readonly ToolAccessPolicy _policy;
@@ -369,7 +369,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (exception is OperationCanceledException && callerToken.IsCancellationRequested)
             return;
 
-        if (exception is ToolApprovalRequiredException or ToolAgentCorrectionRequiredException)
+        if (exception is ToolApprovalRequiredException or ToolCorrectionRequiredException)
             return;
 
         var category = exception switch
@@ -414,7 +414,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
 
         if (string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal))
         {
-            ShellPolicyAuthorization shellAuthorization;
+            (ToolAuthorizationDecision Decision, ShellCommandAnalysis? AuthorizedAnalysis) shellAuthorization;
             try
             {
                 var preflight = _policy.AuthorizeShellPreflight(
@@ -441,9 +441,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                         context,
                         preflight,
                         ct)
-                    : new ShellPolicyAuthorization(
+                    : (
                         ToolAuthorizationDecision.RequireAgentCorrection(correction),
-                        authorizedAnalysis: null);
+                        null);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -493,8 +493,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                 if (storeUnavailableForMiss)
                 {
                     accessDecision = IsOneTimeApprovalSatisfied(context, toolCall, approvalContext)
-                        ? ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval)
-                        : ToolAccessDecision.Deny("approval_store_unavailable");
+                        ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
+                        : ToolAuthorizationDecision.Deny("approval_store_unavailable");
                 }
                 else if (approvalCheck.UnapprovedPatterns.Count == 0
                          && !hasInconsistentCandidateChecks)
@@ -502,11 +502,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
                     context.Approval.ApplyDecision(
                         "PreviouslyApproved",
                         FormatApprovalMatches(approvalCheck.ApprovedMatches));
-                    accessDecision = ToolAccessDecision.Allow(ToolAllowReason.StoredApproval);
+                    accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval);
                 }
                 else
                 {
-                    accessDecision = ToolAccessDecision.RequiresApproval(approvalContext);
+                    accessDecision = ToolAuthorizationDecision.RequiresApproval(
+                        approvalContext,
+                        accessDecision.AgentCorrection);
                 }
             }
         }
@@ -514,7 +516,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         if (accessDecision.NeedsApproval
             && IsOneTimeApprovalSatisfied(context, toolCall, accessDecision.ApprovalContext))
         {
-            accessDecision = ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval);
+            accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
         }
 
         var authorizationDecision = CompleteAuthorizationDecision(accessDecision, approvalMatches);
@@ -522,12 +524,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         return (authorizationDecision, null);
     }
 
-    void ISessionScratchRetryAwareExecutor.MarkSessionScratchRetry(
-        ToolExecutionContext context,
-        ToolAgentCorrection.SessionScratchSuggested correction)
-        => _policy.MarkSessionScratchRetry(context, correction);
-
-    ApprovalShell ISessionScratchRetryAwareExecutor.Shell => _policy.Shell;
+    ApprovalShell IApprovalShellProvider.Shell => _policy.Shell;
 
     private async Task<(INetclawTool Tool, ShellCommandAnalysis? AuthorizedAnalysis)>
         GetAuthorizedToolAsync(
@@ -542,12 +539,13 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         {
             throw new ToolApprovalRequiredException(
                 decision.ApprovalContext
-                ?? throw new InvalidOperationException("Approval decision missing approval context."));
+                ?? throw new InvalidOperationException("Approval decision missing approval context."),
+                decision.AgentCorrection);
         }
 
         if (decision.Outcome is ToolAuthorizationOutcome.RequiresAgentCorrection)
         {
-            throw new ToolAgentCorrectionRequiredException(
+            throw new ToolCorrectionRequiredException(
                 decision.AgentCorrection
                 ?? throw new InvalidOperationException("Agent correction decision missing correction facts."));
         }
@@ -556,7 +554,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
         {
             throw new ToolAccessDeniedException(
                 decision.DenyReason
-                ?? throw new InvalidOperationException("Denied decision missing a deny reason."));
+                ?? throw new InvalidOperationException("Denied decision missing a deny reason."),
+                decision.DenyMessage);
         }
 
         var tool = _registry.GetByName(toolCall.Name)
@@ -566,9 +565,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, ISessionScratchRetr
     }
 
     private static ToolAuthorizationDecision CompleteAuthorizationDecision(
-        ToolAccessDecision accessDecision,
+        ToolAuthorizationDecision accessDecision,
         IReadOnlyList<ToolApprovalMatch> approvalMatches)
-        => ToolAuthorizationDecision.From(accessDecision, approvalMatches);
+        => accessDecision.WithApprovalMatches(approvalMatches);
 
     private static bool TryGetExactUnapprovedCandidates(
         ToolApprovalCheckResult result,

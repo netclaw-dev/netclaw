@@ -38,15 +38,10 @@ public class ToolArgumentValidatorTests
         };
 
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            pathPolicy,
-            commandPolicy,
-            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
         _executor = new DispatchingToolExecutor(
             registry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 config,
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
@@ -324,7 +319,7 @@ public class ToolArgumentValidatorTests
         registry.Register(new McpToolAdapter(fakeTool, "memorizer", "store"));
         var executor = new DispatchingToolExecutor(
             registry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
@@ -367,7 +362,7 @@ public class ToolArgumentValidatorTests
         registry.Register(new McpToolAdapter(fakeTool, "memorizer", "store"));
         var executor = new DispatchingToolExecutor(
             registry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,

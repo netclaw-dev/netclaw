@@ -559,20 +559,20 @@ proximity restriction is lifted.
 ### Requirement: Working directory declaration stays scoped
 
 The system SHALL provide a `set_working_directory` first-party tool that sets
-the session's project root. Its target SHALL be resolved through the read-access
-policy WITHOUT interactive Personal shell-equivalent reach: the working
-directory widens the shell safe-verb auto-approve zone and loads project
-identity files into the system prompt, so it SHALL be clamped to the autonomous
-zone (session directory, project directory, and global read roots) in every
-audience and mode.
+the session's project root. The path access decision SHALL use the read file
+operation without interactive Personal shell-equivalent reach. A successful
+declaration adds the project directory to the trusted roots that reviewed
+safe policy uses. It also loads project identity files into the system
+prompt. Thus, every audience and mode SHALL limit declarations to the session
+directory, project directory, and configured global read roots.
 
 #### Scenario: Interactive Personal session cannot widen the working directory
 
 - **GIVEN** an interactive Personal session requests a directory outside the
-  autonomous zone
+  trusted roots permitted for project declaration
 - **WHEN** the agent invokes `set_working_directory`
 - **THEN** the project directory remains unchanged
-- **AND** the tool reports that the directory is outside the allowed roots
+- **AND** the tool reports that the directory is outside the trusted roots
 
 ### Requirement: File read tool bounds its read for memory safety
 
@@ -642,7 +642,7 @@ A tool-enabled session SHALL have authorization, approval, logging, and dispatch
 #### Scenario: Interactive approval cannot disagree with its bridge
 
 - **GIVEN** a tool invocation has no admitted interactive approval bridge
-- **WHEN** path and shell policies evaluate autonomous trust-zone restrictions
+- **WHEN** path and shell policies evaluate path access for an unattended run
 - **THEN** the invocation is represented as non-interactive
 - **AND** no nullable support flag can bypass those restrictions
 

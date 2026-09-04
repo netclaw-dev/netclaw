@@ -815,7 +815,7 @@ public sealed class McpClientManagerLifecycleTests
             ServerName.Value,
             toolName,
             null,
-            TestToolExecutionContext.CreateBound(
+            TestToolExecutionContext.CreateBoundWithoutApproval(
                 "slack/thread-1",
                 null,
                 TrustAudience.Team,

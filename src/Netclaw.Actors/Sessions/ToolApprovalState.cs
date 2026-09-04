@@ -43,7 +43,7 @@ internal sealed record ToolInteractionRequestDispatch(
     SessionProtocol.ToolInteractionRequest Request,
     bool PersistApprovalState) : INoSerializationVerificationNeeded
 {
-    internal string? SessionScratchDirectory { get; init; }
+    internal string? ManagedTemporaryDirectory { get; init; }
 }
 
 internal enum ApprovalTurnPhase
@@ -59,7 +59,7 @@ internal enum ApprovalTurnPhase
 internal sealed record ApprovalRedrivePlan(
     IReadOnlyDictionary<string, IReadOnlyList<string>>? OneTimeApprovalPreSeed,
     IReadOnlyDictionary<string, ApprovalDecision>? DecisionOverride,
-    IReadOnlyDictionary<string, string>? SessionScratchDenialDirectories,
+    IReadOnlyDictionary<string, string>? ManagedTemporaryDenialDirectories,
     IReadOnlyDictionary<string, AuthorizationAttemptId>? AuthorizationAttemptIds);
 
 internal abstract record ToolApprovalCallState(PendingToolInteraction Pending);
@@ -234,7 +234,7 @@ internal sealed class ToolApprovalState
     {
         private readonly Dictionary<string, IReadOnlyList<string>> _preSeed = new(StringComparer.Ordinal);
         private readonly Dictionary<string, ApprovalDecision> _decisionOverride = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, string> _sessionScratchDenialDirectories = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _managedTemporaryDenialDirectories = new(StringComparer.Ordinal);
         private readonly Dictionary<string, AuthorizationAttemptId> _authorizationAttemptIds = new(StringComparer.Ordinal);
 
         public void Add(string callId, ResolvedToolApproval resolved)
@@ -255,9 +255,9 @@ internal sealed class ToolApprovalState
 
             _decisionOverride[callId] = resolved.Decision;
             if (resolved.Decision == ApprovalDecision.Denied
-                && request.SessionScratchDirectory is { Length: > 0 } scratchDirectory)
+                && request.ManagedTemporaryDirectory is { Length: > 0 } managedTemporaryDirectory)
             {
-                _sessionScratchDenialDirectories[callId] = scratchDirectory;
+                _managedTemporaryDenialDirectories[callId] = managedTemporaryDirectory;
             }
         }
 
@@ -265,7 +265,7 @@ internal sealed class ToolApprovalState
             => new(
                 _preSeed.Count == 0 ? null : _preSeed,
                 _decisionOverride.Count == 0 ? null : _decisionOverride,
-                _sessionScratchDenialDirectories.Count == 0 ? null : _sessionScratchDenialDirectories,
+                _managedTemporaryDenialDirectories.Count == 0 ? null : _managedTemporaryDenialDirectories,
                 _authorizationAttemptIds.Count == 0 ? null : _authorizationAttemptIds);
     }
 }

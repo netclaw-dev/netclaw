@@ -76,7 +76,7 @@ commands must run without approval.
 ### Headless mode
 
 Headless mode (`netclaw chat -p "prompt"`) cannot ask for approval — there is no
-interactive user. Netclaw still applies hard deny, path policy, trust zones, and
+interactive user. Netclaw still applies hard deny, path access decisions, and
 stored grants. If any candidate remains uncovered and would need a
 prompt, the call is denied. The reviewed-safe catalog alone does not grant a
 headless call; approval-exempt side effects can still pass. For unrestricted
@@ -129,8 +129,8 @@ When the agent calls a tool in `Approval` mode:
    - **Deny** — the call returns "Command denied by user" to the LLM
 
 The policy can remove reusable choices when a command has no clean phrase. It
-also removes `Always here` for a shallow root, session scratch, and non-shell
-tools that have no directory scope. See [When the prompt offers fewer
+also removes `Always here` for a shallow root, a session-owned directory, and
+non-shell tools that have no directory scope. See [When the prompt offers fewer
 buttons](#when-the-prompt-offers-fewer-buttons).
 
 ### When the prompt offers fewer buttons
@@ -192,10 +192,10 @@ path-scoped patterns (for example,
 
 ### Reviewed diagnostic phrases skip the prompt
 
-In an interactive session, reviewed diagnostic phrases auto-run inside a
-trusted zone. Personal and Team use `session_dir` or `project_dir`. In a
-headless session, this catalog does not grant authority. The call still needs
-an exact one-time, session, or persistent grant. The bundled safe-policy
+In an interactive session, reviewed diagnostic phrases can auto-run below an
+applicable trusted root. Personal and Team use `session_dir` or `project_dir`.
+In a headless session, this catalog does not grant authority. The call still
+needs an exact one-time, session, or persistent grant. The bundled safe-policy
 catalogs (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover
 file readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
 `Get-Content`, and `Select-String` on PowerShell), system/info phrases
@@ -203,16 +203,17 @@ file readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
 (`git status`, `git rev-parse`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
 command-prefixing verbs (`env`, `xargs`, `sudo`), network-writing verbs
 (`gh api`, `curl`), and environment/process-inspection verbs (`printenv`,
-`ps`) are never auto-allowed — the trusted-zone gate scopes verbs that act on
-a path, so it cannot contain a verb that dumps the process environment or the
-process table. Each entry stores canonical shell tokens and a proof category.
+`ps`) are never auto-allowed. The path access decision limits where these verbs
+can act. Thus, the catalog cannot contain a verb that dumps the process
+environment or process table. Each entry stores canonical shell tokens and a
+proof category.
 `ReviewedDiagnostic` classifies the shell-authored invocation. It does not
 claim that Netclaw sandboxes the executable.
 
 The reviewed phrase cannot accept an authored helper command, output file,
 destructive state request, or remote mutation. Netclaw also rejects an
 argument before the phrase completes. A possible local path must stay beneath
-the eligible safe root.
+an applicable trusted root.
 
 Ambient executable configuration is outside this claim. Tool-private cache or
 metadata refresh is also outside this claim. The same limit applies to paths
@@ -257,7 +258,7 @@ The important value-domain rules are:
   repository slug, URL segment, image name, or other data, so shape alone never
   creates filesystem authority.
 - `IntegerRange` and `Concatenation` can prove bounded scalar data. They cannot
-  select an executable, justify a redirect, or create path authority.
+  select an executable, justify a redirect, or grant file access.
 - `Unknown`, incomplete control flow, a dynamic executable, an unresolved path,
   or an unresolved redirect stays strict.
 

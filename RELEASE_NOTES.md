@@ -1,5 +1,25 @@
 # NetClaw Release Notes
 
+## Unreleased
+
+- New sessions keep work files, attachment staging, artifacts, temporary
+  files, worktrees, and logs in one versioned storage envelope.
+- Each parent and child process receives its own managed temporary directory
+  through standard temporary environment variables.
+- The current session envelope and configured trusted roots feed ordinary
+  file and shell authority. Audience and operation permissions still apply.
+- Successful `spawn_agent` results return child run, log, and artifact paths.
+- Session context announces `worktree_dir`. Agents compose existing shell and
+  working-directory tools for Git worktrees.
+- Authorized structured file reads can inspect `netclaw.json`. Secret stores
+  and control-plane state remain protected.
+
+Existing sessions keep their current paths. Netclaw does not move or rename
+their data.
+
+> **Downgrade note:** A pre-feature binary cannot resume a session that has a
+> versioned storage binding.
+
 ## 0.27.0-beta.2 (2026-08-30)
 
 Follow-up beta to 0.27.0-beta.1. Slack replies now render with Slack's own Markdown blocks and tables, Socket Mode connections are supervised and self-heal, MCP auth failures stop firing false alarms, and a full reset no longer deletes the binaries it resets from.
@@ -49,7 +69,6 @@ A new `Netclaw.Embeddings` assembly gives every cross-session memory a local emb
 ### Small fixes
 
 - Fixed release-note parsing so version metadata resolves cleanly ([#2067](https://github.com/netclaw-dev/netclaw/pull/2067)).
-
 > **Upgrade note:** embeddings default to enabled. Expect roughly 800 MB total RSS on the reference configuration, and plan for model access on first start. Operators can disable embeddings or pre-provision the models for offline use.
 
 ## 0.26.0 (2026-08-26)

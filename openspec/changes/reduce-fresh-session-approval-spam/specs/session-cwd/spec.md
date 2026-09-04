@@ -1,11 +1,11 @@
 ## ADDED Requirements
 
-### Requirement: Project work takes precedence over session scratch in guidance
+### Requirement: Project work takes precedence over managed temporary work
 
 Parent and subagent guidance SHALL use declared project scope for work that
-belongs to that project. Session scratch SHALL be recommended only for
-disposable work outside a project. A successful project declaration SHALL not
-cause later project commands to select `session_dir` as an explicit
+belongs to that project. The managed temporary directory SHALL hold disposable
+work outside a project. A successful project declaration SHALL not cause later
+project commands to select `temp_dir` as an explicit
 `WorkingDirectory`. This guidance SHALL NOT change runtime cwd resolution or
 grant shell authority.
 
@@ -42,7 +42,7 @@ grant shell authority.
 - **GIVEN** a subagent successfully declares a different user-named project
 - **WHEN** it runs later shell commands for that project
 - **THEN** guidance uses the child `project_dir`
-- **AND** it does not pass the parent session scratch as `WorkingDirectory`
+- **AND** it does not pass the parent `temp_dir` as `WorkingDirectory`
 - **AND** it does not add an inline directory change to reach the project
 
 #### Scenario: One call in a child directory uses typed scope
@@ -54,15 +54,15 @@ grant shell authority.
 - **AND** `WorkingDirectory` contains the exact child directory
 - **AND** the persistent project root does not change
 
-#### Scenario: Disposable work outside a project uses session scratch
+#### Scenario: Disposable work outside a project uses managed temporary storage
 
 - **GIVEN** a task creates disposable artifacts that do not belong to a project
-- **AND** the audience can see its private session directory
+- **AND** the audience can see its managed temporary directory
 - **AND** the task does not require a platform temporary path
 - **WHEN** the agent selects a working directory
-- **THEN** guidance selects `session_dir`
+- **THEN** guidance selects `temp_dir`
 - **AND** writable artifacts do not use platform temporary storage
-- **AND** it does not declare session scratch as a project
+- **AND** it does not declare the managed temporary directory as a project
 
 #### Scenario: Requested directory transition remains authored behavior
 
@@ -75,7 +75,7 @@ grant shell authority.
 
 - **GIVEN** an agent successfully declares a project
 - **WHEN** it authors a prompt-worthy command in that project
-- **THEN** the declaration supplies only the safe-space root
+- **THEN** the declaration supplies only a trusted root
 - **AND** the command still needs reviewed-safe, one-time, session, or stored authority
 
 ### Requirement: Parent and child contexts share one directory-selection order
@@ -83,7 +83,7 @@ grant shell authority.
 Personal and Team parent and subagent contexts SHALL state the same directory
 selection order. Project work SHALL use `project_dir`. A named one-call child
 scope SHALL use typed `WorkingDirectory`. Disposable non-project work SHALL use
-`session_dir`. An inline directory change SHALL remain only for requested
+`temp_dir`. An inline directory change SHALL remain only for requested
 directory behavior. Public context SHALL not reveal a private project or
 session path.
 
@@ -91,7 +91,7 @@ session path.
 
 - **GIVEN** a Personal or Team parent context has project and session paths
 - **WHEN** the context is assembled
-- **THEN** it distinguishes project work from disposable scratch work
+- **THEN** it distinguishes project work from managed temporary work
 - **AND** it distinguishes one-call typed scope from persistent project scope
 
 #### Scenario: Child context contains the complete order
@@ -99,14 +99,14 @@ session path.
 - **GIVEN** a Personal or Team child receives project and session context
 - **WHEN** its first model message is assembled
 - **THEN** it receives the same directory-selection order as the parent
-- **AND** the session rule does not use an unconditional scratch instruction
+- **AND** the session rule does not use an unconditional temporary-directory instruction
 
-#### Scenario: Project refresh does not duplicate scratch guidance
+#### Scenario: Project refresh does not duplicate temporary guidance
 
-- **GIVEN** a child context already contains one session-scratch rule
+- **GIVEN** a child context already contains one managed-temporary-directory rule
 - **WHEN** `set_working_directory` refreshes child project context
 - **THEN** the next prompt contains the updated `project_dir`
-- **AND** it contains exactly one session-scratch rule
+- **AND** it contains exactly one managed-temporary-directory rule
 - **AND** the directory-selection order remains unchanged
 
 #### Scenario: Public context stays redacted

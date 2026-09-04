@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 1,
+  "phase": "pre-change",
+  "acceptanceRole": "behavioral-evidence-only",
+  "binary": {
+    "version": "0.27.0-beta.1",
+    "commit": "26370df23728c204fdefe1ebc67ccf93f40ae831",
+    "imageDigest": "sha256:d9cb41fd9fd8d462ffd2199d9b5eddf39ff3b791bcff0ae8b67ff8b0cfa517fa"
+  },
+  "configuration": {
+    "providerType": "openai-compatible",
+    "model": "configured-eval-model",
+    "runsPerCase": 5,
+    "threshold": 0.8,
+    "timeoutSeconds": 180,
+    "providerEndpointRecorded": false
+  },
+  "sourceLock": {
+    "file": "evals/run-evals.sh",
+    "commit": "26370df23728c204fdefe1ebc67ccf93f40ae831",
+    "description": "The prompt and assertion hashes use exact source ranges at this commit."
+  },
+  "cases": [
+    {
+      "name": "subagent_session_scratch_disposable",
+      "passedRuns": 0,
+      "totalRuns": 5,
+      "promptSha256": "b727980820ec951585f9877d44796b0d5dba7446ce8bb1d646d6b3d55db5a492",
+      "assertionSha256": "132688d993a6f87f78eec138073ea690c9e943409318f9a950bc97299cb24d9f"
+    },
+    {
+      "name": "approval_session_scratch_disposable",
+      "passedRuns": 4,
+      "totalRuns": 5,
+      "promptSha256": "8b761921edb9a009e08b495b293192075b25ba556cd411c1616f17059adf76ca",
+      "assertionSha256": "e48ec2427a61d331112746c03a1cef445f9305663e137659f5b1da8a746d93e1"
+    },
+    {
+      "name": "approval_shell_working_directory_argument",
+      "passedRuns": 5,
+      "totalRuns": 5,
+      "promptSha256": "9ec30cec19c298a183d92bbbd9b0fdd7b1e695102e59d35e1e3cdc70fc62881a",
+      "assertionSha256": "f238e5097b2e64ff9183d08c63fa51f3e525ad0a1ecb7066936d028037925df2"
+    },
+    {
+      "name": "approval_inline_cd_semantics",
+      "passedRuns": 5,
+      "totalRuns": 5,
+      "promptSha256": "5bf7bc66f7d0705a5a883b572d5bd6efe9eaa5bd02e868a85620d4bd20dfd726",
+      "assertionSha256": "085c7f27454544858fd81fe24ec8f321d9e795500c12a995e92478d63c4ca3d9"
+    },
+    {
+      "name": "approval_natural_directory_change",
+      "passedRuns": 4,
+      "totalRuns": 5,
+      "promptSha256": "b00ec03569be86ba3556ac1945f76cff79dde37203b569f4eba758544bda2908",
+      "assertionSha256": "427ecaae298de3df7c4c9c5e3ce70c2da404177bb03f1d4be17c79a2afabdab6"
+    }
+  ]
+}

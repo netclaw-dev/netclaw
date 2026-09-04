@@ -557,7 +557,7 @@ global entries. Unknown or synthetic-only scope SHALL omit `Always here`.
 - **THEN** folder coverage fails
 - **AND** protected-path policy denies when applicable
 
-### Requirement: Reviewed diagnostic auto-allow in declared safe spaces
+### Requirement: Reviewed diagnostic auto-allow below trusted roots
 
 The system SHALL load an embedded immutable per-platform policy catalog.
 `ReviewedDiagnostic` SHALL classify only the shell-authored invocation.
@@ -573,11 +573,12 @@ Redirects, parser-owned filesystem values, provider paths, and unknown shell
 expansions SHALL remain separate strict effects. Bounded shell-local output
 variables MAY remain eligible. Any unresolved later use SHALL remain strict.
 
-Safe policy SHALL refine only uncovered candidates. It SHALL require reviewed
-phrase coverage, an allowed real or eligible intent scope, no symlink segment,
-no writing redirect, and no unknown explicit path fact. Hard deny and protected
-paths SHALL run first. Personal and Team safe roots SHALL be session directory
-plus declared project directory. Public SHALL use session directory only.
+Reviewed-safe policy SHALL refine only uncovered candidates. It SHALL require
+reviewed phrase coverage and an allowed real or eligible intent scope. It SHALL
+also require no symlink segment, writing redirect, or unknown explicit path
+fact. Hard deny and protected paths SHALL run first. Personal and Team SHALL
+use the session and declared project trusted roots. Public SHALL use the
+session trusted root only.
 
 `find`, `awk`, `rg`, and `sort` SHALL not be reviewed-safe. Production policy
 code SHALL contain no executable-specific flag exceptions. PowerShell provider
@@ -591,7 +592,8 @@ An authored argument before the matched phrase completes SHALL prevent
 reviewed-safe coverage. The check SHALL use parser-owned element order.
 
 A known `AuthoredPathShape` SHALL be conservative negative evidence only.
-Every represented authored value SHALL resolve beneath an eligible safe root.
+Every represented authored value SHALL resolve beneath an applicable trusted
+root.
 Unknown or unsupported domains SHALL prevent reviewed-safe coverage. A lexical
 path shape SHALL NOT create filesystem authority.
 
@@ -606,7 +608,7 @@ unsupported, or contradictory domains SHALL keep reviewed-safe policy strict.
 - **GIVEN** `head` is reviewed safe
 - **AND** its real scope is under a Personal project root
 - **WHEN** every earlier stage passes
-- **THEN** safe policy covers that candidate
+- **THEN** reviewed-safe policy covers that candidate
 
 #### Scenario: Global argument before a reviewed phrase stays strict
 
@@ -615,7 +617,7 @@ unsupported, or contradictory domains SHALL keep reviewed-safe policy strict.
 - **THEN** reviewed-safe policy does not cover the candidate
 - **AND** Netclaw does not parse Git's private option grammar
 
-#### Scenario: Hidden option path outside the safe root stays strict
+#### Scenario: Hidden option path outside trusted roots stays strict
 
 - **GIVEN** `grep` is a reviewed diagnostic phrase
 - **AND** ShellSyntaxTree marks `/tmp/patterns` with a POSIX path shape
@@ -623,10 +625,10 @@ unsupported, or contradictory domains SHALL keep reviewed-safe policy strict.
 - **THEN** reviewed-safe policy does not cover the candidate
 - **AND** lexical path shape creates no new authority
 
-#### Scenario: Path-shaped data beneath the safe root can remain eligible
+#### Scenario: Path-shaped data beneath a trusted root can remain eligible
 
 - **GIVEN** a reviewed diagnostic receives `example/project` as data
-- **AND** its possible local-path interpretation stays beneath the safe root
+- **AND** its possible local-path interpretation stays beneath a trusted root
 - **WHEN** all stronger shell facts pass
 - **THEN** lexical path shape alone does not reject the candidate
 
@@ -689,12 +691,12 @@ SHALL use built-in `web_fetch`, not a shell HTTP client.
 - **AND** shell HTTP clients are not used for either operation
 - **AND** it does not classify web search as local shell work
 
-#### Scenario: Exact path scope does not declare a safe root
+#### Scenario: Exact path scope does not declare a trusted root
 
 - **GIVEN** an agent has no declared project root for a user-named project
 - **WHEN** a shell candidate contains an absolute path beneath that project
 - **THEN** the path can provide the candidate's exact policy scope
-- **AND** it does not add that project as a safe-space root
+- **AND** it does not add that project as a trusted root
 - **AND** model guidance tells the agent to call `set_working_directory` before
   the first shell or file tool call in that project
 - **AND** guidance declares a named path before probing it with another tool
@@ -781,19 +783,19 @@ SHALL use built-in `web_fetch`, not a shell HTTP client.
 #### Scenario: File redirect remains separate
 
 - **WHEN** reviewed `head` writes through a shell redirect
-- **THEN** safe policy does not cover the occurrence
+- **THEN** reviewed-safe policy does not cover the occurrence
 - **AND** redirect path policy still applies
 
 #### Scenario: Public project directory is not safe
 
 - **GIVEN** a Public session has a project directory
 - **WHEN** a reviewed diagnostic candidate runs only there
-- **THEN** safe policy does not cover it
+- **THEN** reviewed-safe policy does not cover it
 
 #### Scenario: PowerShell environment provider stays strict
 
 - **WHEN** native PowerShell submits `Get-Content Env:SECRET`
-- **THEN** the provider is not treated as filesystem safe space
+- **THEN** the provider does not create a trusted root
 - **AND** the call requires explicit authority or denial
 
 ### Requirement: Five-button approval prompt with verb-and-directory framing
@@ -1251,7 +1253,7 @@ Preflight SHALL snapshot the existing `ToolExecutionContext` and exact
 SHALL remain `OneTimeApprovalKeys` binding filtered phrase and effective
 directory. Preflight SHALL build one canonical
 `ShellCommandAnalysis`, apply hard deny and protected paths, resolve approval
-mode, build candidates, and preserve the existing noninteractive trust-zone
+mode, build candidates, and preserve the existing noninteractive path access
 gate. If preflight is not terminal, `DispatchingToolExecutor` SHALL send
 exactly one typed batch request to `ToolApprovalActor`.
 
@@ -1334,13 +1336,13 @@ a fact that no current type represents.
 - **THEN** it returns terminal deny
 - **AND** the executor sends no grant-match request
 
-#### Scenario: Noninteractive trust zone precedes approval matching
+#### Scenario: Noninteractive path access precedes approval matching
 
 - **GIVEN** interactive approval is unavailable
 - **AND** a stored grant covers the command phrase
-- **WHEN** canonical path facts fall outside the configured trust zone
+- **WHEN** canonical paths fall outside the configured trusted roots
 - **THEN** preflight returns terminal deny
-- **AND** neither the stored grant nor safe policy can override it
+- **AND** neither the stored grant nor reviewed-safe policy can override it
 
 #### Scenario: Recovery re-evaluates the original request
 
@@ -1574,8 +1576,8 @@ Fixture defaults SHALL explicitly provide:
 
 - tool name, audience, and approval mode;
 - interactive capability;
-- session identity and safe root;
-- project safe root and inherited cwd;
+- session identity and session trusted root;
+- project trusted root and inherited cwd;
 - persistent-store status; and
 - a fixed clock.
 
@@ -1677,42 +1679,54 @@ that outcome. Evidence classifications SHALL NOT grant authority.
 - **THEN** it finds no local username, private repository, channel, thread,
   host, email, token, or secret
 
-### Requirement: Delegated scratch alignment is verified without prescribing the answer
+### Requirement: Delegated managed-temp alignment is measured without prescribing the answer
 
-The headless eval suite SHALL include delegated disposable shell work in which the parent request and child task do not name `session_dir`, a platform temporary path, a working directory, or `set_working_directory`. The child SHALL pass its announced private session directory as the exact `WorkingDirectory` of each disposable shell call. The eval SHALL reject omission and inspect the child tool calls and completion rather than relying on response prose.
+The headless eval suite SHALL include delegated disposable work. The parent
+request and child task SHALL NOT name `session_dir`, `temp_dir`, a platform
+temporary path, a working directory, or `set_working_directory`. The runtime
+SHALL inject the child's managed temporary environment. The eval SHALL inspect
+the child tool calls, generated paths, and completion. It SHALL NOT rely on
+response prose.
 
-This eval SHALL measure model alignment only. It SHALL NOT claim that session scratch grants authority or that a headless run exercised interactive approval.
+This eval SHALL measure model alignment only. It SHALL NOT prove environment
+injection, trusted-root containment, path authority, or interactive approval.
 
-#### Scenario: Delegated disposable work selects session scratch
+#### Scenario: Example - delegated work uses standard temp behavior
 
-- **GIVEN** a Personal headless child receives its exact private session directory in context
-- **AND** its task requests disposable multi-command diagnostic work without prescribing a path
-- **WHEN** the child authors shell calls
-- **THEN** every shell call passes the announced session directory as its exact `WorkingDirectory`
-- **AND** no call uses the shared platform temporary root
-- **AND** the child completes successfully with the expected diagnostic result
+- **GIVEN** a Personal headless child receives its managed paths and temporary
+  environment
+- **AND** its task requests disposable diagnostic work without a prescribed
+  path
+- **WHEN** the child creates temporary output
+- **THEN** the observed output path is below the child's `temp_dir`
+- **AND** the child does not author an environment export prefix
+- **AND** the child completes with the expected diagnostic result
 
-#### Scenario: Parent task cannot supply the scratch answer
+#### Scenario: Counterexample - parent task cannot supply the temp answer
 
-- **GIVEN** the delegated scratch alignment eval
+- **GIVEN** the delegated managed-temp eval
 - **WHEN** the parent calls `spawn_agent`
-- **THEN** the child task contains no session path, platform temporary path, cwd instruction, or project declaration instruction
+- **THEN** the child task contains no managed path, platform temporary path,
+  cwd instruction, environment-variable instruction, or project declaration
+  instruction
 - **AND** the eval fails if those hints appear
 
-#### Scenario: Guidance does not confer headless authority
+#### Scenario: Counterexample - guidance does not confer headless authority
 
-- **GIVEN** a headless child knows its private session directory
-- **WHEN** it authors a shell call that lacks existing noninteractive authority
+- **GIVEN** a headless child knows its managed paths
+- **WHEN** it authors a call that lacks existing noninteractive authority
 - **THEN** ordinary headless policy denies the call
-- **AND** knowledge of `session_dir` does not create reviewed-safe, one-time, session, folder, or persistent coverage
+- **AND** path knowledge does not create reviewed-safe, one-time, session,
+  folder, or persistent coverage
 
-#### Scenario: Explicit platform temporary task remains strict
+#### Scenario: Counterexample - explicit platform temp remains strict
 
-- **GIVEN** a headless child task explicitly requires the platform temporary directory
+- **GIVEN** a headless child task explicitly requires the platform temporary
+  directory
 - **WHEN** the child authors that exact path
 - **THEN** Netclaw preserves the authored path
 - **AND** existing noninteractive authorization decides the outcome
-- **AND** the eval does not treat path preservation as a scratch-guidance failure
+- **AND** the eval does not treat path preservation as an alignment failure
 
 ### Requirement: Version 3 approval store wire contract
 
@@ -2049,23 +2063,23 @@ receiver through Netclaw's established recursive analysis.
 Netclaw SHALL evaluate every other redirect on the occurrence independently.
 Stored approval SHALL NOT bypass an unresolved stdin redirect.
 
-#### Scenario: Exact here string to cat can use the trusted scope
+#### Scenario: Exact here string to cat can use reviewed-safe policy
 
-- **GIVEN** an argument-free `cat` command in a trusted project directory
+- **GIVEN** an argument-free `cat` command below an applicable trusted root
 - **WHEN** its complete here string has exact data
 - **THEN** the stdin redirect does not require a separate approval
-- **AND** the normal safe-verb and path rules decide the command
+- **AND** reviewed-safe policy and the path access decision decide the command
 
-#### Scenario: Literal heredoc to cat can use the trusted scope
+#### Scenario: Literal heredoc to cat can use reviewed-safe policy
 
-- **GIVEN** an argument-free `cat` command in a trusted project directory
+- **GIVEN** an argument-free `cat` command below an applicable trusted root
 - **WHEN** its complete literal heredoc has complete authored body provenance
 - **THEN** the stdin redirect does not require a separate approval
-- **AND** the normal safe-verb and path rules decide the command
+- **AND** reviewed-safe policy and the path access decision decide the command
 
 #### Scenario: Unknown here-string data stays strict
 
-- **GIVEN** `cat <<< "$value"` in a trusted project directory
+- **GIVEN** `cat <<< "$value"` below an applicable trusted root
 - **WHEN** the parser cannot prove the data value
 - **THEN** Netclaw requires one-shot approval or deny
 - **AND** Netclaw offers no persistent approval candidate
@@ -2102,260 +2116,370 @@ current-shell brace groups.
 - **THEN** Netclaw does not authorize the visible safe verb
 - **AND** Netclaw offers no persistent approval candidate
 
-### Requirement: Platform temporary scope receives a session-scratch correction
+### Requirement: Explicit unmanaged temporary writes receive a managed-temp correction
 
-After tool exposure, hard deny, protected-path, and shell-analysis checks, the system SHALL return a typed session-scratch correction instead of immediately requesting approval when a Personal shell call explicitly authors the platform temporary root through the typed `WorkingDirectory` or an eligible Bash leading directory transition, every policy-relevant occurrence remains within that root, the session directory is a valid nonempty normalized path, interactive approval is available, and the ordinary result would otherwise request approval. The session directory SHALL NOT need to exist before the correction because replacement execution owns its creation. An inherited project, session, subagent, or default cwd SHALL NOT establish this authored intent. The correction SHALL identify the exact session directory and ask the agent to author a replacement call there. It SHALL execute nothing, record no grant, change no working context, and SHALL NOT rewrite the original call. Team and Public shell calls SHALL retain their existing earlier denial boundary and SHALL NOT receive this correction or the private session path.
+After tool exposure, hard deny, protected-path, and shell-analysis checks, the
+system SHALL return `UseManagedTemporaryDirectory` instead of immediately
+requesting approval when a Personal interactive tool call explicitly authors
+a write below the captured platform temporary root, the managed temporary
+directory is a valid nonempty normalized path, and the ordinary result would
+otherwise request approval. Team and Public calls SHALL retain their existing
+earlier policy boundary and SHALL NOT receive the private path.
 
-An internal immutable policy value SHALL capture the platform temporary root once when shell approval policy is constructed, using the resolved shell environment's path style. Matching SHALL use platform path rules and SHALL NOT use executable-specific parsing. This capability SHALL NOT add a public `ShellExecutionEnvironment` member.
+Initial eligible forms SHALL include a structured file write or edit, an exact
+shell redirect, an explicit shell `WorkingDirectory`, and a complete Bash
+leading directory transition. An inherited project, session, child, or default
+cwd SHALL NOT establish authored intent. Matching SHALL use generic path and
+shell-syntax facts. It SHALL NOT parse private executable option grammar.
 
-For Bash causal-directory advice, the system SHALL consume ShellSyntaxTree's exact leading `IsCwdAttribution` and `CommandOccurrence.WorkingDirectory` facts directly. Because the correction grants and executes nothing, it SHALL NOT require the parent causal-approval intent's pre-existing grant coverage. Actual execution, safe-policy coverage, and folder-grant decisions SHALL retain those authority preconditions, and Netclaw SHALL NOT add a second `cd` parser. Native PowerShell causal directory mutation remains ineligible.
+The correction SHALL name the exact managed temporary directory and ask the
+agent to author a replacement call. It SHALL execute nothing, record no grant,
+change no working context, and SHALL NOT rewrite the original call. The
+replacement SHALL pass every normal authorization stage.
 
-The system SHALL resolve the captured platform temporary root to its final filesystem target at startup. Every relevant cwd and authored filesystem path SHALL remain beneath that canonical target without a descendant symbolic link, junction, or reparse point. An attribute or target-resolution failure SHALL suppress the correction.
+`UseManagedTemporaryDirectory` SHALL replace the former `UseSessionScratch`
+remediation code. Correction and retry state SHALL carry the run's exact
+`temp_dir`; they SHALL NOT use `session_dir` as the replacement destination.
+Model-facing correction text SHALL use “managed temporary directory” and
+`temp_dir`. It SHALL NOT describe `session_dir` as session scratch.
 
-Platform-temp correction SHALL take precedence over undeclared-project correction. The undeclared-project correction SHALL treat the platform temporary root as ineligible, and one shell attempt SHALL return at most one correction.
+For Bash causal-directory advice, the system SHALL use the canonical parser's
+exact cwd-attribution and effective-directory facts. Native PowerShell causal
+directory mutation SHALL remain ineligible until the canonical parser exposes
+equivalent facts.
 
-#### Scenario: Explicit POSIX temporary working directory receives correction
+The system SHALL resolve the captured platform temporary root to its final
+filesystem target. Every relevant path SHALL remain below that target without
+a descendant symbolic link, junction, or reparse point. A resolution or
+attribute failure SHALL suppress the correction. Hard deny and protected-path
+results SHALL take precedence. One call SHALL return at most one correction.
 
-- **GIVEN** the platform temporary root is `/tmp`
-- **AND** the session directory is `/home/user/.netclaw/sessions/example`
+#### Scenario: Example - explicit POSIX temp write receives correction
+
+- **GIVEN** the captured platform temporary root is `/tmp`
+- **AND** the run's managed temporary directory is
+  `/srv/netclaw/sessions/example/tmp/parent`
 - **WHEN** a complete shell call requests `WorkingDirectory=/tmp`
-- **AND** ordinary policy would request user approval
-- **THEN** the agent receives a `SessionScratchSuggested` correction before the user approval surface
-- **AND** the correction names `/home/user/.netclaw/sessions/example`
+- **AND** its command contains the exact redirect `> result.log`
+- **AND** ordinary policy would request approval
+- **THEN** the agent receives `UseManagedTemporaryDirectory` before the user
+  approval surface
+- **AND** the correction names the managed temporary directory
 - **AND** the original call is not executed or rewritten
 
-#### Scenario: Fresh session scratch need not exist yet
+#### Scenario: Counterexample - read-only explicit temp cwd gets no correction
 
-- **GIVEN** a fresh session has a valid normalized session-directory path
-- **AND** that directory has not yet been created on disk
-- **WHEN** its first shell call explicitly authors the platform temporary root
-- **AND** every other correction condition passes
-- **THEN** the system emits `SessionScratchSuggested`
-- **AND** replacement shell execution creates the session directory through the existing shell cwd path
+- **GIVEN** the user asks the agent to run `pwd` from `/tmp`
+- **WHEN** the agent authors `Command=pwd` with `WorkingDirectory=/tmp`
+- **THEN** the system does not emit `UseManagedTemporaryDirectory`
+- **AND** normal authorization preserves the requested directory behavior
 
-#### Scenario: Static causal directory change receives correction
+#### Scenario: Example - structured file write receives correction
 
-- **GIVEN** the platform temporary root is `/tmp`
-- **WHEN** the agent authors `cd /tmp && diagnostic-command > result.log && head result.log`
-- **AND** every policy-relevant effective directory remains `/tmp`
+- **GIVEN** `file_write` or `file_edit` targets an exact path below the
+  captured platform temporary root
+- **WHEN** the call is otherwise eligible for interactive correction
+- **THEN** the agent receives `UseManagedTemporaryDirectory`
+- **AND** the correction names the run's exact managed temporary directory
+- **AND** no partial file write occurs
+
+#### Scenario: Example - exact shell redirect receives correction
+
+- **GIVEN** a complete shell syntax tree proves an exact redirect target below
+  the captured platform temporary root
+- **WHEN** ordinary policy would request approval
+- **THEN** the agent receives `UseManagedTemporaryDirectory`
+- **AND** no executable-specific output-option rule is required
+
+#### Scenario: Fresh managed temporary directory is prepared by execution
+
+- **GIVEN** a fresh run has a valid normalized managed temporary path
+- **AND** that directory has not yet been created
+- **WHEN** an eligible call explicitly writes below the platform temporary root
+- **THEN** the system emits `UseManagedTemporaryDirectory`
+- **AND** replacement execution owns creation of the managed directory
+
+#### Scenario: Static Bash causal directory change receives correction
+
+- **GIVEN** the captured platform temporary root is `/tmp`
+- **WHEN** the agent authors
+  `cd /tmp && diagnostic-command > result.log && head result.log`
+- **AND** every policy-relevant identity, redirect, and effective directory is
+  complete and remains below `/tmp`
 - **AND** ordinary policy would request approval
-- **THEN** the correction asks the agent to author the temporary-artifact operation under the session directory
-- **AND** no executable-specific rule for `diagnostic-command` or `head` is required
-- **AND** the advice does not require prior grant coverage for `cd` or the first action
+- **THEN** the correction asks the agent to author the operation below its
+  managed temporary directory
 - **AND** later execution still requires ordinary authority
 
-#### Scenario: Windows temporary working directory receives correction
+#### Scenario: Windows matching uses captured host temp
 
-- **GIVEN** the native Windows shell environment captured `C:\\Users\\user\\AppData\\Local\\Temp` as its platform temporary root
-- **WHEN** a complete PowerShell call requests that exact working directory
-- **AND** ordinary policy would request approval
-- **THEN** the agent receives the same typed correction with its Windows session-directory path
+- **GIVEN** the native Windows environment captured its actual platform
+  temporary root before managed environment injection
+- **WHEN** an eligible call explicitly authors that exact root or a canonical
+  descendant that crosses no filesystem link
+- **THEN** the agent receives the same typed correction with its Windows
+  managed temporary path
+- **AND** the policy does not depend on `C:\Windows\Temp` or another fixed
+  Windows value
 
-#### Scenario: Native PowerShell causal directory remains strict
+#### Scenario: Counterexample - unresolved PowerShell cwd remains strict
 
-- **GIVEN** the native Windows shell is PowerShell
-- **WHEN** the agent authors `Set-Location $env:TEMP; diagnostic-command` or `cd $env:TEMP; diagnostic-command`
-- **THEN** the system does not emit the session-scratch correction
+- **WHEN** an agent authors `Set-Location $env:TEMP; diagnostic-command` or
+  `cd $env:TEMP; diagnostic-command` in native PowerShell
+- **THEN** the system does not emit the managed-temp correction
 - **AND** normal approval or deny behavior remains
 
 #### Scenario: Platform temp is never proposed as project scope
 
-- **GIVEN** a reviewed-safe shell call whose exact cwd is the platform temporary root
-- **AND** both scope-correction predicates would otherwise be eligible
-- **WHEN** policy selects an agent correction
-- **THEN** it returns only `SessionScratchSuggested`
-- **AND** it does not recommend `set_working_directory` for the platform temporary root
+- **GIVEN** both project-scope and managed-temp corrections are otherwise
+  eligible
+- **WHEN** policy selects one correction for an explicitly authored platform
+  temporary write
+- **THEN** it returns only `UseManagedTemporaryDirectory`
+- **AND** it does not recommend `set_working_directory` for the platform root
 
-#### Scenario: Dynamic temporary directory remains strict
+#### Scenario: Counterexample - inherited temp does not prove authored intent
 
-- **WHEN** the parser cannot prove the effective directory for `cd "$TMPDIR" && diagnostic-command`
-- **THEN** the system does not emit the session-scratch correction
-- **AND** normal approval or deny behavior remains
-
-#### Scenario: Dynamic identity remains on ordinary path
-
-- **WHEN** an authored call is `cd /tmp && "$tool"`
-- **OR** command substitution controls command identity or flow
-- **THEN** the system does not emit the session-scratch correction
-- **AND** normal approval or deny behavior remains
-
-#### Scenario: Unresolved redirect remains on ordinary path
-
-- **WHEN** an authored platform-temp call has a redirect target the parser cannot resolve
-- **THEN** the system does not emit the session-scratch correction
-- **AND** normal approval or deny behavior remains
-
-#### Scenario: Complete prompt-worthy work may receive advice
-
-- **GIVEN** every command identity, control-flow edge, cwd, and redirect is complete and static
-- **AND** the call would prompt because it writes, mutates, or performs a network action
-- **WHEN** its explicitly authored execution scope is the platform temporary root
-- **THEN** it may receive the advice-only session-scratch correction
-- **AND** a replacement or intentional retry still receives complete ordinary authorization
-
-#### Scenario: Mixed incomplete batch remains on ordinary path
-
-- **GIVEN** one candidate is reviewed safe
-- **AND** another candidate has incomplete identity, control flow, cwd, or redirect facts
-- **WHEN** policy evaluates the batch
-- **THEN** it does not emit the session-scratch correction
-- **AND** the incomplete candidate cannot hide behind the reviewed-safe candidate
-
-#### Scenario: Public parent and subagent retain path redaction
-
-- **GIVEN** a Public parent agent or subagent
-- **WHEN** it submits a platform-temp shell call
-- **THEN** the system does not emit `SessionScratchSuggested`
-- **AND** it does not disclose the private session-directory path
-- **AND** normal Public policy remains
-
-#### Scenario: Inherited temp project does not imply authored intent
-
-- **GIVEN** a recovered parent session has `ProjectDirectory=/tmp`
-- **OR** a subagent inherits `/tmp` as its cwd
-- **WHEN** it submits a shell call without an explicit `WorkingDirectory` or Bash leading transition
-- **THEN** the system does not emit `SessionScratchSuggested`
+- **GIVEN** a recovered parent or child inherits the platform temporary root
+  as its cwd
+- **WHEN** it submits a call without an explicit destination, working
+  directory, or supported Bash leading transition
+- **THEN** the system does not emit `UseManagedTemporaryDirectory`
 - **AND** normal policy evaluates the inherited scope
 
-#### Scenario: External authored path prevents correction
+#### Scenario: Counterexample - dynamic shell data remains strict
 
-- **GIVEN** a call runs under the platform temporary root
-- **AND** an authored absolute path resolves outside that root
-- **WHEN** policy evaluates the call
-- **THEN** the system does not emit the session-scratch correction
+- **WHEN** command identity, control flow, cwd, or redirect destination is
+  dynamic, incomplete, or unparseable
+- **THEN** the system does not emit the managed-temp correction
 - **AND** normal approval or deny behavior remains
 
-#### Scenario: POSIX symlink escape prevents correction
+#### Scenario: Counterexample - private executable syntax proves no write
 
-- **GIVEN** `/tmp/outside` is a symbolic link to `/etc`
-- **WHEN** a platform-temp call references `/tmp/outside/passwd` or redirects to `/tmp/outside/result`
-- **THEN** the system does not emit the session-scratch correction
+- **GIVEN** an executable-specific option appears to name an output below the
+  platform temporary root
+- **WHEN** no structured tool contract or canonical shell fact proves that
+  destination
+- **THEN** the system does not infer a managed-temp correction from the option
 - **AND** normal approval or deny behavior remains
 
-#### Scenario: Windows reparse escape prevents correction
+#### Scenario: Counterexample - external authored path prevents correction
 
-- **GIVEN** a descendant of the Windows temporary root is a junction or reparse point outside that root
-- **WHEN** a platform-temp call references that descendant
-- **THEN** the system does not emit the session-scratch correction
+- **GIVEN** a call also authors an absolute path outside the platform
+  temporary root
+- **WHEN** policy evaluates the complete call
+- **THEN** the system does not emit the managed-temp correction
+- **AND** normal approval or deny behavior remains
 
-#### Scenario: Link inspection failure prevents correction
+#### Scenario: Counterexample - link escape prevents correction
 
-- **WHEN** the system cannot resolve the platform temporary root or inspect a relevant descendant's attributes
-- **THEN** it does not emit the session-scratch correction
+- **GIVEN** a descendant of the platform temporary root is a symbolic link,
+  junction, or reparse point outside that root
+- **WHEN** an eligible form references that descendant
+- **THEN** the system does not emit the managed-temp correction
+- **AND** normal approval or deny behavior remains
 
-#### Scenario: Hard deny and protected path retain precedence
+#### Scenario: Path inspection failure prevents correction
 
-- **GIVEN** a shell call runs under the platform temporary root
+- **WHEN** the system cannot resolve the platform root or inspect a relevant
+  descendant
+- **THEN** it does not emit the managed-temp correction
+
+#### Scenario: Counterexample - hard deny retains precedence
+
+- **GIVEN** a call explicitly writes below the platform temporary root
 - **WHEN** the call triggers hard deny or protected-path policy
 - **THEN** the system denies the call
-- **AND** it does not emit the session-scratch correction
+- **AND** it does not emit the managed-temp correction
 
-#### Scenario: Replacement receives full authorization
+#### Scenario: Example - replacement receives full authorization
 
-- **GIVEN** the agent receives a session-scratch correction
-- **WHEN** it authors a replacement call under the named session directory
-- **THEN** the system evaluates the replacement as a new call through every normal authorization stage
-- **AND** the correction does not guarantee automatic execution
+- **GIVEN** the agent receives `UseManagedTemporaryDirectory`
+- **WHEN** it authors a replacement call under the named directory
+- **THEN** the system evaluates the replacement as a new call through every
+  normal authorization stage
+- **AND** the correction does not guarantee execution
 
-#### Scenario: Headless execution retains existing temporary-directory behavior
+#### Scenario: Example - remediation names the new contract
 
-- **GIVEN** a headless, scheduled, webhook, benchmark, or other noninteractive run
-- **WHEN** an authored shell call requires the platform temporary root or an absolute path beneath it
-- **THEN** the system does not emit the session-scratch correction
-- **AND** it does not rewrite or remove the authored temporary path
-- **AND** the existing noninteractive authorization result remains unchanged
+- **GIVEN** an eligible unmanaged temporary write
+- **WHEN** the dispatcher creates its recoverable-correction receipt
+- **THEN** the remediation code is `UseManagedTemporaryDirectory`
+- **AND** the correction destination is the current run's `temp_dir`
+- **AND** neither the code nor presenter calls `session_dir` session scratch
 
-#### Scenario: Personal or Team headless model guidance prefers session scratch
+#### Scenario: Counterexample - legacy persisted path is not reinterpreted
 
-- **GIVEN** a Personal or Team headless session announces its exact session directory as scratch
-- **AND** a task requests disposable artifacts without requiring a platform path
-- **WHEN** the agent authors its shell call
-- **THEN** it uses the announced session directory rather than the platform temporary root
-- **AND** no interactive correction or approval prompt is involved
+- **GIVEN** a recovered approval event contains legacy protobuf field 19
+  `session_scratch_directory`
+- **WHEN** the current runtime restores the approval
+- **THEN** it does not treat that stored path as `temp_dir`
+- **AND** it derives the current managed temporary directory from resolved run
+  storage or omits managed-temp correction metadata
+- **AND** the approval decision itself can still complete normally
 
-#### Scenario: Public headless context retains path redaction
+#### Scenario: Counterexample - headless execution gets no interactive correction
 
-- **GIVEN** a Public headless session
-- **WHEN** its working context is assembled
-- **THEN** the exact private session path is not disclosed
-- **AND** the platform-temp correction is not emitted
-
-#### Scenario: Headless task with explicit temp requirement preserves intent
-
-- **GIVEN** a headless or benchmark task explicitly requires the platform temporary directory
-- **WHEN** the agent authors its shell call
-- **THEN** it preserves the required platform-temp path
-- **AND** Netclaw does not redirect, defer, or prompt
+- **GIVEN** a headless, scheduled, webhook, benchmark, or other noninteractive
+  run
+- **WHEN** a call explicitly requires the platform temporary root
+- **THEN** the system does not emit the interactive correction
+- **AND** it does not rewrite or remove the authored path
 - **AND** existing noninteractive policy decides allow or deny
 
-### Requirement: Intentional platform-temp retry reaches ordinary approval
+### Requirement: Intentional unmanaged-temp retry reaches ordinary approval
 
-The system SHALL prevent correction loops with actor-owned, non-persistent correction keys for the active user turn. A key SHALL cover canonical shell, command text, explicit working-directory presence and value, resolved temporary scope, background mode, and timeout. It SHALL deliberately exclude rationale because rationale does not alter execution. The actor SHALL arm a key only after the correction result is committed to model history. Identical calls in one parallel batch SHALL all remain first attempts. A later equivalent tool iteration SHALL atomically consume one armed key, suppress that correction once, and expose exactly `Once` and `Deny`. The system SHALL NOT offer session, folder, or global persistence for this retry and SHALL NOT write it to an actor grant or approval store.
+The system SHALL prevent correction loops with actor-owned, non-persistent
+correction keys for the active user turn. A shell key SHALL cover canonical
+shell, command text, explicit working-directory presence and value, resolved
+temporary scope, background mode, and timeout. A structured-file key SHALL
+cover tool name, canonical destination, and execution-relevant arguments. A
+key SHALL exclude rationale because rationale does not alter execution.
 
-The actor SHALL clear keys on turn completion, cancellation, failure, passivation or recovery, and before a new user turn. A consumed key SHALL NOT suppress an unlimited sequence of retries.
+The actor SHALL arm a key only after the correction result is committed to
+model history. Identical calls in one parallel batch SHALL remain first
+attempts. A later equivalent tool iteration SHALL consume one armed key,
+suppress that correction once, and expose exactly `Once` and `Deny` when user
+approval is the underlying result. The system SHALL NOT offer session, folder,
+or global persistence for this retry and SHALL NOT write it to a grant store.
 
-#### Scenario: Equivalent retry requests one-time approval
+The actor SHALL clear keys on turn completion, cancellation, failure,
+passivation, recovery, and before a new user turn. A consumed key SHALL NOT
+suppress an unlimited sequence of retries.
 
-- **GIVEN** the agent received a session-scratch correction for a platform-temp call
-- **WHEN** the agent repeats an equivalent call unchanged during the active turn
+#### Scenario: Example - equivalent retry requests one-time approval
+
+- **GIVEN** the agent received `UseManagedTemporaryDirectory`
+- **WHEN** it repeats an equivalent call during the active turn
 - **THEN** the system does not repeat the same correction
-- **AND** it requests ordinary user approval when that is the underlying policy result
+- **AND** it requests user approval when that is the underlying policy result
 - **AND** the approval choices are exactly `Once` and `Deny`
 - **AND** approval executes the agent-authored call exactly
 - **AND** no session or persistent grant is recorded
 
 #### Scenario: Parallel duplicate first attempts all receive correction
 
-- **GIVEN** one model batch contains two equivalent eligible platform-temp calls
-- **WHEN** the parent or subagent pipeline evaluates them concurrently
+- **GIVEN** one model batch contains two equivalent eligible calls
+- **WHEN** the parent or child pipeline evaluates them concurrently
 - **THEN** both calls receive first-attempt corrections
-- **AND** neither call reaches approval based on the other call's uncommitted result
+- **AND** neither reaches approval from the other's uncommitted result
 
 #### Scenario: Later iteration consumes correction key once
 
 - **GIVEN** a correction result is committed to model history
 - **WHEN** a later tool iteration repeats the equivalent call
 - **THEN** the actor consumes the armed key and exposes `Once` and `Deny`
-- **AND** a subsequent equivalent attempt has no residual execution or grant authority
+- **AND** a later equivalent attempt has no residual execution or grant
+  authority
 
-#### Scenario: Execution-meta change is not an unchanged retry
+#### Scenario: Counterexample - execution change starts a new evaluation
 
-- **GIVEN** a correction key was armed for a foreground call with one timeout
-- **WHEN** a later call changes background mode, timeout, command text, or explicit cwd presence or value
-- **THEN** it does not consume that correction key
+- **GIVEN** a correction key is armed
+- **WHEN** a later call changes its tool, command, destination, working
+  directory, background mode, timeout, or another execution-relevant argument
+- **THEN** it does not consume that key
 - **AND** it receives a complete first-attempt policy evaluation
 
 #### Scenario: Rationale-only change remains equivalent
 
-- **GIVEN** a correction key was armed for a platform-temp call
+- **GIVEN** a correction key is armed for a call
 - **WHEN** a later call changes only `_rationale`
 - **THEN** rationale does not prevent equivalence
-- **AND** the execution semantics still receive the bounded retry behavior
+- **AND** the execution semantics receive the bounded retry behavior
 
-#### Scenario: Correction key does not persist
+#### Scenario: Counterexample - correction keys do not cross lifecycle boundaries
 
-- **GIVEN** a platform-temp correction occurred in an earlier turn
-- **WHEN** a later turn submits the same call
-- **THEN** no persisted correction key grants authority or bypasses policy
-- **AND** the call receives the current turn's complete policy evaluation
+- **WHEN** a turn completes, cancels, fails, passivates, recovers, or a new
+  user turn begins
+- **THEN** every armed or consumed managed-temp correction key from the prior
+  lifecycle is cleared
 
-#### Scenario: Lifecycle boundaries clear correction keys
+### Requirement: Parent and subagent managed-temp corrections are equivalent
 
-- **WHEN** a turn completes, cancels, fails, passivates, recovers, or a new user turn begins
-- **THEN** every armed or consumed scratch-correction key from the prior lifecycle is cleared
+The parent session pipeline and child pipeline SHALL consume the same typed
+managed-temp correction before they invoke their respective user or parent
+approval bridges.
 
-### Requirement: Parent and subagent scratch corrections are equivalent
+#### Scenario: Example - parent receives correction before user prompt
 
-The parent session pipeline and subagent pipeline SHALL consume the same typed session-scratch correction before they invoke their respective user or parent approval bridges.
+- **WHEN** a parent agent submits an eligible unmanaged-temp call
+- **THEN** it receives `UseManagedTemporaryDirectory` before a user approval
+  prompt is created
 
-#### Scenario: Parent agent is corrected before user prompt
+#### Scenario: Example - child receives correction before parent bridge
 
-- **WHEN** a parent agent submits an eligible platform-temp call
-- **THEN** it receives the correction before a user approval prompt is created
-
-#### Scenario: Subagent is corrected before parent bridge
-
-- **WHEN** a subagent submits an eligible platform-temp call
-- **THEN** it receives the same correction before a parent approval request is created
+- **WHEN** a child agent submits an eligible unmanaged-temp call
+- **THEN** it receives the same correction before a parent approval request is
+  created
 - **AND** the parent user is not prompted for that first attempt
 
+#### Scenario: Counterexample - child bridge cannot create eligibility
+
+- **GIVEN** a child call is ineligible because of audience or path policy
+- **WHEN** the child pipeline evaluates the call
+- **THEN** the bridge does not create a managed-temp correction
+- **AND** the existing denial or approval result remains
+
+
+### Requirement: Product proof separates runtime contracts from model behavior
+
+The change SHALL use deterministic tests as the acceptance boundary for path
+layout, persistence, access control, environment injection, correction
+selection, retry behavior, and ordinary shell and file authority. Model evals
+SHALL measure tool choice, managed-path use, parent-child handoff, and Git
+worktree composition.
+A model-eval result SHALL NOT replace a failed or missing deterministic test.
+
+#### Scenario: Counterexample - model success cannot hide contract failure
+
+- **GIVEN** a model happens to choose the managed temporary path
+- **WHEN** a deterministic environment or authority test fails
+- **THEN** the change does not meet acceptance
+- **AND** the model result is reported only as behavioral evidence
+
+#### Scenario: Example - before-and-after eval uses one locked case
+
+- **GIVEN** an eval is used for a before-and-after comparison
+- **WHEN** both versions are evaluated
+- **THEN** they use the same sanitized prompt, model configuration, and
+  assertion logic
+- **AND** the result identifies the binary version under test
+
+#### Scenario: Example - parent disposable-file eval keeps first-party tools
+
+- **GIVEN** a Personal parent must create and read one disposable file
+- **WHEN** the managed-temp behavioral eval runs
+- **THEN** the agent uses `file_write` and `file_read` below `temp_dir`
+- **AND** it does not use the complete session envelope as disposable scratch
+- **AND** it does not call the shell
+
+#### Scenario: Example - worktree eval proves the composed workflow
+
+- **GIVEN** session context announces `worktree_dir`
+- **WHEN** the agent must create and work from a Git worktree
+- **THEN** the eval requires a successful `shell_execute` call whose resulting
+  worktree path is below `worktree_dir`
+- **AND** it requires a successful `set_working_directory` call for that path
+- **AND** it fails on a tool call, prose claim, or path string without the
+  successful creation and adoption sequence
+
+#### Scenario: Counterexample - replacement eval is not locked comparison evidence
+
+- **GIVEN** an eval changes its prompt, tools, or assertions for this design
+- **WHEN** results are reported
+- **THEN** the report identifies the result as replacement behavioral evidence
+- **AND** it does not claim a direct before-and-after comparison with the old
+  case
+
+#### Scenario: Counterexample - eval evidence cannot contain PII
+
+- **WHEN** an eval fixture or published result is scanned
+- **THEN** it contains no local username, private repository, channel, thread,
+  host, email, token, or secret
+
+#### Scenario: Counterexample - suite does not invent a Windows pattern
+
+- **GIVEN** deterministic Windows contract tests cover the managed environment
+- **WHEN** no representative sanitized Windows agent behavior is available
+- **THEN** the suite does not invent a Windows model pattern
+- **AND** the missing behavioral case is recorded as future evidence work

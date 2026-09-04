@@ -176,28 +176,17 @@ public static class NetclawAkkaHostingExtensions
     }
 
     /// <summary>
-    /// Registers the session log dispatcher: a <see cref="GenericChildPerEntityParent"/>
-    /// that routes <see cref="Protocol.IWithSessionId"/> messages to a per-session
-    /// <see cref="SessionLogActor"/> child. The actor's mailbox is the sole writer
-    /// per <c>session.log</c> file. <c>RollingFileLoggerProvider</c> resolves the
-    /// dispatcher via <see cref="Akka.Hosting.IRequiredActor{T}"/> and routes
-    /// session-scoped MEL diagnostics through it; <c>LlmSessionActor</c> routes
-    /// session audit messages through it.
+    /// Registers the dispatcher that resolves each session's storage layout and
+    /// forwards log writes to the corresponding <see cref="SessionLogActor"/>.
+    /// Each child actor's mailbox is the sole writer for its <c>session.log</c> file.
     /// </summary>
     public static AkkaConfigurationBuilder WithSessionLogDispatcher(
-        this AkkaConfigurationBuilder builder,
-        string sessionLogsBasePath,
-        TimeProvider timeProvider)
+        this AkkaConfigurationBuilder builder)
     {
-        return builder.StartActors((system, registry, _) =>
+        return builder.StartActors((system, registry, resolver) =>
         {
             var actor = system.ActorOf(
-                GenericChildPerEntityParent.CreateProps(
-                    new Routing.SessionMessageExtractor(),
-                    entityId => SessionLogActor.CreateProps(
-                        new Protocol.SessionId(entityId),
-                        sessionLogsBasePath,
-                        timeProvider)),
+                resolver.Props<SessionLogDispatcher>(),
                 "session-log-dispatcher");
             registry.Register<SessionLogDispatcherActorKey>(actor);
         });

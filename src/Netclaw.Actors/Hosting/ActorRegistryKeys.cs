@@ -58,8 +58,8 @@ public sealed class BackgroundJobManagerActorKey;
 /// <summary>
 /// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
 /// session log dispatcher. The dispatcher owns one <c>SessionLogActor</c>
-/// child per sanitized session id and is the single writer per session log
-/// file. MEL diagnostic providers and <c>LlmSessionActor</c> route audit
+/// child per resolved log path and is the single writer for that file. MEL
+/// diagnostic providers and <c>LlmSessionActor</c> route audit
 /// and diagnostic lines through it.
 /// </summary>
 public sealed class SessionLogDispatcherActorKey;

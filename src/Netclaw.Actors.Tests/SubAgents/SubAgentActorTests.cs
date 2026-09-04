@@ -32,6 +32,9 @@ public class SubAgentActorTests : TestKit
     private static readonly TimeSpan ApprovalAskTimeout = TimeSpan.FromSeconds(30);
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
+    private static string TestPath(string category, string name) => Path.GetFullPath(
+        Path.Combine(Path.GetTempPath(), "netclaw-subagent-tests", category, name));
+
     private static FunctionCallContent CreateToolCall(string callId, string name)
         => CreateToolCall(callId, name, new Dictionary<string, object?>());
 
@@ -371,6 +374,8 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Tool_execution_inherits_parent_session_and_project_directories()
     {
+        var sessionDirectory = TestPath("sessions", "abc");
+        var projectDirectory = TestPath("projects", "netclaw");
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
         {
@@ -387,8 +392,8 @@ public class SubAgentActorTests : TestKit
             new RunSubAgent
             {
                 Scope = SubAgentTestScope.Create(
-                    sessionDirectory: "/tmp/netclaw/sessions/abc",
-                    projectDirectory: "/home/user/workspaces/netclaw",
+                    sessionDirectory: sessionDirectory,
+                    projectDirectory: projectDirectory,
                     recentFiles: ["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"]),
                 Task = "Inspect the inherited paths.",
                 Timeout = TimeSpan.FromSeconds(5)
@@ -397,14 +402,15 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.NotNull(fakeTool.LastContext);
-        Assert.Equal("/tmp/netclaw/sessions/abc", fakeTool.LastContext!.SessionDirectory);
-        Assert.Equal("/home/user/workspaces/netclaw", fakeTool.LastContext.ProjectDirectory);
+        Assert.Equal(sessionDirectory, fakeTool.LastContext!.SessionDirectory);
+        Assert.Equal(projectDirectory, fakeTool.LastContext.ProjectDirectory);
         Assert.Equal(["src/Netclaw.Actors/SubAgents/SubAgentActor.cs"], fakeTool.LastContext.RecentFiles);
     }
 
     [Fact]
     public async Task Tool_execution_with_no_parent_project_directory_passes_null_through()
     {
+        var sessionDirectory = TestPath("sessions", "xyz");
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
         {
@@ -417,7 +423,7 @@ public class SubAgentActorTests : TestKit
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
-                Scope = SubAgentTestScope.Create(sessionDirectory: "/tmp/netclaw/sessions/xyz"),
+                Scope = SubAgentTestScope.Create(sessionDirectory: sessionDirectory),
                 Task = "Inspect inherited paths.",
                 Timeout = TimeSpan.FromSeconds(5)
             },
@@ -425,13 +431,15 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.NotNull(fakeTool.LastContext);
-        Assert.Equal("/tmp/netclaw/sessions/xyz", fakeTool.LastContext!.SessionDirectory);
+        Assert.Equal(sessionDirectory, fakeTool.LastContext!.SessionDirectory);
         Assert.Null(fakeTool.LastContext.ProjectDirectory);
     }
 
     [Fact]
     public async Task Tool_execution_inherits_parent_resolved_cwd_snapshot()
     {
+        var sessionDirectory = TestPath("sessions", "parent");
+        var projectDirectory = TestPath("projects", "foo");
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
         {
@@ -444,9 +452,9 @@ public class SubAgentActorTests : TestKit
             new RunSubAgent
             {
                 Scope = SubAgentTestScope.Create(
-                    sessionDirectory: "/tmp/netclaw/sessions/parent",
-                    projectDirectory: "/home/user/repos/foo",
-                    inheritedCwd: "/home/user/repos/foo"),
+                    sessionDirectory: sessionDirectory,
+                    projectDirectory: projectDirectory,
+                    inheritedCwd: projectDirectory),
                 Task = "Inspect inherited cwd.",
                 Timeout = TimeSpan.FromSeconds(5)
             },
@@ -454,14 +462,14 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.NotNull(fakeTool.LastContext);
-        Assert.Equal("/home/user/repos/foo", fakeTool.LastContext!.InheritedCwd);
+        Assert.Equal(projectDirectory, fakeTool.LastContext!.InheritedCwd);
         // ProjectDirectory wins the resolve when set; this asserts that the
         // inherited snapshot doesn't shadow it.
-        Assert.Equal("/home/user/repos/foo", fakeTool.LastContext.ResolveShellCwd(null));
+        Assert.Equal(projectDirectory, fakeTool.LastContext.ResolveShellCwd(null));
     }
 
     [Fact]
-    public async Task Tool_execution_with_null_parent_cwd_resolves_to_session_dir_or_null()
+    public async Task Tool_execution_with_null_parent_cwd_resolves_to_child_session_directory()
     {
         var fakeTool = new FakeNetclawTool("inspect_context", "ok");
         var fakeClient = new FakeChatClient
@@ -483,37 +491,7 @@ public class SubAgentActorTests : TestKit
         Assert.True(result.Success);
         Assert.NotNull(fakeTool.LastContext);
         Assert.Null(fakeTool.LastContext!.InheritedCwd);
-        Assert.Null(fakeTool.LastContext.ResolveShellCwd(null));
-    }
-
-    [Fact]
-    public async Task Tool_execution_inherits_parent_cwd_when_child_has_no_project_or_session_dir()
-    {
-        // The original bug shape: a sub-agent whose parent had a resolved cwd
-        // but no ProjectDirectory/SessionDirectory propagating to the child.
-        // InheritedCwd is the only path that surfaces the parent's effective
-        // working directory to the approval gate; without it, the prompt
-        // header reads "(no working directory)".
-        var fakeTool = new FakeNetclawTool("inspect_context", "ok");
-        var fakeClient = new FakeChatClient
-        {
-            ToolCallsOnFirstCall = [CreateToolCall("call-inherit-only", "inspect_context")]
-        };
-
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
-
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(inheritedCwd: "/home/user/repos/foo"),
-                Task = "Inspect inherited cwd with no other sources.",
-                Timeout = TimeSpan.FromSeconds(5)
-            },
-            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
-
-        Assert.True(result.Success);
-        Assert.NotNull(fakeTool.LastContext);
-        Assert.Equal("/home/user/repos/foo", fakeTool.LastContext!.ResolveShellCwd(null));
+        Assert.Equal(fakeTool.LastContext.SessionDirectory, fakeTool.LastContext.ResolveShellCwd(null));
     }
 
     [Fact]
@@ -596,7 +574,7 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Session_scratch_context_does_not_authorize_headless_prompt_worthy_shell()
+    public async Task Session_storage_context_does_not_authorize_headless_prompt_worthy_shell()
     {
         using var netclawHome = new DisposableTempDir();
         var sessionDirectory = Path.Combine(netclawHome.Path, "sessions", "example");
@@ -626,7 +604,9 @@ public class SubAgentActorTests : TestKit
         Assert.False(result.Success);
         Assert.False(fakeTool.WasCalled);
         Assert.Contains("approval bridge", result.Output, StringComparison.OrdinalIgnoreCase);
-        Assert.Contains($"session_dir: {sessionDirectory}", fakeClient.LastReceivedMessages![1].Text);
+        var context = fakeClient.LastReceivedMessages![1].Text;
+        Assert.Contains($"session_dir: {sessionDirectory}", context);
+        Assert.Contains($"worktree_dir: {Path.Combine(sessionDirectory, "worktrees")}", context);
     }
 
     [Fact]
@@ -650,6 +630,8 @@ public class SubAgentActorTests : TestKit
         };
 
         var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
+        var sessionDirectory = TestPath("sessions", "approval-parent");
+        var projectDirectory = TestPath("projects", "approval-project");
         var logger = new AuthorizationRecordingLogger();
         var definition = CreateDefinition([fakeTool]);
         var agent = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
@@ -663,9 +645,9 @@ public class SubAgentActorTests : TestKit
             new RunSubAgent
             {
                 Scope = SubAgentTestScope.Create(
-                    sessionDirectory: "/tmp/netclaw/sessions/parent",
-                    projectDirectory: "/home/user/repos/foo",
-                    inheritedCwd: "/home/user/repos/foo",
+                    sessionDirectory: sessionDirectory,
+                    projectDirectory: projectDirectory,
+                    inheritedCwd: projectDirectory,
                     approvalBridge: approvalBridge),
                 Task = "Push to origin",
                 Timeout = TimeSpan.FromSeconds(5)
@@ -680,7 +662,7 @@ public class SubAgentActorTests : TestKit
         Assert.All(
             logger.AuthorizationAttemptIds,
             loggedAttemptId => Assert.Equal(authorizationAttemptId.Value, loggedAttemptId));
-        Assert.Equal("/home/user/repos/foo", approvalBridge.RequestedCwd);
+        Assert.Equal(projectDirectory, approvalBridge.RequestedCwd);
         Assert.Single(approvalBridge.RequestedCandidates);
         Assert.Equal("git push origin main", approvalBridge.RequestedCandidates[0].Verb);
         Assert.Contains(approvalBridge.RequestedOptions, o => o.Key == ApprovalOptionKeys.ApproveEverywhere);
@@ -689,27 +671,28 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Subagent_platform_temp_call_receives_scratch_correction_before_parent_bridge()
+    public async Task Subagent_platform_temp_call_receives_managed_temporary_correction_before_parent_bridge()
     {
+        var sessionDirectory = TestPath("sessions", "managed-temporary-example");
         var fakeTool = new FakeNetclawTool(ShellTool.ToolName, "should not run");
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =
             [
-                ScratchCall("call-scratch-correction")
+                PlatformTemporaryCall("call-managed-temporary-correction")
             ]
         };
         var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([fakeTool]),
             fakeClient,
-            CreateScratchCorrectionPolicy()));
+            CreateManagedTemporaryCorrectionPolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
                 Scope = SubAgentTestScope.Create(
-                    sessionDirectory: "/home/user/.netclaw/sessions/example",
+                    sessionDirectory: sessionDirectory,
                     approvalBridge: approvalBridge),
                 Task = "Inspect a disposable diagnostic artifact.",
                 Timeout = TimeSpan.FromSeconds(5)
@@ -721,10 +704,10 @@ public class SubAgentActorTests : TestKit
         Assert.False(fakeTool.WasCalled);
         Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Equal(
-            "Tool execution deferred: shared_temporary_directory\n" +
-            "Session scratch directory: '/home/user/.netclaw/sessions/example'.\n" +
-            "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths.",
-            GetLastToolResult(fakeClient, "call-scratch-correction"));
+            "Tool execution deferred: use_managed_temporary_directory\n" +
+            $"Managed temporary directory: '{Path.Combine(sessionDirectory, "subagents", "run", "tmp")}'.\n" +
+            "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths.",
+            GetLastToolResult(fakeClient, "call-managed-temporary-correction"));
     }
 
     [Theory]
@@ -804,7 +787,8 @@ public class SubAgentActorTests : TestKit
             StringComparison.Ordinal);
     }
 
-    [Theory]
+    [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash project-scope correction behavior.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The project-scope correction defines Bash path behavior.")]
     [InlineData(true)]
     [InlineData(false)]
     public async Task Subagent_project_declaration_updates_child_prompt_before_unchanged_retry(
@@ -814,12 +798,14 @@ public class SubAgentActorTests : TestKit
         const string declarationCallId = "call-project-scope-declare";
         const string retryCallId = "call-project-scope-retry";
         const string projectGuidance = "Project instructions: use the local test conventions.";
-        const string sessionDirectory = "/home/user/.netclaw/sessions/project-scope-child";
-        var worktree = Path.GetFullPath(AppContext.BaseDirectory);
+        var sessionDirectory = TestPath("sessions", "project-scope-child");
+        var worktree = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
+        var workspacesDirectory = Directory.GetParent(worktree)!.FullName;
         var shell = new FakeNetclawTool(ShellTool.ToolName, "inspected");
         var setWorkingDirectory = new SetWorkingDirectoryTool(
             new ToolConfig(),
-            new NetclawPaths(worktree, worktree));
+            new NetclawPaths(workspacesDirectory, workspacesDirectory),
+            new ToolPathPolicy([]));
         var client = new SequencedToolCallChatClient(
         [
             ProjectScopeCall(firstCallId, worktree),
@@ -839,7 +825,7 @@ public class SubAgentActorTests : TestKit
         var actor = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
             CreateDefinition([shell, setWorkingDirectory]),
             client,
-            CreateProjectScopeCorrectionPolicy(worktree),
+            CreateProjectScopeCorrectionPolicy(workspacesDirectory),
             new ProjectPromptProvider(worktree, projectGuidance)));
 
         var result = await actor.Ask<SubAgentResult>(
@@ -898,7 +884,8 @@ public class SubAgentActorTests : TestKit
         var controlledDirectory = Path.Combine(worktree, $"project-{controlCharacter}-candidate");
         var setWorkingDirectory = new SetWorkingDirectoryTool(
             new ToolConfig(),
-            new NetclawPaths(worktree, worktree));
+            new NetclawPaths(worktree, worktree),
+            new ToolPathPolicy([]));
         var client = new SequencedToolCallChatClient(
         [
             new FunctionCallContent(
@@ -951,26 +938,27 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Subagent_parallel_temp_calls_both_receive_first_attempt_corrections()
     {
+        var sessionDirectory = TestPath("sessions", "managed-temporary-parallel");
         var fakeTool = new FakeNetclawTool(ShellTool.ToolName, "should not run");
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =
             [
-                ScratchCall("call-scratch-parallel-1"),
-                ScratchCall("call-scratch-parallel-2")
+                PlatformTemporaryCall("call-managed-temporary-parallel-1"),
+                PlatformTemporaryCall("call-managed-temporary-parallel-2")
             ]
         };
         var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([fakeTool]),
             fakeClient,
-            CreateScratchCorrectionPolicy()));
+            CreateManagedTemporaryCorrectionPolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
                 Scope = SubAgentTestScope.Create(
-                    sessionDirectory: "/home/user/.netclaw/sessions/example",
+                    sessionDirectory: sessionDirectory,
                     approvalBridge: approvalBridge),
                 Task = "Inspect two disposable diagnostic artifacts.",
                 Timeout = TimeSpan.FromSeconds(5)
@@ -982,33 +970,34 @@ public class SubAgentActorTests : TestKit
         Assert.False(fakeTool.WasCalled);
         Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Contains(
-            "shared_temporary_directory",
-            GetLastToolResult(fakeClient, "call-scratch-parallel-1"));
+            "use_managed_temporary_directory",
+            GetLastToolResult(fakeClient, "call-managed-temporary-parallel-1"));
         Assert.Contains(
-            "shared_temporary_directory",
-            GetLastToolResult(fakeClient, "call-scratch-parallel-2"));
+            "use_managed_temporary_directory",
+            GetLastToolResult(fakeClient, "call-managed-temporary-parallel-2"));
     }
 
     [Fact]
     public async Task Subagent_exact_temp_retry_reaches_once_or_deny_parent_bridge()
     {
+        var sessionDirectory = TestPath("sessions", "managed-temporary-retry");
         var fakeTool = new FakeNetclawTool(ShellTool.ToolName, "should not run");
         var fakeClient = new SequencedToolCallChatClient(
         [
-            ScratchCall("call-scratch-first"),
-            ScratchCall("call-scratch-retry")
+            PlatformTemporaryCall("call-managed-temporary-first"),
+            PlatformTemporaryCall("call-managed-temporary-retry")
         ]);
         var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.Denied);
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition([fakeTool]),
             fakeClient,
-            CreateScratchCorrectionPolicy()));
+            CreateManagedTemporaryCorrectionPolicy()));
 
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
                 Scope = SubAgentTestScope.Create(
-                    sessionDirectory: "/home/user/.netclaw/sessions/example",
+                    sessionDirectory: sessionDirectory,
                     approvalBridge: approvalBridge),
                 Task = "Retry the exact disposable diagnostic call if corrected.",
                 Timeout = TimeSpan.FromSeconds(5)
@@ -1022,9 +1011,9 @@ public class SubAgentActorTests : TestKit
         Assert.Equal(
             [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
             approvalBridge.RequestedOptions.Select(option => option.Key));
-        var denial = GetLastToolResult(fakeClient.LastReceivedMessages, "call-scratch-retry");
+        var denial = GetLastToolResult(fakeClient.LastReceivedMessages, "call-managed-temporary-retry");
         Assert.Contains("approval_denied_by_user", denial, StringComparison.Ordinal);
-        Assert.Contains("/home/user/.netclaw/sessions/example", denial, StringComparison.Ordinal);
+        Assert.Contains(sessionDirectory, denial, StringComparison.Ordinal);
         Assert.DoesNotContain("set_working_directory", denial, StringComparison.Ordinal);
     }
 
@@ -1335,6 +1324,7 @@ public class SubAgentActorTests : TestKit
     }
 
     private static ToolAccessPolicy PermissivePolicy() => new(
+        new NetclawPaths(),
         new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
         new EffectivePolicyDefaults(
             DeploymentPosture.Personal,
@@ -1354,21 +1344,20 @@ public class SubAgentActorTests : TestKit
                 ["shell_execute"] = ToolApprovalMode.Approval
             }
         };
+        var environment = TestShellEnvironment.Current;
         return new ToolAccessPolicy(
+            netclawHome is null ? new NetclawPaths() : new NetclawPaths(netclawHome),
             toolConfig,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-            new ShellCommandPolicy(),
-            new ToolPathPolicy([]),
-            shellTrustZonePolicy: netclawHome is null
-                ? null
-                : new ShellTrustZonePolicy(toolConfig, new NetclawPaths(netclawHome)));
+            new ShellCommandPolicy(environment),
+            new ToolPathPolicy(environment, []));
     }
 
-    private static ToolAccessPolicy CreateScratchCorrectionPolicy()
+    private static ToolAccessPolicy CreateManagedTemporaryCorrectionPolicy()
     {
         var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -1378,10 +1367,11 @@ public class SubAgentActorTests : TestKit
                 [ShellTool.ToolName] = ToolApprovalMode.Approval
             }
         };
-        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var environment = TestShellEnvironment.Current;
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, []);
         return new ToolAccessPolicy(
+            new NetclawPaths(),
             toolConfig,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -1390,9 +1380,9 @@ public class SubAgentActorTests : TestKit
                 UsedStrictFallback: false),
             commandPolicy,
             pathPolicy,
-            new PlatformTemporaryScopePolicy(
+            new TemporaryPathCorrectionPolicy(
                 environment,
-                "/tmp",
+                Path.GetFullPath(Path.GetTempPath()),
                 new AlwaysSafeTemporaryPathInspector()));
     }
 
@@ -1413,7 +1403,8 @@ public class SubAgentActorTests : TestKit
                 : Path.Combine(worktree, "different-workspace-root");
             tools.Add(new SetWorkingDirectoryTool(
                 new ToolConfig(),
-                new NetclawPaths(allowedRoot, allowedRoot)));
+                new NetclawPaths(allowedRoot, allowedRoot),
+                new ToolPathPolicy([])));
         }
 
         var client = new FakeChatClient
@@ -1486,6 +1477,7 @@ public class SubAgentActorTests : TestKit
             ? new[] { "pwd", "whoami" }
             : ["Get-Location", "Get-Date"];
         return new ToolAccessPolicy(
+            new NetclawPaths(workspacesDirectory, workspacesDirectory),
             toolConfig,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -1494,17 +1486,16 @@ public class SubAgentActorTests : TestKit
                 UsedStrictFallback: false),
             new ShellCommandPolicy(environment),
             new ToolPathPolicy(environment, []),
-            shellTrustZonePolicy: new ShellTrustZonePolicy(
-                toolConfig,
-                new NetclawPaths(workspacesDirectory, workspacesDirectory)),
             safeVerbs: SafeVerbList.FromVerbs(approvalShell, safeVerbs));
     }
 
-    private static FunctionCallContent ScratchCall(string callId)
+    private static FunctionCallContent PlatformTemporaryCall(string callId)
         => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
         {
-            ["Command"] = "gh api repos/example/project",
-            ["WorkingDirectory"] = "/tmp",
+            ["Command"] = TestShellEnvironment.Current.Grammar == ShellGrammar.Bash
+                ? "gh api repos/example/project"
+                : "Get-Content result.log",
+            ["WorkingDirectory"] = Path.GetFullPath(Path.GetTempPath()),
             ["_rationale"] = "Inspect a disposable diagnostic artifact."
         });
 
@@ -1518,8 +1509,8 @@ public class SubAgentActorTests : TestKit
 
     private static string ProjectScopeCommand =>
         TestShellEnvironment.Current.Grammar == ShellGrammar.Bash
-            ? "pwd; whoami"
-            : "Get-Location; Get-Date";
+            ? "pwd"
+            : "Get-Location";
 
     private static string? GetLastToolResult(FakeChatClient fakeClient, string callId)
     {
@@ -1546,11 +1537,11 @@ public class SubAgentActorTests : TestKit
             out string resolvedRoot)
             => ShellPathRules.TryNormalize(path, pathStyle, out resolvedRoot);
 
-        public bool IsSafeDescendant(string root, string path, ShellPathStyle pathStyle)
+        public bool HasNoLinkEscape(string root, string path, ShellPathStyle pathStyle)
             => true;
 
-        public bool ContainsInvalidPathState(string path, ShellPathStyle pathStyle)
-            => false;
+        public bool SupportsPathInspection(ShellPathStyle pathStyle)
+            => true;
     }
 
     private static void AssertPromptOrder(string prompt, params string[] markers)
@@ -1825,7 +1816,7 @@ public class SubAgentActorTests : TestKit
 
         var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         toolConfig.AudienceProfiles.Team.McpServersMode = ToolProfileMode.All;
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             toolConfig,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -1937,10 +1928,10 @@ public class SubAgentActorTests : TestKit
     [Theory]
     [InlineData(TrustAudience.Personal)]
     [InlineData(TrustAudience.Team)]
-    public async Task Eligible_subagent_context_announces_exact_private_session_scratch(
+    public async Task Eligible_subagent_context_announces_exact_private_storage_paths(
         TrustAudience audience)
     {
-        const string sessionDirectory = "/home/user/.netclaw/sessions/example";
+        var sessionDirectory = TestPath("sessions", "context-example");
         var fakeClient = new FakeChatClient();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition(),
@@ -1963,6 +1954,9 @@ public class SubAgentActorTests : TestKit
         var userMessage = fakeClient.LastReceivedMessages![1].Text;
         Assert.Contains("[session]", userMessage);
         Assert.Contains($"session_dir: {sessionDirectory}", userMessage);
+        Assert.Contains($"temp_dir: {Path.Combine(sessionDirectory, "subagents", "run", "tmp")}", userMessage);
+        Assert.Contains($"artifact_dir: {Path.Combine(sessionDirectory, "subagents", "run", "artifacts")}", userMessage);
+        Assert.Contains($"worktree_dir: {Path.Combine(sessionDirectory, "worktrees")}", userMessage);
         Assert.Contains(ToolChoiceGuidance.StructuredWorkspaceSelection, userMessage, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, userMessage, StringComparison.Ordinal);
         Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, userMessage, StringComparison.Ordinal);
@@ -1971,9 +1965,9 @@ public class SubAgentActorTests : TestKit
     }
 
     [Fact]
-    public async Task Public_subagent_context_does_not_disclose_private_session_scratch()
+    public async Task Public_subagent_context_does_not_disclose_private_storage_paths()
     {
-        const string sessionDirectory = "/home/user/.netclaw/sessions/private";
+        var sessionDirectory = TestPath("sessions", "private");
         var fakeClient = new FakeChatClient();
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
             CreateDefinition(),
@@ -2006,33 +2000,16 @@ public class SubAgentActorTests : TestKit
     [InlineData("\0")]
     [InlineData("\r")]
     [InlineData("\n")]
-    public async Task Control_bearing_session_scratch_is_not_added_to_subagent_context(
+    public void Control_bearing_session_directory_is_rejected_before_subagent_context(
         string controlCharacter)
     {
         var sessionDirectory = $"/home/user/.netclaw/sessions/bad{controlCharacter}prompt";
-        var fakeClient = new FakeChatClient();
-        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
-            CreateDefinition(),
-            fakeClient,
-            PermissivePolicy()));
-
-        var result = await agent.Ask<SubAgentResult>(
-            new RunSubAgent
-            {
-                Scope = SubAgentTestScope.Create(sessionDirectory: sessionDirectory),
-                Task = "Create a disposable diagnostic artifact.",
-                Timeout = TimeSpan.FromSeconds(5)
-            },
-            TimeSpan.FromSeconds(5),
-            TestContext.Current.CancellationToken);
-
-        Assert.True(result.Success);
-        Assert.DoesNotContain("session_dir", fakeClient.LastReceivedMessages![1].Text);
-        Assert.DoesNotContain(sessionDirectory, fakeClient.LastReceivedMessages[1].Text);
+        Assert.Throws<ArgumentException>(() =>
+            SubAgentTestScope.Create(sessionDirectory: sessionDirectory));
     }
 
     [Fact]
-    public async Task Null_RuntimeContext_leaves_first_user_message_as_raw_task()
+    public async Task Null_runtime_context_still_includes_session_storage_context()
     {
         var fakeClient = new FakeChatClient();
         var definition = CreateDefinition();
@@ -2049,8 +2026,10 @@ public class SubAgentActorTests : TestKit
 
         Assert.True(result.Success);
         Assert.NotNull(fakeClient.LastReceivedMessages);
-        Assert.Equal("Do the thing.", fakeClient.LastReceivedMessages[1].Text);
-        Assert.DoesNotContain("Context:", fakeClient.LastReceivedMessages[1].Text);
+        var userText = fakeClient.LastReceivedMessages[1].Text;
+        Assert.Contains("Context:", userText);
+        Assert.Contains("[session]", userText);
+        Assert.Contains("Task:\nDo the thing.", userText);
     }
 
     [Fact]

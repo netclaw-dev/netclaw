@@ -59,7 +59,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             "interactive-reviewed-safe-allows",
             invocation,
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)));
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)));
     }
 
     [Fact]
@@ -168,7 +168,8 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
         var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
 
-        Assert.Equal(context.Cwd, context.SuggestedProjectDirectory);
+        var correction = Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(decision.AgentCorrection);
+        Assert.Equal(context.Cwd, correction.Directory);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
@@ -190,7 +191,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
         var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
 
-        Assert.Null(context.SuggestedProjectDirectory);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]

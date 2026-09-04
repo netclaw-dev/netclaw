@@ -62,6 +62,8 @@ public class BackgroundJobIntegrationTests : TestKit
     private StartBackgroundJob MakeStartCommand(string command, ChannelType channelType = ChannelType.Slack, string? workingDirectory = null) => new()
     {
         Command = command,
+        ManagedTemporaryDirectory = Path.Combine(Path.GetTempPath(), "netclaw-tests", "managed-temp"),
+        ManagedTemporaryStorageRoot = Path.Combine(Path.GetTempPath(), "netclaw-tests"),
         WorkingDirectory = workingDirectory,
         SessionId = new SessionId("C0123ABC/1712000000.000001"),
         Rationale = "integration test",

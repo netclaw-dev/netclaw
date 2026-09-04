@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.65.4"
+  version: "2.67.0"
 ---
 
 # Netclaw Operations
@@ -51,7 +51,8 @@ When available, use `shell_execute` for local search, VCS, builds, tests, proces
 Do not substitute shell commands when a listed first-party tool satisfies the task.
 Do not delegate a known file operation that an available file tool can complete.
 After a successful file tool result, do not use shell only to verify it unless the user requests shell behavior.
-For disposable text, use `file_write` then `file_read`; do not attempt a shell redirect first.
+For disposable text, use `file_write` in `temp_dir`, then use `file_read`; do not attempt a shell redirect first.
+Standard temporary APIs use `temp_dir` in each shell process.
 Use `load_tool` directly for a known exact tool name.
 Use `search_tools` when the capability is known but its exact tool name is not.
 
@@ -78,7 +79,7 @@ Choose directories in this order:
 
 1. For declared-project work, omit `WorkingDirectory`; the shell uses `project_dir`.
 2. For one call in a named child directory, set typed `WorkingDirectory`.
-3. Use `session_dir` for disposable writable work outside a project; do not substitute platform temporary storage.
+3. Use `temp_dir` for disposable files. Standard temporary APIs already use this directory.
 4. Use an inline directory change only when the task requests that behavior.
 
 Typed `WorkingDirectory` and absolute operands give exact scope but add no safe-space root.
@@ -93,6 +94,25 @@ Do not probe a named project path before declaring it.
 Use the task's first project path exactly; do not substitute its parent first.
 Honor a request to keep the current project unchanged.
 A denied child-directory call does not permit a project change.
+
+## Managed Session Storage
+
+The `[session]` block separates five paths:
+
+- `session_dir` is the workspace and the relative-path fallback.
+- `temp_dir` is run-local storage for disposable files.
+- `artifact_dir` is the run-owned output area.
+- `worktree_dir` is the session area for Git worktrees.
+- `log_path` is the exact raw audit log for the current run.
+
+Use the existing file tools to read an exact parent or child log path.
+Do not use shell to find session logs.
+Normal audience and operation policy applies to every session path.
+Netclaw does not automatically remove managed temporary files or worktrees.
+
+Use `shell_execute` to run Git with a destination below `worktree_dir`.
+After Git succeeds, use `set_working_directory` to adopt the created path.
+A failed Git command does not change project scope.
 
 For Team and Personal sessions, `[working-context]` is refreshed at the start
 of each new turn. In a Git project it includes the active worktree, branch,
@@ -315,9 +335,9 @@ declares scope implicitly.
 
 The approval gate runs three layers in order:
 
-The directory order reserves `session_dir` for disposable non-project output.
+The directory order reserves `temp_dir` for disposable output.
 Preserve an explicitly required platform temporary path.
-Netclaw does not automatically clean session scratch yet.
+Netclaw does not automatically clean managed temporary storage yet.
 
 1. **Hard-deny list** — system-protected paths. Always blocks.
 2. **Safe-verb ∩ safe-space short-circuit** — when the verb is on the curated

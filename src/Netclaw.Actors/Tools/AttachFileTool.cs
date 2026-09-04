@@ -23,17 +23,22 @@ namespace Netclaw.Actors.Tools;
     Grant = "file")]
 public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 {
-    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
-    private readonly ToolPathPolicy _pathPolicy;
+    public const string ToolName = "attach_file";
+
+    private readonly PathAccessPolicy _pathAccessPolicy;
 
     public record Params(
-        [property: Description("Existing authorized source file path. Relative paths use the current project, then session scratch. Pass this path directly without first copying the file.")] string Path,
+        [property: Description("Existing authorized source file path. Relative paths use the current project, then session_dir. Pass this path directly without first copying the file.")] string Path,
         [property: Description("Optional display name for the file")] string? DisplayName = null);
 
     public AttachFileTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
+        : this(new PathAccessPolicy(config, paths, pathPolicy))
     {
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
-        _pathPolicy = pathPolicy;
+    }
+
+    internal AttachFileTool(PathAccessPolicy pathAccessPolicy)
+    {
+        _pathAccessPolicy = pathAccessPolicy;
     }
 
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
@@ -44,61 +49,25 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         if (string.IsNullOrWhiteSpace(context.SessionDirectory))
             return Task.FromResult(context.InvalidInput("Error: invalid_context: No session directory available."));
 
-        if (!_fileAccessPolicy.TryResolveAttachPath(
-                args.Path,
-                context,
-                out var requestedPath,
-                out var accessError,
-                out var resolutionFailure))
-        {
-            return Task.FromResult(context.PathResolutionFailure(accessError, resolutionFailure));
-        }
+        var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Attach);
+        if (!access.Allowed)
+            return Task.FromResult(context.PathAccessFailure(access.Error, access.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied));
 
-        // Same hard-deny surface as file_read/file_list: attach must never ship
-        // control-plane files (secrets, keys, webhooks, config, sqlite, pid,
-        // lock, restart manifest) that shell cannot even reference (#1724).
-        if (_pathPolicy.IsReadDenied(requestedPath))
-            return Task.FromResult(context.AccessDenied(FileToolErrors.CredentialReadDenied(requestedPath)));
+        var requestedPath = access.CanonicalPath;
 
         var sessionDir = PathUtility.Normalize(context.SessionDirectory);
-        var sessionRoot = TryGetSessionRootDirectory(sessionDir);
-
-        // Interactive Personal-audience sessions get shell-equivalent reach:
-        // shell can attach anything it can read, so the session-proximity
-        // restriction is lifted for them. The out-of-session file is still
-        // copied into this session's attachments directory below, preserving
-        // delivery semantics. Non-interactive, Team, and Public sessions keep
-        // the proximity gate.
-        var interactivePersonalReach = ScopedFileAccessPolicy.HasInteractivePersonalReach(context);
-
-        var requestedInCurrentSession = PathUtility.IsWithinRoot(requestedPath, sessionDir);
-        var requestedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(requestedPath, sessionRoot);
-
-        if (!interactivePersonalReach && !requestedInCurrentSession && !requestedInSessionRoot)
-        {
-            return Task.FromResult(context.AccessDenied(
-                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}."));
-        }
 
         if (!File.Exists(requestedPath))
             return Task.FromResult(context.NotFound($"Error: File not found: {requestedPath}"));
 
         var resolvedPath = ResolveFinalPath(requestedPath);
 
-        // Defense-in-depth: re-check the deny against the symlink-resolved
-        // target so any future divergence between requestedPath and resolvedPath
-        // cannot widen attach's surface.
-        if (_pathPolicy.IsReadDenied(resolvedPath))
-            return Task.FromResult(context.AccessDenied(FileToolErrors.CredentialReadDenied(resolvedPath)));
+        var resolvedAccess = _pathAccessPolicy.Evaluate(resolvedPath, context, PathAccessPolicy.FileOperation.Attach);
+        if (!resolvedAccess.Allowed)
+            return Task.FromResult(context.PathAccessFailure(resolvedAccess.Error, resolvedAccess.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied));
 
+        resolvedPath = resolvedAccess.CanonicalPath;
         var resolvedInCurrentSession = PathUtility.IsWithinRoot(resolvedPath, sessionDir);
-        var resolvedInSessionRoot = sessionRoot is not null && PathUtility.IsWithinRoot(resolvedPath, sessionRoot);
-
-        if (!interactivePersonalReach && !resolvedInCurrentSession && !resolvedInSessionRoot)
-        {
-            return Task.FromResult(context.AccessDenied(
-                $"Error: File path must be within the current session directory ({sessionDir}) or another Netclaw session under {sessionRoot ?? "<unknown>"}."));
-        }
 
         var attachPath = resolvedInCurrentSession
             ? resolvedPath
@@ -127,22 +96,6 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var fileInfo = new FileInfo(path);
         var target = fileInfo.ResolveLinkTarget(returnFinalTarget: true);
         return target is null ? fileInfo.FullName : target.FullName;
-    }
-
-    private static string? TryGetSessionRootDirectory(string sessionDir)
-    {
-        var parent = Directory.GetParent(sessionDir);
-        if (parent is null)
-            return null;
-
-        var name = parent.Name;
-        if (name.Equals("sessions", StringComparison.OrdinalIgnoreCase)
-            || name.Equals("netclaw-sessions", StringComparison.OrdinalIgnoreCase))
-        {
-            return PathUtility.Normalize(parent.FullName);
-        }
-
-        return null;
     }
 
     private static string CopyIntoCurrentSession(string sourcePath, string sessionDir)

@@ -29,12 +29,17 @@ public sealed partial class FileWriteTool : NetclawTool<FileWriteTool.Params>
     private readonly FileEditTool _editTool;
 
     public record Params(
-        [property: Description("File path to write. Relative paths use the current project, then session scratch.")] string Path,
+        [property: Description("File path to write. Relative paths use the current project, then session_dir.")] string Path,
         [property: Description("Content to write to the file")] string Content);
 
     public FileWriteTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
+        : this(new PathAccessPolicy(config, paths, pathPolicy))
     {
-        _editTool = new FileEditTool(config, paths, pathPolicy);
+    }
+
+    internal FileWriteTool(PathAccessPolicy pathAccessPolicy)
+    {
+        _editTool = new FileEditTool(pathAccessPolicy);
     }
 
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)

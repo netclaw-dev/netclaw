@@ -166,7 +166,7 @@ public sealed class WorkspaceToolRelativePathTests : IDisposable
     public async Task Set_working_directory_rejects_relative_path_without_state_receipt()
     {
         var context = CreateContext();
-        var tool = new SetWorkingDirectoryTool(_config, new NetclawPaths());
+        var tool = new SetWorkingDirectoryTool(_config, new NetclawPaths(), new ToolPathPolicy([]));
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Path", "other-project"),
@@ -182,7 +182,7 @@ public sealed class WorkspaceToolRelativePathTests : IDisposable
     public async Task Set_working_directory_success_reports_validated_project()
     {
         var context = CreateContext();
-        var tool = new SetWorkingDirectoryTool(_config, new NetclawPaths());
+        var tool = new SetWorkingDirectoryTool(_config, new NetclawPaths(), new ToolPathPolicy([]));
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Path", _projectDirectory),

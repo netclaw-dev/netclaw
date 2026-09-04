@@ -31,7 +31,7 @@ public sealed class MemoryCommandTests
         var paths = CreateTempPaths(prePlaceValidModel: true);
         var config = BuildConfig(autoDownload: true);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc One", "first body");
         await SeedDocumentAsync(store, "doc-2", "Doc Two", "second body");
@@ -51,7 +51,7 @@ public sealed class MemoryCommandTests
         var paths = CreateTempPaths(prePlaceValidModel: true);
         var config = BuildConfig(autoDownload: true);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc One", "first body");
         var hash = MemoryContentHasher.ComputeHash("Doc One", "first body");
@@ -91,7 +91,7 @@ public sealed class MemoryCommandTests
         var paths = CreateTempPaths(prePlaceValidModel: true);
         var config = BuildConfig(autoDownload: true);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc One", "first body");
 
@@ -123,7 +123,7 @@ public sealed class MemoryCommandTests
         var paths = CreateTempPaths(prePlaceValidModel: true);
         var config = BuildConfig(autoDownload: true);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc One", "first body");
         var hash = MemoryContentHasher.ComputeHash("Doc One", "first body");

@@ -121,7 +121,7 @@ internal static class MemoryCommand
         // idempotent DDL) plus Microsoft.Data.Sqlite's default busy-timeout keep each small
         // per-item upsert transaction below safe to interleave with a live daemon's own writes
         // (curation commits, embed-on-write) against the same database file.
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync();
 
         var candidates = await store.GetDocumentsNeedingEmbeddingAsync(embedder.ModelId, force);

@@ -61,30 +61,40 @@ positive, else the session content budget.
 ### Requirement: Spill to a session-scoped file with a steer
 
 When a result exceeds its inline budget, the dispatcher SHALL write the full
-(already-redacted) result to `{SessionDirectory}/tool-calls/{toolCallId}.log`,
-using the call's identifier (sanitized so it cannot escape the directory), and
-SHALL append a steer with the path directing the model to read a slice (`file_read`
-with offset/limit) or `grep` rather than re-running the tool. When no session
-directory or call id is available, the dispatcher SHALL return the inline window
-without spilling.
+redacted result to an internal file under the current session `tool-calls`
+directory. It SHALL derive the file name from the sanitized call id and return
+the opaque call id with a steer to `tool_output_read`. It SHALL NOT reveal the
+raw spill path or direct the model to shell, grep, or `file_read`. When no
+session directory or call id is available, the dispatcher SHALL return the
+inline window without a spill steer.
 
-#### Scenario: Spill file written and path returned
+#### Scenario: Spill file stays internal
 
 - **WHEN** a result over budget is produced in a session with a directory
-- **THEN** the full redacted result is written to
-  `{SessionDirectory}/tool-calls/{toolCallId}.log`
-- **AND** the inline result includes that path and a steer to `file_read`/`grep`
+- **THEN** the full redacted result is written under the session `tool-calls` directory
+- **AND** the inline result includes the opaque call id
+- **AND** the steer names `tool_output_read`
+- **AND** the steer contains no filesystem path
 
 #### Scenario: Spilled file is redacted
 
 - **WHEN** a result containing a secret is spilled
-- **THEN** the on-disk spill file has the secret redacted (redaction runs before
-  the spill write)
+- **THEN** the internal spill file has the secret redacted
+- **AND** redaction occurs before the spill write
 
 #### Scenario: Call id cannot escape the spill directory
 
 - **WHEN** the call id contains path-traversal characters
-- **THEN** the spill file is written inside the tool-calls directory, never outside it
+- **THEN** the spill file stays inside the tool-calls directory
+- **AND** the dispatcher reveals no raw path
+
+#### Scenario: Missing spill identity has no false continuation
+
+- **GIVEN** a result exceeds its inline budget
+- **AND** the invocation has no usable session directory or call id
+- **WHEN** the dispatcher bounds the result
+- **THEN** the model receives the bounded inline window
+- **AND** the result does not claim that `tool_output_read` can continue it
 
 ### Requirement: Bounded-memory capture
 

@@ -59,7 +59,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
     {
         var deniedRoot = Path.Combine(Path.GetTempPath(), "netclaw-protected-root");
         var otherRoot = Path.Combine(Path.GetTempPath(), "netclaw-open-root");
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             ShellConfig(),
             Defaults(),
             new ShellCommandPolicy(),
@@ -95,7 +95,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         const string deniedRoot = @"C:\protected\config";
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, [deniedRoot]);
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             ShellConfig(),
             Defaults(),
             commandPolicy,
@@ -117,7 +117,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, []);
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             ShellConfig(),
             Defaults(),
             commandPolicy,

@@ -46,7 +46,7 @@ internal sealed class SessionToolPipelineTestFixture(
         = new Dictionary<string, IReadOnlyList<string>>();
     private IReadOnlyDictionary<string, ApprovalDecision> _decisionOverrides
         = new Dictionary<string, ApprovalDecision>();
-    private IReadOnlyList<SessionScratchCorrectionKey> _scratchCorrectionKeys = [];
+    private IReadOnlyList<ManagedTemporaryCorrectionKey> _managedTemporaryCorrectionKeys = [];
     private ILoggingAdapter _logger = NoLogger.Instance;
 
     public SessionToolPipelineTestFixture From(MessageSource source)
@@ -164,10 +164,10 @@ internal sealed class SessionToolPipelineTestFixture(
         return this;
     }
 
-    public SessionToolPipelineTestFixture WithScratchCorrections(
-        params SessionScratchCorrectionKey[] keys)
+    public SessionToolPipelineTestFixture WithManagedTemporaryCorrections(
+        params ManagedTemporaryCorrectionKey[] keys)
     {
-        _scratchCorrectionKeys = Array.AsReadOnly(keys.ToArray());
+        _managedTemporaryCorrectionKeys = Array.AsReadOnly(keys.ToArray());
         return this;
     }
 
@@ -179,7 +179,10 @@ internal sealed class SessionToolPipelineTestFixture(
             _source);
         var runEnvironment = new SessionToolRunEnvironment
         {
-            SessionDirectory = _sessionDirectory,
+            Storage = SessionStoragePaths.CreateLegacy(
+                _sessionDirectory,
+                Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),
+                "test-session"),
             InlineOutputBudget = _inlineOutputBudget,
             ModelInputModalities = _modelInputModalities,
             SpawnChildActor = _spawnChildActor,
@@ -206,7 +209,7 @@ internal sealed class SessionToolPipelineTestFixture(
             StreamResults = _streamResults,
             OneTimeApprovalPreSeed = _oneTimeApprovalPreSeed,
             DecisionOverrides = _decisionOverrides,
-            ScratchCorrections = new SessionScratchCorrectionDispatch(_scratchCorrectionKeys),
+            ManagedTemporaryCorrections = new ManagedTemporaryCorrectionDispatch(_managedTemporaryCorrectionKeys),
             CancellationToken = cancellationToken
         };
 

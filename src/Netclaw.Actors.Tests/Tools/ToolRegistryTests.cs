@@ -228,7 +228,7 @@ public class ToolRegistryTests
         registry.Register(new McpToolAdapter(
             CreateFakeTool("search"), "memorizer", "search"));
 
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             new ToolConfig(),
             new EffectivePolicyDefaults(
                 DeploymentPosture.Public,
@@ -260,7 +260,7 @@ public class ToolRegistryTests
                 ["specialty_tool"] = ToolApprovalMode.Deny
             }
         };
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -348,12 +348,7 @@ public class ToolRegistryTests
         var pathPolicy = new Netclaw.Security.ToolPathPolicy([]);
         var commandPolicy = new Netclaw.Security.ShellCommandPolicy();
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            pathPolicy,
-            commandPolicy,
-            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         Assert.Equal("shell_execute", registry.ToCanonicalName("shell_execute"));
         Assert.Equal("shell_execute", registry.ToLlmFacingName("shell_execute"));

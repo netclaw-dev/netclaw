@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Data.Sqlite;
+using Netclaw.Actors.Memory;
+using Netclaw.Actors.Protocol;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Gateway;
@@ -22,6 +24,42 @@ public sealed class SchemaMigratorTests : IDisposable
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
+    }
+
+    [Fact]
+    public async Task Startup_creates_all_sqlite_schemas_in_one_netclaw_database()
+    {
+        var migrator = new SchemaMigrator(_paths, NullLogger<SchemaMigrator>.Instance);
+        var memoryStore = new SQLiteMemoryStore(_paths.SqliteDbPath, TimeProvider.System);
+        var service = new SchemaMigrationHostedService(
+            _paths,
+            migrator,
+            memoryStore,
+            NullLogger<SchemaMigrationHostedService>.Instance);
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        await using var connection = new SqliteConnection($"Data Source={_paths.SqliteDbPath}");
+        await connection.OpenAsync(TestContext.Current.CancellationToken);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT name
+            FROM sqlite_master
+            WHERE type = 'table'
+              AND name IN ('journal', 'snapshot', 'sessions', 'daily_stats',
+                           'memory_documents', 'session_storage_bindings')
+            ORDER BY name
+            """;
+        await using var reader = await command.ExecuteReaderAsync(TestContext.Current.CancellationToken);
+        var tables = new List<string>();
+        while (await reader.ReadAsync(TestContext.Current.CancellationToken))
+            tables.Add(reader.GetString(0));
+
+        Assert.Equal(
+            ["daily_stats", "journal", "memory_documents", "session_storage_bindings", "sessions", "snapshot"],
+            tables);
+        Assert.Equal([_paths.SqliteDbPath], Directory.GetFiles(_paths.BasePath, "*.db"));
     }
 
     [Fact]
@@ -122,6 +160,7 @@ public sealed class SchemaMigratorTests : IDisposable
         var service = new SessionCatalogService(
             _paths,
             TimeProvider.System,
+            new TestSessionStorageResolver(_paths),
             NullLogger<SessionCatalogService>.Instance);
 
         var sessions = service.ListRecent();

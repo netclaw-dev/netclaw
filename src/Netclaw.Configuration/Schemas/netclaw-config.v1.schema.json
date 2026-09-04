@@ -134,10 +134,7 @@
       },
       "additionalProperties": false
     },
-    "Persistence": {
-      "type": "object",
-      "additionalProperties": true
-    },
+    "Persistence": false,
     "Session": {
       "type": "object",
       "description": "Operator-facing session configuration.",

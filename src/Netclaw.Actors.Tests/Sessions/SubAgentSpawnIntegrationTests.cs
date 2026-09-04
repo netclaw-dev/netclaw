@@ -165,7 +165,7 @@ public class SubAgentSpawnIntegrationTests : LlmSessionTestBase
                 [HiddenSpecialtyToolName] = ToolApprovalMode.Deny
             }
         };
-        var toolAccessPolicy = new ToolAccessPolicy(
+        var toolAccessPolicy = new ToolAccessPolicy(new NetclawPaths(),
             toolConfig,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

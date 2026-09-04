@@ -85,11 +85,11 @@ internal static class ApprovalBucketBuilder
     /// Session-scope entries use <c>candidate.Directory</c> directly without
     /// a working-directory fallback. The session approval dictionary
     /// matches verb-only, so threading cwd through here creates buckets that the
-    /// session-scratch guard can drop for standalone verbs such as curl or git status.
+    /// session-owned guard can drop for standalone verbs such as curl or git status.
     ///
     /// Persistent scope still falls back to the working directory and applies
-    /// the session-scratch guard so folder-scoped grants pointing at the session
-    /// scratch directory are not saved as dead-on-arrival approvals.
+    /// the session-owned guard so folder-scoped grants pointing at the session
+    /// directory are not saved as dead-on-arrival approvals.
     /// </remarks>
     public static Dictionary<string, List<string>> Build(
         IReadOnlyList<ApprovalCandidate> candidates,

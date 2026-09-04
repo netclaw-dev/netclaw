@@ -181,6 +181,7 @@ message ToolApprovalRequestedProto {
   TurnContextRecordProto turn_context = 18;
   optional string session_scratch_directory = 19;
   optional string authorization_attempt_id = 20;
+  optional string managed_temporary_directory = 21;
 }
 
 message ToolApprovalResolvedProto {

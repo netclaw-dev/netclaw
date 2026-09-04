@@ -21,7 +21,7 @@ The authorization-attempt identifier is diagnostic metadata as defined in the [e
 
 #### Scenario: Agent correction closes the original attempt
 
-- **WHEN** a tool call returns a recoverable correction such as `UseSessionScratch` or `SetWorkingDirectory`
+- **WHEN** a tool call returns a correction such as `UseManagedTemporaryDirectory` or `SetWorkingDirectory`
 - **THEN** the policy and correction telemetry contain the original call's authorization-attempt identifier and remediation code
 - **AND** a replacement tool call authored by the model starts a new authorization attempt with a different identifier
 

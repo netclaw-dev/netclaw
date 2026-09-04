@@ -6,7 +6,7 @@
 
 ## 1. Security and receipt boundaries
 
-- [x] 1.1 Reject a relative project base that has a symlink or junction ancestor below its allowed root.
+- [x] 1.1 Reject a relative project base that has a symlink or junction ancestor below its trusted root.
 - [x] 1.2 Add POSIX and native Windows tests for ancestor links, direct links, traversal, and stale-project fallback.
 - [x] 1.3 Move terminal authorization classification into the shared dispatcher receipt boundary.
 - [x] 1.4 Prove parent and child policy denials both produce `access_denied` without successful activity.

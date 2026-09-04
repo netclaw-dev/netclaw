@@ -67,7 +67,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly MemoryProposalGate _memoryProposalGate = new();
     private readonly MemoryConfig _memoryConfig;
     private readonly TimeProvider _timeProvider;
-    private readonly string _sessionsBasePath;
+    private readonly SessionStoragePaths _sessionStorage;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
     private readonly Memory.SQLiteMemoryStore? _memoryStore;
     private readonly Memory.MemoryEmbedderHolder? _memoryEmbedderHolder;
@@ -89,7 +89,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ModelInputMediaBuffer _mediaBuffer = new();
     private MessageSource? _currentTurnSource;
     private TurnContext? _currentTurnContext;
-    private readonly SessionScratchCorrectionState _sessionScratchCorrections = new();
+    private readonly ManagedTemporaryCorrectionState _sessionManagedTemporaryCorrections = new();
     private bool _processingStateActive;
     private readonly ToolRegistry? _fullRegistry;
     private readonly ToolAccessPolicy? _toolAccessPolicy;
@@ -125,7 +125,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     // Reference to the singleton SessionLogDispatcher; resolved lazily on
     // recovery completion. The dispatcher owns one SessionLogActor child per
-    // session id and is the single writer per session.log file. Audit messages
+    // resolved log path and is the single writer for that file. Audit messages
     // (SendUserMessage, SessionOutput) are forwarded through it.
     private IActorRef? _logActor;
 
@@ -252,7 +252,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _memoryVectorIndexHolder = memory?.VectorIndexHolder;
         _memoryConfig = memory?.MemoryConfig ?? new MemoryConfig();
         _timeProvider = services.TimeProvider;
-        _sessionsBasePath = services.Paths.SessionsDirectory;
+        _sessionStorage = services.StorageResolver.Resolve(_sessionId);
         _trustContextDeriver = tools?.TrustDeriver;
         PersistenceId = $"session-{entityId}";
 
@@ -936,8 +936,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
         }
 
-        foreach (var change in msg.ScratchCorrectionChanges)
-            _sessionScratchCorrections.Apply(change);
+        foreach (var change in msg.ManagedTemporaryCorrectionChanges)
+            _sessionManagedTemporaryCorrections.Apply(change);
 
         var updatedContext = WorkingContextUpdater.UpdateFromToolReceipts(
             _state.WorkingContext,
@@ -957,7 +957,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         foreach (var result in msg.ToolResults)
         {
-            if (!string.Equals(result.Name, SetWorkingDirectoryTool.ToolName, StringComparison.Ordinal)
+            if (result.Name is not SetWorkingDirectoryTool.ToolName
                 || result.ToolCallId is not { } callId
                 || !msg.ToolReceipts.TryGetValue(callId.Value, out var receipt)
                 || receipt.Category != ToolInvocationOutcomeCategory.Success
@@ -1984,7 +1984,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         List<FunctionCallContent> toolCalls,
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
-        IReadOnlyDictionary<string, string>? sessionScratchDenialDirectories = null,
+        IReadOnlyDictionary<string, string>? managedTemporaryDenialDirectories = null,
         IReadOnlyDictionary<string, AuthorizationAttemptId>? authorizationAttemptIds = null)
     {
         _activeToolBatch.Start(toolCalls);
@@ -2038,7 +2038,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ?? throw new InvalidOperationException("Tool batch dispatch requires admitted turn authority.");
         var runEnvironment = new SessionToolRunEnvironment
         {
-            SessionDirectory = sessionDir,
+            Storage = _sessionStorage,
             InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
             ModelInputModalities = _model.InputModalities,
             SpawnChildActor = spawnChildActor,
@@ -2067,11 +2067,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ?? new Dictionary<string, IReadOnlyList<string>>(),
             DecisionOverrides = decisionOverride
                 ?? new Dictionary<string, ApprovalDecision>(),
-            SessionScratchDenialDirectories = sessionScratchDenialDirectories
+            ManagedTemporaryDenialDirectories = managedTemporaryDenialDirectories
                 ?? new Dictionary<string, string>(),
             AuthorizationAttemptIds = authorizationAttemptIds
                 ?? new Dictionary<string, AuthorizationAttemptId>(),
-            ScratchCorrections = _sessionScratchCorrections.Snapshot(),
+            ManagedTemporaryCorrections = _sessionManagedTemporaryCorrections.Snapshot(),
             CancellationToken = toolExecutionCt
         };
 
@@ -2304,7 +2304,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ContinueIncomingUserMessage(SendUserMessage cmd)
     {
-        _sessionScratchCorrections.Clear();
+        _sessionManagedTemporaryCorrections.Clear();
         _deliveryRetry.Clear();
         _currentTurnSource = cmd.Source;
         BindTurnTelemetry(cmd.Source);
@@ -2600,8 +2600,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     internal static bool IsContextOverflowError(Exception? ex)
         => LlmFailureClassifier.IsContextOverflow(ex);
 
-    private string GetSessionDirectory() =>
-        SessionDirectoryHelper.GetSessionDirectory(_sessionId, _sessionsBasePath);
+    private string GetSessionDirectory() => _sessionStorage.SessionDirectory.Value;
 
     private long NowMs() => _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
 
@@ -2842,7 +2841,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionPromptOverlay: _sessionPromptOverlay,
             TurnRestartNotice: _turnRestartNotice,
             SessionId: _sessionId,
-            SessionsBasePath: _sessionsBasePath,
+            Storage: _sessionStorage,
             FileReadGranted: HasFileReadGranted(),
             ActiveRecall: _activeRecall,
             WorkingContextBlock: string.Empty,
@@ -2958,7 +2957,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionPromptOverlay: _sessionPromptOverlay,
             TurnRestartNotice: message.TurnRestartNotice,
             SessionId: _sessionId,
-            SessionsBasePath: _sessionsBasePath,
+            Storage: _sessionStorage,
             FileReadGranted: HasFileReadGranted(),
             ActiveRecall: _activeRecall,
             WorkingContextBlock: message.Snapshot.ToContextBlock(),
@@ -3294,7 +3293,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             });
             var context = new ToolExecutionContext(new ToolRunScope
             {
-                Session = new ToolSessionScope.Bound(_sessionId.Value, GetSessionDirectory()),
+                Session = new ToolSessionScope.Bound(_sessionId.Value, _sessionStorage),
                 // No active turn context/source carries no trust context — fall closed.
                 Audience = _currentTurnContext?.Audience ?? _currentTurnSource?.Audience ?? TrustAudience.Public,
                 InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
@@ -3582,7 +3581,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
             Candidates = msg.Candidates,
             TurnContext = _currentTurnContext?.ToRecord(),
-            SessionScratchDirectory = dispatch.SessionScratchDirectory,
+            ManagedTemporaryDirectory = dispatch.ManagedTemporaryDirectory,
             RequestedAtMs = NowMs()
         };
 
@@ -3643,7 +3642,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ClearApprovalTurnState()
     {
-        _sessionScratchCorrections.Clear();
+        _sessionManagedTemporaryCorrections.Clear();
         _toolApprovals.ClearTurn();
         _currentTurnContext = null;
     }
@@ -4402,7 +4401,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             toolCalls,
             oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
             decisionOverride: redrivePlan.DecisionOverride,
-            sessionScratchDenialDirectories: redrivePlan.SessionScratchDenialDirectories,
+            managedTemporaryDenialDirectories: redrivePlan.ManagedTemporaryDenialDirectories,
             authorizationAttemptIds: redrivePlan.AuthorizationAttemptIds);
         return true;
     }
@@ -4526,7 +4525,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         //
         // Bucket key is string.Empty for the null-directory (global wildcard)
         // bucket; mapped back to null when calling the persistence layer
-        // below. The session-scratch dead-on-arrival guard is applied inside
+        // below. The session-owned dead-on-arrival guard is applied inside
         // BuildApprovalBuckets for persistent scope only — session-scope
         // entries are matched verb-only at lookup time so threading cwd
         // through here just feeds the filter that drops standalone verbs
@@ -4599,7 +4598,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ProcessToolCallResult(Pipelines.ToolCallResult result)
     {
-        _sessionScratchCorrections.Apply(result.ScratchCorrectionChange);
+        _sessionManagedTemporaryCorrections.Apply(result.ManagedTemporaryCorrectionUpdate);
         TrackStartedBackgroundJob(result.StartedBackgroundJob);
 
         var emittedRunIds = new HashSet<SubAgentRunId>();
@@ -4700,7 +4699,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (toolMessage.Name is "load_tool" && toolMessage.Content is not null)
             TryActivateDiscoveredTool(toolMessage.Content.Trim());
 
-        if (string.Equals(toolMessage.Name, SetWorkingDirectoryTool.ToolName, StringComparison.Ordinal)
+        if (toolMessage.Name is SetWorkingDirectoryTool.ToolName
             && result.Receipt is
             {
                 Category: ToolInvocationOutcomeCategory.Success,

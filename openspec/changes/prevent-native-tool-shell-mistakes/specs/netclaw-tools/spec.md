@@ -7,7 +7,7 @@ The terms in this requirement use the
 
 The parent-session model-visible `attach_file` definition SHALL tell the agent
 to pass the existing authorized source path directly. The agent SHALL NOT need
-to copy the file into session scratch first.
+to copy the file into managed temporary storage first.
 
 Netclaw SHALL retain the existing audience, read-deny, proximity, and safe-copy
 behavior. Subagents SHALL NOT receive this tool until an internal attachment
@@ -49,7 +49,7 @@ Authority examples and counterexamples:
 
 #### Scenario: Core exposure does not widen attachment reach
 
-- **GIVEN** current audience or path policy denies an attachment source
+- **GIVEN** the path access decision denies an attachment source
 - **WHEN** `attach_file` is present in the registered core
 - **THEN** the model-visible set still filters the tool by audience policy
 - **AND** the tool still rejects the denied source when invoked

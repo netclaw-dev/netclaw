@@ -52,7 +52,7 @@ public sealed class EmbeddingWarmupHostedServiceTests : IAsyncLifetime
     {
         _paths = new NetclawPaths(_baseDir);
         _paths.EnsureDirectoriesExist();
-        _store = new SQLiteMemoryStore(_paths.MemorySqliteDbPath, TimeProvider.System);
+        _store = new SQLiteMemoryStore(_paths.SqliteDbPath, TimeProvider.System);
         await _store.InitializeAsync();
 
         var modelBytes = await File.ReadAllBytesAsync(Path.Combine(FixturesDir, "tiny-embedder.onnx"));

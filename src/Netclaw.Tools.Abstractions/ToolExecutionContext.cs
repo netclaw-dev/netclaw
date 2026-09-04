@@ -32,7 +32,7 @@ internal enum ToolInvocationOutcomeCategory
 internal enum ToolRemediationCode
 {
     SetWorkingDirectory,
-    UseSessionScratch,
+    UseManagedTemporaryDirectory,
     ProvideUniqueOldString,
     UseNativeTool
 }
@@ -299,17 +299,26 @@ public abstract record ToolSessionScope
 
     public sealed record Bound : ToolSessionScope
     {
-        public Bound(string sessionId, string? sessionDirectory)
+        /// <summary>Creates a session scope with one complete resolved storage layout.</summary>
+        /// <param name="sessionId">The session identifier.</param>
+        /// <param name="storage">The resolved storage layout.</param>
+        public Bound(string sessionId, SessionStoragePaths storage)
         {
             if (string.IsNullOrWhiteSpace(sessionId))
                 throw new ArgumentException("Session id is required for a bound tool run.", nameof(sessionId));
 
             SessionId = sessionId;
-            SessionDirectory = sessionDirectory;
+            Storage = storage ?? throw new ArgumentNullException(nameof(storage));
         }
 
+        /// <summary>Gets the session identifier.</summary>
         public string SessionId { get; }
-        public string? SessionDirectory { get; }
+
+        /// <summary>Gets the complete resolved storage layout.</summary>
+        public SessionStoragePaths Storage { get; }
+
+        /// <summary>Gets the session workspace from <see cref="Storage"/>.</summary>
+        public string SessionDirectory => Storage.SessionDirectory.Value;
     }
 }
 
@@ -399,6 +408,32 @@ public sealed class ToolExecutionOutputs
 }
 
 /// <summary>
+/// Identifies the managed directory and the platform temporary root for one correction.
+/// </summary>
+internal readonly record struct ManagedTemporaryCorrectionTarget
+{
+    /// <summary>Creates one correction target from the suggested and original directories.</summary>
+    /// <param name="managedTemporaryDirectory">The replacement directory that Netclaw suggested.</param>
+    /// <param name="platformTemporaryRoot">The original platform temporary root.</param>
+    internal ManagedTemporaryCorrectionTarget(
+        string managedTemporaryDirectory,
+        string platformTemporaryRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(managedTemporaryDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(platformTemporaryRoot);
+
+        ManagedTemporaryDirectory = managedTemporaryDirectory;
+        PlatformTemporaryRoot = platformTemporaryRoot;
+    }
+
+    /// <summary>Gets the replacement directory that Netclaw suggested.</summary>
+    internal string ManagedTemporaryDirectory { get; }
+
+    /// <summary>Gets the original platform temporary root.</summary>
+    internal string PlatformTemporaryRoot { get; }
+}
+
+/// <summary>
 /// Mutable authorization state for one invocation attempt. The dispatcher and
 /// policy pipeline own this object; tools receive no setters for approval state.
 /// </summary>
@@ -420,6 +455,7 @@ public sealed class ToolApprovalAttempt
     public IReadOnlySet<string> OneTimeApprovedPatterns => _oneTimeApprovedPatterns ?? EmptyPatterns;
     public string? AppliedDecision { get; private set; }
     public string? AppliedPattern { get; private set; }
+    internal ManagedTemporaryCorrectionTarget? ManagedTemporaryRetry { get; private set; }
 
     public void SetCwd(string? cwd) => Cwd = cwd;
 
@@ -446,6 +482,9 @@ public sealed class ToolApprovalAttempt
         AppliedDecision = null;
         AppliedPattern = null;
     }
+
+    internal void MarkManagedTemporaryRetry(ManagedTemporaryCorrectionTarget retry)
+        => ManagedTemporaryRetry = retry;
 
     internal void RestoreAuthorizationAttemptId(AuthorizationAttemptId authorizationAttemptId)
     {
@@ -489,7 +528,7 @@ public sealed class ToolInvocationContext
         if (runScope.Session is ToolSessionScope.Bound bound)
         {
             SessionId = bound.SessionId;
-            SessionDirectory = bound.SessionDirectory;
+            SessionStorage = bound.Storage;
         }
     }
 
@@ -561,10 +600,12 @@ public sealed class ToolInvocationContext
     public string? SessionId { get; }
 
     /// <summary>
-    /// Session-scoped temp directory for tools that write files to disk.
-    /// Created lazily on first access.
+    /// Session workspace used as the default base for relative tool paths.
     /// </summary>
-    public string? SessionDirectory { get; }
+    public string? SessionDirectory => SessionStorage?.SessionDirectory.Value;
+
+    /// <summary>Gets the complete resolved storage layout for a bound session.</summary>
+    public SessionStoragePaths? SessionStorage { get; }
 
     /// <summary>
     /// The session <i>content</i> inline budget
@@ -613,8 +654,8 @@ public sealed class ToolInvocationContext
     /// <c>WorkingDirectory</c> argument when the agent provided one;</item>
     /// <item><see cref="ProjectDirectory"/> — the session's declared project
     /// root, populated from <c>WorkingContext.ProjectDirectory</c>;</item>
-    /// <item><see cref="SessionDirectory"/> — the per-session scratch
-    /// directory under <c>~/.netclaw/sessions/&lt;id&gt;/</c>;</item>
+    /// <item><see cref="SessionDirectory"/> — the session workspace and
+    /// relative-path fallback;</item>
     /// <item><see cref="InheritedCwd"/> — a sub-agent's snapshot of the
     /// parent's resolved cwd, used when the child has no
     /// <see cref="ProjectDirectory"/> or <see cref="SessionDirectory"/> of
@@ -623,8 +664,8 @@ public sealed class ToolInvocationContext
     /// Returns <c>null</c> only when none of the four is available, which is
     /// the contract for tools that are not directory-anchored. Shell tools
     /// SHALL never inherit the daemon process's cwd — that defeats the
-    /// approval policy's safe-space invariant because the daemon's cwd is
-    /// unrelated to what the agent is "working on."
+    /// approval policy's path-containment invariant because the daemon's cwd
+    /// is unrelated to what the agent is "working on."
     /// </summary>
     public string? ResolveShellCwd(string? explicitArg)
     {
@@ -713,6 +754,7 @@ public sealed class ToolExecutionContext
     public string? ChannelType => Invocation.ChannelType;
     public string? SessionId => Invocation.SessionId;
     public string? SessionDirectory => Invocation.SessionDirectory;
+    public SessionStoragePaths? SessionStorage => Invocation.SessionStorage;
     public int MaxInlineToolResultChars => Invocation.MaxInlineToolResultChars;
     public string? ProjectDirectory => Invocation.ProjectDirectory;
     public ModelModality ModelInputModalities => Invocation.ModelInputModalities;

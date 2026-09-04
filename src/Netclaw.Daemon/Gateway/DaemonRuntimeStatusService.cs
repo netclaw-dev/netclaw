@@ -26,7 +26,6 @@ internal sealed class DaemonRuntimeStatusService(
     DaemonStartClock startClock,
     TimeProvider timeProvider,
     IChannelRegistry channelRegistry,
-    DaemonPersistenceOptions persistenceOptions,
     IOptions<TelemetryOptions> telemetryOptions,
     ModelCapabilities modelCapabilities,
     ModelSelection modelSelection,
@@ -71,7 +70,7 @@ internal sealed class DaemonRuntimeStatusService(
             Connectors = connectors,
             Persistence = new DaemonRuntimeStatus.Persistence
             {
-                Provider = persistenceOptions.Provider.ToString()
+                Provider = "Sqlite"
             },
             Telemetry = BuildTelemetry(),
             Model = new DaemonRuntimeStatus.Model
@@ -276,13 +275,14 @@ internal sealed class DaemonRuntimeStatusService(
 
     private async Task<DaemonRuntimeStatus.Memory> BuildMemoryStatusAsync(CancellationToken ct)
     {
+        var databasePath = paths.SqliteDbPath;
         if (sqliteMemoryStore is null)
         {
             return new DaemonRuntimeStatus.Memory
             {
                 Provider = "sqlite",
                 Status = "unavailable",
-                DatabasePath = paths.MemorySqliteDbPath
+                DatabasePath = databasePath
             };
         }
 
@@ -293,7 +293,7 @@ internal sealed class DaemonRuntimeStatusService(
             {
                 Provider = "sqlite",
                 Status = "healthy",
-                DatabasePath = paths.MemorySqliteDbPath,
+                DatabasePath = databasePath,
                 PendingCheckpoints = pending,
                 Embeddings = BuildEmbeddingsStatus()
             };
@@ -304,7 +304,7 @@ internal sealed class DaemonRuntimeStatusService(
             {
                 Provider = "sqlite",
                 Status = "degraded",
-                DatabasePath = paths.MemorySqliteDbPath,
+                DatabasePath = databasePath,
                 Embeddings = BuildEmbeddingsStatus()
             };
         }

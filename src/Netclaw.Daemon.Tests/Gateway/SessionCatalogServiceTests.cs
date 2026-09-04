@@ -10,6 +10,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Telemetry;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Gateway;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -28,7 +29,12 @@ public sealed class SessionCatalogServiceTests : IDisposable
     }
 
     private SessionCatalogService CreateService(NetclawPaths paths, ISessionMetrics? metrics = null, TimeProvider? timeProvider = null)
-        => new(paths, timeProvider ?? TimeProvider.System, NullLogger<SessionCatalogService>.Instance, metrics);
+        => new(
+            paths,
+            timeProvider ?? TimeProvider.System,
+            new TestSessionStorageResolver(paths),
+            NullLogger<SessionCatalogService>.Instance,
+            metrics);
 
     public void Dispose()
     {

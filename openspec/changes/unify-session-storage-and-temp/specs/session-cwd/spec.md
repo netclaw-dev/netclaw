@@ -14,9 +14,9 @@ This delta uses terms from the
 
 The system SHALL preserve the existing `[session]` context block and its
 `session_dir` entry. It SHALL extend that same block with the applicable
-`temp_dir`, `artifact_dir`, and `log_path` entries for Personal and Team parent
-and child runs. It SHALL NOT add a second context block or repeat these paths in
-per-turn guidance.
+`temp_dir`, `artifact_dir`, `worktree_dir`, and `log_path` entries for Personal
+and Team parent and child runs. It SHALL NOT add a second context block or
+repeat these paths in per-turn guidance.
 
 The system SHALL state the distinct purpose of each path. Public context SHALL
 retain its existing private-path policy. The guidance SHALL preserve an
@@ -40,6 +40,7 @@ runtime prompts and tool schemas SHALL NOT call either path â€œsession scratch.â
 - **WHEN** Netclaw assembles its initial model context
 - **THEN** the context contains its exact session, temporary, and artifact
   directories
+- **AND** it contains the session's exact worktree directory
 - **AND** it contains the exact log path for that child run
 - **AND** it describes `temp_dir` as disposable working storage
 - **AND** it describes `artifact_dir` as the location for outputs that the
@@ -50,8 +51,8 @@ runtime prompts and tool schemas SHALL NOT call either path â€œsession scratch.â
 
 - **GIVEN** a Personal parent already receives `[session]` with `session_dir`
 - **WHEN** Netclaw assembles its first model context for the new layout
-- **THEN** the same block also contains `temp_dir`, `artifact_dir`, and
-  `log_path`
+- **THEN** the same block also contains `temp_dir`, `artifact_dir`,
+  `worktree_dir`, and `log_path`
 - **AND** no second session block contains duplicate path guidance
 
 #### Scenario: Team child receives distinct managed paths
@@ -106,6 +107,78 @@ runtime prompts and tool schemas SHALL NOT call either path â€œsession scratch.â
 - **WHEN** Netclaw renders managed-path guidance
 - **THEN** the guidance points to `temp_dir`
 - **AND** it does not tell the model to use `session_dir` as scratch
+
+### Requirement: set_working_directory tool
+
+The system SHALL provide a `set_working_directory` tool that declares the
+session's project directory. The tool SHALL validate that the target is a real
+directory, resolve its canonical path, and request the shared
+`DeclareProjectScope` path access decision. That operation SHALL use read-file
+authority while remaining distinct from an ordinary read.
+
+The audience profile `AllowedTools` SHALL control whether the tool is exposed.
+Every audience and mode SHALL limit project declarations to the session
+directory, current project directory, and configured read roots. User approval
+and the default interactive Personal `All` file profile SHALL NOT widen those
+declaration roots.
+
+A successful declaration SHALL update project scope, add the directory to the
+trusted roots used by reviewed-safe shell policy, and load project identity
+files into the system prompt. The model-visible description SHALL present the
+tool as project declaration, not as a shell `cd` command.
+
+#### Scenario: set_working_directory updates project directory
+
+- **GIVEN** a session with no project directory set
+- **AND** the audience trust profile allows declarations under `/home/user`
+- **WHEN** the agent invokes `set_working_directory` with
+  path `/home/user/workspaces/akadonic`
+- **THEN** the session project directory is set to
+  `/home/user/workspaces/akadonic`
+- **AND** the project's identity file is loaded on the next LLM call
+- **AND** subsequent shell calls inside that directory may receive reviewed-safe
+  coverage
+
+#### Scenario: set_working_directory rejected outside trusted roots
+
+- **GIVEN** a session whose project declarations are limited to `/home/user`
+- **WHEN** the agent invokes `set_working_directory` with path `/etc/nginx`
+- **THEN** the project directory remains unchanged
+- **AND** the tool reports that the path is outside trusted roots
+
+#### Scenario: set_working_directory rejected for nonexistent directory
+
+- **GIVEN** a session with read authority under `/home/user`
+- **WHEN** the agent invokes `set_working_directory` with
+  path `/home/user/nonexistent`
+- **THEN** the project directory remains unchanged
+- **AND** the tool reports that the directory does not exist
+
+#### Scenario: Personal audience limits project declaration to trusted roots
+
+- **GIVEN** a default Personal file profile with broad interactive read access
+- **AND** a valid target outside the session, current project, and configured
+  read roots
+- **WHEN** the agent invokes `set_working_directory` with that target
+- **THEN** the project directory is not updated
+- **AND** the declaration is denied even though an ordinary interactive
+  Personal read of the same path may be allowed
+
+#### Scenario: set_working_directory not exposed to public audience
+
+- **GIVEN** a Public session
+- **WHEN** the tool exposure list is computed
+- **THEN** `set_working_directory` is not included
+
+#### Scenario: Switching projects replaces context
+
+- **GIVEN** a session with project directory `/home/user/workspaces/akadonic`
+- **WHEN** the agent invokes `set_working_directory` with
+  path `/home/user/workspaces/other-project`
+- **THEN** the project directory changes to `/home/user/workspaces/other-project`
+- **AND** the next LLM call loads identity files from the new project
+- **AND** the old project's identity files are no longer injected
+- **AND** the reviewed-safe trusted root switches to the new project directory
 
 ### Requirement: Managed temporary directory is the private temporary location
 
@@ -213,17 +286,30 @@ Windows temporary path.
 - **THEN** process creation fails before user code runs
 - **AND** Netclaw does not fall back to the host platform temporary root
 
+#### Scenario: Example - old background job record remains readable
+
+- **GIVEN** a persisted background job definition predates the
+  `ManagedTemporaryDirectory` property
+- **WHEN** the current daemon loads that JSON after restart
+- **THEN** it preserves the job's terminal history
+- **AND** a pending or running job follows the existing restart contract and
+  becomes `Lost`
+- **AND** the owning session receives the existing lost-job notification
+- **AND** the daemon does not resume the job with the host temporary root
+
 ### Requirement: Worktrees have a separate session-owned area
 
 The system SHALL distinguish managed worktrees from ordinary temporary files.
-It SHALL allocate worktrees below `<session-envelope>/worktrees` and SHALL NOT
-place them below a run's managed temporary directory. This capability SHALL
-NOT define automatic worktree cleanup.
+It SHALL expose `<session-envelope>/worktrees` as `worktree_dir` in the existing
+session context and SHALL NOT place that directory below a run's managed
+temporary directory. Agents SHALL use existing shell and project-scope tools
+to create and adopt worktrees. This capability SHALL NOT define automatic
+worktree cleanup or a worktree-specific tool.
 
 #### Scenario: Example - worktree stays outside run temp
 
-- **GIVEN** an agent requests a managed worktree
-- **WHEN** the destination is allocated
+- **GIVEN** an agent needs a Git worktree
+- **WHEN** it chooses a destination below the announced `worktree_dir`
 - **THEN** it is below the session worktree area
 - **AND** it is not below the parent or child temporary directory
 
@@ -233,3 +319,10 @@ NOT define automatic worktree cleanup.
 - **WHEN** the session ends
 - **THEN** this capability does not delete the worktree
 - **AND** later cleanup requires a separate policy
+
+#### Scenario: Counterexample - worktree directory is not a temporary API root
+
+- **GIVEN** a child process calls a standard temporary-path API
+- **WHEN** Netclaw has injected the run environment
+- **THEN** the API resolves below `temp_dir`
+- **AND** it does not resolve below `worktree_dir`

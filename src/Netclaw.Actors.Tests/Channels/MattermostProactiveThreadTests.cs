@@ -333,7 +333,7 @@ public sealed class MattermostProactiveThreadActorTests(ITestOutputHelper output
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestMattermostGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
-            Paths: TestMattermostGatewayDeps.NewTestPaths(),
+                        StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
             SessionPropsFactory: (_, _, _, _) => Props.Create(() => new ForwardActor(TestActor)));
 
         return Sys.ActorOf(

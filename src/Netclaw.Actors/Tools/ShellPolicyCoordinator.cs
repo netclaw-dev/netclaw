@@ -19,7 +19,7 @@ internal sealed class ShellPolicyCoordinator(
 {
     private readonly ShellApprovalEvidenceAdapter _approvalEvidence = new(approvalService);
 
-    internal async Task<ShellPolicyAuthorization> EvaluateAsync(
+    internal async Task<(ToolAuthorizationDecision Decision, ShellCommandAnalysis? AuthorizedAnalysis)> EvaluateAsync(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
@@ -45,15 +45,15 @@ internal sealed class ShellPolicyCoordinator(
         }
         catch (Exception)
         {
-            return new ShellPolicyAuthorization(
+            return (
                 CompleteWithTrace(
                     ToolAuthorizationDecision.Deny("internal_policy_failure"),
                     trace),
-                authorizedAnalysis: null);
+                null);
         }
     }
 
-    private async Task<ShellPolicyAuthorization> EvaluateCoreAsync(
+    private async Task<(ToolAuthorizationDecision Decision, ShellCommandAnalysis? AuthorizedAnalysis)> EvaluateCoreAsync(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
@@ -72,10 +72,10 @@ internal sealed class ShellPolicyCoordinator(
                     toolCall.Name,
                     approvalContext))
             {
-                preflightDecision = ToolAccessDecision.Allow(ToolAllowReason.OneTimeApproval);
+                preflightDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
             }
 
-            return new ShellPolicyAuthorization(
+            return (
                 Complete(preflightDecision, [], trace),
                 complete.AuthorizedAnalysis);
         }
@@ -87,15 +87,25 @@ internal sealed class ShellPolicyCoordinator(
                 continuation.Analysis,
                 continuation.ApprovalContext,
                 context,
-                policy.IsSafePlatformTemporaryPath,
+                policy.IsEligiblePlatformTemporaryPath,
                 out var projection)
             || projection is null)
         {
-            return new ShellPolicyAuthorization(
+            return (
                 CompleteWithTrace(
                     ToolAuthorizationDecision.Deny("internal_policy_failure"),
                     trace),
-                authorizedAnalysis: null);
+                null);
+        }
+
+        var projectedPathDecision = policy.EnforceProjectedShellFileProtection(
+            projection.PathFacts,
+            context.Invocation);
+        if (projectedPathDecision is not null)
+        {
+            return (
+                CompleteWithTrace(projectedPathDecision, trace),
+                null);
         }
 
         var decision = await CompleteAsync(
@@ -104,21 +114,32 @@ internal sealed class ShellPolicyCoordinator(
             context,
             projection,
             cancellationToken);
-        return new ShellPolicyAuthorization(
+        if (decision.Outcome == ToolAuthorizationOutcome.RequiresApproval
+            && continuation.Correction is { } correction
+            && decision.ApprovalContext is { } finalApprovalContext)
+        {
+            decision = ToolAuthorizationDecision.RequiresApproval(
+                finalApprovalContext,
+                decision.ApprovalMatches,
+                correction);
+        }
+
+        return (
             decision,
             decision.Outcome == ToolAuthorizationOutcome.Allowed
                 ? continuation.Analysis
                 : null);
     }
 
-    internal static ShellPolicyAuthorization CompleteInternalFailure()
+    internal static (ToolAuthorizationDecision Decision, ShellCommandAnalysis? AuthorizedAnalysis)
+        CompleteInternalFailure()
     {
         var trace = new ShellPolicyDecisionTraceBuilder();
-        return new ShellPolicyAuthorization(
+        return (
             CompleteWithTrace(
                 ToolAuthorizationDecision.Deny("internal_policy_failure"),
                 trace),
-            authorizedAnalysis: null);
+            null);
     }
 
     private async Task<ToolAuthorizationDecision> CompleteAsync(
@@ -254,7 +275,7 @@ internal sealed class ShellPolicyCoordinator(
         if (uncovered.Count > 0)
         {
             var remainingContext = evaluation.GetUncoveredApprovalContext(
-                context.SessionDirectory);
+                ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context));
             if (projection.HasExactOneTimeApproval(toolCall.Name, remainingContext))
             {
                 foreach (var candidate in uncovered)
@@ -330,7 +351,8 @@ internal sealed class ShellPolicyCoordinator(
         {
             return evaluation.Complete(
                 ToolAuthorizationDecision.RequiresApproval(
-                    evaluation.GetUncoveredApprovalContext(context.SessionDirectory),
+                    evaluation.GetUncoveredApprovalContext(
+                        ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context)),
                     approvalMatches));
         }
 
@@ -368,7 +390,7 @@ internal sealed class ShellPolicyCoordinator(
             ToolAuthorizationDecision.Allow(
                 grantCandidates.Count == 0
                     ? ToolAllowReason.ApprovalExemptShellCandidates
-                    : ToolAllowReason.SafeVerbInTrustedScope));
+                    : ToolAllowReason.ReviewedSafePolicy));
     }
 
     private static string FormatApprovalMatches(IReadOnlyList<ToolApprovalMatch> matches)
@@ -389,12 +411,10 @@ internal sealed class ShellPolicyCoordinator(
     }
 
     private static ToolAuthorizationDecision Complete(
-        ToolAccessDecision decision,
+        ToolAuthorizationDecision decision,
         IReadOnlyList<ToolApprovalMatch> approvalMatches,
         ShellPolicyDecisionTraceBuilder trace)
-        => CompleteWithTrace(
-            ToolAuthorizationDecision.From(decision, approvalMatches),
-            trace);
+        => CompleteWithTrace(decision.WithApprovalMatches(approvalMatches), trace);
 
     private static ToolAuthorizationDecision CompleteWithTrace(
         ToolAuthorizationDecision decision,

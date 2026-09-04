@@ -5,9 +5,15 @@ The terms in this requirement use the
 
 ### Requirement: Relative first-party filesystem paths use session-owned bases
 
-First-party filesystem tools SHALL resolve a relative path against the declared project directory when one exists. Otherwise, they SHALL use the immutable session directory. If neither base exists, they SHALL return an `invalid_context` correction. They SHALL NOT use the daemon process current directory.
+`session-cwd` SHALL select the declared project directory when that base is
+available. Otherwise, it SHALL select the immutable session directory. If
+neither base is available, it SHALL return an `invalid_context` correction. It
+SHALL NOT use the daemon process current directory.
 
-The selected base SHALL be a canonical absolute path. A declared project base SHALL remain within an owning allowed root. The system SHALL reject a symlink or junction in that project base or in an ancestor below the owning root. The final canonical path SHALL pass existing scope and protected-path policies. The system SHALL NOT retry another base after a selected base fails authorization.
+`session-cwd` SHALL pass the selected base and authored path to the filesystem
+authorization contract that `netclaw-tools` owns. It SHALL NOT make another
+path-safety decision. It SHALL NOT retry another base after the path access
+decision denies the request.
 
 Resolution examples and counterexamples:
 
@@ -16,8 +22,8 @@ Resolution examples and counterexamples:
 | `src/App.cs`, project `/workspace/project` | `/workspace/project/src/App.cs` | Apply normal read or write policy. |
 | `notes.md`, no project, session `/session/current` | `/session/current/notes.md` | Apply normal session policy. |
 | `notes.md`, stale unavailable project, valid session | `/session/current/notes.md` | Fall back before authorization begins. |
-| `notes.md`, project has a link ancestor | none | `access_denied`; do not try the session base. |
-| `../../outside.txt`, valid project | canonical outside path | Deny if existing scope policy does not authorize it; do not try the session base. |
+| `notes.md`, project has a link ancestor | project | Path access denies it; do not try the session base. |
+| `../../outside.txt`, valid project | project | Path access decides on the canonical path; do not try the session base after denial. |
 | `notes.md`, no project or session | none | `invalid_context`; do not use the daemon current directory. |
 | `/absolute/report.md` | `/absolute/report.md` | Do not select a relative base; apply normal policy directly. |
 
@@ -28,7 +34,7 @@ Resolution examples and counterexamples:
 - **THEN** it authorizes and reads `/workspace/project/src/App.cs`
 - **AND** it does not use the daemon current directory
 
-#### Scenario: Relative write falls back to session scratch
+#### Scenario: Relative write falls back to the session directory
 
 - **GIVEN** no declared project and session directory `/session/current`
 - **WHEN** `file_write` receives `notes/result.md`
@@ -39,15 +45,16 @@ Resolution examples and counterexamples:
 
 - **GIVEN** project directory `/workspace/project`
 - **WHEN** a file tool receives `../../outside.txt`
-- **THEN** it canonicalizes the result before policy evaluation
-- **AND** it denies the call when the path is outside authorized roots
+- **THEN** `session-cwd` passes the selected base and authored path to `netclaw-tools`
+- **AND** the path access decision denies a path outside the trusted roots
 
 #### Scenario: Ancestor link rejects the relative base
 
-- **GIVEN** an allowed root contains a link ancestor for the declared project
+- **GIVEN** a trusted root contains a link ancestor for the declared project
 - **WHEN** a file tool receives a relative path
-- **THEN** the tool returns `access_denied`
+- **THEN** the `netclaw-tools` path access decision returns `access_denied`
 - **AND** it performs no file access through the link
+- **AND** `session-cwd` does not try the session directory
 
 #### Scenario: Missing base returns correction
 

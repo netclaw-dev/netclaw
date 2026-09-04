@@ -76,7 +76,7 @@ public sealed class McpProcessBoundStdioTests
             "browser_playwright",
             "process-info",
             null,
-            TestToolExecutionContext.CreateBound(sessionId, null, TrustAudience.Personal).Invocation,
+            TestToolExecutionContext.CreateBoundWithoutApproval(sessionId, null, TrustAudience.Personal).Invocation,
             ct);
 
         return JsonSerializer.Deserialize<ProcessInfo>(result, JsonOptions)!;

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -74,6 +75,16 @@ public class ToolRegistrationExtensionsTests
     }
 
     [Fact]
+    public void First_party_registry_composes_worktrees_without_a_custom_tool()
+    {
+        var registry = CreateFullFirstPartyRegistry();
+
+        Assert.IsType<ShellTool>(registry.GetByName("shell_execute"));
+        Assert.IsType<SetWorkingDirectoryTool>(registry.GetByName("set_working_directory"));
+        Assert.Null(registry.GetByName("worktree_create"));
+    }
+
+    [Fact]
     public void Registration_defaults_to_deferred_and_core_replacement_is_explicit()
     {
         var registry = new ToolRegistry();
@@ -98,12 +109,116 @@ public class ToolRegistrationExtensionsTests
         var registry = new ToolRegistry();
         var config = new ToolConfig();
 
-        Assert.Throws<ArgumentNullException>(() => registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            new ToolPathPolicy([]),
-            new ShellCommandPolicy()));
+        Assert.Throws<ArgumentNullException>(() => registry.WithFirstPartyTools(null!));
         Assert.Empty(registry.GetAllRegistrations());
+    }
+
+    [Fact]
+    public async Task First_party_structured_tools_reuse_the_access_policy_custom_root()
+    {
+        using var directory = new DisposableTempDir();
+        var paths = new NetclawPaths(Path.Combine(directory.Path, "custom-home"));
+        var config = new ToolConfig();
+        var pathPolicy = new ToolPathPolicy([]);
+        var commandPolicy = new ShellCommandPolicy();
+        var policy = new ToolAccessPolicy(
+            paths,
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            commandPolicy,
+            pathPolicy);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(policy);
+        var tool = Assert.IsType<FileWriteTool>(registry.GetByName(FileWriteTool.ToolName));
+        var targetPath = Path.Combine(paths.SessionsDirectory, "other-session", "result.txt");
+        var currentSession = Path.Combine(directory.Path, "current-session");
+        Directory.CreateDirectory(currentSession);
+        var context = TestToolExecutionContext.CreateBound(
+            "signalr/current-session",
+            currentSession,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = TrustBoundary.TrustedInstance,
+                ChannelType = "signalr"
+            });
+        var arguments = ToolInput.Create("Path", targetPath, "Content", "shared policy");
+
+        var preflight = policy.AuthorizeInvocation(tool, context, arguments);
+        var result = await tool.ExecuteAsync(arguments, context, TestContext.Current.CancellationToken);
+
+        Assert.True(preflight.Allowed);
+        Assert.Contains("Successfully wrote", result, StringComparison.Ordinal);
+        Assert.Equal(
+            "shared policy",
+            await File.ReadAllTextAsync(targetPath, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Skill_registration_preserves_file_read_logging()
+    {
+        using var directory = new DisposableTempDir();
+        var paths = new NetclawPaths(directory.Path);
+        paths.EnsureDirectoriesExist();
+        var skillDirectory = Path.Combine(paths.SkillsDirectory, "tracked-skill");
+        var skillFile = Path.Combine(skillDirectory, "SKILL.md");
+        Directory.CreateDirectory(skillDirectory);
+        await File.WriteAllTextAsync(
+            skillFile,
+            "---\nname: tracked-skill\ndescription: tracked\n---\n\n# Tracked",
+            TestContext.Current.CancellationToken);
+
+        var skillRegistry = new SkillRegistry();
+        var scan = SkillScanner.Scan(paths.SkillsDirectory);
+        skillRegistry.ReplaceAll(scan.AcceptedSkills, scan.Issues);
+        var policy = CreateAccessPolicy(new ToolConfig(), paths);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(policy);
+        var indexPublisher = new SkillIndexPublisher(
+            skillRegistry,
+            new SkillIndexContextLayer(),
+            static (_, _) => true);
+        var refresher = new SkillInventoryRefresher(
+            paths,
+            new SkillFeedsConfig(),
+            [],
+            skillRegistry,
+            indexPublisher);
+        var logger = new RecordingLogger<FileReadTool>();
+        registry.WithSkillTools(
+            policy,
+            skillRegistry,
+            paths,
+            new NoOpSkillContentScanner(),
+            new UnavailablePromptLoader(),
+            refresher,
+            logger);
+        var context = TestToolExecutionContext.CreateBound(
+            "slack/thread-1",
+            Path.Combine(paths.SessionsDirectory, "thread-1"),
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Team,
+                Boundary = TrustBoundary.Team,
+                ChannelType = "slack"
+            });
+        var tool = Assert.IsType<FileReadTool>(registry.GetByName(FileReadTool.ToolName));
+
+        var result = await tool.ExecuteAsync(
+            ToolInput.Create("Path", skillFile),
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Contains("# Tracked", result, StringComparison.Ordinal);
+        Assert.Contains(
+            logger.Messages,
+            static message => message.Contains(
+                "turn_skill_loaded skill=tracked-skill method=file_read",
+                StringComparison.Ordinal));
     }
 
     [Fact]
@@ -127,14 +242,9 @@ public class ToolRegistrationExtensionsTests
     {
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-core-tool-contract"));
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        var policy = CreateAccessPolicy(config);
+        var policy = CreateAccessPolicy(config, paths);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            paths,
-            new ToolPathPolicy([]),
-            new ShellCommandPolicy(),
-            toolAccessPolicy: policy);
+        registry.WithFirstPartyTools(policy);
 
         var skillRegistry = new SkillRegistry();
         var scanner = new NoOpSkillContentScanner();
@@ -149,17 +259,20 @@ public class ToolRegistrationExtensionsTests
             skillRegistry,
             indexPublisher);
         registry.WithSkillTools(
+            policy,
             skillRegistry,
             paths,
             scanner,
             new UnavailablePromptLoader(),
-            refresher);
+            refresher,
+            new RecordingLogger<FileReadTool>());
 
         return registry;
     }
 
-    private static ToolAccessPolicy CreateAccessPolicy(ToolConfig config) =>
+    private static ToolAccessPolicy CreateAccessPolicy(ToolConfig config, NetclawPaths? paths = null) =>
         new(
+            paths ?? new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -204,5 +317,32 @@ public class ToolRegistrationExtensionsTests
             ToolInvocationContext context,
             CancellationToken cancellationToken) =>
             ValueTask.FromResult(McpPromptSkillLoadResult.Failed("unavailable"));
+    }
+
+    private sealed class RecordingLogger<T> : ILogger<T>
+    {
+        public List<string> Messages { get; } = [];
+
+        public IDisposable BeginScope<TState>(TState state) where TState : notnull
+            => EmptyScope.Instance;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+            => Messages.Add(formatter(state, exception));
+
+        private sealed class EmptyScope : IDisposable
+        {
+            public static EmptyScope Instance { get; } = new();
+
+            public void Dispose()
+            {
+            }
+        }
     }
 }

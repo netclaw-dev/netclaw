@@ -164,7 +164,7 @@ tool can complete.
 
 #### Scenario: Disposable text starts with structured file tools
 
-- **GIVEN** disposable text belongs in session scratch
+- **GIVEN** disposable text belongs in the managed temporary directory
 - **AND** `file_write` and `file_read` are available
 - **WHEN** the agent creates and reads that text
 - **THEN** guidance selects those structured tools directly
@@ -281,7 +281,7 @@ complete typed facts and paired strict-boundary tests.
 - **THEN** that link alone does not make the analysis messy
 - **AND** ordinary approval, mutation, audience, and path rules remain active
 
-#### Scenario: An unsafe glob alias remains strict
+#### Scenario: An out-of-root glob alias remains strict
 
 - **GIVEN** a leaf-glob directory contains a broken or externally targeted link
 - **OR** final-target or symlink inspection fails
@@ -292,7 +292,7 @@ complete typed facts and paired strict-boundary tests.
 
 Behavioral evals SHALL use fresh sessions and natural task prompts. A prompt
 SHALL NOT name the expected tool, `WorkingDirectory`, project declaration,
-scratch path, or inline directory form. Assertions SHALL inspect exact tool
+managed temporary path, or inline directory form. Assertions SHALL inspect exact tool
 calls, their order, completion, and approval events. Baseline and changed runs
 SHALL use the same task and model configuration.
 
@@ -320,7 +320,7 @@ SHALL use the same task and model configuration.
 
 #### Scenario: Headless directory-transition guard keeps the boundary
 
-- **GIVEN** an explicit directory transition reaches its expected trust-zone denial
+- **GIVEN** an explicit directory transition reaches its expected path access denial
 - **WHEN** the headless result is assessed
 - **THEN** the behavior guard requires one authored transition and no scope substitution
 - **AND** the requested operation remains incomplete

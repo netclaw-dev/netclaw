@@ -3,11 +3,19 @@
 This proposal uses the
 [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for shared terms.
 
-Recent tool-friction evidence shows agents still copy files into session scratch before attaching them and sometimes type a known Netclaw tool name into `shell_execute`. The first pattern wastes work and can trigger approval; the second turns a recoverable tool-choice mistake into a shell approval prompt. This change advances PRD-001 tool execution and PRD-002 least-authority behavior by making the intended structured path the easiest path.
+Recent tool-friction evidence shows agents still copy files into a managed
+temporary directory before attachment. Agents also type a known Netclaw tool
+name into `shell_execute`. The first pattern wastes work and can trigger
+approval. The second pattern turns a correctable tool-choice mistake into a
+shell approval prompt. This change advances PRD-001 tool execution and PRD-002
+least-authority behavior by making the intended structured path the easiest
+path.
 
 ## What Changes
 
-- Add policy-exposed `attach_file` to the initial parent-session core tool set and state that it accepts an authorized source path directly; the agent does not need to copy the file into session scratch first.
+- Add policy-exposed `attach_file` to the initial parent-session core tool set.
+  State that it accepts an authorized source path directly. The agent does not
+  need to copy the file into managed temporary storage first.
 - Before shell approval or execution, recognize a complete static shell
   analysis containing an authored command occurrence whose exact executable
   token names a policy-visible first-party Netclaw tool.

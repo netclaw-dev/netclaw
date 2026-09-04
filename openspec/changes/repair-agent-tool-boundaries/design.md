@@ -2,7 +2,10 @@
 
 The prior tool work added relative paths, call-local receipts, progressive disclosure, and several focused tools. Live use and adversarial review exposed three problems.
 
-First, a relative project base can contain an unsafe ancestor link. Second, receipt categories differ between parent and child policy denials. Third, two bulk tools duplicate smaller tools and can consume too much model context.
+First, a relative project base can contain an ancestor link that escapes its
+trusted root. Second, receipt categories differ between parent and child policy
+denials. Third, two bulk tools duplicate smaller tools and can consume too much
+model context.
 
 The canonical spill contract also still describes a raw file path and shell grep. The runtime now exposes an opaque `tool_output_read` route instead.
 
@@ -28,7 +31,7 @@ model
        -> authorization
        -> tool implementation
        -> factual result -> redaction and output bound --+
-       -> ToolInvocationReceipt --------------------------+---> correction presenter
+       -> ToolInvocationReceipt --------------------------+---> remediation presenter
                                                            -> model-facing result
 
 ToolInvocationReceipt
@@ -39,7 +42,7 @@ An approval request pauses this flow before tool execution. It does not create
 a terminal receipt. Caller cancellation also propagates without a receipt or
 model-facing failure. For another terminal exception, the dispatcher first
 classifies the receipt. The parent or child actor then creates the factual
-failure result and applies the same correction presenter before model delivery.
+failure result and applies the same remediation presenter before model delivery.
 
 ## Goals / Non-Goals
 
@@ -62,29 +65,33 @@ failure result and applies the same correction presenter before model delivery.
 
 ## Decisions
 
-### 1. The path policy validates the complete selected base chain
+### 1. Base selection and path authorization have different owners
 
-`ScopedFileAccessPolicy` will select one relative base. It will validate that base against its owning allowed root before it resolves the authored path.
+`session-cwd` selects one available base for a relative path. It does not decide
+whether that path is authorized. The `netclaw-tools` path access decision validates
+the complete selected base chain and the resolved authored path.
 
-The validation will reject a link or junction in the base or its ancestors below the owning root. It will preserve the current root, audience, and protected-path checks.
-
-The policy will not retry against session scratch after a project-based denial. A stale project can use the existing session fallback only before path authorization starts.
+The decision rejects a link or junction in the base or its ancestors below the
+trusted root. It also applies the audience, file-operation, and protected-path
+rules. The system can use the session directory only when the project base is
+unavailable before authorization starts. It does not retry another base after
+a denial.
 
 Example:
 
 ```text
-allowed root     = /srv/workspaces
+trusted root     = /srv/workspaces
 declared project = /srv/workspaces/team/project
 authored path    = README.md
 
 /srv/workspaces/team is a link to /outside
-  -> project base state = Unsafe
-  -> result category    = AccessDenied
-  -> file access        = none
-  -> session fallback   = forbidden
+  -> relative base availability = Available
+  -> path access decision       = Denied(link boundary)
+  -> result category            = AccessDenied
+  -> session fallback           = forbidden
 
 /srv/workspaces/team/project does not exist
-  -> project base state = Unavailable
+  -> relative base availability = Unavailable
   -> try the valid session directory before authorization starts
 ```
 
@@ -270,7 +277,7 @@ This change adds no event, snapshot, protobuf, or configuration field. Recovery 
 
 ## Failure Modes and Recovery
 
-- Unsafe project ancestor: return `access_denied`; do not access the file.
+- Project ancestor escapes its trusted root: return `access_denied`; do not access the file.
 - Policy denial: return or propagate the existing bounded denial with an `access_denied` receipt.
 - Approval request: record no terminal receipt; retry after the approval result.
 - Removed tool name: return the normal hidden or unknown tool result.

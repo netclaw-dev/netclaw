@@ -246,6 +246,16 @@ archive_eval_run() {
         mkdir -p "$archive_dir/container-logs"
         cp -r "$EVAL_HOME/logs/." "$archive_dir/container-logs/" 2>/dev/null || true
     fi
+    # Version-2 session logs are below session envelopes.
+    # Copy only log files because session workspaces can contain private data.
+    if [[ -d "$EVAL_HOME/data/sessions" ]]; then
+        while IFS= read -r session_log; do
+            local relative_log="${session_log#"$EVAL_HOME/data/sessions/"}"
+            local archive_log="$archive_dir/session-logs/$relative_log"
+            mkdir -p "$(dirname "$archive_log")"
+            cp "$session_log" "$archive_log" 2>/dev/null || true
+        done < <(find "$EVAL_HOME/data/sessions" -type f -path '*/logs/*.log' 2>/dev/null)
+    fi
 
     # Copy results DB
     if [[ -f "${RESULTS_DB:-}" ]]; then
@@ -1214,7 +1224,7 @@ stdout_json_session_actor_log_path() {
     [[ -n "$session_id" ]] || return 1
 
     session_segment="${session_id//\//_}"
-    log_path="$EVAL_HOME/logs/sessions/$session_segment/session.log"
+    log_path="$EVAL_HOME/data/sessions/$session_segment/logs/session.log"
     [[ -f "$log_path" ]] || return 1
     printf '%s\n' "$log_path"
 }
@@ -1876,7 +1886,6 @@ setup_subagent_session_scratch_disposable() {
 
 assert_subagent_session_scratch_disposable() {
     stdout_json_tool_called 'spawn_agent' || return 1
-    stdout_response_contains 'git version' || return 1
 
     local spawn_call child_task child_log
     spawn_call=$(stdout_json_tool_call_arguments 'spawn_agent' | head -1)
@@ -1886,19 +1895,16 @@ assert_subagent_session_scratch_disposable() {
     ! grep -Eiq 'session_dir|/tmp|temporary|working.?directory|set_working_directory|(^|[^[:alpha:]])cwd([^[:alpha:]]|$)' \
         <<<"$child_task" || return 1
 
-    child_log=$(find "$EVAL_HOME/logs/sessions" -type f \
-        -path '*_subagent_disposable-diagnostic_*/session.log' \
+    local child_relative expected_temp_dir
+    child_log=$(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/logs/session.log' \
         -newer "$SUBAGENT_SCRATCH_LOG_MARKER" 2>/dev/null | head -1)
     [[ -n "$child_log" ]] || return 1
     grep -aq \
         'SubAgent \[disposable-diagnostic\] completed (success=True, outcome=Completed' \
         "$child_log" || return 1
-
-    local session_id session_segment expected_session_dir
-    session_id=$(jq -r '.sessionId' "$STDOUT_FILE")
-    [[ -n "$session_id" && "$session_id" != "null" ]] || return 1
-    session_segment=$(LC_ALL=C sed 's/[^[:alnum:]-]/_/g' <<<"$session_id")
-    expected_session_dir="/home/netclaw/.netclaw/sessions/$session_segment"
+    child_relative="${child_log#"$EVAL_HOME/data/"}"
+    expected_temp_dir="/home/netclaw/.netclaw/${child_relative%/logs/session.log}/tmp"
 
     local shell_count shell_result_count
     shell_count=$(grep -ac \
@@ -1908,26 +1914,17 @@ assert_subagent_session_scratch_disposable() {
         'SubAgent \[disposable-diagnostic\] tool \[shell_execute\] result: Exit code: 0' \
         "$child_log")
 
-    [[ "$shell_count" -eq 2 ]] || return 1
-    [[ "$shell_result_count" -eq 2 ]] || return 1
+    [[ "$shell_count" -eq 1 ]] || return 1
+    [[ "$shell_result_count" -eq 1 ]] || return 1
 
     local -a call_previews
     mapfile -t call_previews < <(grep -aEo \
         'shell_execute#[^(]+\([^)]*\)' \
         "$child_log")
-    [[ "${#call_previews[@]}" -eq 2 ]] || return 1
-
-    local version_suffix config_suffix
-    [[ "${call_previews[0]}" == *"Command=git --version,"* ]] || return 1
-    [[ "${call_previews[1]}" == *"Command=git config --list,"* ]] || return 1
-    version_suffix=${call_previews[0]#*"WorkingDirectory=$expected_session_dir"}
-    config_suffix=${call_previews[1]#*"WorkingDirectory=$expected_session_dir"}
-    [[ "$version_suffix" != "${call_previews[0]}" \
-        && ( "$version_suffix" == ,* || "$version_suffix" == \)* ) ]] || return 1
-    [[ "$config_suffix" != "${call_previews[1]}" \
-        && ( "$config_suffix" == ,* || "$config_suffix" == \)* ) ]] || return 1
-    ! grep -aEiq 'Command=[^,]*(/tmp|\\Temp\\)|WorkingDirectory=(/tmp|[^,]*\\Temp\\)' \
-        "$child_log" || return 1
+    [[ "${#call_previews[@]}" -eq 1 ]] || return 1
+    [[ "${call_previews[0]}" == *"tempfile.gettempdir()"* ]] || return 1
+    grep -aFq "$expected_temp_dir" "$child_log" || return 1
+    stdout_response_contains "$expected_temp_dir"
 
 }
 
@@ -2197,11 +2194,11 @@ assert_approval_set_working_directory_negative() {
 }
 
 # Recovery: T1 agent issues a shell call that gets denied for cwd-outside-
-# safe-spaces (the daemon emits the set_working_directory hint in the result).
+# trusted roots (the daemon emits the set_working_directory hint in the result).
 # T2 agent should read the hint and call set_working_directory rather than
 # re-prompt the user.
 #
-# Note: scripting an actual cwd-outside-safe-space denial inside the eval
+# Note: scripting an actual cwd denial outside trusted roots inside the eval
 # container is awkward — the eval daemon defaults the session to its own
 # scratch dir, so any explicit WorkingDirectory pointing at a repo path
 # triggers the prompt path. We approximate by feeding the hint shape into
@@ -2411,7 +2408,7 @@ assert_approval_inline_cd_semantics() {
 
 # A natural request for process-local directory mutation must retain that shell
 # transition. The headless guardrail passes only when the agent reports the
-# trust-zone boundary once without substituting scope or claiming completion.
+# path access boundary once without substituting scope or claiming completion.
 assert_approval_natural_directory_change() {
     local shell_call call_id command
     local -a shell_calls
@@ -2500,20 +2497,17 @@ assert_approval_set_working_directory_retry() {
         ' "$STDOUT_FILE" >/dev/null
 }
 
-# Disposable output should go directly through file tools in private session
-# scratch. A failed shell attempt is still approval friction, not a clean pass.
-assert_approval_session_scratch_disposable() {
-    local session_id session_segment expected_path write_call read_call
+# Disposable output must use file tools in the exact managed temporary directory.
+assert_approval_managed_temp_disposable() {
+    local expected_path write_call read_call
     stdout_json_envelope_valid || return 1
     ! stdout_json_tool_called 'shell_execute' || return 1
     ! stdout_json_tool_called 'set_working_directory' || return 1
 
-    session_id=$(jq -r '.sessionId' "$STDOUT_FILE")
-    [[ -n "$session_id" && "$session_id" != "null" ]] || return 1
-    session_segment=$(LC_ALL=C sed 's/[^[:alnum:]-]/_/g' <<<"$session_id")
-    expected_path="/home/netclaw/.netclaw/sessions/$session_segment/result.log"
     write_call=$(stdout_json_tool_call_arguments 'file_write' | head -1)
     read_call=$(stdout_json_tool_call_arguments 'file_read' | head -1)
+    expected_path=$(jq -r '.Path // empty' <<<"$write_call")
+    [[ "$expected_path" == /home/netclaw/.netclaw/sessions/*/tmp/parent/result.log ]] || return 1
 
     jq -e --arg expected "$expected_path" '
         .Path == $expected
@@ -2526,6 +2520,69 @@ assert_approval_session_scratch_disposable() {
             (.response | contains("diagnostic-ok v1"))
             and (.response | contains("line2: all systems nominal"))
         ' "$STDOUT_FILE" >/dev/null
+}
+
+assert_parent_child_log_handoff() {
+    stdout_json_envelope_valid || return 1
+    stdout_json_tool_called 'spawn_agent' || return 1
+    ! stdout_json_tool_called 'shell_execute' || return 1
+
+    local tool_name arguments path call_id headless_log
+    headless_log=$(stdout_json_headless_log_path) || return 1
+    for tool_name in file_read file_list file_search; do
+        while IFS=$'\t' read -r call_id arguments; do
+            path=$(jq -r '.Path // .Root // empty' <<<"$arguments")
+            if [[ "$path" == /home/netclaw/.netclaw/sessions/*/subagents/*/logs/session.log \
+                || "$path" == /home/netclaw/.netclaw/sessions/*/subagents/*/logs ]]; then
+                grep -qaF "TOOL_RESULT: $tool_name call_id=$call_id result=" "$headless_log" \
+                    && ! grep -qaF "TOOL_RESULT: $tool_name call_id=$call_id result=Error:" "$headless_log" \
+                    && jq -e '.response | length > 0' "$STDOUT_FILE" >/dev/null
+                return
+            fi
+        done < <(jq -r --arg tool_name "$tool_name" '
+            .toolCalls[]?
+            | select(.toolName == $tool_name)
+            | [.callId, .argumentsJson]
+            | @tsv
+        ' "$STDOUT_FILE")
+    done
+
+    return 1
+}
+
+setup_managed_worktree_creation() {
+    local run="$1"
+    MANAGED_WORKTREE_BRANCH="eval-managed-${RUN_ID:0:8}-$run"
+}
+
+assert_managed_worktree_creation() {
+    local shell_call set_call destination set_call_id
+    stdout_json_envelope_valid || return 1
+    ! stdout_json_tool_called 'worktree_create' || return 1
+    shell_call=$(stdout_json_tool_call_arguments 'shell_execute' | head -1)
+    set_call=$(stdout_json_tool_call_arguments 'set_working_directory' | head -1)
+    destination=$(jq -r '.Path // empty' <<<"$set_call")
+    [[ "$destination" == /home/netclaw/.netclaw/sessions/*/worktrees/* ]] || return 1
+    jq -e --arg branch "$MANAGED_WORKTREE_BRANCH" \
+        --arg destination "$destination" '
+        (.Command | test("(^|[[:space:]])git([[:space:]]|$)"; "i"))
+        and (.Command | test("worktree[[:space:]]+add"; "i"))
+        and (.Command | contains($branch))
+        and (.Command | contains($destination))
+    ' <<<"$shell_call" >/dev/null || return 1
+    jq -e '
+        [.toolCalls[]?.toolName]
+        | index("shell_execute") < index("set_working_directory")
+    ' "$STDOUT_FILE" >/dev/null || return 1
+    set_call_id=$(jq -r '
+        .toolCalls[]?
+        | select(.toolName == "set_working_directory")
+        | .callId
+    ' "$STDOUT_FILE" | head -1)
+    stdout_json_shell_results_succeeded 1 \
+        && stdout_json_tool_result_equals \
+            'set_working_directory' "$set_call_id" "$destination" \
+        && jq -e '.response | contains("worktree")' "$STDOUT_FILE" >/dev/null
 }
 
 # Schedule pre-approval: user asks to schedule an unattended task that
@@ -2617,7 +2674,9 @@ run_case() {
             "$setup_fn" "$run"
         fi
 
-        run_prompt "$prompt" "$output_format"
+        local rendered_prompt="$prompt"
+        rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/${MANAGED_WORKTREE_BRANCH:-}}"
+        run_prompt "$rendered_prompt" "$output_format"
 
         local passed=0
         local details="fail"
@@ -2936,7 +2995,7 @@ run_all() {
     run_multi_turn_case subagent_project_scope_declaration "subagent declares a different named project before shell inspection" \
         "Use spawn_agent with agent project-scope-analyst. Ask it to inspect /home/netclaw/.netclaw/workspaces/project-scope-target with exactly two shell_execute calls: git status --short and git diff --stat. Return the command results, project layout, and build-file summary. Keep the parent project unchanged."
 
-    run_case --json subagent_session_scratch_disposable "subagent chooses private session scratch for disposable shell work" \
+    run_case --json subagent_session_scratch_disposable "subagent standard temporary API uses its managed temp directory" \
         "Use spawn_agent with agent disposable-diagnostic. Ask it to complete its assigned diagnostic and return the exact marker. Do not include a Context argument."
 
     PROMPT_TIMEOUT="$previous_timeout"
@@ -3043,7 +3102,7 @@ run_all() {
         "What's two plus two? Just give me the number." \
         "Explain what a hash table is in one sentence."
 
-    run_case --json approval_recovery_hint "recovers from cwd-outside-safe-spaces denial by calling set_working_directory" \
+    run_case --json approval_recovery_hint "recovers from a cwd denial outside trusted roots by calling set_working_directory" \
         "I tried a shell command in /home/netclaw/.netclaw/workspaces and received: 'Tool access denied. Call set_working_directory \"/home/netclaw/.netclaw/workspaces\" first.' Apply that correction now."
 
     run_case --json approval_shell_working_directory_argument "uses the typed WorkingDirectory argument instead of inline cd" \
@@ -3076,8 +3135,14 @@ run_all() {
         "Start at $PROJECT_SCOPE_EVAL_MISSING_ROOT. If unavailable, continue at $PROJECT_SCOPE_EVAL_ROOT. Return the exact pending Git status entry, project marker, and build file." \
         "Review $PROJECT_SCOPE_EVAL_MISSING_ROOT first. If it does not exist, use $PROJECT_SCOPE_EVAL_ROOT. Report its pending Git status line, project marker text, and build filename."
 
-    run_case --json approval_session_scratch_disposable "uses session scratch for ordinary disposable output" \
+    run_case --json approval_managed_temp_disposable "uses managed temporary storage for ordinary disposable output" \
         "Create a disposable result.log file with exactly these two lines: diagnostic-ok v1 and line2: all systems nominal. Read the file back and return its exact contents."
+
+    run_case --json parent_child_log_handoff "reads the returned child log with an existing file tool" \
+        "Use spawn_agent with agent disposable-diagnostic. After it succeeds, use an existing file tool to read its returned log path. Do not use shell to find the log. Return one log line."
+
+    run_case --json managed_worktree_creation "composes shell and project-scope tools for a managed worktree" \
+        "Create a Git worktree from $PROJECT_SCOPE_EVAL_ROOT for branch {{MANAGED_WORKTREE_BRANCH}} below this session's worktree_dir. After Git succeeds, adopt it as the current project. Return the created path."
 
     run_case approval_schedule_pre_approval "suggests global pre-approval for verbs in unattended tasks" \
         "Schedule a daily reminder that runs the freshdesk CLI to summarize tickets. The reminder fires unattended and won't be able to answer approval prompts, so the verb needs to be globally pre-approved before the schedule fires. Call netclaw approvals trust-verb freshdesk via shell_execute as part of the setup."

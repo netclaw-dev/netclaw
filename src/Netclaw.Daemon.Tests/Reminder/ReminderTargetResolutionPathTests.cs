@@ -117,7 +117,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
         => new(reminderManager, _timeProvider, new SchedulingConfig(), [resolver]);
 
     private static ToolExecutionContext BuildManualToolContext()
-        => TestToolExecutionContext.CreateUnbound(TrustAudience.Personal, "manual");
+        => TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal, "manual");
 
     private sealed class StubReminderTargetResolver(Func<string, ReminderTargetResolution> resolve) : IReminderTargetResolver
     {

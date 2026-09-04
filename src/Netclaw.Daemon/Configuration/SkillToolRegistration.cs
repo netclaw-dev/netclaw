@@ -28,8 +28,7 @@ internal static class SkillToolRegistration
         var registry = services.GetRequiredService<ToolRegistry>();
         var skillRegistry = services.GetRequiredService<SkillRegistry>();
         var paths = services.GetRequiredService<NetclawPaths>();
-        var toolConfig = services.GetRequiredService<ToolConfig>();
-        var pathPolicy = services.GetRequiredService<ToolPathPolicy>();
+        var toolAccessPolicy = services.GetRequiredService<ToolAccessPolicy>();
         var scanner = services.GetRequiredService<ISkillContentScanner>();
         var mcpPromptLoader = services.GetRequiredService<IMcpPromptSkillLoader>();
         var inventoryRefresher = services.GetRequiredService<SkillInventoryRefresher>();
@@ -40,15 +39,14 @@ internal static class SkillToolRegistration
         var skillSyncConfig = services.GetService<SkillSyncConfig>();
         var loggerFactory = services.GetRequiredService<ILoggerFactory>();
 
-        registry.ReplaceCore(new FileReadTool(toolConfig, paths, pathPolicy, skillRegistry, metrics,
-            loggerFactory.CreateLogger<FileReadTool>()));
-
         registry.WithSkillTools(
+            toolAccessPolicy,
             skillRegistry,
             paths,
             scanner,
             mcpPromptLoader,
             inventoryRefresher,
+            loggerFactory.CreateLogger<FileReadTool>(),
             metrics,
             subAgentRegistry,
             subAgentSpawner,

@@ -21,8 +21,10 @@ internal static class TestToolAccessPolicy
     public static ToolAccessPolicy Create(
         ToolConfig config,
         ShellCommandPolicy shellCommandPolicy,
-        ToolPathPolicy toolPathPolicy) =>
+        ToolPathPolicy toolPathPolicy,
+        NetclawPaths? paths = null) =>
         new(
+            paths ?? new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

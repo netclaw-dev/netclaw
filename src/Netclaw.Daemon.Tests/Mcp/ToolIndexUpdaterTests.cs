@@ -62,7 +62,7 @@ public sealed class ToolIndexUpdaterTests
         paths.EnsureDirectoriesExist();
 
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Public,

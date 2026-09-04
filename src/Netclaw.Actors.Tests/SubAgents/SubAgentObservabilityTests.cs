@@ -47,6 +47,7 @@ public sealed class SubAgentObservabilityTests : TestKit
         };
 
     private static ToolAccessPolicy PermissivePolicy() => new(
+        new NetclawPaths(),
         new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
         new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal, ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
         new ShellCommandPolicy(),

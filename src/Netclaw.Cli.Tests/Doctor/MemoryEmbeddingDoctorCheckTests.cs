@@ -73,7 +73,7 @@ public sealed class MemoryEmbeddingDoctorCheckTests
         var config = WriteConfig(paths, enabled: true);
         PrePlaceValidModelFiles(paths);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-unembedded", "Unembedded", "never embedded");
 
@@ -91,7 +91,7 @@ public sealed class MemoryEmbeddingDoctorCheckTests
         var config = WriteConfig(paths, enabled: true);
         PrePlaceValidModelFiles(paths);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc", "body");
         var hash = MemoryContentHasher.ComputeHash("Doc", "body");
@@ -112,7 +112,7 @@ public sealed class MemoryEmbeddingDoctorCheckTests
         var config = WriteConfig(paths, enabled: true);
         PrePlaceValidModelFiles(paths);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc", "body");
         var hash = MemoryContentHasher.ComputeHash("Doc", "body");
@@ -218,7 +218,7 @@ public sealed class MemoryEmbeddingDoctorCheckTests
         var config = WriteConfig(paths, enabled: true);
         PrePlaceValidModelFiles(paths);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc", "body");
         var hash = MemoryContentHasher.ComputeHash("Doc", "body");
@@ -239,7 +239,7 @@ public sealed class MemoryEmbeddingDoctorCheckTests
         var config = WriteConfig(paths, enabled: true);
         PrePlaceValidModelFiles(paths);
 
-        var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
         await SeedDocumentAsync(store, "doc-1", "Doc", "body");
         var hash = MemoryContentHasher.ComputeHash("Doc", "body");

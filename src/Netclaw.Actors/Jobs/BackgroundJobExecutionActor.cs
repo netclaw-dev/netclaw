@@ -7,6 +7,8 @@ using System.Diagnostics;
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Security;
+using Netclaw.Actors.Tools;
+using Netclaw.Tools;
 using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 
 namespace Netclaw.Actors.Jobs;
@@ -93,6 +95,42 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
     private void SpawnProcess()
     {
         var psi = _environment.CreateProcessStartInfo(_definition.Command);
+        if (string.IsNullOrWhiteSpace(_definition.ManagedTemporaryDirectory)
+            || string.IsNullOrWhiteSpace(_definition.ManagedTemporaryAuthorityRoot))
+        {
+            ReportCompletion(
+                BackgroundJobStatus.Failed,
+                -1,
+                "Error: Background job has no managed temporary storage context.");
+            return;
+        }
+
+        ManagedTemporaryLocation temporaryLocation;
+        try
+        {
+            temporaryLocation = ManagedTemporaryLocation.FromPersistedPaths(
+                _definition.ManagedTemporaryDirectory,
+                _definition.ManagedTemporaryAuthorityRoot);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                   or IOException
+                                   or NotSupportedException
+                                   or UnauthorizedAccessException
+                                   or System.Security.SecurityException)
+        {
+            ReportCompletion(
+                BackgroundJobStatus.Failed,
+                -1,
+                $"Error preparing managed temporary directory: {ex.Message}");
+            return;
+        }
+
+        var temporaryDirectoryError = ManagedTemporaryEnvironment.Prepare(psi, temporaryLocation);
+        if (temporaryDirectoryError is not null)
+        {
+            ReportCompletion(BackgroundJobStatus.Failed, -1, temporaryDirectoryError);
+            return;
+        }
 
         if (!string.IsNullOrWhiteSpace(_definition.WorkingDirectory))
         {

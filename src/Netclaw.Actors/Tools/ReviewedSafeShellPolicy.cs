@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="ScopedShellSafeVerbPolicy.cs" company="Petabridge, LLC">
+// <copyright file="ReviewedSafeShellPolicy.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -11,28 +11,27 @@ using ShellSyntaxTree;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Layer 1.5 of the shell approval pipeline (between the hard-deny list and
-/// the interactive approval gate). The policy covers a reviewed diagnostic
-/// only when all parser-owned source and scope guards pass.
+/// Applies reviewed-safe shell coverage after shell command policy and file protection pass.
+/// The policy covers a reviewed diagnostic only when all parser-owned source and scope guards pass.
 ///
-/// Mirrors <see cref="ScopedFileAccessPolicy"/> for the audience model and
-/// the symlink-segment guard. Personal and Team audiences get
-/// <c>session_dir + project_dir</c> as their safe-space roots; Public gets
-/// <c>session_dir</c> only — Public sessions cannot expand their safe space
-/// via <c>set_working_directory</c>, mirroring the read-roots restriction
-/// <see cref="ScopedFileAccessPolicy"/> enforces for file_read.
+/// Delegates every filesystem decision to <see cref="PathAccessPolicy"/>.
+/// ShellSyntaxTree supplies syntax and path facts; this type only decides
+/// whether a phrase qualifies for reviewed-diagnostic handling.
 ///
-/// The policy never relaxes the hard-deny list (layer 1) — that runs first
-/// in <see cref="ToolAccessPolicy"/>. It only relaxes the interactive
-/// approval gate (layer 2) for phrases that the bundled catalog reviews.
+/// The policy never relaxes tool capability, shell command policy, or file protection.
+/// It only supplies approval coverage for phrases that the bundled catalog reviews.
 /// </summary>
-internal sealed class ScopedShellSafeVerbPolicy
+internal sealed class ReviewedSafeShellPolicy
 {
     private readonly SafeVerbList _safeVerbs;
+    private readonly PathAccessPolicy _pathAccessPolicy;
 
-    public ScopedShellSafeVerbPolicy(SafeVerbList safeVerbs)
+    public ReviewedSafeShellPolicy(
+        SafeVerbList safeVerbs,
+        PathAccessPolicy pathAccessPolicy)
     {
         _safeVerbs = safeVerbs;
+        _pathAccessPolicy = pathAccessPolicy;
     }
 
     /// <summary>
@@ -67,15 +66,21 @@ internal sealed class ScopedShellSafeVerbPolicy
             return false;
         }
 
-        if (ResolveSafeSpaceRoots(context)
-            .Any(root => PathUtility.IsWithinRoot(fullCwd, root)))
+        var pathStyle = candidates[0].Shell == ApprovalShell.PowerShell
+            ? ShellPathStyle.Windows
+            : ShellPathStyle.Posix;
+        if (_pathAccessPolicy.EvaluateReviewedShellPath(fullCwd, context, pathStyle).Allowed)
         {
             return false;
         }
 
-        var prospectiveRoots = ResolveSafeSpaceRoots(context)
-            .Append(fullCwd)
-            .ToArray();
+        var declaration = _pathAccessPolicy.Evaluate(
+            fullCwd,
+            context,
+            PathAccessPolicy.FileOperation.DeclareProjectScope);
+        if (!declaration.Allowed)
+            return false;
+
         foreach (var candidate in candidates)
         {
             var resolvedPaths = ResolveCompatibilityPaths(
@@ -85,8 +90,9 @@ internal sealed class ScopedShellSafeVerbPolicy
             if (!IsReviewedDiagnostic(
                     candidate,
                     candidate.SourceOccurrence,
-                    prospectiveRoots,
-                    resolvedPaths))
+                    context,
+                    resolvedPaths,
+                    declaration.CanonicalPath))
             {
                 return false;
             }
@@ -105,8 +111,11 @@ internal sealed class ScopedShellSafeVerbPolicy
                 return false;
             }
 
-            if (!PathUtility.IsWithinRoot(fullDirectory, fullCwd)
-                || PathUtility.ContainsSymlinkSegment(fullCwd, fullDirectory))
+            if (!_pathAccessPolicy.EvaluateReviewedShellPath(
+                    fullDirectory,
+                    context,
+                    pathStyle,
+                    declaration.CanonicalPath).Allowed)
             {
                 return false;
             }
@@ -118,35 +127,20 @@ internal sealed class ScopedShellSafeVerbPolicy
     private bool IsReviewedDiagnostic(
         ApprovalCandidate candidate,
         CommandOccurrence? sourceOccurrence,
-        IReadOnlyList<string> safeRoots,
-        ShellPolicyResolvedPathView? resolvedPaths)
+        ToolInvocationContext context,
+        ShellPolicyResolvedPathView? resolvedPaths,
+        string? proposedProjectRoot = null,
+        bool includeTrustedRootInLinkCheck = true)
     {
-        if (candidate is not
-            {
-                Shell: { } shell,
-                VerbTokens: { }
-            }
-            || sourceOccurrence is null
-            || HasFileWritingRedirect(resolvedPaths)
-            || HasUnprovedNonFileSystemSemantics(resolvedPaths)
-            || !_safeVerbs.TryMatchReviewedDiagnostic(
-                shell,
-                candidate.VerbTokens,
-                out var matchedTokenCount))
-        {
+        if (!IsReviewedDiagnosticSyntax(candidate, sourceOccurrence, resolvedPaths, out var shell))
             return false;
-        }
-
-        if (sourceOccurrence.Arguments.Any(argument =>
-                argument.Element.PrecedingVerbElementCount < matchedTokenCount))
-        {
-            return false;
-        }
 
         return AllAuthoredPathsStayWithinRoots(
             resolvedPaths,
             shell,
-            safeRoots);
+            context,
+            proposedProjectRoot,
+            includeTrustedRootInLinkCheck);
     }
 
     internal bool ShortCircuitsCausalIntent(
@@ -166,20 +160,17 @@ internal sealed class ScopedShellSafeVerbPolicy
                 State: ShellPolicyPathResolutionState.Known,
                 Path: { } intentPath
             }
-            || !IsSafePath(
-                intentPath.Value,
-                intentPath.Value,
-                ShellPathStyle.Posix)
-            || !IsReviewedDiagnostic(
+            || !IsWithinCausalIntent(intentPath.Value, intentPath.Value)
+            || !IsReviewedDiagnosticSyntax(
                 candidate,
                 projected.SourceOccurrence,
-                [intentPath.Value],
-                pathFacts.Intent))
+                pathFacts.Intent,
+                out _))
         {
             return false;
         }
 
-        return AllEffectivePathsStayWithinIntent(
+        return AllPathsStayWithinIntent(
             pathFacts.Intent,
             intentPath.Value);
     }
@@ -206,12 +197,10 @@ internal sealed class ScopedShellSafeVerbPolicy
         ToolInvocationContext context)
     {
         var candidate = projected.Candidate;
-        var safeRoots = ResolveDeclaredSafeSpaceRoots(context);
-        if (safeRoots.Count == 0
-            || !IsReviewedDiagnostic(
+        if (!IsReviewedDiagnostic(
                 candidate,
                 projected.SourceOccurrence,
-                safeRoots,
+                context,
                 pathFacts.Real)
             || pathFacts.RealScope is not
             {
@@ -225,29 +214,10 @@ internal sealed class ScopedShellSafeVerbPolicy
         var pathStyle = candidate.Shell == ApprovalShell.Bash
             ? ShellPathStyle.Posix
             : ShellPathStyle.Windows;
-        if (safeRoots.All(root =>
-                ShellPathRules.TryNormalize(root, pathStyle, out _)))
-        {
-            return safeRoots.Any(root => IsSafePath(
-                realPath.Value,
-                root,
-                pathStyle));
-        }
-
-        if (string.IsNullOrWhiteSpace(realScope.AuthoredValue))
-            return false;
-
-        try
-        {
-            var fullDirectory = Path.GetFullPath(realScope.AuthoredValue);
-            return safeRoots.Any(root => IsSafePath(fullDirectory, root));
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or NotSupportedException
-                                      or PathTooLongException)
-        {
-            return false;
-        }
+        return _pathAccessPolicy.EvaluateReviewedShellPath(
+            realPath.Value,
+            context,
+            pathStyle).Allowed;
     }
 
     private static bool HasFileWritingRedirect(ShellPolicyResolvedPathView? resolvedPaths)
@@ -263,10 +233,41 @@ internal sealed class ScopedShellSafeVerbPolicy
         ShellPolicyResolvedPathView? resolvedPaths)
         => resolvedPaths?.HasUnprovedNonFileSystemSemantics == true;
 
-    private static bool AllAuthoredPathsStayWithinRoots(
+    private bool IsReviewedDiagnosticSyntax(
+        ApprovalCandidate candidate,
+        CommandOccurrence? sourceOccurrence,
+        ShellPolicyResolvedPathView? resolvedPaths,
+        out ApprovalShell shell)
+    {
+        shell = default;
+        if (candidate is not
+            {
+                Shell: { } candidateShell,
+                VerbTokens: { }
+            }
+            || sourceOccurrence is null
+            || HasFileWritingRedirect(resolvedPaths)
+            || HasUnprovedNonFileSystemSemantics(resolvedPaths)
+            || !_safeVerbs.TryMatchReviewedDiagnostic(
+                candidateShell,
+                candidate.VerbTokens,
+                out var matchedTokenCount)
+            || sourceOccurrence.Arguments.Any(argument =>
+                argument.Element.PrecedingVerbElementCount < matchedTokenCount))
+        {
+            return false;
+        }
+
+        shell = candidateShell;
+        return true;
+    }
+
+    private bool AllAuthoredPathsStayWithinRoots(
         ShellPolicyResolvedPathView? resolvedPaths,
         ApprovalShell shell,
-        IReadOnlyList<string> safeRoots)
+        ToolInvocationContext context,
+        string? proposedProjectRoot,
+        bool includeTrustedRootInLinkCheck)
     {
         if (resolvedPaths is null)
             return false;
@@ -286,10 +287,12 @@ internal sealed class ScopedShellSafeVerbPolicy
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
                 || fact.Paths.Any(path =>
-                    !safeRoots.Any(root => IsSafePath(
+                    !_pathAccessPolicy.EvaluateReviewedShellPath(
                         path.Value,
-                        root,
-                        path.PathStyle))))
+                        context,
+                        path.PathStyle,
+                        proposedProjectRoot,
+                        includeTrustedRootInLinkCheck).Allowed))
             {
                 return false;
             }
@@ -298,7 +301,7 @@ internal sealed class ScopedShellSafeVerbPolicy
         return true;
     }
 
-    private static bool AllEffectivePathsStayWithinIntent(
+    private static bool AllPathsStayWithinIntent(
         ShellPolicyResolvedPathView? resolvedPaths,
         string intentDirectory)
     {
@@ -306,16 +309,14 @@ internal sealed class ScopedShellSafeVerbPolicy
             return false;
 
         foreach (var fact in resolvedPaths.Facts.Where(static fact =>
-                     fact.Source.Origin == ShellPolicyPathOrigin.EffectiveArgument))
+                     fact.Source.Origin is ShellPolicyPathOrigin.AuthoredArgument
+                         or ShellPolicyPathOrigin.EffectiveArgument))
         {
             if (fact.Source.Domain is not
                     (ShellValueDomain.Exact or ShellValueDomain.FiniteSet)
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
-                || fact.Paths.Any(path => !IsSafePath(
-                    path.Value,
-                    intentDirectory,
-                    ShellPathStyle.Posix)))
+                || fact.Paths.Any(path => !IsWithinCausalIntent(path.Value, intentDirectory)))
             {
                 return false;
             }
@@ -328,10 +329,7 @@ internal sealed class ScopedShellSafeVerbPolicy
                 || fact.Source.Domain is not ShellValueDomain.Exact
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count != 1
-                || !IsSafePath(
-                    fact.Paths[0].Value,
-                    intentDirectory,
-                    ShellPathStyle.Posix))
+                || !IsWithinCausalIntent(fact.Paths[0].Value, intentDirectory))
             {
                 return false;
             }
@@ -359,27 +357,17 @@ internal sealed class ScopedShellSafeVerbPolicy
             .Resolve(workingDirectory, pathStyle, shell);
     }
 
-    private static bool IsSafePath(string path, string root)
-    {
-        try
-        {
-            return PathUtility.IsWithinRoot(path, root)
-                   && !PathUtility.ContainsSymlinkSegment(root, path);
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or IOException
-                                      or NotSupportedException
-                                      or UnauthorizedAccessException
-                                      or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
+    // A parser-derived intent is approval scope, not a trusted root. Permit a
+    // root alias such as macOS /tmp,
+    // while still rejecting linked descendants below it.
+    private static bool IsWithinCausalIntent(string path, string intentRoot)
+        => IsWithinShellRoot(path, intentRoot, ShellPathStyle.Posix, includeRoot: false);
 
-    private static bool IsSafePath(
+    private static bool IsWithinShellRoot(
         string path,
         string root,
-        ShellPathStyle pathStyle)
+        ShellPathStyle pathStyle,
+        bool includeRoot = true)
     {
         try
         {
@@ -392,7 +380,8 @@ internal sealed class ScopedShellSafeVerbPolicy
                    && (!ShellPathRules.UsesHostPathStyle(pathStyle)
                        || !PathUtility.ContainsSymlinkSegment(
                            normalizedRoot,
-                           normalizedPath));
+                           normalizedPath,
+                           includeRoot));
         }
         catch (Exception ex) when (ex is ArgumentException
                                       or IOException
@@ -404,38 +393,4 @@ internal sealed class ScopedShellSafeVerbPolicy
         }
     }
 
-    /// <summary>
-    /// Resolves the audience-aware safe-space roots for the current
-    /// invocation. Personal and Team get <c>session_dir + project_dir</c>;
-    /// Public gets <c>session_dir</c> only.
-    /// </summary>
-    private static IReadOnlyList<string> ResolveSafeSpaceRoots(ToolInvocationContext context)
-        => ResolveSafeSpaceRoots(context, static path => PathUtility.Normalize(path));
-
-    private static IReadOnlyList<string> ResolveDeclaredSafeSpaceRoots(
-        ToolInvocationContext context)
-        => ResolveSafeSpaceRoots(context, static path => path);
-
-    private static IReadOnlyList<string> ResolveSafeSpaceRoots(
-        ToolInvocationContext context,
-        Func<string, string> mapPath)
-    {
-        var roots = new List<string>(2);
-
-        if (!string.IsNullOrWhiteSpace(context.SessionDirectory))
-            roots.Add(mapPath(context.SessionDirectory));
-
-        // Public audience cannot expand its safe space via project_dir —
-        // mirrors the file_read read-roots restriction enforced by
-        // ScopedFileAccessPolicy. Even a Public session that has somehow
-        // populated WorkingContext.ProjectDirectory does not get to use it
-        // as a shell safe-space root.
-        if (context.Audience != TrustAudience.Public
-            && !string.IsNullOrWhiteSpace(context.ProjectDirectory))
-        {
-            roots.Add(mapPath(context.ProjectDirectory));
-        }
-
-        return roots;
-    }
 }

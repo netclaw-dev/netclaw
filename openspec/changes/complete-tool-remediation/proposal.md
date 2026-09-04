@@ -6,7 +6,7 @@ Parent and child execution paths therefore depend on separate handwritten result
 
 ## What Changes
 
-- Replace free-form remediation strings with a closed next-action code set.
+- Replace free-form remediation strings with a closed remediation code set.
 - Require each recoverable correction to select one known remediation value.
 - Use one shared presenter for parent and child model instructions.
 - Keep remediation separate from tool authority and successful output continuation.
@@ -20,7 +20,7 @@ None.
 
 ### Modified Capabilities
 
-- `netclaw-tools`: Define a closed next-action code and one shared instruction path.
+- `netclaw-tools`: Define a closed remediation code and one shared instruction path.
 
 ## Impact
 

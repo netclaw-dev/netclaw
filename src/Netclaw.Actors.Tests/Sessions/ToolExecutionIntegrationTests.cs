@@ -453,7 +453,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
 
     public Dictionary<string, ToolInvocationReceipt> Receipts { get; } = [];
 
-    public Dictionary<string, ToolAgentCorrection> Corrections { get; } = [];
+    public Dictionary<string, ToolCorrection> Corrections { get; } = [];
 
     public Action? BeforeCorrection { get; set; }
 
@@ -465,7 +465,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         if (Corrections.TryGetValue(toolCall.Name, out var correction))
         {
             BeforeCorrection?.Invoke();
-            throw new ToolAgentCorrectionRequiredException(correction);
+            throw new ToolCorrectionRequiredException(correction);
         }
 
         if (FailForTools.Contains(toolCall.Name))
@@ -481,7 +481,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         if (Corrections.TryGetValue(toolCall.Name, out var correction))
         {
             BeforeCorrection?.Invoke();
-            throw new ToolAgentCorrectionRequiredException(correction);
+            throw new ToolCorrectionRequiredException(correction);
         }
 
         if (FailForTools.Contains(toolCall.Name))

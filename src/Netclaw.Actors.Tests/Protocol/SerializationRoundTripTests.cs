@@ -825,7 +825,7 @@ public sealed class SerializationRoundTripTests : TestKit
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U-observer"],
             Cwd = "/home/user/project",
-            SessionScratchDirectory = "/home/user/.netclaw/sessions/example",
+            ManagedTemporaryDirectory = "/home/user/.netclaw/sessions/example/tmp/parent",
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
             [
@@ -885,7 +885,8 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.HasThirdPartyAdoptedContext, result.HasThirdPartyAdoptedContext);
         Assert.Equal(wrapped.AdoptedSpeakerIds, result.AdoptedSpeakerIds);
         Assert.Equal(wrapped.Cwd, result.Cwd);
-        Assert.Equal(wrapped.SessionScratchDirectory, result.SessionScratchDirectory);
+        Assert.Null(result.SessionScratchDirectory);
+        Assert.Equal(wrapped.ManagedTemporaryDirectory, result.ManagedTemporaryDirectory);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);
         Assert.Equal("git", result.Candidates[0].Verb);
@@ -936,6 +937,49 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.AuthorizationAttemptId, result.AuthorizationAttemptId);
         Assert.Equal(wrapped.Decision, result.Decision);
         Assert.Equal(wrapped.ResolvedAtMs, result.ResolvedAtMs);
+    }
+
+    [Fact]
+    public void ToolApprovalRequested_writes_only_managed_temporary_directory()
+    {
+        var wrapped = new ToolApprovalRequested
+        {
+            SessionId = new SessionId("C123/1700000000.000001"),
+            CallId = "call-managed-temp",
+            ToolName = "file_write",
+            Audience = Netclaw.Configuration.TrustAudience.Personal,
+            SessionScratchDirectory = "/legacy/session-directory",
+            ManagedTemporaryDirectory = "/managed/tmp/parent",
+            RequestedAtMs = 1700000000000
+        };
+
+        var proto = NetclawProtoMapper.ToProto(wrapped);
+
+        Assert.False(proto.HasSessionScratchDirectory);
+        Assert.True(proto.HasManagedTemporaryDirectory);
+        Assert.Equal(wrapped.ManagedTemporaryDirectory, proto.ManagedTemporaryDirectory);
+    }
+
+    [Fact]
+    public void ToolApprovalRequested_reads_legacy_session_directory_without_temp_reinterpretation()
+    {
+        var proto = new Serialization.Proto.ToolApprovalRequestedProto
+        {
+            SessionId = new Serialization.Proto.SessionIdProto
+            {
+                Value = "C123/1700000000.000001"
+            },
+            CallId = "call-legacy-temp",
+            ToolName = "file_write",
+            Audience = Serialization.Proto.TrustAudience.Personal,
+            SessionScratchDirectory = "/legacy/session-directory",
+            RequestedAtMs = 1700000000000
+        };
+
+        var result = NetclawProtoMapper.FromProto(proto);
+
+        Assert.Equal(proto.SessionScratchDirectory, result.SessionScratchDirectory);
+        Assert.Null(result.ManagedTemporaryDirectory);
     }
 
     [Fact]

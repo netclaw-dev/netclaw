@@ -43,7 +43,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     private readonly IThreadHistoryFetcher _threadHistoryFetcher;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
-    private readonly NetclawPaths _paths;
+    private readonly ISessionStorageResolver _storageResolver;
 
     private IActorRef? _gateway;
     private SlackUserId? _botUserId;
@@ -78,7 +78,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         IThreadHistoryFetcher threadHistoryFetcher,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
-        NetclawPaths paths)
+        ISessionStorageResolver storageResolver)
     {
         _pipeline = pipeline;
         _system = system;
@@ -101,7 +101,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         _threadHistoryFetcher = threadHistoryFetcher ?? throw new ArgumentNullException(nameof(threadHistoryFetcher));
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
-        _paths = paths;
+        _storageResolver = storageResolver;
     }
 
     public Actors.Channels.ChannelType ChannelType => Actors.Channels.ChannelType.Slack;
@@ -253,7 +253,7 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
                 ThreadHistoryFetcher: _threadHistoryFetcher,
                 AudienceProfiles: _audienceProfiles,
                 ModelCapabilities: _modelCapabilities,
-                Paths: _paths,
+                StorageResolver: _storageResolver,
                 HttpClient: httpClient,
                 PromptInjectionDetector: _promptInjectionDetector)),
             "slack-gateway");

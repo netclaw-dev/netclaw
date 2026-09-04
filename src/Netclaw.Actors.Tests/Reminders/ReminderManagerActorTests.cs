@@ -576,7 +576,7 @@ public class ReminderManagerActorTests : TestKit
         var pipeline = new SessionPipeline(
             Sys,
             new RequiredActor<SessionManagerActorKey>(ActorRegistry.For(Sys)),
-            paths);
+            new Netclaw.Actors.Protocol.TestSessionStorageResolver(paths));
         var defaults = new EffectivePolicyDefaults(
             DeploymentPosture.Team, TrustAudience.Team, ShellExecutionMode.Off, false);
 

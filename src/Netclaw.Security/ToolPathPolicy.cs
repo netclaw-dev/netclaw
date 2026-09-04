@@ -46,9 +46,7 @@ internal readonly record struct CanonicalShellPath
 /// <remarks>
 /// Three independent deny surfaces: write (<see cref="IsDenied"/>), read
 /// (<see cref="IsReadDenied"/>), and shell indicators
-/// (<see cref="CommandReferencesDeniedPath"/>). Read denies the union of the
-/// read deny list and the shell indicator list, so file tools cannot reach the
-/// control plane that shell cannot reference. The shell indicator list is
+/// (<see cref="CommandReferencesDeniedPath"/>). The shell indicator list is
 /// scanned as raw substrings of the command text, so directory-scoped entries
 /// (e.g. the config dir) over-block commands whose text merely mentions them —
 /// that is the accepted trade-off for keeping the control plane unreachable.
@@ -181,13 +179,12 @@ public sealed class ToolPathPolicy
         => IsDeniedAgainst(path, _writeDeniedPaths);
 
     /// <summary>
-    /// Returns true if the given path is denied for read by policy. Covers the
-    /// credential-leaking surfaces (secrets, keys, webhooks) plus the shell
-    /// indicator list (config dir, sqlite DB, pid, lock, restart manifest), so
-    /// read tools cannot reach files that shell cannot even reference.
+    /// Returns true if the given path is denied for structured file reads.
+    /// Shell indicators remain independent because a structured read names one
+    /// exact operation and path.
     /// </summary>
     public bool IsReadDenied(string path)
-        => IsDeniedAgainst(path, _readDeniedPaths) || IsDeniedAgainst(path, _shellDeniedPaths);
+        => IsDeniedAgainst(path, _readDeniedPaths);
 
     internal bool IsShellDeniedProjectedPath(
         CanonicalShellPath path)

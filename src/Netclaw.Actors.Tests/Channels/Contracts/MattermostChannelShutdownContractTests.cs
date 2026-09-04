@@ -44,7 +44,7 @@ public sealed class MattermostChannelShutdownContractTests : ChannelShutdownCont
                 AudienceProfiles = TestMattermostGatewayDeps.DefaultAudienceProfiles
             },
             modelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
-            paths: TestMattermostGatewayDeps.NewTestPaths());
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
     }
 
     /// <summary>

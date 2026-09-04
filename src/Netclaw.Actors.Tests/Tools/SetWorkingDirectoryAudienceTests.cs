@@ -23,7 +23,7 @@ public sealed class SetWorkingDirectoryAudienceTests
     [Fact]
     public void Path_schema_describes_persistent_project_scope()
     {
-        var tool = new SetWorkingDirectoryTool(new ToolConfig(), new NetclawPaths());
+        var tool = new SetWorkingDirectoryTool(new ToolConfig(), new NetclawPaths(), new ToolPathPolicy([]));
         Assert.Contains("before tool work", tool.Description, StringComparison.Ordinal);
         Assert.Contains("before probing it", tool.Description, StringComparison.Ordinal);
         Assert.Contains("user-provided fallback", tool.Description, StringComparison.Ordinal);
@@ -45,7 +45,7 @@ public sealed class SetWorkingDirectoryAudienceTests
     public void SetWorkingDirectory_BlockedForPublicAudience_ByDefault()
     {
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = CreateFakeTool();
 
         Assert.False(policy.IsToolExposed(tool, TrustAudience.Public));
@@ -55,7 +55,7 @@ public sealed class SetWorkingDirectoryAudienceTests
     public void SetWorkingDirectory_AllowedForTeamAudience_ByDefault()
     {
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = CreateFakeTool();
 
         Assert.True(policy.IsToolExposed(tool, TrustAudience.Team));
@@ -65,7 +65,7 @@ public sealed class SetWorkingDirectoryAudienceTests
     public void SetWorkingDirectory_AllowedForPersonalAudience_ByDefault()
     {
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
+        var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults, new ShellCommandPolicy(), new ToolPathPolicy([]));
         var tool = CreateFakeTool();
 
         Assert.True(policy.IsToolExposed(tool, TrustAudience.Personal));

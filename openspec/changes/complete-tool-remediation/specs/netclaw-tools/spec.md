@@ -42,14 +42,14 @@ shared presenter returns:
 
 #### Scenario: Access denial has no successful file activity
 
-- **GIVEN** `file_read` is called for a path outside the current read authority
-- **WHEN** scoped access denies the call
+- **GIVEN** `file_read` is called for a path outside the current audience's read authority
+- **WHEN** the path access decision denies the call
 - **THEN** the outcome category is `access_denied`
 - **AND** the outcome contains no successful file activity
 - **AND** the outcome contains no remediation
 - **AND** the model receives a bounded denial string
 
-#### Scenario: Missing declaration has a closed correction code
+#### Scenario: Recoverable correction stays distinct from failure
 
 - **GIVEN** a workspace tool can continue after the project directory is declared
 - **AND** `set_working_directory` is visible to the current model
@@ -83,12 +83,12 @@ shared presenter returns:
 - **AND** the remediation code is `ProvideUniqueOldString`
 - **AND** the presenter adds one fixed retry action
 
-#### Scenario: Shared temporary path suggests session scratch
+#### Scenario: Host temporary path suggests the managed temporary directory
 
-- **GIVEN** shell policy proposes the session directory for a shared temporary path
+- **GIVEN** shell policy proposes the managed temporary directory for a host temporary path
 - **WHEN** the call returns a recoverable correction
-- **THEN** the remediation code is `UseSessionScratch`
-- **AND** the presenter adds one fixed session-scratch action
+- **THEN** the remediation code is `UseManagedTemporaryDirectory`
+- **AND** the presenter adds one fixed managed-temporary-directory action
 - **AND** a later retry still runs normal shell authorization
 
 #### Scenario: Recoverable correction requires a known value

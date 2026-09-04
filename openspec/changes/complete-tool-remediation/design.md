@@ -1,8 +1,8 @@
 ## Context
 
 Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for the
-terms in this design. This document uses "next-action code" for the internal
-`ToolRemediationCode` enum.
+terms in this design. A remediation code is the internal
+`ToolRemediationCode` enum value that selects one bounded remediation.
 
 Before this change, each tool path wrote its own correction instruction. The
 receipt also stored a free-form string that no shared component consumed.
@@ -18,7 +18,7 @@ This design separates three facts:
 ```text
 tool result       = factual text about what happened
 tool receipt      = trusted internal outcome for the call
-next-action code  = one closed enum value for a correctable outcome
+remediation code  = one closed enum value for a correctable outcome
 ```
 
 The receipt is ephemeral. Netclaw does not store it in actor events, snapshots,
@@ -29,7 +29,7 @@ API compatibility.
 
 **Goals:**
 
-- Replace free-form remediation strings with a closed next-action code.
+- Replace free-form remediation strings with a closed remediation code.
 - Require one valid code for every recoverable correction.
 - Produce the final correction instruction through one shared formatter.
 - Give parent and child sessions the same instruction for the same facts.
@@ -40,7 +40,7 @@ API compatibility.
 - Execute or retry the suggested action automatically.
 - Grant file, shell, project, or approval authority.
 - Add output continuation or successful spill data to a correction.
-- Persist the next-action code across actor recovery.
+- Persist the remediation code across actor recovery.
 - Add a public remediation API or wire format.
 
 ## End-to-End Example
@@ -69,14 +69,14 @@ make a new tool call. That call still runs normal authorization.
 
 ## Decisions
 
-### Use a closed next-action code
+### Use a closed remediation code
 
 `ToolRemediationCode` contains the supported corrective actions:
 
 ```text
-SetWorkingDirectory   A relative tool call has no usable path base.
-UseSessionScratch     A shell call can use the session directory instead of a
-                      shared temporary directory.
+SetWorkingDirectory            A relative tool call has no usable path base.
+UseManagedTemporaryDirectory   A shell call can use the managed temporary
+                               directory instead of host temporary storage.
 ProvideUniqueOldString
                       file_edit found zero matches or several ambiguous matches.
 ```
@@ -133,13 +133,13 @@ still provide a valid absolute path or change the session configuration.
 
 ### Keep retry state separate
 
-The session-scratch correction key prevents a correction loop in the shell
-approval path. The next-action code does not replace that state.
+The managed-temporary correction key prevents a correction loop in the shell
+approval path. The remediation code does not replace that state.
 
 ```text
-first shell call uses a shared temporary path
-  -> result suggests the session directory
-  -> receipt code is UseSessionScratch
+first shell call uses host temporary storage
+  -> result suggests the managed temporary directory
+  -> receipt code is UseManagedTemporaryDirectory
   -> session arms the existing correction key
 
 model retries the exact corrected call
@@ -154,7 +154,7 @@ The model must author the next call.
 
 The main session persists its tool-role message. A subagent keeps its tool-role
 message only for the child run. Neither actor persists the receipt or
-next-action code.
+remediation code.
 
 ```text
 main session before actor restart:
@@ -190,12 +190,12 @@ subagent after child completion:
 4. The receipt uses `RecoverableCorrection(ProvideUniqueOldString)`.
 5. The formatter tells the model to use a unique value or `ReplaceAll=true`.
 
-### A shell call should use session scratch
+### A shell call should use the managed temporary directory
 
-1. The model authors a shell call under a shared temporary directory.
-2. Policy proposes the session directory as the bounded alternative.
-3. The receipt uses `RecoverableCorrection(UseSessionScratch)`.
-4. The formatter tells the model to use the session directory.
+1. The model authors a shell call under host temporary storage.
+2. Policy proposes the managed temporary directory as the bounded alternative.
+3. The receipt uses `RecoverableCorrection(UseManagedTemporaryDirectory)`.
+4. The formatter tells the model to use the managed temporary directory.
 5. A later retry still passes the complete shell authorization policy.
 
 ## Risks / Trade-offs
@@ -224,7 +224,7 @@ tests verify the final model message after the shared formatter runs.
 ## Migration Plan
 
 1. Add `ToolRemediationCode` with the three supported values.
-2. Convert the path, shell scratch, and `file_edit` producers.
+2. Convert the path, managed-temporary, and `file_edit` producers.
 3. Add `ToolRemediationPresenter` to parent and child message construction.
 4. Remove duplicate action text from those producers.
 5. Add receipt validation and actor integration tests.

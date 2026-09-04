@@ -50,7 +50,7 @@ public sealed class SmokeMcpPromptSkillTests(ITestOutputHelper output)
         var result = await harness.Manager.LoadAsync(
             source,
             setup.PromptArguments,
-            TestToolExecutionContext.CreateUnbound(TrustAudience.Personal).Invocation,
+            TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal).Invocation,
             cts.Token);
 
         Assert.True(result.Success, result.Error);

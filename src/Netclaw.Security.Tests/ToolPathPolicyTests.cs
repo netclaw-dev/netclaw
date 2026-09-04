@@ -169,12 +169,18 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/config/secrets.json",
             "/home/user/.netclaw/keys",
             "/home/user/.netclaw/config/webhooks",
+            "/home/user/.netclaw/netclaw.db",
+            "/home/user/.netclaw/netclaw.db-wal",
+            "/home/user/.netclaw/netclaw.db-shm",
+            "/home/user/.netclaw/netclaw.db-journal",
+            "/home/user/.netclaw/netclaw.pid",
+            "/home/user/.netclaw/netclaw.lock",
+            "/home/user/.netclaw/cache/restart-manifest.json",
         };
         var shellIndicators = new[]
         {
-            // ConfigDirectory is a directory-scoped shell indicator in production
-            // (src/Netclaw.Daemon/Program.cs), so the whole config dir is denied
-            // for shell references AND (via the IsReadDenied union) for reads.
+            // ConfigDirectory is a directory-scoped shell indicator in production.
+            // Structured file reads use the independent read deny list.
             "/home/user/.netclaw/config",
             "/home/user/.netclaw/config/secrets.json",
             "/home/user/.netclaw/config/webhooks",
@@ -231,11 +237,7 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.IsReadDenied(path));
     }
 
-    // The read deny surface is the union of the read deny list and the shell
-    // indicator list, so read tools cannot reach control-plane lifecycle files
-    // that shell cannot even reference (#1724).
     [Theory]
-    [InlineData("/home/user/.netclaw/config/netclaw.json")]
     [InlineData("/home/user/.netclaw/netclaw.db")]
     [InlineData("/home/user/.netclaw/netclaw.db-wal")]
     [InlineData("/home/user/.netclaw/netclaw.db-shm")]
@@ -247,6 +249,16 @@ public sealed class ToolPathPolicyTests
     {
         var policy = CreateProductionPolicy();
         Assert.True(policy.IsReadDenied(path));
+    }
+
+    [Fact]
+    public void IsReadDenied_allows_ordinary_config_while_shell_remains_denied()
+    {
+        var policy = CreateProductionPolicy();
+        const string configPath = "/home/user/.netclaw/config/netclaw.json";
+
+        Assert.False(policy.IsReadDenied(configPath));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {configPath}"));
     }
 
     public enum SymlinkTraversalShape
@@ -351,10 +363,8 @@ public sealed class ToolPathPolicyTests
         }
     }
 
-    // The fixture mirrors production (Program.cs): ConfigDirectory is a
-    // directory-scoped shell indicator, so the whole config dir is read-denied
-    // via the IsReadDenied union. Sidecar files (db-wal/db-shm/db-journal) are
-    // also in the fixture, matching the production shell indicator list.
+    // Structured reads use their own explicit deny list. Shell indicators do
+    // not widen that list.
     [Theory]
     [InlineData("/home/user/repositories/foo.cs")]
     [InlineData("/tmp/notes.txt")]

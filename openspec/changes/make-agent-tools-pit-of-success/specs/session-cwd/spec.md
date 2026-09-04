@@ -7,12 +7,14 @@ validation and exact fallback states.
 
 ### Requirement: Relative first-party filesystem paths use session-owned bases
 
-First-party filesystem tools SHALL resolve a relative path against the declared
-project directory when one exists; otherwise they SHALL resolve it against the
-immutable session directory. If neither base is available, they SHALL return an
-`invalid_context` correction and SHALL NOT use the daemon process current
-directory. The canonical resolved path SHALL still pass the existing operation-
-specific scoped access and protected-path policies.
+`session-cwd` SHALL select the declared project directory for a relative path
+when that base is available. Otherwise, it SHALL select the immutable session
+directory. If neither base is available, it SHALL return an `invalid_context`
+correction. It SHALL NOT use the daemon process current directory.
+
+The capability SHALL pass the selected base and authored path to the filesystem
+authorization contract that `netclaw-tools` owns. It SHALL NOT make a separate
+path access decision.
 
 #### Scenario: Relative read uses declared project
 
@@ -22,7 +24,7 @@ specific scoped access and protected-path policies.
 - **THEN** it authorizes and reads `/workspace/project/src/App.cs`
 - **AND** it does not resolve the path from the daemon current directory
 
-#### Scenario: Relative write falls back to session scratch
+#### Scenario: Relative write uses the session directory
 
 - **GIVEN** a session without a declared project and with session directory
   `/session/current`
@@ -34,8 +36,8 @@ specific scoped access and protected-path policies.
 
 - **GIVEN** project directory `/workspace/project`
 - **WHEN** a file tool receives `../../outside.txt`
-- **THEN** it canonicalizes the result before policy evaluation
-- **AND** the call is denied when the canonical path is outside authorized roots
+- **THEN** `session-cwd` passes the selected base and authored path to `netclaw-tools`
+- **AND** the path access decision denies a path outside the trusted roots
 
 #### Scenario: Missing base returns correction
 

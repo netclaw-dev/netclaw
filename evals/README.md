@@ -86,6 +86,7 @@ log patterns** (skill loading, memory recall, checkpoint formation).
 | Deployment Mission | 1 | Applies the disk mission playbook, loads its required skill, and returns reviewed sales email |
 | Subagents | 3 | Delegates through `spawn_agent`, completes ambiguous work, preserves specialized guidance, and declares a different named project before shell inspection |
 | Coding Context | 1 | Repeatedly switches between isolated linked worktrees, alternates branch and one-of-four target files by run, and verifies Git grounding, wrong-file/worktree safety, and path-free child handoff |
+| Session Storage | 4 | Verifies managed temporary APIs, parent-child log handoff, and managed worktree creation |
 | Complex Task Execution | 5 | Multi-step tool chains complete successfully, incl. bounded tool output — given only the goal (no handling hints), the agent retrieves a deep line from oversized shell output and from a large file, which is only possible by coping with the bound the way AGENTS.md/skills/steer text direct |
 | Multi-Turn Conversation | 7 | Session resume and speaker attribution recall |
 
@@ -202,6 +203,10 @@ touching the operator's `~/.netclaw/` state.
 
 Raw archives can contain prompts, session identities, tool calls, and provider
 configuration. Do not publish them. Publish only reviewed PII-free aggregates.
+
+Windows model-pattern cases remain deferred until sanitized representative
+traffic exists. Windows contract tests remain required for path and process
+behavior. Record the deferred cases as evidence work, not as passed evals.
 
 Requires `sqlite3` CLI — if not available, the script still runs but
 skips persistence.

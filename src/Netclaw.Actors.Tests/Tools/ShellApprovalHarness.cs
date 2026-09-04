@@ -94,7 +94,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             Guid.NewGuid().ToString("N"));
         var projectDirectory = Path.Combine(rootDirectory, "project");
         var sessionDirectory = Path.Combine(rootDirectory, "session");
-        var externalDirectory = Path.Combine(rootDirectory, "external");
+        var externalDirectory = Path.Combine(rootDirectory, "workspaces", "external");
         Directory.CreateDirectory(projectDirectory);
         Directory.CreateDirectory(sessionDirectory);
         Directory.CreateDirectory(externalDirectory);
@@ -108,7 +108,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             var windowsRoot = $"C:/netclaw-approval-matrix/{Guid.NewGuid():N}";
             approvalProjectDirectory = $"{windowsRoot}/project";
             approvalSessionDirectory = $"{windowsRoot}/session";
-            approvalExternalDirectory = $"{windowsRoot}/external";
+            approvalExternalDirectory = $"{windowsRoot}/workspaces/external";
         }
 
         var approvalShell = environment.Grammar == ShellGrammar.Bash
@@ -188,14 +188,10 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             : []);
         var pathPolicy = new ToolPathPolicy(environment, effectiveDeniedPaths);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            pathPolicy,
-            commandPolicy,
-            toolAccessPolicy: TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var policy = new ToolAccessPolicy(
+            new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces")),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -204,9 +200,6 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 UsedStrictFallback: false),
             shellCommandPolicy: commandPolicy,
             toolPathPolicy: pathPolicy,
-            shellTrustZonePolicy: new ShellTrustZonePolicy(
-                config,
-                new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),
             safeVerbs: safeVerbs ?? SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows));
         var executor = new DispatchingToolExecutor(registry, policy, countingApprovalService);
 

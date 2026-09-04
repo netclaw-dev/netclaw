@@ -248,6 +248,7 @@ public sealed class MattermostThreadHistoryFetcherTests
         MattermostChannelOptions? options = null,
         NetclawPaths? paths = null)
     {
+        var testPaths = paths ?? TestMattermostGatewayDeps.NewTestPaths();
         return new MattermostThreadHistoryFetcher(
             messageFetcher ?? ((_, _) => Task.FromResult<IReadOnlyList<MattermostThreadHistoryFetcher.HistoricalMessage>>([])),
             fileDownloader ?? ((_, _, _, _) => Task.FromResult<(string FilePath, long BytesWritten)?>(null)),
@@ -257,8 +258,8 @@ public sealed class MattermostThreadHistoryFetcherTests
             BotUserId,
             profiles ?? TestMattermostGatewayDeps.DefaultAudienceProfiles,
             modelCapabilities ?? TestMattermostGatewayDeps.DefaultVisionCapableModel,
-            paths ?? TestMattermostGatewayDeps.NewTestPaths(),
-            NullLogger<MattermostThreadHistoryFetcher>.Instance);
+            NullLogger<MattermostThreadHistoryFetcher>.Instance,
+            new Netclaw.Actors.Protocol.TestSessionStorageResolver(testPaths));
     }
 
     private sealed class FailingContentScanner : IContentScanner

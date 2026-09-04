@@ -114,30 +114,28 @@ enqueue acknowledgment, not for curator completion.
 
 ### Requirement: Standard configuration directory
 
-The system SHALL use `~/.netclaw/` as the standard configuration directory with
-`memory/` as the durable memory home. The memory subsystem SHALL store its
-SQLite database, schema metadata, and health/queue state under
-`~/.netclaw/memory/`. The redesigned MVP SHALL NOT require any legacy memory
-directory or import step in order to start cleanly.
+The system SHALL use the configured Netclaw home as its standard data directory.
+The memory subsystem SHALL use the single Netclaw SQLite database at
+`NetclawPaths.SqliteDbPath`. That database SHALL be the source of truth for all
+SQLite-backed production data. The system SHALL NOT create a separate memory
+database or expose an independent database-path or persistence-provider setting.
 
-#### Scenario: Memory directory and database created on startup
+#### Scenario: Netclaw database created on startup
 
-- **GIVEN** `~/.netclaw/memory/` does not exist
+- **GIVEN** the configured Netclaw home does not contain `netclaw.db`
 - **WHEN** the Netclaw process starts with the redesigned memory subsystem
   enabled
-- **THEN** the system creates the directory and initializes the SQLite database
-  schema
+- **THEN** the system creates `NetclawPaths.SqliteDbPath`
+- **AND** the system initializes the memory schema in that database
 - **AND** the daemon reports memory status as healthy when initialization
   succeeds
 
 #### Scenario: Greenfield startup requires no legacy memory store
 
-- **GIVEN** `~/.netclaw/memory/` is empty and `~/.netclaw/memories/` does not
-  exist
+- **GIVEN** the configured Netclaw home contains no legacy memory store
 - **WHEN** the redesigned memory subsystem starts for the first time
 - **THEN** the system initializes successfully without any import step
-- **AND** uses the SQLite memory store as the only required durable memory
-  substrate
+- **AND** it uses the single Netclaw database as the durable memory substrate
 
 ### Requirement: Pluggable memory backend with 4-tool surface
 

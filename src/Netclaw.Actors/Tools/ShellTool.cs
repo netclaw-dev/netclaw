@@ -22,7 +22,7 @@ namespace Netclaw.Actors.Tools;
 [NetclawTool(ToolName,
     "Execute local search, VCS, builds, tests, processes, or other operations requiring shell semantics. " +
     "For declared-project work, omit WorkingDirectory. Use it for one call in a named child directory. " +
-    "Use session_dir for disposable writable work outside a project; do not substitute platform temporary storage. " +
+    "Standard temporary APIs use temp_dir. Preserve an explicit host temporary path only when the task requires it. " +
     "Keep inline directory changes only when requested. " +
     "Start with the smallest operation that answers the request. Use one operation per call. " +
     "Keep independent searches and diagnostics separate; do not join them with separators or labels. " +
@@ -56,7 +56,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             "The smallest shell operation that answers the request. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels. Add a pipeline only when the requested result requires it. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. If approval is required but no interactive requester is available, do not retry or substitute the call during that turn. After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. A later explicit user request can start a new call under normal approval policy. Apply one 'Tool execution deferred:' correction unchanged.")]
         string Command,
         [param: Description(
-            "Set only for one call in a named child directory or worktree. Omit for declared-project work. Use session_dir for disposable writable work outside a project; do not substitute platform temporary storage.")]
+            "Set only for one call in a named child directory or worktree. Omit for declared-project work. Standard temporary APIs use temp_dir.")]
         string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)
@@ -113,15 +113,20 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             return "Error: Command references a protected file path. Access denied by security policy.";
 
         var psi = _environment.CreateProcessStartInfo(args.Command);
+        var storage = context.SessionStorage
+            ?? throw new InvalidOperationException("Shell execution requires resolved session storage.");
+        var temporaryDirectoryError = ManagedTemporaryEnvironment.Prepare(psi, storage.ManagedTemporary);
+        if (temporaryDirectoryError is not null)
+            return temporaryDirectoryError;
 
         // Resolve working directory in priority order: explicit arg →
         // WorkingContext.ProjectDirectory (declared via set_working_directory)
-        // → SessionDirectory (per-session scratch). Never falls through to
+        // → SessionDirectory (the session workspace). Never falls through to
         // ProcessStartInfo's default of inheriting the daemon process's cwd —
         // that location is wherever the daemon happened to be launched and is
         // unrelated to what the agent is "working on," which makes it
-        // impossible for the approval policy to reason about safe-space
-        // membership. The matcher reads context.Cwd against the same
+        // impossible for the approval policy to reason about path containment.
+        // The matcher reads context.Cwd against the same
         // resolution chain so the gate evaluates folder-scoped ApprovalEntry
         // records against the directory the spawned process will run in.
         var workingDirectoryError = PrepareWorkingDirectory(
@@ -338,6 +343,14 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             }
 
             var psi = _environment.CreateProcessStartInfo(args.Command);
+            var storage = context.SessionStorage
+                ?? throw new InvalidOperationException("Shell execution requires resolved session storage.");
+            var temporaryDirectoryError = ManagedTemporaryEnvironment.Prepare(psi, storage.ManagedTemporary);
+            if (temporaryDirectoryError is not null)
+            {
+                output.TryWrite(new ToolCompletedUpdate(temporaryDirectoryError));
+                return;
+            }
             var workingDirectoryError = PrepareWorkingDirectory(
                 psi,
                 resolvedCwd,

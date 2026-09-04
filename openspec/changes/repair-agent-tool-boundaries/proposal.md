@@ -1,6 +1,8 @@
 ## Why
 
-Live use exposed unsafe path gaps, inconsistent receipt outcomes, and tool choices that can flood model context. The merged contracts also differ from current runtime behavior and from the smallest useful tool surface.
+Live use exposed path-authorization gaps, inconsistent receipt outcomes, and
+tool choices that can flood model context. The merged contracts also differ
+from current runtime behavior and from the smallest useful tool surface.
 
 This change supports PRD-001 outcomes 7 and 9, PRD-006 outcome 5, and PRD-007 outcomes 3 and 5.
 
@@ -10,7 +12,7 @@ This change supports PRD-001 outcomes 7 and 9, PRD-006 outcome 5, and PRD-007 ou
 - Define shared engineering terms and show the tool flow with pseudocode.
 - Classify policy denials at the shared receipt boundary for parent and child sessions.
 - Restrict project-scope receipt effects to `set_working_directory`.
-- Use a closed next-action code and keep approval requests non-terminal.
+- Use a closed remediation code and keep approval requests non-terminal.
 - **BREAKING** Remove the unreleased `json_read` tool and its public type.
 - **BREAKING** Remove the unreleased `file_read_many` tool and its public type.
 - Replace their eval cases with composed `file_search` and `file_read` use.
@@ -48,7 +50,8 @@ None.
 ### Modified Capabilities
 
 - `netclaw-tools`: Remove bulk read and JSON projection tools, and strengthen receipt ownership.
-- `session-cwd`: Reject a relative base with an unsafe ancestor and preserve explicit fallback rules.
+- `session-cwd`: Select an available relative base and do not retry after the
+  `netclaw-tools` path access decision denies it.
 - `bounded-tool-output`: Make the opaque continuation tool the only model-visible spill route.
 - `netclaw-subagents`: Require a real child-catalog replay and consistent denial outcomes.
 - `progressive-tool-disclosure`: Clarify schema exposure, exact-name loads, and dispatch authorization.
@@ -57,7 +60,10 @@ None.
 
 ### Code and APIs
 
-The change affects workspace tools, path policy, receipt classification, tool registration, prompts, skills, tests, and evals. It removes two public tool classes that no released tag contains. Public durable session and approval formats stay unchanged.
+The change affects workspace tools, path authorization, receipt classification,
+tool registration, prompts, skills, tests, and evals. It removes two public tool
+classes that no released tag contains. Public durable session and approval
+formats stay unchanged.
 
 ### Security
 

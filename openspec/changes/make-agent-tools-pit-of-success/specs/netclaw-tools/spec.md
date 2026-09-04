@@ -16,8 +16,8 @@ It SHALL NOT change the public string-returning `INetclawTool` contract.
 
 #### Scenario: Access denial has no successful file activity
 
-- **GIVEN** `file_read` is called for a path outside the current read authority
-- **WHEN** scoped access denies the call
+- **GIVEN** `file_read` is called for a path outside the trusted roots
+- **WHEN** the path access decision denies the call
 - **THEN** the outcome category is `access_denied`
 - **AND** the outcome contains no successful file activity
 - **AND** the model receives a bounded denial string
@@ -54,7 +54,7 @@ SHALL NOT infer successful file activity solely from authored argument names.
 ### Requirement: Recursive workspace search is bounded and structured
 
 The system SHALL provide a `file_search` tool for recursive literal file-name
-and text search under one authorized root. The tool SHALL accept explicit
+and text search under one trusted root. The tool SHALL accept explicit
 result, file, and content-byte ceilings; SHALL NOT follow directory symlinks;
 and SHALL report matches, skipped entries, and truncation state. Search SHALL
 use filesystem APIs rather than an external executable.

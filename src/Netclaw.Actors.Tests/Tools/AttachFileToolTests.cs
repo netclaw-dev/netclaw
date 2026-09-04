@@ -60,9 +60,8 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Path_traversal_attempt_is_rejected()
     {
-        // Autonomous Personal: the out-of-session boundary holds for
-        // non-interactive sessions (#1724). Interactive Personal gets
-        // shell-equivalent reach instead.
+        // Default Personal file policy is unrestricted only for interactive
+        // sessions. Unattended runs remain confined to trusted roots.
         var outsidePath = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
         await File.WriteAllTextAsync(outsidePath, "sensitive data", TestContext.Current.CancellationToken);
 
@@ -80,7 +79,7 @@ public class AttachFileToolTests : IDisposable
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
             Assert.Contains("Error", result);
-            Assert.Contains("session directory", result);
+            Assert.Contains("trusted roots", result);
         }
         finally
         {
@@ -91,7 +90,7 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task Dotdot_traversal_is_rejected()
     {
-        // Autonomous Personal: dotdot escape is denied outside the zone (#1724).
+        // Unattended Personal: dotdot escape is denied outside trusted roots (#1724).
         var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
@@ -104,7 +103,7 @@ public class AttachFileToolTests : IDisposable
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
         Assert.Contains("Error", result);
-        Assert.Contains("session directory", result);
+        Assert.Contains("trusted roots", result);
     }
 
     [Fact]
@@ -134,13 +133,16 @@ public class AttachFileToolTests : IDisposable
     [Fact]
     public async Task No_session_directory_returns_error()
     {
-        var context = TestToolExecutionContext.CreateBound("test-session", null, TrustAudience.Personal);
+        var context = TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal
+        });
         var args = ToolInput.Create("Path", "/tmp/anything.png");
 
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
         Assert.Contains("Error", result);
-        Assert.Contains("session directory", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("No session directory", result, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -210,16 +212,15 @@ public class AttachFileToolTests : IDisposable
         var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
         Assert.Contains("Error", result);
-        Assert.Contains("session directory", result, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("trusted roots", result, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(context.FileAttachments);
     }
 
     [Fact]
     public async Task Symlink_to_outside_file_is_rejected()
     {
-        // Autonomous Personal: a symlink in the session dir that resolves
-        // outside is denied by the proximity gate (#1724). Interactive Personal
-        // gets shell-equivalent reach instead.
+        // Unattended Personal: a link in the session directory that resolves
+        // outside is denied by path access policy (#1724).
         var outsideFile = Path.Combine(Path.GetTempPath(), $"netclaw-outside-{Guid.NewGuid():N}.txt");
         var symlinkPath = Path.Combine(_dir.Path, "linked.txt");
 
@@ -240,10 +241,9 @@ public class AttachFileToolTests : IDisposable
 
             var result = await _tool.ExecuteAsync(args, context, CancellationToken.None);
 
-            // The autonomous zone rejects symlinked paths outright — stricter
-            // than the proximity gate, and the intended behavior (#1724).
+            // The shared path decision rejects linked paths outright (#1724).
             Assert.Contains("Error", result);
-            Assert.Contains("symlink", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("links inside trusted roots", result, StringComparison.OrdinalIgnoreCase);
             Assert.Empty(context.FileAttachments);
         }
         catch (UnauthorizedAccessException)

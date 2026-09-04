@@ -61,120 +61,132 @@ public static class SubAgentProtocol
     /// <summary>Marker for subagent responses.</summary>
     public interface ISubAgentResponse : INoSerializationVerificationNeeded;
 
-// ===== Commands =====
-
-/// <summary>
-/// Message sent to a <see cref="SubAgentActor"/> to begin execution.
-/// </summary>
-public sealed record RunSubAgent : ISubAgentCommand
-{
-    /// <summary>
-    /// Framework-owned authority and read-only working snapshot forked from
-    /// the parent invocation. The child receives no reference to parent
-    /// activity state and allocates its own output and file-activity trackers.
-    /// </summary>
-    public required ChildRunScope Scope { get; init; }
-
-    /// <summary>The task for the subagent to perform (becomes part of the user message).</summary>
-    public required string Task { get; init; }
+    // ===== Commands =====
 
     /// <summary>
-    /// Optional per-invocation background context from the parent session. When present,
-    /// it is prefixed onto the subagent's first user message as a "Context:" block so the
-    /// agent's static system prompt (loaded from disk) remains reproducible.
+    /// Message sent to a <see cref="SubAgentActor"/> to begin execution.
     /// </summary>
-    public string? RuntimeContext { get; init; }
+    public sealed record RunSubAgent : ISubAgentCommand
+    {
+        /// <summary>
+        /// Framework-owned authority and read-only working snapshot forked from
+        /// the parent invocation. The child receives no reference to parent
+        /// activity state and allocates its own output and file-activity trackers.
+        /// </summary>
+        public required ChildRunScope Scope { get; init; }
+
+        /// <summary>The task for the subagent to perform (becomes part of the user message).</summary>
+        public required string Task { get; init; }
+
+        /// <summary>
+        /// Optional per-invocation background context from the parent session. When present,
+        /// it is prefixed onto the subagent's first user message as a "Context:" block so the
+        /// agent's static system prompt (loaded from disk) remains reproducible.
+        /// </summary>
+        public string? RuntimeContext { get; init; }
+
+        /// <summary>
+        /// Inter-delta inactivity budget: the maximum gap between streaming deltas
+        /// once the model has started responding, and the general inactivity budget
+        /// for the tool loop. The watchdog promotes to this budget on the first
+        /// substantive delta.
+        /// </summary>
+        public required TimeSpan Timeout { get; init; }
+
+        /// <summary>
+        /// Generous wait-for-first-delta budget covering queue wait and cold prefill.
+        /// The watchdog starts on this budget and content-free keepalives refresh it,
+        /// so a healthy-but-slow self-hosted prefill is not killed. When unset
+        /// (<see cref="TimeSpan.Zero"/>), the sub-agent defaults to the same 1800s
+        /// budget as the main session path rather than collapsing to <see cref="Timeout"/>.
+        /// </summary>
+        public TimeSpan PrefillTimeout { get; init; }
+
+        /// <summary>
+        /// Hard ceiling on time without substantive output. Reset only by real
+        /// streaming tokens — content-free keepalives never extend it — so a backend
+        /// that heartbeats forever without producing a token is killed once this
+        /// elapses. <see cref="TimeSpan.Zero"/> (unset) leaves the call bounded only by
+        /// the liveness watchdog; the spawner always populates it from
+        /// <see cref="Configuration.SubAgentConfig.NoProgressTimeoutSeconds"/>.
+        /// </summary>
+        public TimeSpan NoProgressTimeout { get; init; }
+
+        /// <summary>
+        /// Cancellation token from the calling tool execution. Used to stop the
+        /// subagent promptly when the parent turn is cancelled or times out.
+        /// </summary>
+        public CancellationToken Cancellation { get; init; }
+
+        /// <summary>
+        /// Optional sink for liveness/progress activity emitted while the sub-agent
+        /// runs. Streaming <c>spawn_agent</c> calls provide this so the parent's
+        /// per-call watchdog sees a long-but-healthy run as alive. Non-streaming
+        /// callers leave it null because no parent stream is observing activity.
+        /// </summary>
+        public ChannelWriter<ToolActivityUpdate>? ActivitySink { get; init; }
+    }
+
+    /// <summary>Immutable authority, storage, and working context assigned to one child run.</summary>
+    public sealed record ChildRunScope
+    {
+        /// <summary>Gets the child scope identifier used for logs and telemetry.</summary>
+        public required SubAgentScopeId ScopeId { get; init; }
+
+        /// <summary>Gets the framework-owned authority and resolved session storage.</summary>
+        public required ToolRunScope Authority { get; init; }
+
+        /// <summary>Gets the working-context snapshot inherited from the parent.</summary>
+        public required WorkingContextSnapshot InitialWorkingSnapshot { get; init; }
+    }
+
+    // ===== Responses =====
 
     /// <summary>
-    /// Inter-delta inactivity budget: the maximum gap between streaming deltas
-    /// once the model has started responding, and the general inactivity budget
-    /// for the tool loop. The watchdog promotes to this budget on the first
-    /// substantive delta.
+    /// Result returned by a <see cref="SubAgentActor"/> when execution completes.
     /// </summary>
-    public required TimeSpan Timeout { get; init; }
+    public sealed record SubAgentResult : ISubAgentResponse
+    {
+        public required ChildRunCompletion Completion { get; init; }
 
-    /// <summary>
-    /// Generous wait-for-first-delta budget covering queue wait and cold prefill.
-    /// The watchdog starts on this budget and content-free keepalives refresh it,
-    /// so a healthy-but-slow self-hosted prefill is not killed. When unset
-    /// (<see cref="TimeSpan.Zero"/>), the sub-agent defaults to the same 1800s
-    /// budget as the main session path rather than collapsing to <see cref="Timeout"/>.
-    /// </summary>
-    public TimeSpan PrefillTimeout { get; init; }
+        /// <summary>Whether the subagent completed successfully.</summary>
+        public bool Success => Completion.Success;
 
-    /// <summary>
-    /// Hard ceiling on time without substantive output. Reset only by real
-    /// streaming tokens — content-free keepalives never extend it — so a backend
-    /// that heartbeats forever without producing a token is killed once this
-    /// elapses. <see cref="TimeSpan.Zero"/> (unset) leaves the call bounded only by
-    /// the liveness watchdog; the spawner always populates it from
-    /// <see cref="Configuration.SubAgentConfig.NoProgressTimeoutSeconds"/>.
-    /// </summary>
-    public TimeSpan NoProgressTimeout { get; init; }
+        /// <summary>The subagent's final text output (or error message on failure).</summary>
+        public required string Output { get; init; }
 
-    /// <summary>
-    /// Cancellation token from the calling tool execution. Used to stop the
-    /// subagent promptly when the parent turn is cancelled or times out.
-    /// </summary>
-    public CancellationToken Cancellation { get; init; }
+        /// <summary>Name of the subagent that produced this result.</summary>
+        public required AgentName AgentName { get; init; }
 
-    /// <summary>
-    /// Optional sink for liveness/progress activity emitted while the sub-agent
-    /// runs. Streaming <c>spawn_agent</c> calls provide this so the parent's
-    /// per-call watchdog sees a long-but-healthy run as alive. Non-streaming
-    /// callers leave it null because no parent stream is observing activity.
-    /// </summary>
-    public ChannelWriter<ToolActivityUpdate>? ActivitySink { get; init; }
-}
+        /// <summary>Terminal outcome of the run, separate from the legacy success flag.</summary>
+        public SubAgentRunOutcome Outcome => Completion.Outcome;
 
-public sealed record ChildRunScope
-{
-    public required SubAgentScopeId ScopeId { get; init; }
-    public required ToolRunScope Authority { get; init; }
-    public required WorkingContextSnapshot InitialWorkingSnapshot { get; init; }
-}
+        /// <summary>Machine-readable reason when <see cref="Outcome"/> is not completed.</summary>
+        public SubAgentOutcomeReason? OutcomeReason => Completion.Reason;
 
-// ===== Responses =====
+        /// <summary>Spawner-generated run id used to correlate logs and notifications.</summary>
+        public SubAgentRunId? RunId { get; init; }
 
-/// <summary>
-/// Result returned by a <see cref="SubAgentActor"/> when execution completes.
-/// </summary>
-public sealed record SubAgentResult : ISubAgentResponse
-{
-    public required ChildRunCompletion Completion { get; init; }
+        /// <summary>Subagent scope id used in structured logs.</summary>
+        public SubAgentScopeId? ScopeId { get; init; }
 
-    /// <summary>Whether the subagent completed successfully.</summary>
-    public bool Success => Completion.Success;
+        /// <summary>The exact child log path. Only a successful run exposes it.</summary>
+        public string? LogPath { get; init; }
 
-    /// <summary>The subagent's final text output (or error message on failure).</summary>
-    public required string Output { get; init; }
+        /// <summary>The parent-readable child artifact directory. Only a successful run exposes it.</summary>
+        public string? ArtifactDirectory { get; init; }
 
-    /// <summary>Name of the subagent that produced this result.</summary>
-    public required AgentName AgentName { get; init; }
+        /// <summary>
+        /// Structured findings returned to the owning session for policy and checkpoint review.
+        /// </summary>
+        public List<SubAgentFinding> Findings { get; init; } = [];
 
-    /// <summary>Terminal outcome of the run, separate from the legacy success flag.</summary>
-    public SubAgentRunOutcome Outcome => Completion.Outcome;
+        /// <summary>
+        /// Total number of structured findings returned before parent-session review.
+        /// </summary>
+        public int FindingsCount { get; init; }
 
-    /// <summary>Machine-readable reason when <see cref="Outcome"/> is not completed.</summary>
-    public SubAgentOutcomeReason? OutcomeReason => Completion.Reason;
-
-    /// <summary>Spawner-generated run id used to correlate logs and notifications.</summary>
-    public SubAgentRunId? RunId { get; init; }
-
-    /// <summary>Subagent scope id used in structured logs.</summary>
-    public SubAgentScopeId? ScopeId { get; init; }
-
-    /// <summary>
-    /// Structured findings returned to the owning session for policy and checkpoint review.
-    /// </summary>
-    public List<SubAgentFinding> Findings { get; init; } = [];
-
-    /// <summary>
-    /// Total number of structured findings returned before parent-session review.
-    /// </summary>
-    public int FindingsCount { get; init; }
-
-    /// <summary>Structured, run-scoped file and Git context returned to the parent.</summary>
-    public WorkingContextDelta? WorkingContext => Completion.Delta;
-}
+        /// <summary>Structured, run-scoped file and Git context returned to the parent.</summary>
+        public WorkingContextDelta? WorkingContext => Completion.Delta;
+    }
 }

@@ -2,7 +2,7 @@
 
 - [x] 1.1 Add the closed internal remediation code.
 - [x] 1.2 Require exactly one remediation for each recoverable correction receipt and reject it for other outcomes.
-- [x] 1.3 Convert project declaration, session scratch, and file edit producers from free-form strings to the closed next-action code.
+- [x] 1.3 Convert project declaration, managed temporary, and file edit producers from free-form strings to the closed remediation code.
 - [x] 1.4 Add constructor and producer regressions for valid, missing, undefined, and wrong-category remediations.
 
 ## 2. Shared model presentation
@@ -14,7 +14,7 @@
 
 ## 3. Compatibility
 
-- [x] 3.1 Prove approval authority, session-scratch retry state, public APIs, and durable messages are unchanged.
+- [x] 3.1 Prove approval authority, managed-temporary retry state, public APIs, and durable messages are unchanged.
 
 ## 4. Validation
 

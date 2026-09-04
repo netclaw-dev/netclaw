@@ -23,8 +23,8 @@ internal static class ToolRemediationPresenter
             ToolRemediationCode.SetWorkingDirectory when setWorkingDirectoryAvailable =>
                 "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
             ToolRemediationCode.SetWorkingDirectory => null,
-            ToolRemediationCode.UseSessionScratch =>
-                "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths.",
+            ToolRemediationCode.UseManagedTemporaryDirectory =>
+                "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths.",
             ToolRemediationCode.ProvideUniqueOldString =>
                 "Next action: retry file_edit with a unique OldString, or set ReplaceAll=true when every match should change.",
             ToolRemediationCode.UseNativeTool =>

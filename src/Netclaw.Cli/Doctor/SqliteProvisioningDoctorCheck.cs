@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text.Json.Nodes;
 using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Doctor;
@@ -14,13 +13,6 @@ public sealed class SqliteProvisioningDoctorCheck(NetclawPaths paths) : IDoctorC
 
     public Task<DoctorCheckResult> RunAsync(CancellationToken cancellationToken = default)
     {
-        if (!UsesSqlite(paths))
-        {
-            return Task.FromResult(DoctorCheckResult.Pass(
-                CheckName,
-                "Persistence provider is not SQLite."));
-        }
-
         var latestCrash = FindLatestCrashLog(paths.LogsDirectory);
         if (latestCrash is null)
         {
@@ -65,19 +57,6 @@ public sealed class SqliteProvisioningDoctorCheck(NetclawPaths paths) : IDoctorC
             CheckName,
             $"Daemon failed provisioning SQLite ({latestCrash.Name}, {occurredAt}).",
             "The daemon could not initialize SQLite (for example missing e_sqlite3 in a single-file build). Update/reinstall Netclaw binaries, then run `netclaw daemon start`."));
-    }
-
-    private static bool UsesSqlite(NetclawPaths paths)
-    {
-        var (root, readError) = DoctorJsonConfigReader.TryReadConfig(paths);
-        if (readError is not null)
-            return true; // Default behavior is SQLite when config is missing/invalid.
-
-        var provider = root?["Persistence"]?["Provider"]?.GetValue<string>();
-        if (string.IsNullOrWhiteSpace(provider))
-            return true;
-
-        return provider.Equals("sqlite", StringComparison.OrdinalIgnoreCase);
     }
 
     private static FileInfo? FindLatestCrashLog(string logsDirectory)

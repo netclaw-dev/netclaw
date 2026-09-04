@@ -44,6 +44,26 @@ public sealed class ShellPolicyPathFactsTests
                     && fact.Paths.Any(path => path.Value == expected));
     }
 
+    [Fact]
+    public void Execution_views_retain_provider_qualified_power_shell_paths()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var analysis = new ShellCommandPolicy(environment)
+            .Analyze(@"Get-Content 'FileSystem::C:\external\file.log'");
+
+        var view = Assert.Single(ShellPolicyPathFacts.CreateExecutionViews(analysis));
+
+        Assert.Contains(
+            view.Facts,
+            fact => fact.State == ShellPolicyPathResolutionState.Known
+                    && fact.Paths.Any(path => ShellPathRules.Equals(
+                        path.Value,
+                        @"C:\external\file.log",
+                        ShellPathStyle.Windows)));
+    }
+
     [Theory]
     [InlineData(@"\external\file.log")]
     [InlineData(@"D:file.log")]
@@ -185,15 +205,15 @@ public sealed class ShellPolicyPathFactsTests
         var evaluation = CreateEvaluation(
             BashCandidate("git status", "/work/repo"),
             BashCandidate("git push", "/work/repo"));
-        var sessionScratch = evaluation.GetUncoveredApprovalContext("/work/repo");
+        var sessionOwned = evaluation.GetUncoveredApprovalContext(["/work/repo"]);
 
         evaluation.Cover(evaluation.Candidates[0], ShellPolicyCoverageSource.Session);
-        var remaining = evaluation.GetUncoveredApprovalContext("/work/session");
+        var remaining = evaluation.GetUncoveredApprovalContext(["/work/session"]);
 
-        Assert.NotSame(sessionScratch, remaining);
+        Assert.NotSame(sessionOwned, remaining);
         Assert.Equal([evaluation.Candidates[1].Candidate], remaining.Candidates);
         Assert.DoesNotContain(
-            sessionScratch.Options,
+            sessionOwned.Options,
             static option => option.Key == ApprovalOptionKeys.ApproveAlwaysKey);
         Assert.Contains(
             remaining.Options,

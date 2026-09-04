@@ -19,8 +19,8 @@ public class ToolRemediationPresenterTests
             "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call."
         },
         {
-            nameof(ToolRemediationCode.UseSessionScratch),
-            "Next action: use the session scratch directory from this result for disposable files, or retry unchanged for exact platform paths."
+            nameof(ToolRemediationCode.UseManagedTemporaryDirectory),
+            "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths."
         },
         {
             nameof(ToolRemediationCode.ProvideUniqueOldString),

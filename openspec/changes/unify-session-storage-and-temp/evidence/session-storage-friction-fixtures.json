@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "sanitized": true,
+  "fixtures": [
+    {
+      "id": "parent-child-log-reference-missing",
+      "source": "pre-change-runtime-contract",
+      "spawnResult": {
+        "runId": "run-7",
+        "diagnosticHint": "Session log entries contain the child scope identifier."
+      },
+      "missingFields": [
+        "log_path",
+        "artifact_dir"
+      ],
+      "unsafeFallback": "Search a daemon-global log root for the child identifier.",
+      "requiredOutcome": "Return exact same-session paths after the child log target exists."
+    },
+    {
+      "id": "explicit-posix-temp-write",
+      "source": "sanitized-approval-traffic",
+      "tool": "shell_execute",
+      "commandShape": "cd /tmp && diagnostic-command > result.log && head result.log",
+      "authoredWritePath": "/tmp/result.log",
+      "requiredOutcome": "UseManagedTemporaryDirectory",
+      "counterexample": "A read-only pwd call with WorkingDirectory=/tmp keeps normal authorization."
+    }
+  ],
+  "piiAudit": {
+    "forbiddenCategories": [
+      "local-user",
+      "private-repository",
+      "channel",
+      "thread",
+      "host",
+      "email",
+      "token",
+      "secret"
+    ],
+    "result": "pass"
+  }
+}

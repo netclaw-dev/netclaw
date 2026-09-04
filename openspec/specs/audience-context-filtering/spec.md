@@ -102,21 +102,21 @@ The working context block, including project directory, recent files, Git worktr
 ### Requirement: File access error message sanitization
 
 File access denial messages for Public-audience sessions SHALL NOT include
-the list of allowed root paths or mention the session directory as an allowed
-root. Team and Personal audiences SHALL continue to receive verbose error
-messages including allowed roots.
+the list of trusted roots or identify the session directory as a trusted root.
+Team and Personal audiences SHALL continue to receive verbose error messages
+that include trusted roots.
 
 #### Scenario: Public file access denial omits roots
 
-- **WHEN** a Public-audience session attempts to read a file outside allowed roots
-- **THEN** the error message does not reveal any allowed root
+- **WHEN** a Public-audience session attempts to read a file outside trusted roots
+- **THEN** the error message does not reveal any trusted root
 - **AND** no root paths are listed in the error
 - **AND** the session directory is not named or implied in the error
 
 #### Scenario: Team file access denial includes roots
 
-- **WHEN** a Team-audience session attempts to read a file outside allowed roots
-- **THEN** the error message includes the list of allowed root paths
+- **WHEN** a Team-audience session attempts to read a file outside trusted roots
+- **THEN** the error message includes the list of trusted root paths
 
 ### Requirement: Public audience has no implicit internal file roots
 
@@ -153,4 +153,3 @@ fail loudly rather than adopt a default audience.
 - **WHEN** the pipeline derives the effective audience
 - **THEN** the derived audience reflects the Personal source audience
 - **AND** no default-audience value participates in the derivation
-

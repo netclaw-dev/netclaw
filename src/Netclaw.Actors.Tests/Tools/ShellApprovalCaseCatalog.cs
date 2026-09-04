@@ -186,7 +186,7 @@ internal sealed record ExpectedApproval(
             null,
             [],
             null,
-            approvalChecks ?? (reason == ToolAllowReason.SafeVerbInTrustedScope ? 1 : 0),
+            approvalChecks ?? (reason == ToolAllowReason.ReviewedSafePolicy ? 1 : 0),
             approvalMatches);
 
     public static ExpectedApproval Require(
@@ -261,12 +261,12 @@ public static class ShellApprovalCases
             "safe-verb-project-allows",
             Bash("git status"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-git-ls-tree-ref-allows",
             Bash("git ls-tree feature"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-git-ls-tree-external-prompts-with-canonical-verb",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
@@ -281,7 +281,7 @@ public static class ShellApprovalCases
             "safe-verb-context-project-fallback-allows",
             Bash("cat src/readme.txt", ApprovalDirectoryShape.None),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-verb-context-project-traversal-prompts",
             Bash("cat ../secret.txt", ApprovalDirectoryShape.None),
@@ -291,7 +291,7 @@ public static class ShellApprovalCases
             "safe-verb-session-allows",
             Bash("git status", ApprovalDirectoryShape.Session),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-verb-external-prompts",
             Bash("git status", ApprovalDirectoryShape.External),
@@ -316,7 +316,7 @@ public static class ShellApprovalCases
             "safe-verb-bash-provider-looking-relative-path-allows",
             Bash("cat filesystem::/etc/netclaw.secret"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-verb-external-redirect-prompts",
             Bash($"git status > {TemporaryFile("netclaw-approval-matrix.txt")}"),
@@ -336,12 +336,12 @@ public static class ShellApprovalCases
             "all-safe-compound-allows",
             Bash("git status && git ls-tree HEAD"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "four-safe-mixed-operator-clauses-allow",
             Bash("git status && git ls-tree HEAD | head -20; pwd"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "mixed-safe-unsafe-compound-prompts",
             Bash("git status && git push"),
@@ -356,7 +356,7 @@ public static class ShellApprovalCases
             "safe-pipeline-allows",
             Bash("git ls-tree HEAD | head -20"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "unsafe-catalog-find-exec-prompts",
             Bash("find . -exec rm {} +"),
@@ -426,12 +426,12 @@ public static class ShellApprovalCases
             "reviewed-grep-local-option-path-allows",
             Bash("grep -f ./patterns ./data.txt"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "reviewed-path-shaped-data-under-project-allows",
             Bash("gh run list --repo example/project"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
 
         Case(
             "live-read-chain-with-separator-prompts-for-rg",
@@ -581,7 +581,7 @@ public static class ShellApprovalCases
             "local-glob-allows-safe-verb",
             Bash("ls *.txt"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "local-glob-reuses-project-grant",
             Bash("rm *.tmp"),
@@ -614,7 +614,7 @@ public static class ShellApprovalCases
             "directory-listing-glob-in-project-auto-allows",
             Bash("ls -d subdirs/*/"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         // Outside the trusted tree the same command prompts — but now with a
         // persistent grant scoped to the covering directory, not one-shot only.
         // This is the reported regression (0.25.3 flipped it to complex-command).
@@ -715,7 +715,7 @@ public static class ShellApprovalCases
             "powershell7-safe-command-allows",
             PowerShell7("Get-ChildItem -Path . -Filter *.cs"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "powershell7-pipeline-prompts-for-unsafe-stage",
             PowerShell7("Get-ChildItem | Remove-Item"),
@@ -770,7 +770,7 @@ public static class ShellApprovalCases
             "powershell7-subexpression-standalone-safe-allows",
             PowerShell7("$(Get-Date)"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "powershell7-subexpression-quoted-path-fails-closed",
             PowerShell7("Get-Content \"$(Get-Date)\""),
@@ -805,7 +805,7 @@ public static class ShellApprovalCases
             "powershell7-subexpression-escaped-literal-allows",
             PowerShell7(@"Get-Content "".\`$(Remove-Item victim.txt)"""),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "powershell7-subexpression-malformed-fails-closed",
             PowerShell7("Get-Content \"$(Get-Date\""),
@@ -858,7 +858,7 @@ public static class ShellApprovalCases
             "powershell7-alias-resolves-before-safe-verb-check",
             PowerShell7("gci"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "powershell7-local-redirect-prompts-for-writer",
             PowerShell7(@"Get-Content .\input.txt > .\output.txt"),
@@ -893,7 +893,7 @@ public static class ShellApprovalCases
             "powershell7-output-variable-alone-allows",
             PowerShell7("Get-Date -OutVariable marker"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "powershell7-output-variable-execution-stays-strict",
             PowerShell7("Get-Date -OutVariable marker; & $marker"),
@@ -943,7 +943,7 @@ public static class ShellApprovalCases
             "powershell51-safe-command-allows",
             WindowsPowerShell51("Get-ChildItem"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "powershell51-directory-change-does-not-create-causal-scope",
             WindowsPowerShell51(@"Set-Location C:\Temp; Get-Content result.log"),
@@ -1018,7 +1018,7 @@ public static class ShellApprovalCases
             "bash-substitution-escaped-literal-allows",
             Bash("cat \"./\\$(git push)\""),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "bash-substitution-malformed-fails-closed",
             Bash("cat \"$(git status\""),
@@ -1038,22 +1038,22 @@ public static class ShellApprovalCases
             "fd-dup-redirect-safe-verb-allows",
             Bash("git status 2>&1"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "fd-dup-redirect-safe-pipeline-allows",
             Bash("git ls-tree HEAD 2>&1 | tail -20"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "fd-close-redirect-safe-verb-allows",
             Bash("git status 2>&-"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "fd-move-redirect-safe-verb-allows",
             Bash("git status 2>&1-"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "combined-output-project-redirect-safe-verb-prompts",
             Bash("git status &> result.log"),
@@ -1144,7 +1144,7 @@ public static class ShellApprovalCases
             "literal-heredoc-cat-allows",
             Bash("cat <<'EOF'\nhello\nEOF"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "expanding-heredoc-cat-prompts",
             Bash("cat <<EOF\nhello\nEOF"),
@@ -1159,7 +1159,7 @@ public static class ShellApprovalCases
             "literal-here-string-cat-allows",
             Bash("cat <<< \"hello\""),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "dynamic-here-string-cat-prompts",
             Bash("cat <<< \"$value\""),
@@ -1188,7 +1188,7 @@ public static class ShellApprovalCases
             "workload-search-grep-in-project-allows",
             Bash("grep -R \"error\" src"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-find-in-project-prompts",
             Bash("find src -name \"*.cs\" -print"),
@@ -1198,17 +1198,17 @@ public static class ShellApprovalCases
             "workload-search-cat-in-project-allows",
             Bash("cat src/file.txt"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-head-in-project-allows",
             Bash("head -40 src/file.txt"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-tail-in-project-allows",
             Bash("tail -100 logs/app.log"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-sed-print-in-project-currently-prompts",
             Bash("sed -n '20,80p' src/file.txt"),
@@ -1233,7 +1233,7 @@ public static class ShellApprovalCases
             "workload-search-grep-tail-pipeline-allows",
             Bash("grep -R \"error\" logs | tail -20"),
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)),
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-find-head-pipeline-prompts",
             Bash("find src -name \"*.cs\" -print | head -20"),

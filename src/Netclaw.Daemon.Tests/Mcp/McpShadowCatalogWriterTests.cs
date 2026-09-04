@@ -126,7 +126,7 @@ public sealed class McpShadowCatalogWriterTests
         {
             ["memorizer"] = ["search_memories"]
         };
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

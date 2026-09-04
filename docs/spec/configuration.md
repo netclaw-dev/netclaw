@@ -242,7 +242,7 @@ shape, confirm that strict-default fallback is active, or verify that
 |-------|------|---------|-------------|
 | `ShellMode` | string? | `null` | Optional shell mode override (`Off`, `SandboxOnly`, `HostAllowed`). Falls back to security posture defaults when omitted. |
 | `MaxOutputChars` | int | `32000` | Maximum characters captured from tool output. |
-| `AudienceProfiles` | object | built-in defaults | Per-audience tool, MCP server, and filesystem scopes. Default tool grants are monotonic — `public` ⊆ `team` ⊆ `personal`. `public` gets read-only file tools only (`file_read`, `file_list`, `attach_file`) — no file-mutation and no outbound web tools; `team` adds the file-mutation, web (`web_search`/`web_fetch`), scheduling, and skill tools but not `shell_execute`, the webhook tools, or any MCP server; `personal` defaults to unrestricted tool/file access and all MCP servers. `public` and `team` keep session-scoped file access until the operator opts in. |
+| `AudienceProfiles` | object | built-in defaults | Per-audience tool, MCP server, and filesystem permissions. Default tool grants are monotonic — `public` ⊆ `team` ⊆ `personal`. `public` gets read-only file tools only (`file_read`, `file_list`, `attach_file`) — no file mutation and no outbound web tools; `team` adds file mutation, web (`web_search`/`web_fetch`), scheduling, and skill tools but not `shell_execute`, webhook tools, or any MCP server; `personal` defaults to unrestricted interactive tool/file access and all MCP servers. `public` and `team` file operations remain bounded by configured trusted roots, including the shared Netclaw sessions root, until the operator opts in to broader roots. |
 
 ### MCP Servers
 

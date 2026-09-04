@@ -58,112 +58,116 @@ public enum BackgroundJobStatus
 public static partial class BackgroundJobProtocol
 {
 
-/// <summary>Marker for background-job commands.</summary>
-public interface IBackgroundJobCommand;
+    /// <summary>Marker for background-job commands.</summary>
+    public interface IBackgroundJobCommand;
 
-/// <summary>Marker for background-job queries.</summary>
-public interface IBackgroundJobQuery;
+    /// <summary>Marker for background-job queries.</summary>
+    public interface IBackgroundJobQuery;
 
-/// <summary>Marker for background-job responses.</summary>
-public interface IBackgroundJobResponse;
+    /// <summary>Marker for background-job responses.</summary>
+    public interface IBackgroundJobResponse;
 
-// ===== Commands =====
-
-/// <summary>
-/// Request to start a background shell command. Sent from the pipeline to
-/// <see cref="BackgroundJobManagerActor"/> after approval has been granted.
-/// </summary>
-public sealed record StartBackgroundJob : IBackgroundJobCommand
-{
-    public required string Command { get; init; }
-    public string? WorkingDirectory { get; init; }
-    public required Protocol.SessionId SessionId { get; init; }
-    public required string Rationale { get; init; }
-    public required TrustAudience Audience { get; init; }
-    public required TrustBoundary Boundary { get; init; }
-    public required Channels.ChannelType OriginChannelType { get; init; }
+    // ===== Commands =====
 
     /// <summary>
-    /// Optional kill timer. 0 (the default) means no timer: a background job is
-    /// a detached process with no completion expectation — it runs until it
-    /// exits, is cancelled, or its owning session passivates. Only an explicit
-    /// positive <c>_timeout_seconds</c> hint arms a timer.
+    /// Request to start a background shell command. Sent from the pipeline to
+    /// <see cref="BackgroundJobManagerActor"/> after approval has been granted.
     /// </summary>
-    public int TimeoutSeconds { get; init; }
+    public sealed record StartBackgroundJob : IBackgroundJobCommand
+    {
+        public required string Command { get; init; }
+        public string? WorkingDirectory { get; init; }
+        /// <summary>Gets the directory exposed through the child process temporary variables.</summary>
+        public required string ManagedTemporaryDirectory { get; init; }
+        /// <summary>Gets the storage root that must contain the managed temporary directory.</summary>
+        public required string ManagedTemporaryStorageRoot { get; init; }
+        public required Protocol.SessionId SessionId { get; init; }
+        public required string Rationale { get; init; }
+        public required TrustAudience Audience { get; init; }
+        public required TrustBoundary Boundary { get; init; }
+        public required Channels.ChannelType OriginChannelType { get; init; }
 
-    public Protocol.SenderId? SenderId { get; init; }
-}
+        /// <summary>
+        /// Optional kill timer. 0 (the default) means no timer: a background job is
+        /// a detached process with no completion expectation — it runs until it
+        /// exits, is cancelled, or its owning session passivates. Only an explicit
+        /// positive <c>_timeout_seconds</c> hint arms a timer.
+        /// </summary>
+        public int TimeoutSeconds { get; init; }
 
-/// <summary>
-/// Request to cancel a running background job.
-/// </summary>
-public sealed record CancelBackgroundJob(
-    BackgroundJobId JobId,
-    Protocol.SessionId SessionId,
-    TrustAudience Audience,
-    TrustBoundary Boundary) : IBackgroundJobCommand;
+        public Protocol.SenderId? SenderId { get; init; }
+    }
 
-// ===== Queries =====
+    /// <summary>
+    /// Request to cancel a running background job.
+    /// </summary>
+    public sealed record CancelBackgroundJob(
+        BackgroundJobId JobId,
+        Protocol.SessionId SessionId,
+        TrustAudience Audience,
+        TrustBoundary Boundary) : IBackgroundJobCommand;
 
-/// <summary>
-/// Query for current status of a background job.
-/// </summary>
-public sealed record QueryBackgroundJob(BackgroundJobId JobId, Protocol.SessionId SessionId, TrustAudience Audience, TrustBoundary Boundary) : IBackgroundJobQuery;
+    // ===== Queries =====
 
-/// <summary>
-/// Sent by a passivating session: kill every running or pending job this
-/// session owns and mark them <see cref="BackgroundJobStatus.Reaped"/>.
-/// Reaped jobs produce NO completion delivery — delivering a turn would
-/// rehydrate the session that is tearing itself down.
-/// </summary>
-public sealed record KillJobsForSession(Protocol.SessionId SessionId) : IBackgroundJobCommand;
+    /// <summary>
+    /// Query for current status of a background job.
+    /// </summary>
+    public sealed record QueryBackgroundJob(BackgroundJobId JobId, Protocol.SessionId SessionId, TrustAudience Audience, TrustBoundary Boundary) : IBackgroundJobQuery;
 
-// ===== Responses =====
+    /// <summary>
+    /// Sent by a passivating session: kill every running or pending job this
+    /// session owns and mark them <see cref="BackgroundJobStatus.Reaped"/>.
+    /// Reaped jobs produce NO completion delivery — delivering a turn would
+    /// rehydrate the session that is tearing itself down.
+    /// </summary>
+    public sealed record KillJobsForSession(Protocol.SessionId SessionId) : IBackgroundJobCommand;
 
-/// <summary>
-/// Acknowledgement for <see cref="KillJobsForSession"/>: kills have been
-/// initiated and definitions marked. The passivating session waits for this
-/// before taking its final snapshot.
-/// </summary>
-public sealed record SessionJobsReaped(Protocol.SessionId SessionId, int ReapedCount) : IBackgroundJobResponse;
+    // ===== Responses =====
 
-/// <summary>
-/// Confirmation that a background job was accepted for execution.
-/// <see cref="OutputLogPath"/> is handed back to the agent in the submit ACK so
-/// it can monitor the streaming log without an extra status query.
-/// </summary>
-public sealed record BackgroundJobStarted(BackgroundJobId JobId, string? OutputLogPath = null) : IBackgroundJobResponse;
+    /// <summary>
+    /// Acknowledgement for <see cref="KillJobsForSession"/>: kills have been
+    /// initiated and definitions marked. The passivating session waits for this
+    /// before taking its final snapshot.
+    /// </summary>
+    public sealed record SessionJobsReaped(Protocol.SessionId SessionId, int ReapedCount) : IBackgroundJobResponse;
 
-/// <summary>
-/// Status response for a background job query.
-/// </summary>
-public sealed record BackgroundJobStatusResponse : IBackgroundJobResponse
-{
-    public required BackgroundJobId JobId { get; init; }
-    public required BackgroundJobStatus Status { get; init; }
-    public bool Found { get; init; } = true;
-    public int? ExitCode { get; init; }
-    public string? OutputTail { get; init; }
-    public string? OutputFilePath { get; init; }
-    public TimeSpan? Elapsed { get; init; }
-    public string? Rationale { get; init; }
-}
+    /// <summary>
+    /// Confirmation that a background job was accepted for execution.
+    /// <see cref="OutputLogPath"/> is handed back to the agent in the submit ACK so
+    /// it can monitor the streaming log without an extra status query.
+    /// </summary>
+    public sealed record BackgroundJobStarted(BackgroundJobId JobId, string? OutputLogPath = null) : IBackgroundJobResponse;
 
-public sealed record BackgroundJobCancelResponse(BackgroundJobId JobId, bool Found) : IBackgroundJobResponse;
+    /// <summary>
+    /// Status response for a background job query.
+    /// </summary>
+    public sealed record BackgroundJobStatusResponse : IBackgroundJobResponse
+    {
+        public required BackgroundJobId JobId { get; init; }
+        public required BackgroundJobStatus Status { get; init; }
+        public bool Found { get; init; } = true;
+        public int? ExitCode { get; init; }
+        public string? OutputTail { get; init; }
+        public string? OutputFilePath { get; init; }
+        public TimeSpan? Elapsed { get; init; }
+        public string? Rationale { get; init; }
+    }
 
-// ===== Health =====
+    public sealed record BackgroundJobCancelResponse(BackgroundJobId JobId, bool Found) : IBackgroundJobResponse;
 
-/// <summary>Ping sent to <see cref="BackgroundJobManagerActor"/> to confirm it is ready (PreStart + startup reconciliation complete).</summary>
-public sealed record GetBackgroundJobManagerHealth : IBackgroundJobQuery, INoSerializationVerificationNeeded
-{
-    public static readonly GetBackgroundJobManagerHealth Instance = new();
-    private GetBackgroundJobManagerHealth() { }
-}
+    // ===== Health =====
 
-/// <summary>Response from <see cref="GetBackgroundJobManagerHealth"/> with current runtime counters.</summary>
-public sealed record BackgroundJobManagerHealthResponse(
-    int ActiveJobCount,
-    int QueuedJobCount) : IBackgroundJobResponse, INoSerializationVerificationNeeded;
+    /// <summary>Ping sent to <see cref="BackgroundJobManagerActor"/> to confirm it is ready (PreStart + startup reconciliation complete).</summary>
+    public sealed record GetBackgroundJobManagerHealth : IBackgroundJobQuery, INoSerializationVerificationNeeded
+    {
+        public static readonly GetBackgroundJobManagerHealth Instance = new();
+        private GetBackgroundJobManagerHealth() { }
+    }
+
+    /// <summary>Response from <see cref="GetBackgroundJobManagerHealth"/> with current runtime counters.</summary>
+    public sealed record BackgroundJobManagerHealthResponse(
+        int ActiveJobCount,
+        int QueuedJobCount) : IBackgroundJobResponse, INoSerializationVerificationNeeded;
 
 }
 
@@ -193,6 +197,11 @@ public sealed record BackgroundJobDefinition
     public required BackgroundJobId Id { get; init; }
     public required string Command { get; init; }
     public string? WorkingDirectory { get; init; }
+    public string? ManagedTemporaryDirectory { get; init; }
+    /// <summary>
+    /// Gets the storage root from the legacy persisted field name.
+    /// </summary>
+    public string? ManagedTemporaryAuthorityRoot { get; init; }
     [JsonConverter(typeof(Protocol.SessionIdJsonConverter))]
     public required Protocol.SessionId SessionId { get; init; }
     public required string Rationale { get; init; }

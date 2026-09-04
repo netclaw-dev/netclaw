@@ -20,6 +20,19 @@ public class ShellToolTests
     public static bool IsWindows => OperatingSystem.IsWindows();
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
+    private static ToolExecutionContext CreateExecutionContext()
+    {
+        var sessionDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "netclaw-shell-tests",
+            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(sessionDirectory);
+        return TestToolExecutionContext.CreateBound(
+            "test/shell",
+            sessionDirectory,
+            TrustAudience.Personal);
+    }
+
     [Fact]
     public void Constructor_preserves_three_parameter_binary_signature()
     {
@@ -58,8 +71,8 @@ public class ShellToolTests
         Assert.Contains("shell semantics", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("local search, VCS, builds, tests, processes", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("declared-project work, omit WorkingDirectory", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("session_dir for disposable writable work outside a project", _tool.Description, StringComparison.Ordinal);
-        Assert.Contains("do not substitute platform temporary storage", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Standard temporary APIs use temp_dir", _tool.Description, StringComparison.Ordinal);
+        Assert.Contains("Preserve an explicit host temporary path", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("smallest operation that answers the request", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Use one operation per call", _tool.Description, StringComparison.Ordinal);
         Assert.Contains("Keep independent searches and diagnostics separate", _tool.Description, StringComparison.Ordinal);
@@ -98,8 +111,7 @@ public class ShellToolTests
         Assert.Contains("Set only for one call", description, StringComparison.Ordinal);
         Assert.Contains("named child directory or worktree", description, StringComparison.Ordinal);
         Assert.Contains("Omit for declared-project work", description, StringComparison.Ordinal);
-        Assert.Contains("session_dir for disposable writable work outside a project", description, StringComparison.Ordinal);
-        Assert.Contains("do not substitute platform temporary storage", description, StringComparison.Ordinal);
+        Assert.Contains("Standard temporary APIs use temp_dir", description, StringComparison.Ordinal);
     }
 
     [Theory]
@@ -162,7 +174,7 @@ public class ShellToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Command", "Get-ChildItem"),
-            TestToolExecutionContext.CreateUnbound(),
+            CreateExecutionContext(),
             TestContext.Current.CancellationToken);
 
         Assert.Contains(missingExecutable, result);
@@ -174,7 +186,7 @@ public class ShellToolTests
     public async Task Execute_echo_returns_output()
     {
         var args = ToolInput.Create("Command", "echo hello");
-        var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("hello", result);
         Assert.Contains("Exit code: 0", result);
@@ -195,7 +207,7 @@ public class ShellToolTests
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Command", "Write-Output windows-powershell-51"),
-            TestToolExecutionContext.CreateUnbound(),
+            CreateExecutionContext(),
             TestContext.Current.CancellationToken);
 
         Assert.Contains("windows-powershell-51", result);
@@ -206,7 +218,7 @@ public class ShellToolTests
     public async Task Execute_captures_stderr()
     {
         var args = ToolInput.Create("Command", TestShellEnvironment.StandardErrorCommand);
-        var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("error", result);
         Assert.Contains("Exit code: 0", result);
@@ -216,7 +228,7 @@ public class ShellToolTests
     public async Task Execute_returns_nonzero_exit_code()
     {
         var args = ToolInput.Create("Command", "exit 42");
-        var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("Exit code: 42", result);
     }
@@ -306,7 +318,7 @@ public class ShellToolTests
         var tool = CreateTool();
         var args = ToolInput.Create("Command", $"echo {new string('x', 200)}");
 
-        var result = await tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("Exit code: 0", result);
         Assert.Contains(new string('x', 200), result); // full output, not yet windowed/spilled
@@ -320,7 +332,7 @@ public class ShellToolTests
         var command = TestShellEnvironment.PrintWorkingDirectoryCommand;
         var args = ToolInput.Create("Command", command, "WorkingDirectory", tmpDir);
 
-        var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         // Normalize paths for comparison: resolve symlinks, trim trailing separators
         var resolvedTmpDir = Path.GetFullPath(tmpDir).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
@@ -332,7 +344,7 @@ public class ShellToolTests
     public async Task Missing_command_returns_error()
     {
         var args = ToolInput.Empty();
-        var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("Command", result);
         Assert.Contains("missing", result, StringComparison.OrdinalIgnoreCase);
@@ -485,7 +497,7 @@ public class ShellToolTests
         var missingDir = Path.GetFullPath(Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")));
         var args = ToolInput.Create("Command", "echo hi", "WorkingDirectory", missingDir);
 
-        var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await _tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("does not exist", result);
         Assert.Contains(missingDir, result);
@@ -505,7 +517,7 @@ public class ShellToolTests
         {
             var args = ToolInput.Create("Command", "echo hi", "WorkingDirectory", filePath);
 
-            var result = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+            var result = await _tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
             Assert.Contains("is a file, not a directory", result);
             Assert.Contains(filePath, result);
@@ -546,7 +558,7 @@ public class ShellToolTests
     [Fact]
     public async Task Null_arguments_returns_error()
     {
-        var result = await _tool.ExecuteAsync(null, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await _tool.ExecuteAsync(null, CreateExecutionContext(), CancellationToken.None);
         Assert.Contains("No arguments provided", result);
     }
 
@@ -576,7 +588,7 @@ public class ShellToolTests
 
         var args = ToolInput.Create("Command", $"cat {secretsPath}");
 
-        var result = await tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("protected file path", result);
         Assert.Contains("Access denied", result);
@@ -592,7 +604,7 @@ public class ShellToolTests
 
         var args = ToolInput.Create("Command", "cat ~/.netclaw/config/*.json");
 
-        var result = await tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("protected file path", result);
         Assert.Contains("Access denied", result);
@@ -605,7 +617,7 @@ public class ShellToolTests
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), commandPolicy);
 
         var args = ToolInput.Create("Command", "netclaw daemon stop");
-        var result = await tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("hard deny policy", result);
     }
@@ -617,7 +629,7 @@ public class ShellToolTests
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), commandPolicy);
 
         var args = ToolInput.Create("Command", "kill -9 12345");
-        var result = await tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("hard deny policy", result);
     }
@@ -630,7 +642,7 @@ public class ShellToolTests
         var tool = new ShellTool(new ToolConfig(), pathPolicy, commandPolicy);
 
         var args = ToolInput.Create("Command", "netclaw daemon stop");
-        var result = await tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         // Should hit hard deny, not path policy
         Assert.Contains("hard deny policy", result);
@@ -646,7 +658,7 @@ public class ShellToolTests
 
         var args = ToolInput.Create("Command", "cat /home/user/.netclaw/config/secrets.json");
 
-        var result = await tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), CancellationToken.None);
+        var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.DoesNotContain("hard deny policy", result);
         Assert.Contains("protected file path", result);
@@ -670,7 +682,7 @@ public class ShellToolTests
 
             var result = await tool.ExecuteAsync(
                 args,
-                TestToolExecutionContext.CreateUnbound(),
+                CreateExecutionContext(),
                 TestContext.Current.CancellationToken);
 
             Assert.Contains("protected file path", result);
@@ -711,7 +723,7 @@ public class ShellToolTests
                     command,
                     "WorkingDirectory",
                     root.FullName),
-                TestToolExecutionContext.CreateUnbound().Invocation,
+                CreateExecutionContext().Invocation,
                 analysis,
                 TestContext.Current.CancellationToken);
 

@@ -27,7 +27,7 @@ snowflake-arctic-embed 137M (33M-class models measured inadequate for
 doc-to-doc dedup).
 
 Actor/persistence context: memory lives in the daemon's single SQLite file
-(`NetclawPaths.MemorySqliteDbPath == SqliteDbPath`), whose memory tables are
+(`NetclawPaths.SqliteDbPath`), whose memory tables are
 owned by `SQLiteMemoryStore.InitializeAsync` (idempotent DDL), NOT by the
 daemon's `SchemaMigrator`. Two write pipelines exist today: the inline
 per-session path (`SessionMemoryObserverActor` → `MemoryProposalGate` →

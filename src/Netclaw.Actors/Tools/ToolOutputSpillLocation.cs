@@ -98,7 +98,7 @@ internal static class ToolOutputSpillLocation
             if ((File.GetAttributes(sessionDirectory) & FileAttributes.ReparsePoint) != 0)
                 return false;
 
-            return !PathUtility.ContainsSymlinkSegment(sessionDirectory, path);
+            return !PathUtility.ContainsSymlinkSegment(sessionDirectory, path, includeRoot: true);
         }
         catch (Exception ex) when (ex is IOException
                                    or UnauthorizedAccessException

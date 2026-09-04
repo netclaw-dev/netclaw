@@ -8,6 +8,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.SubAgents;
+using Netclaw.Actors.Tools;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
@@ -79,7 +80,7 @@ internal sealed record ToolExecutionCompleted : INoSerializationVerificationNeed
     public List<CompletedSubAgentRun> CompletedSubAgentRuns { get; init; } = [];
     public List<AcceptedSubAgentFinding> AcceptedSubAgentFindings { get; init; } = [];
     public List<Jobs.ActiveJobInfo> StartedBackgroundJobs { get; init; } = [];
-    public List<SessionScratchCorrectionChange> ScratchCorrectionChanges { get; init; } = [];
+    public List<ManagedTemporaryCorrectionChange> ManagedTemporaryCorrectionChanges { get; init; } = [];
     public Dictionary<string, string> ToolFailureCodes { get; init; } = new(StringComparer.Ordinal);
     public Dictionary<string, ToolInvocationReceipt> ToolReceipts { get; init; } = new(StringComparer.Ordinal);
     public Dictionary<string, ToolExposureRequest> ToolExposureRequests { get; init; } = new(StringComparer.Ordinal);

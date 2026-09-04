@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="PlatformTemporaryScopePolicyTests.cs" company="Petabridge, LLC">
+// <copyright file="TemporaryPathCorrectionPolicyTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -14,15 +14,19 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public sealed class PlatformTemporaryScopePolicyTests
+public sealed class TemporaryPathCorrectionPolicyTests
 {
     private const string PosixTemp = "/tmp";
     private const string PosixSession = "/home/user/.netclaw/sessions/example";
     private const string WindowsTemp = "C:\\Users\\user\\AppData\\Local\\Temp";
     private const string WindowsSession = "C:\\Users\\user\\.netclaw\\sessions\\example";
+    public static bool IsMacOS => OperatingSystem.IsMacOS();
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+    public static bool IsWindows => OperatingSystem.IsWindows();
 
-    [Fact]
-    public void Explicit_posix_temp_cwd_returns_private_scratch_correction()
+    [SlopwatchSuppress("SW001", "This test requires a POSIX storage path and Bash temporary path semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX host path semantics.")]
+    public void Explicit_posix_temp_cwd_returns_managed_temporary_correction()
     {
         var decision = Evaluate(
             BashEnvironment(),
@@ -31,14 +35,14 @@ public sealed class PlatformTemporaryScopePolicyTests
             PosixSession,
             explicitWorkingDirectory: PosixTemp);
 
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        var correction = Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
-        Assert.Equal(PosixSession, correction.SessionDirectory);
-        Assert.Equal(PosixTemp, correction.TemporaryRoot);
-        Assert.Null(context.SuggestedProjectDirectory);
+        var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+        Assert.Equal(Path.Combine(PosixSession, "tmp", "parent"), correction.Target.ManagedTemporaryDirectory);
+        Assert.Equal(PosixTemp, correction.Target.PlatformTemporaryRoot);
+        Assert.IsNotType<ToolCorrection.ProjectDirectorySuggested>(decision.AgentCorrection);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This test requires a POSIX storage path and Bash temporary path semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX host path semantics.")]
     public void Platform_temp_alias_maps_to_canonical_target()
     {
         var decision = Evaluate(
@@ -49,16 +53,16 @@ public sealed class PlatformTemporaryScopePolicyTests
             explicitWorkingDirectory: PosixTemp,
             inspector: new TestPathInspector(resolvedRoot: "/private/tmp"));
 
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        var correction = Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
-        Assert.Equal("/private/tmp", correction.TemporaryRoot);
+        var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+        Assert.Equal("/private/tmp", correction.Target.PlatformTemporaryRoot);
     }
 
-    [Theory]
+    [SlopwatchSuppress("SW001", "This theory requires a POSIX storage path and Bash temporary path semantics.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX host path semantics.")]
     [InlineData("cd /tmp && gh api repos/example/project > /tmp/result.log")]
     [InlineData("command cd /tmp && gh api repos/example/project > /tmp/result.log")]
     [InlineData("builtin cd /tmp && gh api repos/example/project > /tmp/result.log")]
-    public void Parser_owned_bash_temp_transition_returns_private_scratch_correction(
+    public void Parser_owned_bash_temp_transition_returns_managed_temporary_correction(
         string command)
     {
         var decision = Evaluate(
@@ -67,12 +71,12 @@ public sealed class PlatformTemporaryScopePolicyTests
             command,
             PosixSession);
 
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
-        Assert.Null(context.SuggestedProjectDirectory);
+        Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+        Assert.IsNotType<ToolCorrection.ProjectDirectorySuggested>(decision.AgentCorrection);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This test requires a POSIX storage path and Bash temporary path semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX host path semantics.")]
     public void Additional_posix_temp_alias_maps_to_its_own_canonical_root()
     {
         const string runtimeTemp = "/var/folders/example/T";
@@ -90,10 +94,9 @@ public sealed class PlatformTemporaryScopePolicyTests
                 }),
             additionalTemporaryRoots: [PosixTemp]);
 
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        var correction = Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(
-            context.AgentCorrection);
-        Assert.Equal("/private/tmp", correction.TemporaryRoot);
+        var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(
+            decision.AgentCorrection);
+        Assert.Equal("/private/tmp", correction.Target.PlatformTemporaryRoot);
     }
 
     [Fact]
@@ -106,30 +109,29 @@ public sealed class PlatformTemporaryScopePolicyTests
                 [runtimeTemp] = runtimeTemp,
                 [PosixTemp] = "/private/tmp"
             });
-        var policy = new PlatformTemporaryScopePolicy(
+        var policy = new TemporaryPathCorrectionPolicy(
             BashEnvironment(),
             runtimeTemp,
             inspector,
             [PosixTemp]);
 
-        Assert.True(policy.IsSafePlatformTemporaryPath("/tmp/work/result.log"));
-        Assert.True(policy.IsSafePlatformTemporaryPath("/private/tmp/work/result.log"));
-        Assert.False(policy.IsSafePlatformTemporaryPath("/var/external/result.log"));
+        Assert.True(policy.IsEligiblePlatformTemporaryPath("/tmp/work/result.log"));
+        Assert.True(policy.IsEligiblePlatformTemporaryPath("/private/tmp/work/result.log"));
+        Assert.False(policy.IsEligiblePlatformTemporaryPath("/var/external/result.log"));
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This test requires the native macOS temporary path alias configuration.")]
+    [Fact(SkipUnless = nameof(IsMacOS), Skip = "This case uses native macOS temporary path aliases.")]
     public void MacOS_factory_recognizes_the_conventional_posix_temp_alias()
     {
-        if (!OperatingSystem.IsMacOS())
-            return;
-
-        var policy = PlatformTemporaryScopePolicy.Create(BashEnvironment());
+        var policy = TemporaryPathCorrectionPolicy.Create(BashEnvironment());
 
         Assert.True(policy.IsPlatformTemporaryRoot(PosixTemp));
     }
 
-    [Fact]
-    public void Native_windows_explicit_temp_cwd_returns_private_scratch_correction()
+    [SlopwatchSuppress("SW001", "This test requires a Windows storage path and PowerShell temporary path semantics.")]
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "This case uses native Windows path semantics.")]
+    public void Native_windows_explicit_temp_cwd_returns_managed_temporary_correction()
     {
         var decision = Evaluate(
             PowerShellEnvironment(),
@@ -138,13 +140,12 @@ public sealed class PlatformTemporaryScopePolicyTests
             WindowsSession,
             explicitWorkingDirectory: WindowsTemp);
 
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        var correction = Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
-        Assert.Equal(ApprovalShell.PowerShell, correction.Shell);
-        Assert.Equal(WindowsSession, correction.SessionDirectory);
+        var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+        Assert.Equal(Path.Combine(WindowsSession, "tmp", "parent"), correction.Target.ManagedTemporaryDirectory);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This test requires native Windows case rules for temporary paths.")]
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "This case uses native Windows path semantics.")]
     public void Native_windows_temp_comparison_uses_windows_case_rules()
     {
         var decision = Evaluate(
@@ -154,8 +155,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             WindowsSession,
             explicitWorkingDirectory: WindowsTemp.ToUpperInvariant());
 
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
+        Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
     }
 
     [Theory]
@@ -172,7 +172,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             command,
             PosixSession);
 
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             explicitWorkingDirectory: PosixTemp);
 
         Assert.False(decision.Allowed);
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
         Assert.StartsWith("hard_deny_", decision.DenyReason, StringComparison.Ordinal);
     }
 
@@ -202,7 +202,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             deniedPaths: ["/tmp/protected"]);
 
         Assert.False(decision.Allowed);
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
         Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
 
@@ -216,7 +216,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             PosixSession,
             projectDirectory: PosixTemp);
 
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [Fact]
@@ -230,7 +230,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             explicitWorkingDirectory: PosixTemp,
             interactive: false);
 
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [Theory]
@@ -246,25 +246,19 @@ public sealed class PlatformTemporaryScopePolicyTests
             explicitWorkingDirectory: PosixTemp,
             audience: audience);
 
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [Theory]
     [InlineData("")]
     [InlineData("relative/session")]
-    public void Invalid_session_scope_suppresses_correction(string sessionDirectory)
+    public void Invalid_storage_envelope_is_rejected_before_correction(string sessionDirectory)
     {
-        var decision = Evaluate(
-            BashEnvironment(),
-            PosixTemp,
-            "gh api repos/example/project",
-            sessionDirectory,
-            explicitWorkingDirectory: PosixTemp);
-
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Throws<ArgumentException>(() => new SessionStorageEnvelopeRoot(sessionDirectory));
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This test requires a POSIX storage path and Bash temporary path semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX host path semantics.")]
     public void Fresh_session_scope_does_not_need_to_exist()
     {
         var sessionDirectory = $"/home/user/.netclaw/sessions/{Guid.NewGuid():N}";
@@ -275,8 +269,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             sessionDirectory,
             explicitWorkingDirectory: PosixTemp);
 
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
+        Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
     }
 
     [Fact]
@@ -288,7 +281,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             "Set-Location $env:TEMP; Get-Content result.log",
             WindowsSession);
 
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [Fact]
@@ -302,7 +295,7 @@ public sealed class PlatformTemporaryScopePolicyTests
             explicitWorkingDirectory: PosixTemp,
             inspector: new TestPathInspector(failDescendantInspection: true));
 
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [Fact]
@@ -316,16 +309,14 @@ public sealed class PlatformTemporaryScopePolicyTests
             explicitWorkingDirectory: WindowsTemp,
             inspector: new TestPathInspector(failDescendantInspection: true));
 
-        Assert.Null(decision.ApprovalContext?.AgentCorrection);
+        Assert.Null(decision.AgentCorrection);
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic link traversal semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX symbolic link semantics.")]
     public void Host_inspector_rejects_posix_symlink_descendant()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
-        var testRoot = Path.Combine(Path.GetTempPath(), $"netclaw-scratch-policy-{Guid.NewGuid():N}");
+        var testRoot = Path.Combine(Path.GetTempPath(), $"netclaw-managed-temporary-policy-{Guid.NewGuid():N}");
         var outside = Path.Combine(testRoot, "outside");
         var link = Path.Combine(testRoot, "link");
         Directory.CreateDirectory(outside);
@@ -333,7 +324,7 @@ public sealed class PlatformTemporaryScopePolicyTests
 
         try
         {
-            Assert.False(HostPlatformTemporaryPathInspector.Instance.IsSafeDescendant(
+            Assert.False(HostPlatformTemporaryPathInspector.Instance.HasNoLinkEscape(
                 testRoot,
                 Path.Combine(link, "result.log"),
                 ShellPathStyle.Posix));
@@ -346,12 +337,10 @@ public sealed class PlatformTemporaryScopePolicyTests
         }
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic link root semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX symbolic link semantics.")]
     public void Host_inspector_resolves_symlink_in_temporary_root_parent()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var testRoot = Path.Combine(Path.GetTempPath(), $"netclaw-temp-root-{Guid.NewGuid():N}");
         var realParent = Path.Combine(testRoot, "real-parent");
         var realTemp = Path.Combine(realParent, "temp");
@@ -374,12 +363,10 @@ public sealed class PlatformTemporaryScopePolicyTests
         }
     }
 
-    [Fact]
-    public void Canonical_platform_temp_alias_can_recommend_scratch_for_redirect()
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic link alias semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX symbolic link semantics.")]
+    public void Canonical_platform_temp_alias_can_recommend_managed_temporary_for_redirect()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var testRoot = Path.Combine(Path.GetTempPath(), $"netclaw-temp-alias-{Guid.NewGuid():N}");
         var realTemp = Path.Combine(testRoot, "real-temp");
         var aliasTemp = Path.Combine(testRoot, "alias-temp");
@@ -396,7 +383,7 @@ public sealed class PlatformTemporaryScopePolicyTests
                 $"gh api repos/example/project > '{output}'",
                 PosixSession,
                 inspector: HostPlatformTemporaryPathInspector.Instance);
-            Assert.Null(externalFirst.ApprovalContext?.AgentCorrection);
+            Assert.Null(externalFirst.AgentCorrection);
 
             var decision = Evaluate(
                 BashEnvironment(),
@@ -406,8 +393,8 @@ public sealed class PlatformTemporaryScopePolicyTests
                 inspector: HostPlatformTemporaryPathInspector.Instance);
 
             var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-            var correction = Assert.IsType<ToolAgentCorrection.SessionScratchSuggested>(context.AgentCorrection);
-            Assert.Equal(realTemp, correction.TemporaryRoot);
+            var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+            Assert.Equal(realTemp, correction.Target.PlatformTemporaryRoot);
         }
         finally
         {
@@ -416,7 +403,7 @@ public sealed class PlatformTemporaryScopePolicyTests
         }
     }
 
-    private static ToolAccessDecision Evaluate(
+    private static ToolAuthorizationDecision Evaluate(
         ShellExecutionEnvironment environment,
         string tempRoot,
         string command,
@@ -448,13 +435,14 @@ public sealed class PlatformTemporaryScopePolicyTests
         var pathPolicy = new ToolPathPolicy(environment, deniedPaths ?? []);
         var pathInspector = inspector ?? new TestPathInspector();
         var tempPolicy = additionalTemporaryRoots is null
-            ? new PlatformTemporaryScopePolicy(environment, tempRoot, pathInspector)
-            : new PlatformTemporaryScopePolicy(
+            ? new TemporaryPathCorrectionPolicy(environment, tempRoot, pathInspector)
+            : new TemporaryPathCorrectionPolicy(
                 environment,
                 tempRoot,
                 pathInspector,
                 additionalTemporaryRoots);
         var policy = new ToolAccessPolicy(
+            new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -470,9 +458,11 @@ public sealed class PlatformTemporaryScopePolicyTests
                     : ApprovalShell.PowerShell,
                 ["head", "cat"]));
         var shellTool = new ShellTool(config, pathPolicy, commandPolicy);
-        var context = TestToolExecutionContext.CreateBound(
+        var storage = SessionStoragePaths.CreateVersion2(
+            new SessionStorageEnvelopeRoot(Path.GetFullPath(sessionDirectory)));
+        var context = TestToolExecutionContext.CreateBoundWithStorage(
             "signalr/example",
-            sessionDirectory,
+            storage,
             new TestToolExecutionContextOptions
             {
                 Audience = audience,
@@ -518,11 +508,11 @@ public sealed class PlatformTemporaryScopePolicyTests
             return ShellPathRules.TryNormalize(root, pathStyle, out resolvedRoot);
         }
 
-        public bool IsSafeDescendant(string root, string path, ShellPathStyle pathStyle)
+        public bool HasNoLinkEscape(string root, string path, ShellPathStyle pathStyle)
             => !_failDescendantInspection;
 
-        public bool ContainsInvalidPathState(string path, ShellPathStyle pathStyle)
-            => false;
+        public bool SupportsPathInspection(ShellPathStyle pathStyle)
+            => true;
     }
 
     private sealed class MappedPathInspector(
@@ -538,10 +528,10 @@ public sealed class PlatformTemporaryScopePolicyTests
                    && ShellPathRules.TryNormalize(mapped, pathStyle, out resolvedRoot);
         }
 
-        public bool IsSafeDescendant(string root, string path, ShellPathStyle pathStyle)
+        public bool HasNoLinkEscape(string root, string path, ShellPathStyle pathStyle)
             => ShellPathRules.IsWithinRoot(path, root, pathStyle);
 
-        public bool ContainsInvalidPathState(string path, ShellPathStyle pathStyle)
-            => false;
+        public bool SupportsPathInspection(ShellPathStyle pathStyle)
+            => true;
     }
 }

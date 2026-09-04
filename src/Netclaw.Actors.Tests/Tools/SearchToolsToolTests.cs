@@ -231,7 +231,7 @@ public class SearchToolsToolTests
 
         var tool = new SearchToolsTool(
             registry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 CreateProfileAwareToolConfig("memorizer"),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
@@ -268,7 +268,7 @@ public class SearchToolsToolTests
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         var tool = new SearchToolsTool(
             registry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 config,
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
@@ -312,6 +312,7 @@ public class SearchToolsToolTests
 
     private static ToolAccessPolicy CreatePersonalPolicy() =>
         new(
+            new NetclawPaths(),
             new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

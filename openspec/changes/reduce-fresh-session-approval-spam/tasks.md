@@ -19,19 +19,19 @@
 ## 3. Record the Current Model Baseline
 
 - [x] 3.1 Add natural eval tasks for repeated project review, child-worktree inspection, known-file operations, external retrieval, disposable output, and deliberate directory change.
-- [x] 3.2 Ensure no eval prompt names a tool, project declaration, directory argument, scratch path, or inline directory form.
+- [x] 3.2 Ensure no eval prompt names a tool, project declaration, directory argument, temporary path, or inline directory form.
 - [x] 3.3 Parse exact tool calls, argument boundaries, call order, completion, and approval events without depending on opaque call-ID syntax.
 - [x] 3.4 Run five fresh sessions per case against the current deployed binary and fixed model configuration.
 - [x] 3.5 Record baseline prompt count, shell-call count, tool choices, completion rate, and retained legitimate prompts.
 
-## 4. Align Project, Child, and Scratch Guidance
+## 4. Align Project, Child, and Managed-Temporary Guidance
 
-- [x] 4.1 Replace the unconditional child scratch instruction with the project, child-directory, scratch, and deliberate-transition decision order.
+- [x] 4.1 Replace the unconditional child temporary-path instruction with one directory-selection order.
 - [x] 4.2 Apply the same order to parent context, always-loaded rules, the shell schema, and the bundled operations skill.
-- [x] 4.3 Keep existing project and session state as the only path sources; add no parallel scope field or persisted value.
+- [x] 4.3 Reuse the existing run paths; add no parallel scope field or persisted value.
 - [x] 4.4 Add exact Personal, Team, Public, parent, child, declaration-refresh, and failed-declaration prompt tests.
 - [x] 4.5 Prove one successful child declaration governs later project commands without changing the parent project.
-- [x] 4.6 Prove a project refresh contains one scratch rule and does not reveal private paths to Public audiences.
+- [x] 4.6 Prove a project refresh contains one managed-temporary rule and reveals no private path to a Public audience.
 
 ## 5. Strengthen Structured-Tool Selection
 

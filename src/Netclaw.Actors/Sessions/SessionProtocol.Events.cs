@@ -165,6 +165,8 @@ public static partial class SessionProtocol
 
         public string? SessionScratchDirectory { get; init; }
 
+        public string? ManagedTemporaryDirectory { get; init; }
+
         public TurnContextRecord? TurnContext { get; init; }
 
         public long RequestedAtMs { get; init; }
