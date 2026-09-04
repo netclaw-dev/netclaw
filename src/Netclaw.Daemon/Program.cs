@@ -10,6 +10,7 @@ using Akka.Hosting;
 using Akka.Persistence.Hosting;
 using Akka.Persistence.Sql.Hosting;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.Extensions.Configuration;
@@ -186,6 +187,9 @@ static async Task RunDaemonAsync(
     builder.Services.AddSingleton<BootstrapStateStore>();
     builder.Services.AddSingleton<BootstrapDeviceSeeder>();
     builder.Services.AddSingleton<PairingCodeService>();
+    builder.Services.AddSingleton<LocalControlPairingProofProtector>();
+    builder.Services.AddSingleton<LocalControlPairingProofValidator>();
+    builder.Services.AddSingleton<PairingCoordinator>();
     builder.Services.AddSingleton<PairingExchangeGuard>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services.AddNetclawAuthSchemes(daemonConfig);
@@ -194,8 +198,8 @@ static async Task RunDaemonAsync(
     // Add OpenAPI
     builder.Services.AddOpenApi();
 
-    // Rate limiting for the unauthenticated pairing exchange endpoint.
-    // 5 attempts per minute per IP — brute-force defense for the 8-char code space.
+    // Rate limits bound both unauthenticated pairing endpoints.
+    // The exchange uses a long brute-force window. Local control uses a short load-shed window.
     builder.Services.AddRateLimiter(options =>
     {
         options.AddPolicy("pairing-exchange", context =>
@@ -208,6 +212,7 @@ static async Task RunDaemonAsync(
                     QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                     QueueLimit = 0,
                 }));
+        PairingEndpointRouteBuilderExtensions.AddLocalControlRateLimitPolicy(options);
         options.RejectionStatusCode = 429;
     });
     builder.Services.AddMattermostActionEndpointRateLimiting();
@@ -387,7 +392,9 @@ static NetclawPaths ConfigureConfigServices(
     // Initialize Data Protection for secrets encryption/decryption.
     // Must happen before config binding so SensitiveStringTypeConverter
     // can transparently decrypt ENC: values.
-    var protector = SecretsProtection.CreateProtector(bootstrapPaths);
+    var dataProtectionProvider = SecretsProtection.CreateDataProtectionProvider(bootstrapPaths);
+    services.AddSingleton<IDataProtectionProvider>(dataProtectionProvider);
+    var protector = new DataProtectionSecretsProtector(dataProtectionProvider);
     services.AddSingleton<ISecretsProtector>(protector);
     SensitiveStringTypeConverter.Protector = protector;
 

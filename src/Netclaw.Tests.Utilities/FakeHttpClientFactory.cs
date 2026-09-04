@@ -7,6 +7,11 @@ namespace Netclaw.Tests.Utilities;
 
 internal sealed class FakeHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> handler) : IHttpClientFactory
 {
+    public string? LastClientName { get; private set; }
+
     public HttpClient CreateClient(string name)
-        => new(new FakeHttpMessageHandler(handler));
+    {
+        LastClientName = name;
+        return new HttpClient(new FakeHttpMessageHandler(handler));
+    }
 }

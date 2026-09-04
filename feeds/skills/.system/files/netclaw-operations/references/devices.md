@@ -1,6 +1,3 @@
-# Device Pairing
-
-
 ## Device Pairing
 
 
@@ -8,14 +5,26 @@ Remote devices authenticate with the daemon using a two-sided pairing protocol.
 
 ### Pairing flow
 
-**Daemon side** (requires local/SSH access):
+**Daemon host** (requires local or SSH access):
 
 ```
 shell_execute: netclaw daemon pair
 ```
 
-This generates a single-use pairing code (8 chars, 5-minute TTL). The code
-generation endpoint is loopback-only.
+This command proves access to the daemon host key ring.
+It creates a single-use pairing code with a five-minute lifetime.
+The command works in all exposure modes.
+Host authority follows the shared Netclaw home and key ring.
+It does not follow a physical host label, source address, tunnel, or proxy.
+
+Run the CLI inside the daemon container for a container deployment:
+
+```
+shell_execute: docker exec <container-name> netclaw daemon pair
+```
+
+The container command must use the same Netclaw home and user as the daemon.
+Do not copy the key ring to a remote device.
 
 If `netclaw daemon pair` fails immediately after an exposure-mode change, run
 `netclaw doctor` and inspect `~/.netclaw/logs/crash-*.log` for the specific
@@ -30,6 +39,37 @@ shell_execute: netclaw pair https://my-daemon.tail1234.ts.net:5000
 The user is prompted for the pairing code. On success, the bearer token is
 saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
 `~/.netclaw/client/config.json`.
+
+Use HTTPS for each remote daemon endpoint.
+The pair command permits HTTP only for a loopback endpoint, such as `http://127.0.0.1:5199`.
+The pair command rejects redirects during the exchange.
+These rules prevent a remote endpoint from receiving the code or token through an insecure transport.
+
+### Credential lifecycle
+
+| Credential | Lifetime | Next action after failure |
+|---|---|---|
+| Host proof | 30 seconds and one use | Run `netclaw daemon pair` again |
+| Pairing code | Five minutes and one successful exchange | Create a new code on the daemon host |
+| Device token | Until operator revocation | Use the normal pairing flow again |
+
+The device token has no automatic expiration or refresh flow.
+Pairing-code expiration does not invalidate a paired device token.
+
+If the daemon rejects a duplicate device name, select a unique name.
+Reuse the same code while it remains valid.
+
+Create a new host code after an invalid, expired, used, or missing code response.
+Wait before a retry when the daemon reports a request limit.
+The CLI does not save a device token or endpoint after a failed exchange.
+
+Use the normal pairing flow when a client loses its token.
+Select a unique replacement name if the old device record still exists.
+Revoke the old device record after the replacement token works.
+Use the same flow after an operator revokes a device and later restores access.
+
+Update the CLI and daemon together when the command reports a protocol mismatch.
+The command does not use the old hub method as a fallback.
 
 ### Device management
 
@@ -48,6 +88,9 @@ saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
   scanners)
 - Tokens are stored as salted SHA-256 hashes on the daemon; the raw token is
   never persisted server-side
+- Device tokens remain valid until operator revocation; they have no refresh flow
+- Remote pairing requires HTTPS; HTTP is available only for a loopback endpoint
+- The remote pair command does not follow redirects
 
 ### Config locations
 

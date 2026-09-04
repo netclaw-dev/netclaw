@@ -71,6 +71,7 @@ EVAL_DATA_PROTECTION_KEYS="${NETCLAW_EVAL_DATA_PROTECTION_KEYS:-}"
 EVAL_FALLBACK_MODEL_ID="${NETCLAW_EVAL_FALLBACK_MODEL_ID:-}"
 EVAL_COMPACTION_MODEL_ID="${NETCLAW_EVAL_COMPACTION_MODEL_ID:-}"
 EVAL_CONTEXT_WINDOW="${NETCLAW_EVAL_CONTEXT_WINDOW:-}"
+EVAL_DISABLE_THINKING="${NETCLAW_EVAL_DISABLE_THINKING:-false}"
 
 # ─── State ────────────────────────────────────────────────────────────────────
 
@@ -572,6 +573,12 @@ start_eval_daemon() {
     if [[ -n "$EVAL_PROVIDER_API_KEY" ]]; then
         docker_args+=(
             -e "NETCLAW_Providers__eval__ApiKey=$EVAL_PROVIDER_API_KEY"
+        )
+    fi
+
+    if [[ "$EVAL_DISABLE_THINKING" == "true" ]]; then
+        docker_args+=(
+            -e "NETCLAW_Providers__eval__VendorOptions__DisableThinking=true"
         )
     fi
 
@@ -1311,6 +1318,14 @@ assert_skill_progressive_disclosure() {
         && stdout_tool_called 'skill_read_resource' \
         && stdout_no_skill_file_read_called \
         && { stdout_contains 'ReminderAutoDisabled' || stdout_contains '5 consecutive'; }
+}
+
+assert_skill_device_pairing_procedure() {
+    daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
+        && stdout_tool_called 'skill_read_resource' \
+        && stdout_no_skill_file_read_called \
+        && stdout_contains 'docker exec' \
+        && stdout_contains 'netclaw daemon pair'
 }
 
 assert_skill_memory_knowledge() {
@@ -2698,6 +2713,9 @@ run_all() {
 
     run_case skill_progressive_disclosure "reads reference via skill_read_resource (2nd hop)" \
         "Exactly how many consecutive reminder execution failures cause Netclaw to auto-disable a reminder, and what is the exact name of the alert it raises when that happens? Be precise."
+
+    run_case skill_device_pairing_procedure "reads the container pairing procedure" \
+        "First call skill_load with Name=netclaw-operations and _rationale='Load the operations guide.' After that result, call skill_read_resource with SkillName=netclaw-operations, ResourcePath=references/devices.md, and _rationale='Read the device procedure.' Then tell me how to generate a pairing code inside a daemon container without changing its exposure mode."
 
     run_case skill_memory_knowledge "knows memory classes from skill" \
         "What types of memory do you have? Explain the differences and how long each lasts." \

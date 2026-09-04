@@ -142,6 +142,7 @@ the missing values. In non-interactive contexts it fails loudly.
 | `NETCLAW_EVAL_FALLBACK_MODEL_ID` | `NETCLAW_EVAL_MODEL_ID` | Fallback model id |
 | `NETCLAW_EVAL_COMPACTION_MODEL_ID` | `NETCLAW_EVAL_MODEL_ID` | Compaction model id |
 | `NETCLAW_EVAL_CONTEXT_WINDOW` | — | Override `Models:Main:ContextWindowTokens` — useful for triggering compaction in future eval cases |
+| `NETCLAW_EVAL_DISABLE_THINKING` | `false` | Disable provider reasoning for a focused tool-use eval. |
 
 ### Container + runtime (optional)
 

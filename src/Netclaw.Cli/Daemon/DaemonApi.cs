@@ -22,6 +22,8 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 public sealed class DaemonApi
 {
+    internal const string LocalControlHttpClientName = "Netclaw.LocalControl";
+
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan LongTimeout = TimeSpan.FromSeconds(30);
 
@@ -66,11 +68,56 @@ public sealed class DaemonApi
         return DaemonControlPlaneEndpointResolver.ResolveFallbackEndpoint(daemonConfig);
     }
 
+    internal static string ResolveLocalControlEndpoint(NetclawPaths paths)
+        => ResolveDaemonConfigEndpoint(paths) ?? DefaultEndpoint;
+
+    internal static SocketsHttpHandler CreateLocalControlHttpHandler()
+        => new()
+        {
+            AllowAutoRedirect = false,
+            UseProxy = false,
+        };
+
     /// <summary>
     /// The resolved daemon base endpoint (e.g. <c>http://127.0.0.1:5199</c>).
     /// Useful for display messages and SignalR hub URL construction.
     /// </summary>
     public string Endpoint => _endpoint;
+
+    internal string LocalControlEndpoint => ResolveLocalControlEndpoint(_paths);
+
+    internal async Task<PairingCodeRequestResult> RequestPairingCodeAsync(
+        string proof,
+        CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = _factory.CreateClient(LocalControlHttpClientName);
+        using var response = await client.PostAsJsonAsync(
+            $"{LocalControlEndpoint}/api/local-control/v1/pairing-code",
+            new LocalControlPairingCodeRequest(proof),
+            JsonDefaults.Api,
+            cts.Token);
+
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        if (response.IsSuccessStatusCode)
+        {
+            var result = await JsonSerializer.DeserializeAsync<PairingCodeResultDto>(stream, JsonDefaults.Api, cts.Token);
+            return new PairingCodeRequestResult(response.StatusCode, result, null);
+        }
+
+        PairingCodeErrorResponse? error = null;
+        try
+        {
+            error = await JsonSerializer.DeserializeAsync<PairingCodeErrorResponse>(stream, JsonDefaults.Api, cts.Token);
+        }
+        catch (JsonException)
+        {
+            error = new PairingCodeErrorResponse(
+                response.ReasonPhrase ?? "The daemon returned an invalid error response.");
+        }
+
+        return new PairingCodeRequestResult(response.StatusCode, null, error?.Error);
+    }
 
     // ── Status ────────────────────────────────────────────────────────
 
@@ -442,3 +489,12 @@ public sealed class DaemonApi
         return client;
     }
 }
+
+internal sealed record LocalControlPairingCodeRequest(string Proof);
+
+internal sealed record PairingCodeErrorResponse(string Error);
+
+internal sealed record PairingCodeRequestResult(
+    HttpStatusCode StatusCode,
+    PairingCodeResultDto? Result,
+    string? Error);

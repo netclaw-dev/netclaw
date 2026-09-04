@@ -3,10 +3,12 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Buffers.Text;
-using System.Security.Cryptography;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
 using Netclaw.Configuration;
 
@@ -14,17 +16,39 @@ namespace Netclaw.Daemon.Security;
 
 public static class PairingEndpointRouteBuilderExtensions
 {
+    internal const string LocalControlRateLimitPolicy = "local-control";
+    private const int MaximumLocalControlRequestBytes = 4 * 1024;
+
+    internal static void AddLocalControlRateLimitPolicy(RateLimiterOptions options)
+    {
+        options.AddPolicy(LocalControlRateLimitPolicy, context =>
+            RateLimitPartition.GetFixedWindowLimiter(
+                context.Connection.RemoteIpAddress?.ToString() ?? "unknown",
+                _ => new FixedWindowRateLimiterOptions
+                {
+                    PermitLimit = 10,
+                    Window = TimeSpan.FromSeconds(1),
+                    QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+                    QueueLimit = 0,
+                }));
+    }
+
     public static IEndpointRouteBuilder MapPairingEndpoints(this IEndpointRouteBuilder app)
     {
+        app.MapPost("/api/local-control/v1/pairing-code", GeneratePairingCodeAsync)
+            .WithName("GenerateHostPairingCodeV1")
+            .WithSummary("Generate a pairing code with a daemon-host local-control proof.")
+            .WithTags("Pairing")
+            .RequireRateLimiting(LocalControlRateLimitPolicy)
+            .AllowAnonymous();
+
         // Device pairing exchange — unauthenticated, rate-limited, with per-IP lockout guard.
         // Accepts a time-limited pairing code and a device name; returns a bearer token on success.
         app.MapPost("/api/pair/exchange", async ValueTask<Results<Ok<PairingTokenResponse>, BadRequest<PairingErrorResponse>, NotFound, Conflict<PairingErrorResponse>, JsonHttpResult<PairingErrorResponse>>> (
             HttpContext httpContext,
             PairingCodeExchangeRequest request,
-            PairingCodeService pairingCodeService,
             PairingExchangeGuard exchangeGuard,
-            DeviceRegistry deviceRegistry,
-            TimeProvider timeProvider,
+            PairingCoordinator pairingCoordinator,
             CancellationToken ct) =>
         {
             var remoteIp = httpContext.Connection.RemoteIpAddress;
@@ -39,48 +63,30 @@ public static class PairingEndpointRouteBuilderExtensions
                     statusCode: StatusCodes.Status429TooManyRequests);
             }
 
-            // Layer 2: No-code-pending gate — if no code exists, hide the endpoint entirely.
-            if (pairingCodeService.GetPendingExpiry() is null)
-                return TypedResults.NotFound();
-
             if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.DeviceName))
                 return TypedResults.BadRequest(new PairingErrorResponse("code and deviceName are required."));
 
-            if (!pairingCodeService.TryConsume(request.Code))
+            var result = await pairingCoordinator.ExchangeAsync(request.Code, request.DeviceName, ct);
+            switch (result.Status)
             {
-                exchangeGuard.RecordFailure(remoteIp);
-                return TypedResults.Json(
-                    new PairingErrorResponse("Invalid, expired, or already-used pairing code."),
-                    statusCode: StatusCodes.Status401Unauthorized);
+                case PairingExchangeStatus.Success when result.Token is { } token:
+                    return TypedResults.Ok(new PairingTokenResponse(token));
+
+                case PairingExchangeStatus.NoCode:
+                    return TypedResults.NotFound();
+
+                case PairingExchangeStatus.InvalidCode:
+                    exchangeGuard.RecordFailure(remoteIp);
+                    return TypedResults.Json(
+                        new PairingErrorResponse("Invalid, expired, or already-used pairing code."),
+                        statusCode: StatusCodes.Status401Unauthorized);
+
+                case PairingExchangeStatus.DuplicateName when result.Error is { } error:
+                    return TypedResults.Conflict(new PairingErrorResponse(error));
+
+                default:
+                    throw new InvalidOperationException("The pairing exchange returned an invalid result state.");
             }
-
-            var tokenBytes = RandomNumberGenerator.GetBytes(32);
-            var rawToken = Base64Url.EncodeToString(tokenBytes);
-
-            var saltBytes = RandomNumberGenerator.GetBytes(16);
-            var saltHex = Convert.ToHexString(saltBytes).ToLowerInvariant();
-            var tokenHash = PairedDevice.ComputeTokenHash(rawToken, saltHex);
-
-            var now = timeProvider.GetUtcNow();
-            var device = new PairedDevice
-            {
-                Name = request.DeviceName.Trim(),
-                TokenHash = tokenHash,
-                Salt = saltHex,
-                CreatedAt = now,
-                LastUsedAt = now,
-            };
-
-            try
-            {
-                await deviceRegistry.AddAsync(device, ct);
-            }
-            catch (InvalidOperationException ex)
-            {
-                return TypedResults.Conflict(new PairingErrorResponse(ex.Message));
-            }
-
-            return TypedResults.Ok(new PairingTokenResponse(rawToken));
         })
         .WithName("ExchangePairingCode")
         .WithSummary("Exchange a pairing code for a device bearer token.")
@@ -114,6 +120,66 @@ public static class PairingEndpointRouteBuilderExtensions
 
         return app;
     }
+
+    private static async Task<IResult> GeneratePairingCodeAsync(
+        HttpContext httpContext,
+        LocalControlPairingProofValidator proofValidator,
+        PairingCoordinator pairingCoordinator,
+        CancellationToken cancellationToken)
+    {
+        if (httpContext.Request.ContentLength > MaximumLocalControlRequestBytes)
+            return TypedResults.StatusCode(StatusCodes.Status413PayloadTooLarge);
+
+        var body = new byte[MaximumLocalControlRequestBytes + 1];
+        var totalRead = 0;
+        while (totalRead < body.Length)
+        {
+            var read = await httpContext.Request.Body.ReadAsync(body.AsMemory(totalRead), cancellationToken);
+            if (read == 0)
+                break;
+
+            totalRead += read;
+        }
+
+        if (totalRead > MaximumLocalControlRequestBytes)
+            return TypedResults.StatusCode(StatusCodes.Status413PayloadTooLarge);
+
+        LocalControlPairingCodeRequest? request;
+        try
+        {
+            request = JsonSerializer.Deserialize(
+                body.AsSpan(0, totalRead),
+                PairingEndpointJsonContext.Default.LocalControlPairingCodeRequest);
+        }
+        catch (JsonException)
+        {
+            return TypedResults.BadRequest(new PairingErrorResponse("The request body is invalid."));
+        }
+
+        if (request is null)
+            return TypedResults.BadRequest(new PairingErrorResponse("The request body is invalid."));
+
+        var validation = proofValidator.ValidateAndConsume(request.Proof);
+        switch (validation)
+        {
+            case LocalControlPairingProofValidation.Valid:
+                var result = await pairingCoordinator.GenerateCodeAsync(cancellationToken);
+                return TypedResults.Ok(result);
+
+            case LocalControlPairingProofValidation.UnsupportedVersion:
+                return TypedResults.BadRequest(new PairingErrorResponse("unsupported_protocol_version"));
+
+            case LocalControlPairingProofValidation.CapacityExhausted:
+                return TypedResults.Json(
+                    new PairingErrorResponse("Local control is temporarily unavailable."),
+                    statusCode: StatusCodes.Status503ServiceUnavailable);
+
+            default:
+                return TypedResults.Json(
+                    new PairingErrorResponse("Invalid local-control proof."),
+                    statusCode: StatusCodes.Status401Unauthorized);
+        }
+    }
 }
 
 /// <summary>
@@ -121,8 +187,14 @@ public static class PairingEndpointRouteBuilderExtensions
 /// </summary>
 internal sealed record PairingCodeExchangeRequest(string Code, string DeviceName);
 
+internal sealed record LocalControlPairingCodeRequest(string Proof);
+
 /// <summary>Bearer token issued on a successful pairing exchange.</summary>
 internal sealed record PairingTokenResponse(string Token);
 
 /// <summary>Error payload returned when a pairing request fails.</summary>
 internal sealed record PairingErrorResponse(string Error);
+
+[JsonSerializable(typeof(LocalControlPairingCodeRequest))]
+[JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase)]
+internal sealed partial class PairingEndpointJsonContext : JsonSerializerContext;

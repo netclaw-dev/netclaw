@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-21
+Last updated: 2026-08-28
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -109,6 +109,28 @@ the smallest repeatable manual script plus expected output.
 - Testing: `docs/spec/SPEC-010-testing-and-smoke-strategy.md`, `TOOLING.md`
 
 ## NOW
+
+### Priority: Secure Host Pairing and Recovery
+
+**PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-004-cli-onboarding-and-config.md`
+**Spec:** `openspec/changes/secure-host-pairing-proof/`
+**Surface area:** daemon security, CLI, HTTP, device registry, operations
+**Verification:** L3
+
+The host must generate a pairing code in every exposure mode without granting
+host authority to traffic that a tunnel or proxy forwards through loopback.
+
+Done when:
+
+- [x] A versioned Data Protection proof authorizes the host-only endpoint.
+- [x] The SignalR hub no longer exposes pairing code generation.
+- [x] Valid device records, tokens, and exposure settings survive the upgrade.
+- [x] A duplicate device name or registry failure does not consume a valid code.
+- [x] Tests prove host success and remote denial in every exposure mode.
+- [x] Process smoke proves host recovery without a live tunnel dependency.
+- [x] The operations skill and next `0.27` beta website task describe the new procedure.
+- [x] The public draft PR receives normal CI before the fixed beta.
+- [ ] The host command keeps proofs away from remote client endpoints, proxies, redirects, and bearer headers.
 
 ### Priority: Keep MCP HTTP Protocol Fallback Deterministic
 
