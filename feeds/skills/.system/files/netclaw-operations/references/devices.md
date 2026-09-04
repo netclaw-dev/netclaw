@@ -40,6 +40,11 @@ The user is prompted for the pairing code. On success, the bearer token is
 saved to `secrets.json` (`DeviceToken` field) and the endpoint is saved to
 `~/.netclaw/client/config.json`.
 
+Use HTTPS for each remote daemon endpoint.
+The pair command permits HTTP only for a loopback endpoint, such as `http://127.0.0.1:5199`.
+The pair command rejects redirects during the exchange.
+These rules prevent a remote endpoint from receiving the code or token through an insecure transport.
+
 ### Credential lifecycle
 
 | Credential | Lifetime | Next action after failure |
@@ -84,6 +89,8 @@ The command does not use the old hub method as a fallback.
 - Tokens are stored as salted SHA-256 hashes on the daemon; the raw token is
   never persisted server-side
 - Device tokens remain valid until operator revocation; they have no refresh flow
+- Remote pairing requires HTTPS; HTTP is available only for a loopback endpoint
+- The remote pair command does not follow redirects
 
 ### Config locations
 

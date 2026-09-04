@@ -31,6 +31,7 @@ internal sealed class PairingCodeService
 
     private readonly TimeProvider _timeProvider;
     private readonly object _lock = new();
+    private long _generation;
     private PendingCode? _pending;
 
     public PairingCodeService(TimeProvider timeProvider)
@@ -56,38 +57,41 @@ internal sealed class PairingCodeService
 
         lock (_lock)
         {
-            _pending = new PendingCode(rawCode, expiresAt);
+            _pending = new PendingCode(rawCode, expiresAt, checked(++_generation));
         }
 
         return (formatted, expiresAt);
     }
 
     /// <summary>
-    /// Attempts to consume the pending code.
+    /// Reserves the pending code after one validity check.
     /// </summary>
     /// <param name="presentedCode">Code as presented by the remote client (with or without dash).</param>
-    /// <returns><c>true</c> if the code matched and was not expired; the code is consumed on success.</returns>
-    internal bool TryConsume(string presentedCode)
+    /// <returns>A reservation for the active code generation, or <c>null</c> when validation fails.</returns>
+    internal PairingCodeReservation? TryReserve(string presentedCode)
     {
         lock (_lock)
         {
             if (!IsValidLocked(presentedCode))
-                return false;
+                return null;
 
-            _pending = null;
-            return true;
+            return new PairingCodeReservation(_pending!.Generation);
         }
     }
 
     /// <summary>
-    /// Checks the pending code without consuming it.
-    /// The pairing coordinator uses this before a durable device write.
+    /// Consumes the exact code generation from a prior successful validity check.
+    /// The coordinator calls this only after the durable device write succeeds.
     /// </summary>
-    internal bool IsValid(string presentedCode)
+    internal bool TryConsume(PairingCodeReservation reservation)
     {
         lock (_lock)
         {
-            return IsValidLocked(presentedCode);
+            if (_pending is null || _pending.Generation != reservation.Generation)
+                return false;
+
+            _pending = null;
+            return true;
         }
     }
 
@@ -103,7 +107,7 @@ internal sealed class PairingCodeService
                 return null;
 
             var now = _timeProvider.GetUtcNow();
-            if (now > _pending.ExpiresAt)
+            if (now >= _pending.ExpiresAt)
             {
                 _pending = null;
                 return null;
@@ -118,7 +122,7 @@ internal sealed class PairingCodeService
         if (_pending is null)
             return false;
 
-        if (_timeProvider.GetUtcNow() > _pending.ExpiresAt)
+        if (_timeProvider.GetUtcNow() >= _pending.ExpiresAt)
         {
             _pending = null;
             return false;
@@ -128,5 +132,7 @@ internal sealed class PairingCodeService
         return string.Equals(normalized, _pending.RawCode, StringComparison.Ordinal);
     }
 
-    private sealed record PendingCode(string RawCode, DateTimeOffset ExpiresAt);
+    private sealed record PendingCode(string RawCode, DateTimeOffset ExpiresAt, long Generation);
 }
+
+internal readonly record struct PairingCodeReservation(long Generation);

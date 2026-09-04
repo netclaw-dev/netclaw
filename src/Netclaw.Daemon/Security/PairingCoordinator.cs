@@ -34,7 +34,7 @@ internal sealed class PairingCoordinator
         _logger = logger;
     }
 
-    internal async ValueTask<PairingCodeResultDto> GenerateCodeAsync(CancellationToken cancellationToken)
+    internal async Task<PairingCodeResultDto> GenerateCodeAsync(CancellationToken cancellationToken)
     {
         await _lock.WaitAsync(cancellationToken);
         try
@@ -49,7 +49,7 @@ internal sealed class PairingCoordinator
         }
     }
 
-    internal async ValueTask<PairingExchangeResult> ExchangeAsync(
+    internal async Task<PairingExchangeResult> ExchangeAsync(
         string presentedCode,
         string deviceName,
         CancellationToken cancellationToken)
@@ -60,7 +60,8 @@ internal sealed class PairingCoordinator
             if (_pairingCodeService.GetPendingExpiry() is null)
                 return PairingExchangeResult.NoCode();
 
-            if (!_pairingCodeService.IsValid(presentedCode))
+            var reservation = _pairingCodeService.TryReserve(presentedCode);
+            if (reservation is null)
                 return PairingExchangeResult.InvalidCode();
 
             var tokenBytes = RandomNumberGenerator.GetBytes(32);
@@ -86,10 +87,10 @@ internal sealed class PairingCoordinator
                 return PairingExchangeResult.DuplicateName(ex.Message);
             }
 
-            if (!_pairingCodeService.TryConsume(presentedCode))
+            if (!_pairingCodeService.TryConsume(reservation.Value))
             {
                 throw new InvalidOperationException(
-                    "The serialized pairing code changed after the device registry write.");
+                    "The reserved pairing code changed after the device registry write.");
             }
 
             return PairingExchangeResult.Success(rawToken);
@@ -101,11 +102,21 @@ internal sealed class PairingCoordinator
     }
 }
 
-internal readonly record struct PairingExchangeResult(
-    PairingExchangeStatus Status,
-    string? Token,
-    string? Error)
+internal sealed record PairingExchangeResult
 {
+    private PairingExchangeResult(PairingExchangeStatus status, string? token, string? error)
+    {
+        Status = status;
+        Token = token;
+        Error = error;
+    }
+
+    internal PairingExchangeStatus Status { get; }
+
+    internal string? Token { get; }
+
+    internal string? Error { get; }
+
     internal static PairingExchangeResult Success(string token) =>
         new(PairingExchangeStatus.Success, token, null);
 

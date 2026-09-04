@@ -84,15 +84,16 @@ public sealed class DaemonApi
     /// </summary>
     public string Endpoint => _endpoint;
 
+    internal string LocalControlEndpoint => ResolveLocalControlEndpoint(_paths);
+
     internal async Task<PairingCodeRequestResult> RequestPairingCodeAsync(
         string proof,
         CancellationToken ct = default)
     {
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
         var client = _factory.CreateClient(LocalControlHttpClientName);
-        var localControlEndpoint = ResolveLocalControlEndpoint(_paths);
         using var response = await client.PostAsJsonAsync(
-            $"{localControlEndpoint}/api/local-control/v1/pairing-code",
+            $"{LocalControlEndpoint}/api/local-control/v1/pairing-code",
             new LocalControlPairingCodeRequest(proof),
             JsonDefaults.Api,
             cts.Token);

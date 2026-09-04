@@ -105,7 +105,9 @@ public sealed class PairingSecurityMatrixTests
                     }
                     else if (priorCode is not null)
                     {
-                        Assert.True(pairingCodeService.TryConsume(priorCode));
+                        var reservation = pairingCodeService.TryReserve(priorCode);
+                        Assert.NotNull(reservation);
+                        Assert.True(pairingCodeService.TryConsume(reservation.Value));
                         priorCode = null;
                     }
                     else

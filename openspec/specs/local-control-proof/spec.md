@@ -174,6 +174,7 @@ The daemon SHALL reject a request body larger than 4 KiB.
 ### Requirement: A local-control proof is single-use
 
 The daemon SHALL accept each nonce once.
+The daemon SHALL retain an accepted nonce through the inclusive proof-lifetime boundary.
 The daemon SHALL retain at most 1,024 unexpired nonces.
 The daemon SHALL remove expired nonces before it checks capacity.
 The daemon SHALL fail closed when the cache remains full.
@@ -182,6 +183,13 @@ The daemon SHALL fail closed when the cache remains full.
 
 - **GIVEN** the daemon accepted nonce `00112233445566778899AABBCCDDEEFF`
 - **WHEN** any caller submits the same proof again
+- **THEN** the daemon returns an unauthorized response
+- **AND** the daemon creates no second pairing code
+
+#### Scenario: Repeated proof fails at the lifetime boundary
+
+- **GIVEN** the daemon accepts a proof exactly 30 seconds after its issue time
+- **WHEN** any caller submits the same proof again at that time
 - **THEN** the daemon returns an unauthorized response
 - **AND** the daemon creates no second pairing code
 

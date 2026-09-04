@@ -92,16 +92,128 @@ public sealed class PairCommandTests : IDisposable
         Assert.Equal("device-token", ConfigFileHelper.DecryptIfEncrypted(_paths, protectedToken));
     }
 
+    [Fact]
+    public async Task NonLoopbackHttpEndpoint_FailsBeforeCodeInput()
+    {
+        var requestCount = 0;
+        using var handler = new FakeHttpMessageHandler(_ =>
+        {
+            requestCount++;
+            return FakeHttpMessageHandler.JsonResponse(new { token = "device-token" });
+        });
+        using var httpClient = new HttpClient(handler);
+
+        var result = await RunAsync(httpClient, "http://daemon.example", "ABCD-EFGH\ntablet\n");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("must use HTTPS", result.Stderr);
+        Assert.DoesNotContain("Pairing code", result.Stdout);
+        Assert.Equal(0, requestCount);
+        AssertNoClientState();
+    }
+
+    [Fact]
+    public async Task LoopbackHttpEndpoint_RemainsAvailable()
+    {
+        using var response = FakeHttpMessageHandler.JsonResponse(new { token = "device-token" });
+        using var handler = new FakeHttpMessageHandler(_ => response);
+        using var httpClient = new HttpClient(handler);
+
+        var result = await RunAsync(httpClient, "http://127.0.0.1:5199", "ABCD-EFGH\ntablet\n");
+
+        Assert.Equal(0, result.ExitCode);
+        Assert.Equal("http://127.0.0.1:5199", ClientConfigFile.ReadEndpoint(_paths));
+    }
+
+    [Fact]
+    public void PairingHttpHandler_DoesNotFollowRedirects()
+    {
+        using var handler = PairCommand.CreateHttpHandler();
+
+        Assert.False(handler.AllowAutoRedirect);
+    }
+
+    [Fact]
+    public async Task RedirectResponse_FailsWithoutSavingClientState()
+    {
+        var requestCount = 0;
+        using var response = new HttpResponseMessage(HttpStatusCode.TemporaryRedirect)
+        {
+            Headers = { Location = new Uri("https://redirect.example") },
+        };
+        using var handler = new FakeHttpMessageHandler(_ =>
+        {
+            requestCount++;
+            return response;
+        });
+        using var httpClient = new HttpClient(handler);
+
+        var result = await RunAsync(httpClient, Endpoint, "ABCD-EFGH\ntablet\n");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Equal(1, requestCount);
+        AssertNoClientState();
+    }
+
+    [Fact]
+    public async Task InvalidSuccessJson_FailsWithoutSavingClientState()
+    {
+        using var response = new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{")
+        };
+
+        var result = await RunAsync(response);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("invalid JSON", result.Stderr);
+        AssertNoClientState();
+    }
+
+    [Fact]
+    public async Task Timeout_FailsWithoutSavingClientState()
+    {
+        using var handler = new TimeoutMessageHandler();
+        using var httpClient = new HttpClient(handler);
+
+        var result = await RunAsync(httpClient, Endpoint, "ABCD-EFGH\ntablet\n");
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.Contains("did not respond before the timeout", result.Stderr);
+        AssertNoClientState();
+    }
+
+    [Fact]
+    public async Task OversizedErrorBody_IsNotCopiedToCliOutput()
+    {
+        var marker = new string('X', 5_000);
+        using var response = ErrorResponse(HttpStatusCode.BadGateway, marker);
+
+        var result = await RunAsync(response);
+
+        Assert.Equal(1, result.ExitCode);
+        Assert.DoesNotContain(marker, result.Stderr);
+        AssertNoClientState();
+    }
+
     private async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(HttpResponseMessage response)
     {
         using var handler = new FakeHttpMessageHandler(_ => response);
         using var httpClient = new HttpClient(handler);
-        using var input = new StringReader("ABCD-EFGH\ntablet\n");
+        return await RunAsync(httpClient, Endpoint, "ABCD-EFGH\ntablet\n");
+    }
+
+    private async Task<(int ExitCode, string Stdout, string Stderr)> RunAsync(
+        HttpClient httpClient,
+        string endpoint,
+        string inputText)
+    {
+        using var input = new StringReader(inputText);
         using var stdout = new StringWriter();
         using var stderr = new StringWriter();
 
         var exitCode = await PairCommand.RunAsync(
-            ["pair", Endpoint],
+            ["pair", endpoint],
             _paths,
             httpClient,
             input,
@@ -119,5 +231,13 @@ public sealed class PairCommandTests : IDisposable
     {
         Assert.False(File.Exists(_paths.SecretsPath));
         Assert.False(File.Exists(_paths.ClientConfigPath));
+    }
+
+    private sealed class TimeoutMessageHandler : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+            => Task.FromException<HttpResponseMessage>(new TaskCanceledException("Test timeout."));
     }
 }

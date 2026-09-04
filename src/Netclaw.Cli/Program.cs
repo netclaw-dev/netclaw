@@ -581,7 +581,7 @@ static async Task RunAsync(string[] args)
                 }
                 catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
-                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.Endpoint}: {ex.Message}");
+                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.LocalControlEndpoint}: {ex.Message}");
                     Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
                     Environment.ExitCode = 1;
                 }

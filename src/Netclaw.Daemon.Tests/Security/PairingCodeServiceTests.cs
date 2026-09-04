@@ -48,15 +48,13 @@ public sealed class PairingCodeServiceTests
         var (first, _) = _service.GenerateCode();
         var (second, _) = _service.GenerateCode();
 
-        // First code should no longer be consumable after replacement
-        Assert.False(_service.TryConsume(first));
-        Assert.True(_service.TryConsume(second));
+        Assert.False(TryConsume(first));
+        Assert.True(TryConsume(second));
     }
 
     [Fact]
     public void GenerateCode_produces_codes_only_from_reduced_alphabet()
     {
-        // Generate many codes and verify no ambiguous characters appear
         const string ForbiddenChars = "01IO";
         for (var i = 0; i < 20; i++)
         {
@@ -74,7 +72,7 @@ public sealed class PairingCodeServiceTests
     {
         var (formatted, _) = _service.GenerateCode();
 
-        Assert.True(_service.TryConsume(formatted));
+        Assert.True(TryConsume(formatted));
     }
 
     [Fact]
@@ -83,7 +81,7 @@ public sealed class PairingCodeServiceTests
         var (formatted, _) = _service.GenerateCode();
         var noDash = formatted.Replace("-", "");
 
-        Assert.True(_service.TryConsume(noDash));
+        Assert.True(TryConsume(noDash));
     }
 
     [Fact]
@@ -91,7 +89,7 @@ public sealed class PairingCodeServiceTests
     {
         var (formatted, _) = _service.GenerateCode();
 
-        Assert.True(_service.TryConsume(formatted.ToLowerInvariant()));
+        Assert.True(TryConsume(formatted.ToLowerInvariant()));
     }
 
     [Fact]
@@ -99,14 +97,14 @@ public sealed class PairingCodeServiceTests
     {
         var (formatted, _) = _service.GenerateCode();
 
-        Assert.True(_service.TryConsume(formatted));
-        Assert.False(_service.TryConsume(formatted));
+        Assert.True(TryConsume(formatted));
+        Assert.False(TryConsume(formatted));
     }
 
     [Fact]
     public void TryConsume_returns_false_when_no_code_pending()
     {
-        Assert.False(_service.TryConsume("ABCD-1234"));
+        Assert.False(TryConsume("ABCD-1234"));
     }
 
     [Fact]
@@ -114,8 +112,7 @@ public sealed class PairingCodeServiceTests
     {
         _service.GenerateCode();
 
-        // Try an obviously wrong code
-        Assert.False(_service.TryConsume("ZZZZ-ZZZZ"));
+        Assert.False(TryConsume("ZZZZ-ZZZZ"));
     }
 
     [Fact]
@@ -123,10 +120,9 @@ public sealed class PairingCodeServiceTests
     {
         var (formatted, _) = _service.GenerateCode();
 
-        // Advance past 5-minute TTL
         _time.Advance(TimeSpan.FromMinutes(5).Add(TimeSpan.FromSeconds(1)));
 
-        Assert.False(_service.TryConsume(formatted));
+        Assert.False(TryConsume(formatted));
     }
 
     [Fact]
@@ -134,10 +130,31 @@ public sealed class PairingCodeServiceTests
     {
         var (formatted, _) = _service.GenerateCode();
 
-        // Advance to just inside the TTL (1 second before expiry)
         _time.Advance(TimeSpan.FromMinutes(5).Subtract(TimeSpan.FromSeconds(1)));
 
-        Assert.True(_service.TryConsume(formatted));
+        Assert.True(TryConsume(formatted));
+    }
+
+    [Fact]
+    public void TryReserve_returns_false_at_exact_expiry()
+    {
+        var (formatted, _) = _service.GenerateCode();
+        _time.Advance(TimeSpan.FromMinutes(5));
+
+        Assert.Null(_service.TryReserve(formatted));
+    }
+
+    [Fact]
+    public void Reservation_remains_consumable_after_expiry()
+    {
+        var (formatted, _) = _service.GenerateCode();
+        var reservation = _service.TryReserve(formatted);
+        Assert.NotNull(reservation);
+
+        _time.Advance(TimeSpan.FromMinutes(6));
+
+        Assert.True(_service.TryConsume(reservation.Value));
+        Assert.Null(_service.GetPendingExpiry());
     }
 
     // ── GetPendingExpiry ──────────────────────────────────────────────────────
@@ -162,7 +179,7 @@ public sealed class PairingCodeServiceTests
     public void GetPendingExpiry_returns_null_after_code_consumed()
     {
         var (formatted, _) = _service.GenerateCode();
-        _service.TryConsume(formatted);
+        Assert.True(TryConsume(formatted));
 
         Assert.Null(_service.GetPendingExpiry());
     }
@@ -174,5 +191,11 @@ public sealed class PairingCodeServiceTests
         _time.Advance(TimeSpan.FromMinutes(5).Add(TimeSpan.FromSeconds(1)));
 
         Assert.Null(_service.GetPendingExpiry());
+    }
+
+    private bool TryConsume(string code)
+    {
+        var reservation = _service.TryReserve(code);
+        return reservation is { } value && _service.TryConsume(value);
     }
 }

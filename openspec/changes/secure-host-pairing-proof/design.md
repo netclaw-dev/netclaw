@@ -73,9 +73,13 @@ It owns the call-local token material and the transaction order.
 The pairing code service owns the process-local active code.
 It validates the code before the registry checks the device name.
 It writes the device before it consumes the code.
+The code service returns an opaque reservation after a successful validity check.
+The reservation identifies the exact code generation that the coordinator accepted.
+The coordinator consumes that reservation without a second expiration check after the durable write.
 
 If the registry write fails, the code stays active.
 If the write succeeds, code consumption occurs synchronously under the same coordinator lock.
+A code that expires during the durable write remains valid for that admitted transaction.
 A process failure after the write clears the in-memory code during restart.
 This order prevents a second device from using the old code.
 
@@ -153,6 +157,26 @@ Counterexamples:
 - A device token cannot authorize code creation through a reverse proxy.
 - A copied unused proof can win a first-use race because the proof does not provide channel confidentiality.
 
+### Require confidential remote token exchange
+
+The remote pair command accepts HTTPS endpoints and loopback HTTP endpoints.
+It rejects plain HTTP for each non-loopback endpoint before it reads a pairing code.
+It also rejects automatic redirects, because a redirect can export the pairing code.
+
+The remote response is untrusted input.
+The CLI bounds error bodies and reports timeouts or invalid JSON without a crash.
+It writes no token or endpoint after any remote failure.
+
+Examples:
+
+- `https://remote.example` is valid for remote pairing.
+- `http://127.0.0.1:5199` is valid for a same-host test or local workflow.
+
+Counterexamples:
+
+- `http://remote.example` is rejected before the CLI asks for the code.
+- A `307` response does not receive a second request.
+
 ### Treat key-ring access as host authority
 
 The common Data Protection factory restricts the Unix key directory to owner access.
@@ -188,9 +212,11 @@ It omits rate limits, token hashing, and HTTP error mapping.
 - A full replay cache can deny a valid host. → Entries expire quickly and the daemon logs only a reason category.
 - Immediate removal breaks mixed versions. → The CLI prints explicit joint-update guidance and never uses an unsafe fallback.
 - A registry write can fail after token creation. → The coordinator discards the raw token and preserves the code.
+- A code can expire during a successful registry write. → Admission reserves that code generation until the serialized transaction ends.
 - A general HTTP client can export the proof. → A dedicated direct client disables proxies, redirects, and bearer attachment.
 - A non-loopback HTTP path can expose the proof. → The deployment must protect the direct host path from an on-path observer.
 - A copied proof can win its first-use race. → The proof expires after 30 seconds and the daemon accepts its nonce once.
+- A remote HTTP exchange can expose a durable token. → The remote CLI requires HTTPS except for loopback endpoints.
 
 ## Migration Plan
 

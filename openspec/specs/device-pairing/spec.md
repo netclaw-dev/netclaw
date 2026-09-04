@@ -94,7 +94,12 @@ A remote CLI SHALL exchange a valid pairing code for a long-lived device token v
 The exchange SHALL use an unauthenticated endpoint that is separate from the main hub.
 The daemon SHALL validate the code before it checks the device name.
 The daemon SHALL consume the code only after it stores the new device.
+The daemon SHALL reserve the accepted code generation before the durable write.
+The daemon SHALL NOT repeat the expiration check after that durable write.
 The remote CLI SHALL not persist a token or endpoint after a failed exchange.
+The remote CLI SHALL require HTTPS for a non-loopback endpoint.
+The remote CLI MAY use HTTP for a loopback endpoint.
+The remote CLI SHALL NOT follow an HTTP redirect during code exchange.
 
 #### Scenario: Successful pairing exchange
 
@@ -160,6 +165,41 @@ The remote CLI SHALL not persist a token or endpoint after a failed exchange.
 - **WHEN** the daemon processes both requests
 - **THEN** exactly one request can register a device
 - **AND** the other request cannot reuse the consumed code
+
+#### Scenario: Code expires during a successful registry write
+
+- **GIVEN** the daemon admits a valid code before its expiration
+- **AND** the code reaches its expiration during the registry write
+- **WHEN** the registry stores the device
+- **THEN** the daemon consumes the reserved code generation
+- **AND** the daemon returns the device token
+
+#### Scenario: Remote HTTP endpoint fails before code input
+
+- **GIVEN** the remote endpoint is `http://remote.example`
+- **WHEN** the operator runs `netclaw pair http://remote.example`
+- **THEN** the CLI rejects the endpoint before it reads a pairing code
+- **AND** the CLI stores no token or endpoint
+
+#### Scenario: Loopback HTTP endpoint remains available
+
+- **GIVEN** the endpoint is `http://127.0.0.1:5199`
+- **WHEN** the operator runs the normal pair command
+- **THEN** the CLI permits the exchange
+
+#### Scenario: Remote redirect cannot export the code
+
+- **GIVEN** the HTTPS exchange endpoint returns a redirect
+- **WHEN** the remote CLI submits a pairing code
+- **THEN** the CLI does not follow the redirect
+- **AND** the CLI stores no token or endpoint
+
+#### Scenario: Invalid remote response fails clearly
+
+- **GIVEN** the remote endpoint times out or returns invalid success JSON
+- **WHEN** the remote CLI waits for the exchange result
+- **THEN** the CLI returns a clear failure
+- **AND** the CLI stores no token or endpoint
 
 ### Requirement: Paired device registry
 

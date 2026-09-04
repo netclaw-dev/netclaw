@@ -21,12 +21,15 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 internal static class PairCommand
 {
+    private const int MaximumErrorResponseBytes = 4 * 1024;
+
     /// <summary>
     /// Entry point for <c>netclaw pair [endpoint]</c>.
     /// </summary>
     public static async Task<int> RunAsync(string[] args, NetclawPaths paths)
     {
-        using var httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        using var handler = CreateHttpHandler();
+        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
         return await RunAsync(
             args,
             paths,
@@ -54,23 +57,72 @@ internal static class PairCommand
             return string.IsNullOrWhiteSpace(endpoint) ? 1 : 0;
         }
 
-        endpoint = endpoint.TrimEnd('/');
+        if (!TryNormalizeEndpoint(endpoint, out var normalizedEndpoint, out var endpointError))
+        {
+            error.WriteLine($"error: {endpointError}");
+            return 1;
+        }
 
+        endpoint = normalizedEndpoint;
+
+        var pairingInput = await ReadPairingInputAsync(input, output, error, cancellationToken);
+        if (pairingInput is null)
+            return 1;
+
+        var exchangeUrl = $"{endpoint}/api/pair/exchange";
+        var token = await RequestTokenAsync(
+            httpClient,
+            exchangeUrl,
+            pairingInput.Code,
+            pairingInput.DeviceName,
+            error,
+            cancellationToken);
+        if (token is null)
+            return 1;
+
+        var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
+        secrets["DeviceToken"] = token;
+        ConfigFileHelper.WriteSecretsFile(paths, secrets);
+
+        ClientConfigFile.WriteEndpoint(paths, endpoint);
+
+        output.WriteLine($"Paired successfully as '{pairingInput.DeviceName}'.");
+        output.WriteLine($"Token stored in:     {paths.SecretsPath}");
+        output.WriteLine($"Endpoint saved in:   {paths.ClientConfigPath}");
+        output.WriteLine();
+        output.WriteLine($"You can now use `netclaw chat`, `netclaw status`, etc. against {endpoint}.");
+        return 0;
+    }
+
+    private static async Task<PairingInput?> ReadPairingInputAsync(
+        TextReader input,
+        TextWriter output,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
         output.Write("Pairing code (XXXX-XXXX): ");
         var code = (await input.ReadLineAsync(cancellationToken))?.Trim();
         if (string.IsNullOrWhiteSpace(code))
         {
             error.WriteLine("error: pairing code is required.");
-            return 1;
+            return null;
         }
 
         var defaultName = Environment.MachineName;
         output.Write($"Device name [{defaultName}]: ");
         var nameInput = (await input.ReadLineAsync(cancellationToken))?.Trim();
         var deviceName = string.IsNullOrWhiteSpace(nameInput) ? defaultName : nameInput;
+        return new PairingInput(code, deviceName);
+    }
 
-        var exchangeUrl = $"{endpoint}/api/pair/exchange";
-
+    private static async Task<string?> RequestTokenAsync(
+        HttpClient httpClient,
+        string exchangeUrl,
+        string code,
+        string deviceName,
+        TextWriter error,
+        CancellationToken cancellationToken)
+    {
         try
         {
             var requestBody = new { code, deviceName };
@@ -79,39 +131,45 @@ internal static class PairCommand
             if (!response.IsSuccessStatusCode)
             {
                 await WriteFailureAsync(response, error, cancellationToken);
-                return 1;
+                return null;
             }
 
             var result = await response.Content.ReadFromJsonAsync<ExchangeResponse>(cancellationToken);
             if (string.IsNullOrWhiteSpace(result?.Token))
             {
                 error.WriteLine("Pairing failed: the daemon returned an empty token.");
-                return 1;
+                return null;
             }
 
-            // Persist token to secrets.json (encrypted at rest).
-            var secrets = ConfigFileHelper.LoadJsonDict(paths.SecretsPath);
-            secrets["DeviceToken"] = result.Token;
-            ConfigFileHelper.WriteSecretsFile(paths, secrets);
-
-            // Persist the local client's preferred daemon endpoint separately from
-            // daemon-owned netclaw.json.
-            ClientConfigFile.WriteEndpoint(paths, endpoint);
-
-            output.WriteLine($"Paired successfully as '{deviceName}'.");
-            output.WriteLine($"Token stored in:     {paths.SecretsPath}");
-            output.WriteLine($"Endpoint saved in:   {paths.ClientConfigPath}");
-            output.WriteLine();
-            output.WriteLine($"You can now use `netclaw chat`, `netclaw status`, etc. against {endpoint}.");
-            return 0;
+            return result.Token;
         }
         catch (HttpRequestException ex)
         {
             error.WriteLine($"Failed to connect to {exchangeUrl}: {ex.Message}");
             error.WriteLine("Make sure that the daemon runs and that the endpoint is available.");
-            return 1;
+            return null;
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            error.WriteLine($"Pairing failed because {exchangeUrl} did not respond before the timeout.");
+            return null;
+        }
+        catch (JsonException)
+        {
+            error.WriteLine("Pairing failed because the daemon returned invalid JSON.");
+            return null;
+        }
+        catch (NotSupportedException)
+        {
+            error.WriteLine("Pairing failed because the daemon returned an unsupported response format.");
+            return null;
         }
     }
+
+    internal static SocketsHttpHandler CreateHttpHandler() => new()
+    {
+        AllowAutoRedirect = false,
+    };
 
     private static bool IsHelpToken(string s) => CliArgsParser.IsHelpToken(s);
 
@@ -152,13 +210,24 @@ internal static class PairCommand
         HttpContent content,
         CancellationToken cancellationToken)
     {
-        var body = await content.ReadAsStringAsync(cancellationToken);
-        if (string.IsNullOrWhiteSpace(body))
+        var body = new byte[MaximumErrorResponseBytes + 1];
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
+        var totalRead = 0;
+        while (totalRead < body.Length)
+        {
+            var read = await stream.ReadAsync(body.AsMemory(totalRead), cancellationToken);
+            if (read == 0)
+                break;
+
+            totalRead += read;
+        }
+
+        if (totalRead == 0 || totalRead > MaximumErrorResponseBytes)
             return null;
 
         try
         {
-            using var document = JsonDocument.Parse(body);
+            using var document = JsonDocument.Parse(body.AsMemory(0, totalRead));
             if (document.RootElement.ValueKind == JsonValueKind.Object
                 && document.RootElement.TryGetProperty("error", out var error)
                 && error.ValueKind == JsonValueKind.String)
@@ -170,6 +239,38 @@ internal static class PairCommand
         }
 
         return null;
+    }
+
+    private static bool TryNormalizeEndpoint(
+        string endpoint,
+        out string normalizedEndpoint,
+        out string error)
+    {
+        normalizedEndpoint = string.Empty;
+        error = string.Empty;
+
+        if (!Uri.TryCreate(endpoint, UriKind.Absolute, out var uri)
+            || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps)
+            || string.IsNullOrWhiteSpace(uri.Host))
+        {
+            error = "The daemon endpoint must be an absolute HTTP or HTTPS URL.";
+            return false;
+        }
+
+        if (!string.IsNullOrEmpty(uri.UserInfo))
+        {
+            error = "The daemon endpoint must not contain user credentials.";
+            return false;
+        }
+
+        if (uri.Scheme == Uri.UriSchemeHttp && !uri.IsLoopback)
+        {
+            error = "A non-loopback daemon endpoint must use HTTPS.";
+            return false;
+        }
+
+        normalizedEndpoint = uri.AbsoluteUri.TrimEnd('/');
+        return true;
     }
 
     private static void WriteNewCodeHelp(TextWriter error)
@@ -199,7 +300,7 @@ internal static class PairCommand
         output.WriteLine("Pair this device with a remote Netclaw daemon for authenticated remote access.");
         output.WriteLine();
         output.WriteLine("Arguments:");
-        output.WriteLine("  <endpoint>   Daemon base URL (e.g. http://my-server:5199)");
+        output.WriteLine("  <endpoint>   HTTPS daemon URL, or an HTTP loopback URL");
         output.WriteLine();
         output.WriteLine("Steps:");
         output.WriteLine("  1. On the daemon host, run:  netclaw daemon pair");
@@ -213,4 +314,6 @@ internal static class PairCommand
     }
 
     private sealed record ExchangeResponse(string Token);
+
+    private sealed record PairingInput(string Code, string DeviceName);
 }

@@ -71,7 +71,7 @@ internal sealed class LocalControlPairingProofValidator
         lock (_lock)
         {
             foreach (var expiredNonce in _liveNonces
-                         .Where(entry => entry.Value <= now)
+                         .Where(entry => entry.Value < now)
                          .Select(entry => entry.Key)
                          .ToArray())
             {

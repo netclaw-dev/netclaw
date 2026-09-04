@@ -49,3 +49,11 @@
 - [x] 8.2 Add positive and negative reverse-proxy examples, including the copied-proof transport limit.
 - [x] 8.3 Sync the main specifications and rerun strict OpenSpec validation.
 - [x] 8.4 Add direct regression tests for non-loopback host access and forwarded-loopback denial.
+
+## 9. Final Adversarial Review Fixes
+
+- [x] 9.1 Reserve a valid pairing code before the registry write and consume that reservation after the write.
+- [x] 9.2 Reject proof replay at the exact proof-lifetime boundary with deterministic virtual-time tests.
+- [x] 9.3 Require HTTPS for remote exchange, reject redirects, bound error bodies, and handle invalid remote responses.
+- [x] 9.4 Remove invalid exchange-result states, use `Task` for I/O, and report the actual failed host endpoint.
+- [x] 9.5 Sync the main specs and rerun tests, evals, Slopwatch, headers, strict validation, and CRAP analysis.

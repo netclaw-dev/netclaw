@@ -34,6 +34,10 @@ Labels that do not configure the tested exposure mode or credential are not suff
 | Any mode + repeated proof | Unauthorized; original code unchanged |
 | `reverse-proxy` + forwarded loopback + device bearer + no proof | Unauthorized; no code |
 | Any remote mode + valid host proof + no device bearer | Code created |
+| Same proof twice at the exact 30-second boundary | Second request denied |
+| Code expires during the registry write | One device and one returned token |
+| Non-loopback HTTP remote endpoint | CLI rejects before code input |
+| Remote redirect or invalid success JSON | CLI fails without saved state |
 
 ```text
 One authority rule
@@ -188,3 +192,15 @@ The required suite SHALL not require a live tunnel provider.
 - **WHEN** the process smoke restarts the daemon with that home
 - **THEN** the prior device token still authenticates
 - **AND** the host can create another pairing code
+
+#### Scenario: Time boundaries cannot split one transaction
+
+- **GIVEN** virtual time moves past code expiration after exchange admission
+- **WHEN** the durable device write succeeds
+- **THEN** the test observes one device, one consumed code, and one returned token
+
+#### Scenario: Remote transport failures preserve client state
+
+- **GIVEN** a non-loopback HTTP endpoint, redirect, timeout, or invalid success response
+- **WHEN** the CLI processes each case
+- **THEN** every case fails without a saved token or endpoint

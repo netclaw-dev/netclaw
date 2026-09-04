@@ -67,21 +67,26 @@ public static class PairingEndpointRouteBuilderExtensions
                 return TypedResults.BadRequest(new PairingErrorResponse("code and deviceName are required."));
 
             var result = await pairingCoordinator.ExchangeAsync(request.Code, request.DeviceName, ct);
-            if (result.Status is PairingExchangeStatus.NoCode)
-                return TypedResults.NotFound();
-
-            if (result.Status is PairingExchangeStatus.InvalidCode)
+            switch (result.Status)
             {
-                exchangeGuard.RecordFailure(remoteIp);
-                return TypedResults.Json(
-                    new PairingErrorResponse("Invalid, expired, or already-used pairing code."),
-                    statusCode: StatusCodes.Status401Unauthorized);
+                case PairingExchangeStatus.Success when result.Token is { } token:
+                    return TypedResults.Ok(new PairingTokenResponse(token));
+
+                case PairingExchangeStatus.NoCode:
+                    return TypedResults.NotFound();
+
+                case PairingExchangeStatus.InvalidCode:
+                    exchangeGuard.RecordFailure(remoteIp);
+                    return TypedResults.Json(
+                        new PairingErrorResponse("Invalid, expired, or already-used pairing code."),
+                        statusCode: StatusCodes.Status401Unauthorized);
+
+                case PairingExchangeStatus.DuplicateName when result.Error is { } error:
+                    return TypedResults.Conflict(new PairingErrorResponse(error));
+
+                default:
+                    throw new InvalidOperationException("The pairing exchange returned an invalid result state.");
             }
-
-            if (result.Status is PairingExchangeStatus.DuplicateName)
-                return TypedResults.Conflict(new PairingErrorResponse(result.Error!));
-
-            return TypedResults.Ok(new PairingTokenResponse(result.Token!));
         })
         .WithName("ExchangePairingCode")
         .WithSummary("Exchange a pairing code for a device bearer token.")

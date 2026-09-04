@@ -43,7 +43,7 @@ public sealed class LocalControlPairingProofValidatorTests : IDisposable
     }
 
     [Fact]
-    public void Nonce_expires_when_its_proof_window_ends()
+    public void Boundary_proof_replay_is_rejected_then_nonce_expires()
     {
         const string nonce = "00112233445566778899AABBCCDDEEFF";
         var boundaryProof = _protector.ProtectPayload(new LocalControlPairingProofPayload(
@@ -58,6 +58,11 @@ public sealed class LocalControlPairingProofValidatorTests : IDisposable
             nonce));
 
         Assert.Equal(LocalControlPairingProofValidation.Valid, _validator.ValidateAndConsume(boundaryProof));
+        Assert.Equal(LocalControlPairingProofValidation.Unauthorized, _validator.ValidateAndConsume(boundaryProof));
+        Assert.Equal(LocalControlPairingProofValidation.Unauthorized, _validator.ValidateAndConsume(freshProof));
+
+        _time.Advance(TimeSpan.FromMilliseconds(1));
+
         Assert.Equal(LocalControlPairingProofValidation.Valid, _validator.ValidateAndConsume(freshProof));
     }
 
