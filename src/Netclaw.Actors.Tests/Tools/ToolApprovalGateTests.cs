@@ -102,6 +102,24 @@ public sealed class ToolApprovalGateTests
         Assert.Equal("git push", complete.AuthorizedAnalysis.Source);
     }
 
+    [Fact]
+    public void Shell_in_auto_mode_allows_a_dynamic_executable_without_approval()
+    {
+        var policy = CreatePolicy(ToolApprovalMode.Auto);
+        var args = ToolInput.Create("Command", "\"$tool\" --status");
+
+        var preflight = policy.AuthorizeShellPreflight(
+            ShellTool(),
+            PersonalContext(),
+            args);
+
+        var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
+        Assert.True(complete.Decision.Allowed);
+        Assert.False(complete.Decision.NeedsApproval);
+        Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
+        Assert.NotNull(complete.AuthorizedAnalysis);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]

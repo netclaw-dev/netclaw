@@ -3929,6 +3929,29 @@ public class DispatchingToolExecutorTests
         Assert.Equal(0, approvalService.RequestCount);
     }
 
+    [Fact]
+    public async Task Native_tool_correction_precedes_auto_execution()
+    {
+        var call = CreateToolCall(
+            "call-native-auto-correction",
+            ShellTool.ToolName,
+            ToolInput.Create("Command", "file_read --path notes.txt"));
+        var context = CreateInteractivePersonalContext("signalr/native-auto-correction");
+
+        var decision = await _executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+        var correction = Assert.IsType<ToolCorrection.NativeToolSuggested>(decision.AgentCorrection);
+        Assert.Equal("file_read", correction.ToolName.Value);
+
+        var exception = await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
+            _executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
+        Assert.IsType<ToolCorrection.NativeToolSuggested>(exception.Correction);
+    }
+
     [Theory]
     [InlineData(ShellGrammar.Bash, "printf marker; file_read --path report.txt")]
     [InlineData(ShellGrammar.PowerShell, "Write-Output marker; file_read -Path report.txt")]

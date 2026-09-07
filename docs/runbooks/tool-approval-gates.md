@@ -7,20 +7,27 @@ channel.
 
 ## Overview
 
-Tool invocations pass through four layers:
+The current source checks shell requests in this order:
 
-1. **Operation hard deny** — shell commands that are always blocked
-   (e.g., `netclaw daemon stop`, `rm -rf /`). Never approvable. Checked first.
-2. **Resource hard deny** — protected files and directories (secrets, keys,
-   lifecycle/control-plane files) that are blocked for file tools and shell
-   path references. Never approvable.
-3. **Tool access** — per-audience allowlists (`AllowedTools`,
-   `AllowedMcpServers`). Binary: the tool is available or it isn't.
-4. **Approval gate** — for tools that pass layers 1-3, does this specific
-   invocation need user sign-off?
+1. **Tool access and shell capability** — the audience must expose the tool.
+   The shell must be enabled and the caller must use the Personal audience.
+2. **Shell operation controls** — `check_background_job` can control only a
+   job that has the same session, audience, and trust boundary.
+3. **Operation and resource hard deny** — blocked shell operations and
+   protected shell paths never receive approval authority.
+4. **Mode and channel controls** — `Deny` stops the call. Non-interactive
+   calls must pass the trust-zone policy before `Auto` can allow the call.
+5. **Correction or approval** — an `Approval` call can request prior-grant
+   evidence, reviewed-safe coverage, or an interactive approval.
 
-The approval gate is transparent to the LLM — it never knows approval is
-happening. It calls `shell_execute`, gets either a result or a denial.
+The approval gate does not execute a call or grant authority by itself. A shell
+call can return a result, a denial, or a recoverable correction to the model.
+
+The dispatcher detects an exposed native tool after shell preflight and before
+it calls `ShellPolicyCoordinator`. That correction stops the shell call and
+does not contact the approval store. The temporary-path policy adds managed
+temporary-directory advice to an `Approval` result. `Auto` returns before that
+policy runs, so it does not return managed temporary-directory advice.
 
 ## Approval Modes
 

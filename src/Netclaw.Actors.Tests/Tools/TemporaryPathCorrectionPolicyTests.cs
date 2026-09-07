@@ -233,6 +233,22 @@ public sealed class TemporaryPathCorrectionPolicyTests
         Assert.Null(decision.AgentCorrection);
     }
 
+    [Fact]
+    public void Auto_mode_skips_the_managed_temporary_path_correction()
+    {
+        var decision = Evaluate(
+            BashEnvironment(),
+            PosixTemp,
+            "gh api repos/example/project",
+            PosixSession,
+            explicitWorkingDirectory: PosixTemp,
+            approvalMode: ToolApprovalMode.Auto);
+
+        Assert.True(decision.Allowed);
+        Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
+        Assert.Null(decision.ApprovalContext);
+    }
+
     [Theory]
     [InlineData(TrustAudience.Team)]
     [InlineData(TrustAudience.Public)]
@@ -414,7 +430,8 @@ public sealed class TemporaryPathCorrectionPolicyTests
         TrustAudience audience = TrustAudience.Personal,
         IPlatformTemporaryPathInspector? inspector = null,
         IReadOnlyList<string>? deniedPaths = null,
-        IReadOnlyList<string>? additionalTemporaryRoots = null)
+        IReadOnlyList<string>? additionalTemporaryRoots = null,
+        ToolApprovalMode approvalMode = ToolApprovalMode.Approval)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         var profile = audience switch
@@ -428,7 +445,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
         {
             ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
             {
-                [ShellTool.ToolName] = ToolApprovalMode.Approval
+                [ShellTool.ToolName] = approvalMode
             }
         };
         var commandPolicy = new ShellCommandPolicy(environment);
