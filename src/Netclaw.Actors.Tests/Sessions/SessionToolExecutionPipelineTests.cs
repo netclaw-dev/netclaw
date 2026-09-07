@@ -361,6 +361,39 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     }
 
     [Fact]
+    public async Task Native_and_temporary_collection_returns_one_model_response()
+    {
+        var executor = new NativeAndTemporaryCorrectionExecutor();
+        var probe = CreateTestProbe("native-temporary-collection");
+        var call = new FunctionCallContent(
+            "call-native-temporary-collection",
+            "shell_execute",
+            new Dictionary<string, object?> { ["command"] = "file_write --path output.txt" });
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [call],
+                new SessionId("D1/native-temporary-collection"),
+                probe.Ref)
+            .WithApprovals(new ApprovalChannel(), _ => throw new InvalidOperationException("The collection must not prompt."), Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal(
+            "Shell execution stopped because 'file_write' is a native Netclaw tool.\n" +
+            $"Managed temporary directory: '{TestManagedTemporaryDirectory}'.\n" +
+            "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
+            result.Content);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, completed.ToolReceipts["call-native-temporary-collection"].RemediationCode);
+        Assert.Equal("file_write", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
+    }
+
+    [Fact]
     public async Task Streaming_result_is_presented_before_delivery()
     {
         var executor = new CorrectiveReceiptExecutor();
@@ -1307,6 +1340,28 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         private static ToolCorrectionRequiredException CreateCorrection()
             => new(new ToolCorrection.NativeToolSuggested(new ToolName("file_read")));
+    }
+
+    private sealed class NativeAndTemporaryCorrectionExecutor : IToolExecutor
+    {
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            var collection = ShellPolicyCoordinator.TryCreateNativeAndTemporaryCandidate(
+                new ToolCorrection.NativeToolSuggested(new ToolName(FileWriteTool.ToolName)),
+                new ToolCorrection.ManagedTemporaryDirectorySuggested(
+                    new ManagedTemporaryCorrectionTarget(TestManagedTemporaryDirectory, "/tmp")))
+                ?? throw new InvalidOperationException("The correction pair must remain compatible.");
+            throw new ToolCorrectionRequiredException(collection);
+        }
     }
 
     private sealed class ManagedTemporaryCorrectionRequiredExecutor : IToolExecutor

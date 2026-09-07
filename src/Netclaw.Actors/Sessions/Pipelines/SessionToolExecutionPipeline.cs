@@ -661,24 +661,20 @@ internal sealed class SessionToolExecutionPipeline
         catch (ToolCorrectionRequiredException correctionEx)
         {
             sw.Stop();
-            if (correctionEx.Correction is ToolCorrection.NativeToolSuggested nativeTool)
+            var presentation = ToolCorrectionPresentation.Build(correctionEx.Corrections);
+            var correctionReceipt = new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.RecoverableCorrection,
+                remediationCode: ToolRemediationCode.UseNativeTool);
+            return new ToolCallResult(new SerializableChatMessage
             {
-                var correctionReceipt = new ToolInvocationReceipt(
-                    ToolInvocationOutcomeCategory.RecoverableCorrection,
-                    remediationCode: ToolRemediationCode.UseNativeTool);
-                return new ToolCallResult(new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.Tool,
-                    Content = BuildNativeToolCorrection(nativeTool.ToolName),
-                    ToolCallId = new ToolCallId(tc.CallId),
-                    Name = tc.Name
-                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
-                    authorizationAttemptId,
-                    Receipt: correctionReceipt,
-                    ExposureRequest: new ToolExposureRequest(nativeTool.ToolName));
-            }
-
-            throw new InvalidOperationException("The correction does not name a native tool.");
+                Role = Protocol.ChatRole.Tool,
+                Content = presentation.Content,
+                ToolCallId = new ToolCallId(tc.CallId),
+                Name = tc.Name
+            }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+                authorizationAttemptId,
+                Receipt: correctionReceipt,
+                ExposureRequest: new ToolExposureRequest(presentation.NativeTool));
         }
         catch (ToolApprovalRequiredException approvalEx)
         {

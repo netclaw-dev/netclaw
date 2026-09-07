@@ -139,7 +139,26 @@ internal sealed class ShellPolicyCoordinator(
             CompleteWithTrace(
                 ToolAuthorizationDecision.Deny("internal_policy_failure"),
                 trace),
-            null);
+                null);
+    }
+
+    /// <summary>Creates an inactive candidate for the verified compatible correction pair.</summary>
+    /// <remarks>
+    /// The current dispatcher still selects the native correction. This method
+    /// has no authority or side effects. P3 can activate the collection after
+    /// it defines the complete retry, receipt, and caller contract.
+    /// </remarks>
+    internal static ToolCorrectionCollection? TryCreateNativeAndTemporaryCandidate(
+        ToolCorrection? nativeCorrection,
+        ToolCorrection? policyCorrection)
+    {
+        if (nativeCorrection is not ToolCorrection.NativeToolSuggested native
+            || policyCorrection is not ToolCorrection.ManagedTemporaryDirectorySuggested temporary)
+        {
+            return null;
+        }
+
+        return new ToolCorrectionCollection([native, temporary]);
     }
 
     private async Task<ToolAuthorizationDecision> CompleteAsync(
