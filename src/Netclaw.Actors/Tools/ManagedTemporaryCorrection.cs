@@ -26,6 +26,75 @@ internal abstract record ToolCorrection
     internal sealed record ProjectDirectorySuggested(string Directory) : ToolCorrection;
 }
 
+/// <summary>Groups compatible correction facts for one tool attempt.</summary>
+/// <remarks>
+/// The collection has no authority or side effects. Current production paths
+/// still emit one correction. A later cutover can use this type after it
+/// defines the required retry and receipt behavior for every collection.
+/// </remarks>
+internal sealed class ToolCorrectionCollection
+{
+    private readonly IReadOnlyList<ToolCorrection> _items;
+
+    internal ToolCorrectionCollection(IEnumerable<ToolCorrection> corrections)
+    {
+        ArgumentNullException.ThrowIfNull(corrections);
+
+        var items = new List<ToolCorrection>();
+        foreach (var correction in corrections)
+        {
+            ArgumentNullException.ThrowIfNull(correction);
+            if (items.Contains(correction))
+                throw new ArgumentException("Correction collections cannot contain duplicates.", nameof(corrections));
+
+            items.Add(correction);
+        }
+
+        if (items.Count == 0)
+            throw new ArgumentException("Correction collections cannot be empty.", nameof(corrections));
+
+        _items = Array.AsReadOnly(items.ToArray());
+    }
+
+    internal IReadOnlyList<ToolCorrection> Items => _items;
+}
+
+/// <summary>Formats native-tool and managed-temporary correction pairs.</summary>
+internal static class ToolCorrectionPresentation
+{
+    internal static (string Content, ToolName NativeTool) Build(ToolCorrectionCollection corrections)
+    {
+        ArgumentNullException.ThrowIfNull(corrections);
+
+        ToolName? nativeTool = null;
+        ManagedTemporaryCorrectionTarget? managedTemporaryTarget = null;
+        foreach (var correction in corrections.Items)
+        {
+            switch (correction)
+            {
+                case ToolCorrection.NativeToolSuggested native when nativeTool is null:
+                    nativeTool = native.ToolName;
+                    break;
+                case ToolCorrection.ManagedTemporaryDirectorySuggested managed
+                    when managedTemporaryTarget is null:
+                    managedTemporaryTarget = managed.Target;
+                    break;
+                default:
+                    throw new InvalidOperationException("The correction collection has an unsupported or duplicate correction.");
+            }
+        }
+
+        if (nativeTool is null)
+            throw new InvalidOperationException("A shell correction collection must name a native tool.");
+
+        var content = $"Shell execution stopped because '{nativeTool.Value}' is a native Netclaw tool.";
+        if (managedTemporaryTarget is { } temporaryTarget)
+            content += $"\nManaged temporary directory: '{temporaryTarget.ManagedTemporaryDirectory}'.";
+
+        return (content, nativeTool.Value);
+    }
+}
+
 /// <summary>Captures the execution-relevant arguments of one corrected tool call.</summary>
 internal abstract record ManagedTemporaryCallSemantics(string ToolName, TimeSpan Timeout)
 {

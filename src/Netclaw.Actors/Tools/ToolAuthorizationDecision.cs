@@ -350,11 +350,18 @@ public sealed record ToolAuthorizationDecision
 internal sealed class ToolCorrectionRequiredException : InvalidOperationException
 {
     internal ToolCorrectionRequiredException(ToolCorrection correction)
-        : base("Tool invocation requires agent correction.")
+        : this(new ToolCorrectionCollection([correction]))
     {
-        ArgumentNullException.ThrowIfNull(correction);
-        Correction = correction;
     }
 
-    internal ToolCorrection Correction { get; }
+    internal ToolCorrectionRequiredException(ToolCorrectionCollection corrections)
+        : base("Tool invocation requires agent correction.")
+    {
+        ArgumentNullException.ThrowIfNull(corrections);
+        Corrections = corrections;
+    }
+
+    internal ToolCorrectionCollection Corrections { get; }
+
+    internal ToolCorrection Correction => Corrections.Items[0];
 }
