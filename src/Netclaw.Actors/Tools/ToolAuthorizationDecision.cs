@@ -363,5 +363,8 @@ internal sealed class ToolCorrectionRequiredException : InvalidOperationExceptio
 
     internal ToolCorrectionCollection Corrections { get; }
 
-    internal ToolCorrection Correction => Corrections.Items[0];
+    internal ToolCorrection Correction
+        => Corrections.Items.Count == 1
+            ? Corrections.Items[0]
+            : throw new InvalidOperationException("A scalar correction consumer received multiple corrections.");
 }

@@ -18,9 +18,12 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tests.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Tests.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -363,12 +366,17 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     [Fact]
     public async Task Native_and_temporary_collection_returns_one_model_response()
     {
-        var executor = new NativeAndTemporaryCorrectionExecutor();
+        var candidate = CreatePolicyProducedNativeAndTemporaryCollection();
+        var executor = new NativeAndTemporaryCorrectionExecutor(candidate.Corrections);
         var probe = CreateTestProbe("native-temporary-collection");
         var call = new FunctionCallContent(
             "call-native-temporary-collection",
             "shell_execute",
-            new Dictionary<string, object?> { ["command"] = "file_write --path output.txt" });
+            new Dictionary<string, object?>
+            {
+                ["command"] = candidate.Command,
+                ["WorkingDirectory"] = Path.GetTempPath()
+            });
 
         var pipelineTask = new SessionToolPipelineTestFixture(
                 executor,
@@ -391,6 +399,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             result.Content);
         Assert.Equal(ToolRemediationCode.UseNativeTool, completed.ToolReceipts["call-native-temporary-collection"].RemediationCode);
         Assert.Equal("file_write", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
+        Assert.Equal(1, executor.Attempts);
     }
 
     [Fact]
@@ -1342,8 +1351,75 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             => new(new ToolCorrection.NativeToolSuggested(new ToolName("file_read")));
     }
 
-    private sealed class NativeAndTemporaryCorrectionExecutor : IToolExecutor
+    private static PolicyProducedCorrectionCollection CreatePolicyProducedNativeAndTemporaryCollection()
     {
+        var environment = TestShellEnvironment.Current;
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [ShellTool.ToolName] = ToolApprovalMode.Approval,
+                [FileWriteTool.ToolName] = ToolApprovalMode.Approval
+            }
+        };
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, []);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        var policy = new ToolAccessPolicy(
+            new NetclawPaths(),
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            commandPolicy,
+            pathPolicy);
+        var storage = SessionStoragePaths.CreateVersion2(
+            new SessionStorageEnvelopeRoot(ManagedTemporarySessionDirectory));
+        var context = TestToolExecutionContext.CreateBoundWithStorage(
+            "signalr/native-temporary-collection",
+            storage,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
+            });
+        var nativePath = Path.Combine(Path.GetTempPath(), "netclaw-p2-output.txt");
+        var command = $"file_write --path {nativePath}";
+        var shellTool = Assert.IsAssignableFrom<INetclawTool>(registry.GetByName(ShellTool.ToolName));
+        var fileWriteTool = Assert.IsAssignableFrom<INetclawTool>(registry.GetByName(FileWriteTool.ToolName));
+        var preflight = Assert.IsType<ShellPolicyPreflightResult.Continue>(
+            policy.AuthorizeShellPreflight(
+                shellTool,
+                context,
+                ToolInput.Create("Command", command, "WorkingDirectory", Path.GetTempPath())));
+        var shellTemporary = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(preflight.Correction);
+        var native = Assert.IsType<ToolCorrection.NativeToolSuggested>(
+            NativeToolShellCorrectionDetector.Detect(preflight.Analysis, registry, policy, context.Invocation));
+        var structured = policy.AuthorizeInvocation(
+            fileWriteTool,
+            context,
+            ToolInput.Create("Path", nativePath, "Content", "P2 output"));
+        Assert.True(structured.NeedsApproval);
+        var nativeTemporary = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(structured.AgentCorrection);
+        Assert.Equal(shellTemporary.Target, nativeTemporary.Target);
+
+        var corrections = ShellPolicyCoordinator.CollectApplicableCorrections(native, nativeTemporary)
+            ?? throw new InvalidOperationException("The policy-produced corrections must form a collection.");
+        return new PolicyProducedCorrectionCollection(command, corrections);
+    }
+
+    private sealed record PolicyProducedCorrectionCollection(
+        string Command,
+        ToolCorrectionCollection Corrections);
+
+    private sealed class NativeAndTemporaryCorrectionExecutor(ToolCorrectionCollection corrections) : IToolExecutor
+    {
+        public int Attempts { get; private set; }
+
         public Task AuthorizeAsync(
             FunctionCallContent toolCall,
             ToolExecutionContext? context = null,
@@ -1355,12 +1431,8 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ToolExecutionContext? context = null,
             CancellationToken ct = default)
         {
-            var collection = ShellPolicyCoordinator.TryCreateNativeAndTemporaryCandidate(
-                new ToolCorrection.NativeToolSuggested(new ToolName(FileWriteTool.ToolName)),
-                new ToolCorrection.ManagedTemporaryDirectorySuggested(
-                    new ManagedTemporaryCorrectionTarget(TestManagedTemporaryDirectory, "/tmp")))
-                ?? throw new InvalidOperationException("The correction pair must remain compatible.");
-            throw new ToolCorrectionRequiredException(collection);
+            Attempts++;
+            throw new ToolCorrectionRequiredException(corrections);
         }
     }
 

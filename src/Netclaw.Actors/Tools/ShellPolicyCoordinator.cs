@@ -142,23 +142,28 @@ internal sealed class ShellPolicyCoordinator(
                 null);
     }
 
-    /// <summary>Creates an inactive candidate for the verified compatible correction pair.</summary>
+    /// <summary>Collects correction facts that already apply to one shell attempt.</summary>
     /// <remarks>
-    /// The current dispatcher still selects the native correction. This method
-    /// has no authority or side effects. P3 can activate the collection after
-    /// it defines the complete retry, receipt, and caller contract.
+    /// Callers determine correction applicability before this method runs.
+    /// This method preserves order and enforces collection invariants.
+    /// The current dispatcher still emits one native correction.
     /// </remarks>
-    internal static ToolCorrectionCollection? TryCreateNativeAndTemporaryCandidate(
-        ToolCorrection? nativeCorrection,
-        ToolCorrection? policyCorrection)
+    internal static ToolCorrectionCollection? CollectApplicableCorrections(
+        params ToolCorrection?[] corrections)
     {
-        if (nativeCorrection is not ToolCorrection.NativeToolSuggested native
-            || policyCorrection is not ToolCorrection.ManagedTemporaryDirectorySuggested temporary)
+        ArgumentNullException.ThrowIfNull(corrections);
+
+        var applicable = new List<ToolCorrection>();
+        foreach (var correction in corrections)
         {
-            return null;
+            if (correction is not null)
+                applicable.Add(correction);
         }
 
-        return new ToolCorrectionCollection([native, temporary]);
+        if (applicable.Count < 2)
+            return null;
+
+        return new ToolCorrectionCollection(applicable);
     }
 
     private async Task<ToolAuthorizationDecision> CompleteAsync(

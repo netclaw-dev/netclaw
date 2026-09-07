@@ -59,7 +59,11 @@ internal sealed class ToolCorrectionCollection
     internal IReadOnlyList<ToolCorrection> Items => _items;
 }
 
-/// <summary>Formats native-tool and managed-temporary correction pairs.</summary>
+/// <summary>Formats correction facts for the current native-tool response path.</summary>
+/// <remarks>
+/// The response requires one native-tool fact. It can include one managed-temporary fact.
+/// A new fact requires an explicit response contract here.
+/// </remarks>
 internal static class ToolCorrectionPresentation
 {
     internal static (string Content, ToolName NativeTool) Build(ToolCorrectionCollection corrections)
@@ -80,7 +84,7 @@ internal static class ToolCorrectionPresentation
                     managedTemporaryTarget = managed.Target;
                     break;
                 default:
-                    throw new InvalidOperationException("The correction collection has an unsupported or duplicate correction.");
+                    throw new InvalidOperationException("The correction collection has an unsupported correction or duplicate fact.");
             }
         }
 
