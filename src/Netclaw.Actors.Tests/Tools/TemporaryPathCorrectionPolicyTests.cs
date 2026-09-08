@@ -48,7 +48,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
         var decision = Evaluate(
             BashEnvironment(),
             PosixTemp,
-            "cat /tmp/result.log",
+            "cat /tmp/input.log > /tmp/result.log",
             PosixSession,
             explicitWorkingDirectory: PosixTemp,
             inspector: new TestPathInspector(resolvedRoot: "/private/tmp"));
@@ -83,7 +83,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
         var decision = Evaluate(
             BashEnvironment(),
             runtimeTemp,
-            "cat /tmp/result.log",
+            "cat /tmp/input.log > /tmp/result.log",
             PosixSession,
             explicitWorkingDirectory: PosixTemp,
             inspector: new MappedPathInspector(
