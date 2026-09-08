@@ -618,8 +618,8 @@ public sealed class SQLiteMemoryRecallCoordinator(
         IReadOnlyList<double> scores;
         try
         {
-            using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
-            gateCts.CancelAfter(subBudgetMs);
+            using var budgetCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(subBudgetMs), timeProvider);
+            using var gateCts = CancellationTokenSource.CreateLinkedTokenSource(ct, budgetCts.Token);
             scores = await scorer.ScoreAsync(request.Query, texts, gateCts.Token);
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Memory;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
@@ -35,6 +36,7 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
     private static readonly float[] QueryVector = [1f, 0f];
 
     private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-recall-gate-tests", Guid.NewGuid().ToString("N"));
+    private readonly FakeTimeProvider _timeProvider = new();
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 
@@ -42,7 +44,7 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
     {
         Directory.CreateDirectory(_baseDir);
         _dbPath = Path.Combine(_baseDir, "netclaw.db");
-        _store = new SQLiteMemoryStore(_dbPath, TimeProvider.System);
+        _store = new SQLiteMemoryStore(_dbPath, _timeProvider);
     }
 
     public async ValueTask DisposeAsync() => await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
@@ -160,11 +162,8 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
         await _store.InitializeAsync(ct);
         await SeedFloorSurvivingDocumentAsync("doc-timeout", ct);
 
-        // Never completes on its own; only the coordinator's envelope-clamped sub-budget CTS
-        // (ceiling 120ms, default 300ms RecallTimeoutMs here so the ceiling itself governs) can
-        // cancel it. Task.Delay inside a fake is the sanctioned way to simulate latency
-        // deterministically — no Thread.Sleep/Task.Delay appears in this test's own orchestration.
-        var scorer = new HangingRelevanceScorer(RelevanceModelId);
+        // The scorer exceeds the 120 ms gate ceiling while the outer envelope retains time.
+        var scorer = new VirtualTimeRelevanceScorer(_timeProvider, TimeSpan.FromMilliseconds(150), score: 0.0);
         var coordinator = BuildCoordinator(relevanceScorerHolder: BuildHolder(scorer));
 
         var result = await coordinator.RecallAsync(BuildRequest("gate/sub-budget-timeout"), ct);
@@ -175,25 +174,29 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
 
     // ── Envelope-derived sub-budget (2026-07 production-canary fix, task 3) ────
 
-    [Fact]
-    public async Task Gate_sub_budget_is_capped_by_the_remaining_outer_envelope_not_just_the_ceiling()
+    [Theory]
+    [InlineData(250)]
+    [InlineData(300)]
+    [InlineData(350)]
+    public async Task Gate_sub_budget_is_capped_by_the_remaining_outer_envelope_not_just_the_ceiling(int queryDurationMs)
     {
         var ct = TestContext.Current.CancellationToken;
         await _store.InitializeAsync(ct);
         await SeedFloorSurvivingDocumentAsync("doc-envelope-exhausted", ct);
 
-        // A real 50ms delay comfortably UNDER the 120ms gate-sub-budget ceiling -- if the fixed
-        // ceiling alone governed the gate's CTS, this scorer would complete in time and its
-        // (rejecting) score would apply. An almost-zero outer RecallTimeoutMs forces the
-        // envelope-derived clamp to hand the gate far less than 120ms instead, so the scorer gets
-        // cancelled and the turn degrades to the floor's unfiltered result.
-        var scorer = new DelayedRelevanceScorer(RelevanceModelId, TimeSpan.FromMilliseconds(50), score: 0.0);
-        var coordinator = BuildCoordinator(relevanceScorerHolder: BuildHolder(scorer), recallTimeoutMs: 1);
+        // The query leaves at most 50 ms. An 80 ms score exceeds the remainder, but not the gate ceiling.
+        var logger = new RecordingLogger<SQLiteMemoryRecallCoordinator>();
+        var scorer = new VirtualTimeRelevanceScorer(_timeProvider, TimeSpan.FromMilliseconds(80), score: 0.0);
+        var coordinator = BuildCoordinator(
+            relevanceScorerHolder: BuildHolder(scorer),
+            logger: logger,
+            queryDuration: TimeSpan.FromMilliseconds(queryDurationMs));
 
         var result = await coordinator.RecallAsync(BuildRequest("gate/envelope-exhausted"), ct);
 
         Assert.False(result.Degraded);
         Assert.Contains(result.Items, i => i.Id.Value == "doc-envelope-exhausted");
+        Assert.Contains(logger.Entries, e => e.Message.Contains("reason=sub_budget_exceeded", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -203,12 +206,9 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
         await _store.InitializeAsync(ct);
         await SeedFloorSurvivingDocumentAsync("doc-envelope-headroom", ct);
 
-        // Same 50ms real delay and same rejecting score as the test above -- the only difference
-        // is a generous outer envelope. Proves the previous test's degradation was caused by the
-        // exhausted envelope specifically, not merely by the fake being slow: with headroom, the
-        // gate runs to completion and its score is honored (candidate dropped, not degraded).
-        var scorer = new DelayedRelevanceScorer(RelevanceModelId, TimeSpan.FromMilliseconds(50), score: 0.0);
-        var coordinator = BuildCoordinator(relevanceScorerHolder: BuildHolder(scorer), recallTimeoutMs: 5000);
+        // The same score completes when the query leaves the full envelope available.
+        var scorer = new VirtualTimeRelevanceScorer(_timeProvider, TimeSpan.FromMilliseconds(80), score: 0.0);
+        var coordinator = BuildCoordinator(relevanceScorerHolder: BuildHolder(scorer));
 
         var result = await coordinator.RecallAsync(BuildRequest("gate/envelope-headroom"), ct);
 
@@ -387,7 +387,8 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
         bool? relevanceGateEnabled = null,
         double? thresholdOverride = null,
         ILogger<SQLiteMemoryRecallCoordinator>? logger = null,
-        int recallTimeoutMs = 300)
+        int recallTimeoutMs = 300,
+        TimeSpan queryDuration = default)
         => new(
             _store,
             logger ?? NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
@@ -400,14 +401,14 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
                     RelevanceGate = new MemoryRelevanceGateConfig { Enabled = relevanceGateEnabled, Threshold = thresholdOverride },
                 },
             },
-            TimeProvider.System,
+            _timeProvider,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true },
             // memory-query-prefix design D3: Memory.Recall.MinCosineSimilarity now defaults to
             // null (manifest-follows). Every candidate here embeds at cosine 1.0 against itself
             // (SeedFloorSurvivingDocumentAsync), so any floor below 1.0 clears it identically to
             // this file's pre-existing fixture geometry.
             embedderHolder: new MemoryEmbedderHolder(
-                new ScriptedEmbedder(EmbedderModelId, Dimensions, QueryVector), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: 0.5),
+                new ScriptedEmbedder(EmbedderModelId, Dimensions, QueryVector, _timeProvider, queryDuration), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: 0.5),
             vectorIndexHolder: new MemoryVectorIndexHolder(_store),
             relevanceScorerHolder: relevanceScorerHolder);
 
@@ -421,7 +422,7 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
     private async Task SeedFloorSurvivingDocumentAsync(string documentId, CancellationToken ct)
     {
         var anchor = _store.CreateDefaultAnchor(documentId);
-        var now = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
         await _store.UpsertDocumentAsync(new SQLiteMemoryDocument(
             DocumentId: documentId,
             Anchor: anchor,
@@ -460,7 +461,8 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
     /// <c>SQLiteMemoryRecallHybridTests</c> and <c>MemoryCurationNominatorTests</c> — kept
     /// separate per those files' own stated convention.
     /// </summary>
-    private sealed class ScriptedEmbedder(string modelId, int dimensions, float[] queryVector) : IMemoryEmbedder
+    private sealed class ScriptedEmbedder(
+        string modelId, int dimensions, float[] queryVector, FakeTimeProvider timeProvider, TimeSpan queryDuration) : IMemoryEmbedder
     {
         public string ModelId => modelId;
 
@@ -469,7 +471,10 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
         public bool IsAvailable => true;
 
         public ValueTask<ReadOnlyMemory<float>> EmbedAsync(string text, EmbeddingPurpose purpose, CancellationToken ct)
-            => ValueTask.FromResult<ReadOnlyMemory<float>>(queryVector);
+        {
+            timeProvider.Advance(queryDuration);
+            return ValueTask.FromResult<ReadOnlyMemory<float>>(queryVector);
+        }
 
         public ValueTask<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(IReadOnlyList<string> texts, EmbeddingPurpose purpose, CancellationToken ct)
             => ValueTask.FromResult<IReadOnlyList<ReadOnlyMemory<float>>>(
@@ -497,45 +502,18 @@ public sealed class SQLiteMemoryRecallGateTests : IAsyncDisposable
             => ValueTask.FromResult(scoreFn(query, candidates));
     }
 
-    /// <summary>
-    /// Fake relevance scorer that never completes on its own — only the coordinator's own
-    /// sub-budget-linked <see cref="CancellationTokenSource"/> can end the call, so the sub-
-    /// budget-timeout test is deterministic rather than racing a wall-clock delay against the
-    /// coordinator's timer.
-    /// </summary>
-    private sealed class HangingRelevanceScorer(string modelId) : IRelevanceScorer
+    /// <summary>Advances the gate's clock before it returns a score or observes cancellation.</summary>
+    private sealed class VirtualTimeRelevanceScorer(FakeTimeProvider timeProvider, TimeSpan duration, double score) : IRelevanceScorer
     {
-        public string ModelId => modelId;
+        public string ModelId => RelevanceModelId;
 
         public bool IsAvailable => true;
 
-        public async ValueTask<IReadOnlyList<double>> ScoreAsync(string query, IReadOnlyList<string> candidates, CancellationToken ct)
+        public ValueTask<IReadOnlyList<double>> ScoreAsync(string query, IReadOnlyList<string> candidates, CancellationToken ct)
         {
-            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
-            return [];
-        }
-    }
-
-    /// <summary>
-    /// Fake relevance scorer that completes after a fixed, finite real-wall-clock delay (2026-07
-    /// production-canary envelope-derived-budget tests) rather than hanging forever like
-    /// <see cref="HangingRelevanceScorer"/> — this file's own copy of a "slow but not infinite"
-    /// fake, needed to prove the gate's sub-budget is actually smaller than the fixed
-    /// <c>RelevanceGateSubBudgetMs</c> ceiling when the outer envelope is nearly exhausted. The
-    /// delay itself is real (Task.Delay inside the fake, not this test's own orchestration) — the
-    /// sanctioned way to simulate latency deterministically per this repo's testing guidelines.
-    /// </summary>
-    private sealed class DelayedRelevanceScorer(string modelId, TimeSpan delay, double score) : IRelevanceScorer
-    {
-        public string ModelId => modelId;
-
-        public bool IsAvailable => true;
-
-        [SlopwatchSuppress("SW004", "Intentional latency simulation inside a fake (never in test orchestration) -- proves the envelope-derived sub-budget clamp actually cancels a scorer that would otherwise complete within the fixed 120ms ceiling.")]
-        public async ValueTask<IReadOnlyList<double>> ScoreAsync(string query, IReadOnlyList<string> candidates, CancellationToken ct)
-        {
-            await Task.Delay(delay, ct);
-            return candidates.Select(_ => score).ToArray();
+            timeProvider.Advance(duration);
+            ct.ThrowIfCancellationRequested();
+            return ValueTask.FromResult<IReadOnlyList<double>>(candidates.Select(_ => score).ToArray());
         }
     }
 
