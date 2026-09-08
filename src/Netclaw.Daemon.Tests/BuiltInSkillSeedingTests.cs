@@ -95,7 +95,10 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
             "If approval is required but no interactive requester is available",
             "After an access denial, do not retry that call during the same user turn",
             "A later explicit user request can start a new call",
-            "Apply one `Tool execution deferred:` correction unchanged"
+            "Apply all compatible advice in a correction response before the next call",
+            "A shell call can return correction advice under Auto",
+            "Advice grants no authority. Every replacement call passes current policy",
+            "If you require the exact platform path, retry unchanged once through normal policy"
         };
         foreach (var statement in statements)
         {
