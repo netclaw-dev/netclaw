@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.67.0"
+  version: "2.68.0"
 ---
 
 # Netclaw Operations
@@ -66,7 +66,10 @@ Keep shell approval friction bounded:
 6. After an access denial, do not retry that call during the same user turn.
 7. Do not change its scope or substitute another tool to evade the denial.
 8. A later explicit user request can start a new call. Apply the normal approval policy to that call.
-9. Apply one `Tool execution deferred:` correction unchanged; otherwise use a structured tool or report the block once.
+9. Apply all compatible advice in a correction response before the next call.
+10. A shell call can return correction advice under Auto. Auto removes approval prompts; it does not remove corrections.
+11. Advice grants no authority. Every replacement call passes current policy.
+12. If you require the exact platform path, retry unchanged once through normal policy.
 
 ## Project Directory
 

@@ -516,8 +516,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         {
             throw new ToolApprovalRequiredException(
                 decision.ApprovalContext
-                ?? throw new InvalidOperationException("Approval decision missing approval context."),
-                decision.AgentCorrection);
+                ?? throw new InvalidOperationException("Approval decision missing approval context."));
         }
 
         if (decision.Outcome is ToolAuthorizationOutcome.RequiresAgentCorrection)

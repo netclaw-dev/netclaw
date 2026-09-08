@@ -24,11 +24,14 @@ The approval gate does not execute a call or grant authority by itself. A shell
 call can return a result, a denial, or a recoverable correction to the model.
 
 `ShellPolicyCoordinator` asks `ToolAccessPolicy` to analyze the request and
-apply synchronous access checks. It then detects an exposed native tool before
-it checks the approval store. That correction stops the shell call. The
-temporary-path policy adds managed temporary-directory advice to an `Approval`
-result. `Auto` returns before that policy runs, so it does not return managed
-temporary-directory advice.
+apply synchronous access checks. The coordinator collects compatible native,
+temporary, and project advice from existing invocation facts and policy.
+Native advice precedes stored grants. Temporary-only and project-only advice
+retain existing stored-grant and exact one-time approval precedence.
+Corrections precede an `Auto` allow. Hard denials precede all advice.
+Parent and child deliver the common result and retain their state and transport duties.
+Project advice requires a visible declaration tool that accepts the exact directory.
+That advice can apply without an approval bridge; temporary advice retains its interactive capability requirement.
 
 ## Approval Modes
 
@@ -36,7 +39,7 @@ Each tool can be in one of three modes per audience:
 
 | Mode | Behavior |
 |------|----------|
-| `Auto` | No approval needed. Tool executes immediately. This is the default. |
+| `Auto` | No approval prompt. Shell corrections and hard denials still apply before execution. |
 | `Approval` | User must approve before execution. Unapproved commands pause and prompt. |
 | `Deny` | Always blocked. No approval prompt offered. |
 

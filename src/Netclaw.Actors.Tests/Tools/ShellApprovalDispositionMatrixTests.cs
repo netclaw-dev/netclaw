@@ -151,7 +151,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The project-scope correction defines Bash path behavior.")]
-    public async Task Reviewed_safe_external_cwd_exposes_project_scope_correction()
+    public async Task Unavailable_registry_scope_preserves_ordinary_approval()
     {
         var testCase = new ShellApprovalCase(
             "reviewed-safe-external-cwd-suggests-project-scope",
@@ -168,8 +168,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
         var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
 
-        var correction = Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(decision.AgentCorrection);
-        Assert.Equal(context.Cwd, correction.Directory);
+        Assert.True(decision.NeedsApproval);
+        Assert.Null(decision.AgentCorrection);
+        Assert.NotNull(context.Cwd);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]

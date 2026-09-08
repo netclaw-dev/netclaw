@@ -75,25 +75,19 @@ internal sealed class ShellPolicyCoordinator(
             ShellPolicyPreflightResult.Continue preflightContinuation => preflightContinuation.Analysis,
             _ => throw new InvalidOperationException("Unsupported shell policy preflight result."),
         };
-        var nativeCorrection = analysis is null
+        cancellationToken.ThrowIfCancellationRequested();
+        var corrections = analysis is null
             ? null
-            : NativeToolShellCorrectionDetector.Detect(
-                analysis,
-                registry,
-                policy,
-                context.Invocation);
+            : CollectApplicableCorrections(analysis, toolCall, context, preflight);
+        cancellationToken.ThrowIfCancellationRequested();
 
-        if (nativeCorrection is not null)
-        {
-            // Temporary relocation is valid only when the suggested native operation can use the same target.
-            var corrections = nativeCorrection.SupportsManagedTemporaryDirectory
-                && preflight is ShellPolicyPreflightResult.Continue
+        if (corrections is not null
+            && (corrections.Items.Any(static correction => correction is ToolCorrection.NativeToolSuggested)
+                || preflight is ShellPolicyPreflightResult.Complete
                 {
-                    Correction: ToolCorrection.ManagedTemporaryDirectorySuggested temporaryCorrection
-                }
-                ? CollectApplicableCorrections(nativeCorrection.Correction, temporaryCorrection)
-                    ?? throw new InvalidOperationException("Compatible corrections must form a collection.")
-                : new ToolCorrectionCollection([nativeCorrection.Correction]);
+                    Decision.AllowReason: ToolAllowReason.PolicyAuto
+                }))
+        {
             return (
                 Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace),
                 null);
@@ -151,7 +145,7 @@ internal sealed class ShellPolicyCoordinator(
             toolCall,
             context,
             projection,
-            continuation.Correction,
+            corrections,
             cancellationToken);
 
         return (
@@ -161,28 +155,61 @@ internal sealed class ShellPolicyCoordinator(
                 : null);
     }
 
-    /// <summary>Collects correction facts that already apply to one shell attempt.</summary>
-    /// <remarks>
-    /// Each correction policy determines applicability before this method runs.
-    /// This method preserves order and enforces collection invariants.
-    /// The coordinator selects correction collections for shell requests.
-    /// </remarks>
-    internal static ToolCorrectionCollection? CollectApplicableCorrections(
-        params ToolCorrection?[] corrections)
+    /// <summary>Collects compatible advice from the same invocation and its existing policies.</summary>
+    internal ToolCorrectionCollection? CollectApplicableCorrections(
+        ShellCommandAnalysis analysis,
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        ShellPolicyPreflightResult preflight)
     {
-        ArgumentNullException.ThrowIfNull(corrections);
-
-        var applicable = new List<ToolCorrection>();
-        foreach (var correction in corrections)
-        {
-            if (correction is not null)
-                applicable.Add(correction);
-        }
-
-        if (applicable.Count < 2)
+        if (preflight is ShellPolicyPreflightResult.Complete { Decision.Allowed: false })
             return null;
 
-        return new ToolCorrectionCollection(applicable);
+        var native = NativeToolShellCorrectionDetector.Detect(analysis, registry, policy, context.Invocation);
+        var applicable = new List<ToolCorrection>();
+        if (native is not null)
+            applicable.Add(native.Correction);
+
+        // A native operation without relocation support must keep its target. Retry keys never authorize replacement native calls.
+        if (native is { SupportsManagedTemporaryDirectory: false }
+            || native is null && context.Approval.ManagedTemporaryRetry is not null)
+        {
+            return applicable.Count == 0 ? null : new ToolCorrectionCollection(applicable);
+        }
+
+        IReadOnlyList<ApprovalCandidate> candidates;
+        bool isMessy;
+        if (preflight is ShellPolicyPreflightResult.Continue continuation)
+        {
+            candidates = continuation.ApprovalContext.Candidates!;
+            isMessy = continuation.ApprovalContext.IsMessy;
+        }
+        else
+        {
+            // Auto omits the approval context. Reuse its canonical parse without asking the approval store.
+            var approval = policy.ShellApprovalMatcher.AnalyzeInvocation(
+                new ToolName(toolCall.Name),
+                ToolAccessPolicy.WithResolvedShellWorkingDirectory(toolCall.Arguments, analysis.WorkingDirectory),
+                analysis);
+            candidates = approval.Candidates;
+            isMessy = approval.IsMessy;
+        }
+
+        var temporary = policy.EvaluateShellTemporaryCorrection(analysis, candidates, toolCall.Arguments, context.Invocation);
+        if (temporary is not null)
+            applicable.Add(temporary);
+
+        // Relocation invalidates project advice for the original directory. A native replacement also requires fresh policy.
+        if (native is null && temporary is null && !isMessy
+            && policy.EvaluateShellProjectCorrection(candidates, analysis.WorkingDirectory, context.Invocation) is { } project
+            && registry.GetByName(SetWorkingDirectoryTool.ToolName) is SetWorkingDirectoryTool declaration
+            && policy.IsToolExposed(declaration, context.Invocation)
+            && declaration.CanDeclare(project.Directory, context.Invocation))
+        {
+            applicable.Add(project);
+        }
+
+        return applicable.Count == 0 ? null : new ToolCorrectionCollection(applicable);
     }
 
     private async Task<ToolAuthorizationDecision> CompleteAsync(
@@ -190,7 +217,7 @@ internal sealed class ShellPolicyCoordinator(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         ShellPolicyProjection projection,
-        ToolCorrection? correction,
+        ToolCorrectionCollection? corrections,
         CancellationToken cancellationToken)
     {
         var evaluation = new ShellPolicyEvaluation(projection);
@@ -201,7 +228,7 @@ internal sealed class ShellPolicyCoordinator(
                 toolCall,
                 context,
                 evaluation,
-                correction,
+                corrections,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -220,7 +247,7 @@ internal sealed class ShellPolicyCoordinator(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         ShellPolicyEvaluation evaluation,
-        ToolCorrection? correction,
+        ToolCorrectionCollection? corrections,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -231,7 +258,7 @@ internal sealed class ShellPolicyCoordinator(
                 candidate.Candidate.Shell is null
                 || candidate.Candidate.VerbTokens is null))
         {
-            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, correction);
+            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
         }
 
         var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
@@ -264,7 +291,7 @@ internal sealed class ShellPolicyCoordinator(
                     intentDirectory,
                     candidate.IntentFallbackDirectories)))
         {
-            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, correction);
+            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
         }
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -339,7 +366,7 @@ internal sealed class ShellPolicyCoordinator(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return CompleteFinal(evaluation, context, correction);
+        return CompleteFinal(evaluation, context, corrections);
     }
 
     private static void ApplyReviewedSafeCoverage(
@@ -389,7 +416,7 @@ internal sealed class ShellPolicyCoordinator(
     private static ToolAuthorizationDecision CompleteFinal(
         ShellPolicyEvaluation evaluation,
         ToolExecutionContext context,
-        ToolCorrection? correction)
+        ToolCorrectionCollection? corrections)
     {
         var projection = evaluation.Projection;
         var approvalMatches = evaluation.ApprovalMatches;
@@ -401,7 +428,7 @@ internal sealed class ShellPolicyCoordinator(
                 evaluation.GetUncoveredApprovalContext(
                     ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context)),
                 approvalMatches,
-                correction);
+                corrections);
         }
 
         if (!evaluation.AllCovered)
@@ -448,7 +475,7 @@ internal sealed class ShellPolicyCoordinator(
     private static ToolAuthorizationDecision CompleteOneTimeOrPrompt(
         ShellPolicyEvaluation evaluation,
         string toolName,
-        ToolCorrection? correction)
+        ToolCorrectionCollection? corrections)
     {
         var projection = evaluation.Projection;
         return projection.HasExactOneTimeApproval(toolName, projection.ApprovalContext)
@@ -459,21 +486,18 @@ internal sealed class ShellPolicyCoordinator(
                 evaluation,
                 projection.ApprovalContext,
                 [],
-                correction);
+                corrections);
     }
 
     private static ToolAuthorizationDecision CompleteApprovalOrCorrection(
         ShellPolicyEvaluation evaluation,
         ToolApprovalContext approvalContext,
         IReadOnlyList<ToolApprovalMatch> approvalMatches,
-        ToolCorrection? correction)
+        ToolCorrectionCollection? corrections)
     {
-        var decision = correction is ToolCorrection.ManagedTemporaryDirectorySuggested
-            ? ToolAuthorizationDecision.RequireAgentCorrection(correction, approvalMatches)
-            : ToolAuthorizationDecision.RequiresApproval(
-                approvalContext,
-                approvalMatches,
-                correction);
+        var decision = corrections is not null
+            ? ToolAuthorizationDecision.RequireAgentCorrection(corrections, approvalMatches)
+            : ToolAuthorizationDecision.RequiresApproval(approvalContext, approvalMatches);
         return evaluation.Complete(decision);
     }
 

@@ -171,30 +171,4 @@ public sealed class SessionToolExecutionPipelineHintTests
         Assert.Empty(hint);
     }
 
-    [Fact]
-    public void Project_scope_correction_reports_only_the_failure_reason()
-    {
-        var context = new ToolCorrection.ProjectDirectorySuggested("/home/user/repos/project");
-
-        var correction = SessionToolExecutionPipeline.BuildProjectScopeDeclarationCorrection(
-            context,
-            setWorkingDirectoryAvailable: true);
-
-        Assert.Contains("working_directory_not_declared", correction);
-        Assert.DoesNotContain("set_working_directory", correction);
-        Assert.Contains("Project directory: '/home/user/repos/project'", correction);
-        Assert.DoesNotContain("Next action", correction);
-    }
-
-    [Fact]
-    public void Project_scope_correction_is_suppressed_when_tool_is_unavailable()
-    {
-        var context = new ToolCorrection.ProjectDirectorySuggested("/home/user/repos/project");
-
-        var correction = SessionToolExecutionPipeline.BuildProjectScopeDeclarationCorrection(
-            context,
-            setWorkingDirectoryAvailable: false);
-
-        Assert.Empty(correction);
-    }
 }

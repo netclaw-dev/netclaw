@@ -3980,7 +3980,8 @@ public class DispatchingToolExecutorTests
         var preflight = Assert.IsType<ShellPolicyPreflightResult.Continue>(
             policy.AuthorizeShellPreflight(shellTool, context, arguments));
 
-        var shellTemporary = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(preflight.Correction);
+        var shellTemporary = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(
+            policy.AuthorizeInvocation(shellTool, context, arguments).AgentCorrection);
         var nativeCorrection = NativeToolShellCorrectionDetector.Detect(
             preflight.Analysis,
             registry,
@@ -3999,9 +4000,11 @@ public class DispatchingToolExecutorTests
             correctedNativeDecision.AgentCorrection);
         Assert.Equal(shellTemporary.Target, nativeTemporary.Target);
 
-        var collection = ShellPolicyCoordinator.CollectApplicableCorrections(
-            nativeTool.Correction,
-            nativeTemporary);
+        var collection = new ShellPolicyCoordinator(registry, policy, approvalService: null).CollectApplicableCorrections(
+            preflight.Analysis,
+            CreateToolCall("pair", ShellTool.ToolName, arguments),
+            context,
+            preflight);
         Assert.NotNull(collection);
         Assert.Collection(
             collection.Items,
@@ -4009,10 +4012,14 @@ public class DispatchingToolExecutorTests
             correction => Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(correction));
     }
 
-    [Fact]
-    public async Task Coordinator_selects_native_and_temporary_corrections_before_approval()
+    [Theory]
+    [InlineData(ToolApprovalMode.Approval)]
+    [InlineData(ToolApprovalMode.Auto)]
+    public async Task Coordinator_selects_native_and_temporary_corrections_before_approval(ToolApprovalMode mode)
     {
-        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
+        var config = CreateApprovalGatedShellConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[ShellTool.ToolName] = mode;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment, config);
         var approvalService = new FixedShellApprovalService(_ =>
             throw new InvalidOperationException("Candidate collection must not request approval."));
         var shellTool = Assert.IsAssignableFrom<INetclawTool>(registry.GetByName(ShellTool.ToolName));
@@ -4039,6 +4046,107 @@ public class DispatchingToolExecutorTests
         Assert.Null(authorization.AuthorizedAnalysis);
         Assert.Equal(0, approvalService.RequestCount);
         Assert.Null(authoritativeContext.Receipt);
+    }
+
+    [Fact]
+    public void Correction_collection_does_not_mutate_authority_or_delivery_state()
+    {
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
+        var context = CreateInteractivePersonalContext("signalr/pure-correction");
+        var call = CreateToolCall("pure", ShellTool.ToolName, ToolInput.Create(
+            "Command", $"file_write --path {Path.Combine(Path.GetTempPath(), "netclaw-pure-output.txt")}",
+            "WorkingDirectory", Path.GetTempPath()));
+        var preflight = Assert.IsType<ShellPolicyPreflightResult.Continue>(
+            policy.AuthorizeShellPreflight(registry.GetByName(ShellTool.ToolName)!, context, call.Arguments));
+        context.Approval.SeedOneTimeApproval(ShellTool.ToolName, ["unrelated invocation"]);
+        context.Approval.ApplyDecision("existing decision", "existing pattern");
+        var patterns = context.Approval.OneTimeApprovedPatterns;
+        var cwd = context.Approval.Cwd;
+        var attempt = context.Approval.AuthorizationAttemptId;
+        var service = new FixedShellApprovalService(_ => throw new InvalidOperationException("Collection cannot contact the store."));
+        var coordinator = new ShellPolicyCoordinator(registry, policy, service);
+
+        var first = coordinator.CollectApplicableCorrections(preflight.Analysis, call, context, preflight);
+        var second = coordinator.CollectApplicableCorrections(preflight.Analysis, call, context, preflight);
+
+        Assert.Equal(2, first!.Items.Count);
+        Assert.Equal(first.Items, second!.Items);
+        Assert.Equal(0, service.RequestCount);
+        Assert.Same(patterns, context.Approval.OneTimeApprovedPatterns);
+        Assert.Equal(ShellTool.ToolName, context.Approval.OneTimeApprovedToolName);
+        Assert.Equal(cwd, context.Approval.Cwd);
+        Assert.Equal(attempt, context.Approval.AuthorizationAttemptId);
+        Assert.Equal("existing decision", context.Approval.AppliedDecision);
+        Assert.Equal("existing pattern", context.Approval.AppliedPattern);
+        Assert.Null(context.Approval.ManagedTemporaryRetry);
+        Assert.Null(context.Receipt);
+        Assert.Empty(context.Outputs.FileAttachments);
+    }
+
+    [Theory]
+    [InlineData(ToolApprovalMode.Auto, true)]
+    [InlineData(ToolApprovalMode.Auto, false)]
+    [InlineData(ToolApprovalMode.Approval, true)]
+    [InlineData(ToolApprovalMode.Approval, false)]
+    public async Task Coordinator_selects_project_correction_from_registry_without_caller_advice(
+        ToolApprovalMode mode, bool interactive)
+    {
+        var directory = Path.GetFullPath(AppContext.BaseDirectory);
+        var config = CreateApprovalGatedShellConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[ShellTool.ToolName] = mode;
+        var paths = new NetclawPaths(directory, directory);
+        var command = ShellEnvironment.Grammar == ShellGrammar.Bash ? "pwd" : "Get-Location";
+        var shell = ShellEnvironment.Grammar == ShellGrammar.Bash ? ApprovalShell.Bash : ApprovalShell.PowerShell;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(
+            ShellEnvironment, config, SafeVerbList.FromVerbs(shell, [command]), paths: paths);
+        registry.Replace(new SetWorkingDirectoryTool(config, paths, new ToolPathPolicy(ShellEnvironment, [])));
+        var context = TestToolExecutionContext.CreateBound("signalr/project-correction", null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(interactive)
+            });
+        var coordinator = new ShellPolicyCoordinator(registry, policy, approvalService: null);
+        var call = CreateToolCall("project", ShellTool.ToolName,
+            ToolInput.Create("Command", command, "WorkingDirectory", directory));
+
+        var result = await coordinator.EvaluateAsync(registry.GetByName(ShellTool.ToolName)!, call, context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Decision.Outcome);
+        Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.Decision.AgentCorrection).Directory);
+        Assert.Null(result.AuthorizedAnalysis);
+        Assert.Null(result.Decision.ApprovalContext);
+        Assert.Null(context.Receipt);
+    }
+
+    [Theory]
+    [InlineData(ToolApprovalMode.Auto)]
+    [InlineData(ToolApprovalMode.Deny)]
+    public async Task Coordinator_temporary_advice_precedes_auto_but_not_deny(ToolApprovalMode mode)
+    {
+        var config = CreateApprovalGatedShellConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[ShellTool.ToolName] = mode;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment, config);
+        var service = new FixedShellApprovalService(_ => throw new InvalidOperationException("No grant request is permitted."));
+        var context = CreateInteractivePersonalContext("signalr/auto-temporary");
+        var call = CreateToolCall("auto-temporary", ShellTool.ToolName,
+            ToolInput.Create("Command", "git push", "WorkingDirectory", Path.GetTempPath()));
+        var result = await new ShellPolicyCoordinator(registry, policy, service).EvaluateAsync(
+            registry.GetByName(ShellTool.ToolName)!, call, context, TestContext.Current.CancellationToken);
+
+        Assert.Null(result.AuthorizedAnalysis);
+        Assert.Equal(0, service.RequestCount);
+        if (mode == ToolApprovalMode.Auto)
+        {
+            Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Decision.Outcome);
+            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.Decision.AgentCorrection);
+        }
+        else
+        {
+            Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
+            Assert.Null(result.Decision.AgentCorrections);
+        }
     }
 
     [Fact]

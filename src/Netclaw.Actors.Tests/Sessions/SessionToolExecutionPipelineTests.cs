@@ -19,6 +19,7 @@ using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tests.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
 using Netclaw.Actors.Tests.Tools;
+using Netclaw.Actors.Tests.Memory;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
@@ -239,7 +240,29 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     [Fact]
     public async Task Undeclared_project_scope_returns_agent_correction_without_user_prompt()
     {
-        var executor = new ProjectScopeDeclarationRequiredExecutor("/home/user/repos/project");
+        var directory = Path.GetFullPath(AppContext.BaseDirectory);
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [ShellTool.ToolName] = ToolApprovalMode.Approval
+            }
+        };
+        var environment = TestShellEnvironment.Current;
+        var command = environment.Grammar == ShellGrammar.Bash ? "pwd" : "Get-Location";
+        var shell = environment.Grammar == ShellGrammar.Bash ? ApprovalShell.Bash : ApprovalShell.PowerShell;
+        var paths = new NetclawPaths(directory, directory);
+        var registry = new ToolRegistry();
+        var shellTool = new FakeNetclawTool(ShellTool.ToolName, "unexpected execution");
+        registry.Register(shellTool);
+        registry.Register(new SetWorkingDirectoryTool(config, paths, new ToolPathPolicy(environment, [])));
+        var policy = new ToolAccessPolicy(paths, config,
+            new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []),
+            safeVerbs: SafeVerbList.FromVerbs(shell, [command]));
+        var executor = new DispatchingToolExecutor(registry, policy);
         var probe = CreateTestProbe("project-scope-correction-probe");
         var approvals = new List<ToolInteractionRequest>();
         var sessionId = new SessionId("D1/project-scope-correction");
@@ -247,7 +270,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         {
             new("call-1", "shell_execute", new Dictionary<string, object?>
             {
-                ["command"] = "head -40 src/file.cs"
+                ["Command"] = command,
+                ["WorkingDirectory"] = directory,
+                ["_rationale"] = "Inspect the project directory."
             })
         };
 
@@ -268,14 +293,15 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var result = Assert.Single(completed.ToolResults);
         Assert.Equal(
             "Tool execution deferred: working_directory_not_declared\n" +
-            "Project directory: '/home/user/repos/project'.\n" +
+            $"Project directory: '{directory}'.\n" +
             "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
             result.Content);
         Assert.Equal(
             ToolRemediationCode.SetWorkingDirectory,
             completed.ToolReceipts["call-1"].RemediationCode);
         Assert.Empty(approvals);
-        Assert.Equal(1, executor.Attempts);
+        Assert.False(shellTool.WasCalled);
+        Assert.Empty(completed.ManagedTemporaryCorrectionChanges);
         Assert.True(AuthorizationAttemptId.TryParse(
             completed.AuthorizationAttemptIds["call-1"].Value,
             out _));
@@ -1369,33 +1395,6 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("approved-and-ran");
-        }
-    }
-
-    private sealed class ProjectScopeDeclarationRequiredExecutor(string directory) : IToolExecutor
-    {
-        public int Attempts { get; private set; }
-
-        public Task AuthorizeAsync(
-            FunctionCallContent toolCall,
-            ToolExecutionContext? context = null,
-            CancellationToken ct = default)
-            => ExecuteAsync(toolCall, context, ct);
-
-        public Task<string> ExecuteAsync(
-            FunctionCallContent toolCall,
-            ToolExecutionContext? context = null,
-            CancellationToken ct = default)
-        {
-            Attempts++;
-            throw new ToolApprovalRequiredException(
-                new ToolApprovalContext(
-                    ToolName: toolCall.Name,
-                    DisplayText: "head -40 src/file.cs",
-                    Patterns: ["head"],
-                    CandidateVerbs: ["head"],
-                    Options: []),
-                new ToolCorrection.ProjectDirectorySuggested(directory));
         }
     }
 

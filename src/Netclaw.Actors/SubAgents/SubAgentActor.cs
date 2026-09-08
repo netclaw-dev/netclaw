@@ -841,13 +841,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _toolExecutorLogger);
         var setWorkingDirectoryTool =
             _toolRegistry.GetByName(SetWorkingDirectoryTool.ToolName) as SetWorkingDirectoryTool;
-        Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory =
-            setWorkingDirectoryTool is null
-            || !_toolAccessPolicy.IsToolExposed(
-                setWorkingDirectoryTool,
-                ToolExecutionContext.Invocation)
-                ? null
-                : setWorkingDirectoryTool.CanDeclare;
+        var setWorkingDirectoryAvailable = setWorkingDirectoryTool is not null
+            && _toolAccessPolicy.IsToolExposed(setWorkingDirectoryTool, ToolExecutionContext.Invocation);
         _toolExecutionWatchdogState = _approvalBridge is null
             ? ToolExecutionWatchdogState.None
             : ToolExecutionWatchdogState.RunningApprovalCapableTools;
@@ -861,7 +856,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             self,
             _approvalBridge,
             _managedTemporaryCorrections.Snapshot(),
-            canDeclareWorkingDirectory,
+            setWorkingDirectoryAvailable,
             _log,
             _definition.Name,
             _parentSessionId,
@@ -1400,7 +1395,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         IActorRef self,
         IParentApprovalBridge? approvalBridge,
         ManagedTemporaryCorrectionDispatch managedTemporaryCorrections,
-        Func<string, ToolInvocationContext, bool>? canDeclareWorkingDirectory,
+        bool setWorkingDirectoryAvailable,
         ILoggingAdapter logger,
         AgentName agentName,
         string? parentSessionId,
@@ -1483,24 +1478,6 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 catch (ToolApprovalRequiredException approvalEx)
                 {
                     var ctx = approvalEx.ApprovalContext;
-                    var projectScopeCorrection =
-                        SessionToolExecutionPipeline.BuildProjectScopeDeclarationCorrection(
-                            approvalEx.Correction,
-                            canDeclareWorkingDirectory is not null,
-                            toolContext.Invocation,
-                            canDeclareWorkingDirectory);
-                    if (!string.IsNullOrEmpty(projectScopeCorrection))
-                    {
-                        toolContext.Outputs.TryComplete(new ToolInvocationReceipt(
-                            ToolInvocationOutcomeCategory.RecoverableCorrection,
-                            remediationCode: ToolRemediationCode.SetWorkingDirectory));
-                        return BuildToolResult(
-                            cleanedTc,
-                            projectScopeCorrection,
-                            toolContext,
-                            modelInputBudget);
-                    }
-
                     if (approvalBridge is null)
                     {
                         throw new ParentApprovalUnavailableException(
@@ -1649,7 +1626,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     Message = ToolRemediationPresenter.Present(
                         result.Message,
                         result.Receipt,
-                        canDeclareWorkingDirectory is not null)
+                        setWorkingDirectoryAvailable)
                 };
             }
             self.Tell(new ToolExecutionCompleted

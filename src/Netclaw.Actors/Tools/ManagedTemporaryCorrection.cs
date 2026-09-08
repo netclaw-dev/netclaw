@@ -28,7 +28,7 @@ internal abstract record ToolCorrection
 
 /// <summary>Groups compatible correction facts for one tool attempt.</summary>
 /// <remarks>
-/// The collection has no authority or side effects. The caller defines the
+/// The collection has no authority or side effects. The coordinator selects the
 /// applicable facts, and the delivery factory defines response and state behavior.
 /// </remarks>
 internal sealed class ToolCorrectionCollection
@@ -77,6 +77,7 @@ internal sealed record ToolCorrectionDelivery(
         ArgumentNullException.ThrowIfNull(corrections);
 
         ToolName? nativeTool = null;
+        string? projectDirectory = null;
         ManagedTemporaryCorrectionTarget? managedTemporaryTarget = null;
         foreach (var correction in corrections.Items)
         {
@@ -89,9 +90,27 @@ internal sealed record ToolCorrectionDelivery(
                     when managedTemporaryTarget is null:
                     managedTemporaryTarget = managed.Target;
                     break;
+                case ToolCorrection.ProjectDirectorySuggested project when projectDirectory is null:
+                    projectDirectory = project.Directory;
+                    break;
                 default:
                     throw new InvalidOperationException("The correction collection has an unsupported correction or duplicate fact.");
             }
+        }
+
+        if (projectDirectory is not null)
+        {
+            if (nativeTool is not null || managedTemporaryTarget is not null)
+                throw new InvalidOperationException("Project advice cannot accompany advice that replaces its target.");
+
+            return new ToolCorrectionDelivery(
+                "Tool execution deferred: working_directory_not_declared\n" +
+                $"Project directory: '{projectDirectory}'.",
+                new ToolInvocationReceipt(
+                    ToolInvocationOutcomeCategory.RecoverableCorrection,
+                    remediationCode: ToolRemediationCode.SetWorkingDirectory),
+                NativeTool: null,
+                ManagedTemporaryStateChange: null);
         }
 
         if (nativeTool is { } replacementTool)

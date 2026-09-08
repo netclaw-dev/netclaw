@@ -680,30 +680,6 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (ToolApprovalRequiredException approvalEx)
         {
-            var projectScopeCorrection = BuildProjectScopeDeclarationCorrection(
-                approvalEx.Correction,
-                batch.SetWorkingDirectoryAvailable,
-                context.Invocation,
-                batch.CanDeclareWorkingDirectory);
-            if (!string.IsNullOrEmpty(projectScopeCorrection))
-            {
-                sw.Stop();
-                resultText = projectScopeCorrection;
-
-                var correctionReceipt = new ToolInvocationReceipt(
-                    ToolInvocationOutcomeCategory.RecoverableCorrection,
-                    remediationCode: ToolRemediationCode.SetWorkingDirectory);
-                return new ToolCallResult(new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.Tool,
-                    Content = resultText,
-                    ToolCallId = new ToolCallId(tc.CallId),
-                    Name = tc.Name
-                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
-                    authorizationAttemptId,
-                    Receipt: correctionReceipt);
-            }
-
             if (!CanRequestInteractiveApproval(batch.TurnContext))
             {
                 sw.Stop();
@@ -1294,30 +1270,6 @@ internal sealed class SessionToolExecutionPipeline
 
     private static bool CanRequestInteractiveApproval(TurnContext turnContext)
         => turnContext.SupportsInteractiveApproval && turnContext.HasApprovalRequester;
-
-    /// <summary>
-    /// Builds the agent-facing correction for reviewed-safe shell work whose
-    /// requested directory has not yet been declared as project scope.
-    /// </summary>
-    internal static string BuildProjectScopeDeclarationCorrection(
-        ToolCorrection? correction,
-        bool setWorkingDirectoryAvailable,
-        ToolInvocationContext? invocation = null,
-        Func<string, ToolInvocationContext, bool>? canDeclare = null)
-    {
-        if (!setWorkingDirectoryAvailable
-            || correction is not ToolCorrection.ProjectDirectorySuggested projectDirectory
-            || string.IsNullOrWhiteSpace(projectDirectory.Directory)
-            || invocation is not null
-                && (canDeclare is null
-                    || !canDeclare(projectDirectory.Directory, invocation)))
-        {
-            return string.Empty;
-        }
-
-        return "Tool execution deferred: working_directory_not_declared\n" +
-               $"Project directory: '{projectDirectory.Directory}'.";
-    }
 
     /// <summary>
     /// Returns a one-line agent-facing hint pointing at <c>set_working_directory</c>
