@@ -156,10 +156,13 @@ internal sealed class ShellPolicyCoordinator(
             && continuation.Correction is { } correction
             && decision.ApprovalContext is { } finalApprovalContext)
         {
-            decision = ToolAuthorizationDecision.RequiresApproval(
-                finalApprovalContext,
-                decision.ApprovalMatches,
-                correction);
+            decision = (correction is ToolCorrection.ManagedTemporaryDirectorySuggested
+                ? ToolAuthorizationDecision.RequireAgentCorrection(correction)
+                : ToolAuthorizationDecision.RequiresApproval(
+                    finalApprovalContext,
+                    decision.ApprovalMatches,
+                    correction))
+                .WithShellPolicyTrace(decision.ShellPolicyTrace);
         }
 
         return (

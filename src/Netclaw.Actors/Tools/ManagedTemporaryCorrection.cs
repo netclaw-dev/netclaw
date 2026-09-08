@@ -58,14 +58,21 @@ internal sealed class ToolCorrectionCollection
     internal IReadOnlyList<ToolCorrection> Items => _items;
 }
 
-/// <summary>Formats correction facts for the current native-tool response path.</summary>
-/// <remarks>
-/// The response requires one native-tool fact. It can include one managed-temporary fact.
-/// A new fact requires an explicit response contract here.
-/// </remarks>
-internal static class ToolCorrectionPresentation
+/// <summary>Defines the shared correction content, receipt, and actor state change.</summary>
+internal sealed record ToolCorrectionDelivery(
+    string Content,
+    ToolInvocationReceipt Receipt,
+    ToolName? NativeTool,
+    ManagedTemporaryCorrectionChange? ManagedTemporaryStateChange)
 {
-    internal static (string Content, ToolName NativeTool) Build(ToolCorrectionCollection corrections)
+    /// <summary>Creates one delivery result from the corrections that policy selected.</summary>
+    /// <remarks>
+    /// Native-tool advice requires a new call and a fresh authorization attempt.
+    /// Temporary-only advice records one exact retry key after the result reaches the model.
+    /// </remarks>
+    internal static ToolCorrectionDelivery Create(
+        ToolCorrectionCollection corrections,
+        ManagedTemporaryCallSemantics? managedTemporaryCall)
     {
         ArgumentNullException.ThrowIfNull(corrections);
 
@@ -87,14 +94,35 @@ internal static class ToolCorrectionPresentation
             }
         }
 
-        if (nativeTool is null)
-            throw new InvalidOperationException("A shell correction collection must name a native tool.");
+        if (nativeTool is { } replacementTool)
+        {
+            var content = $"Shell execution stopped because '{replacementTool}' is a native Netclaw tool.";
+            if (managedTemporaryTarget is { } temporaryTarget)
+                content += $"\nManaged temporary directory: '{temporaryTarget.ManagedTemporaryDirectory}'.";
 
-        var content = $"Shell execution stopped because '{nativeTool.Value}' is a native Netclaw tool.";
-        if (managedTemporaryTarget is { } temporaryTarget)
-            content += $"\nManaged temporary directory: '{temporaryTarget.ManagedTemporaryDirectory}'.";
+            return new ToolCorrectionDelivery(
+                content,
+                new ToolInvocationReceipt(
+                    ToolInvocationOutcomeCategory.RecoverableCorrection,
+                    remediationCode: ToolRemediationCode.UseNativeTool),
+                replacementTool,
+                ManagedTemporaryStateChange: null);
+        }
 
-        return (content, nativeTool.Value);
+        if (managedTemporaryTarget is not { } retryTarget)
+            throw new InvalidOperationException("The correction collection has no supported delivery result.");
+
+        if (managedTemporaryCall is null)
+            throw new InvalidOperationException("A temporary correction requires exact call semantics.");
+
+        var correctionKey = new ManagedTemporaryCorrectionKey(managedTemporaryCall, retryTarget);
+        return new ToolCorrectionDelivery(
+            ManagedTemporaryCorrection.BuildSuggestion(retryTarget.ManagedTemporaryDirectory),
+            new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.RecoverableCorrection,
+                remediationCode: ToolRemediationCode.UseManagedTemporaryDirectory),
+            NativeTool: null,
+            new ManagedTemporaryCorrectionChange.Arm(correctionKey));
     }
 }
 

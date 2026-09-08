@@ -485,6 +485,15 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
         }
 
+        if (accessDecision is
+            {
+                Outcome: ToolAuthorizationOutcome.RequiresApproval,
+                AgentCorrection: ToolCorrection.ManagedTemporaryDirectorySuggested temporaryCorrection
+            })
+        {
+            accessDecision = ToolAuthorizationDecision.RequireAgentCorrection(temporaryCorrection);
+        }
+
         var authorizationDecision = CompleteAuthorizationDecision(accessDecision, approvalMatches);
         LogAuthorizationDecision(toolCall, context, authorizationDecision);
         return (authorizationDecision, null);

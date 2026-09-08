@@ -2916,7 +2916,9 @@ public class DispatchingToolExecutorTests
     [Fact]
     public async Task One_time_approval_bypasses_policy_for_path_aware_file_patterns()
     {
-        var controlPlaneRoot = Path.Combine(Path.GetTempPath(), $"netclaw-control-plane-{Guid.NewGuid():N}");
+        var controlPlaneRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            $"netclaw-control-plane-{Guid.NewGuid():N}");
         var targetPath = Path.Combine(controlPlaneRoot, "netclaw.json");
         var secondPath = Path.Combine(controlPlaneRoot, "devices.json");
         Directory.CreateDirectory(controlPlaneRoot);
@@ -4032,6 +4034,71 @@ public class DispatchingToolExecutorTests
         Assert.Null(authorization.AuthorizedAnalysis);
         Assert.Equal(0, approvalService.RequestCount);
         Assert.Null(authoritativeContext.Receipt);
+    }
+
+    [Fact]
+    public async Task Coordinator_returns_temporary_only_correction_after_approval_miss()
+    {
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
+        var approvalService = new FixedShellApprovalService(request =>
+            new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(request.Candidates
+                    .Select(candidate => new ShellGrantCandidateMatch(
+                        candidate.CandidateId,
+                        Match: null,
+                        GrantCoverage: null,
+                        NearMisses: []))
+                    .ToArray())));
+        var executor = new DispatchingToolExecutor(registry, policy, approvalService);
+        var call = CreateToolCall(
+            "call-temporary-only-correction",
+            ShellTool.ToolName,
+            ToolInput.Create(
+                "Command", "gh api repos/example/project",
+                "WorkingDirectory", Path.GetTempPath()));
+        var context = CreateInteractivePersonalContext("signalr/temporary-only-correction");
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+        Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+        Assert.Equal(1, approvalService.RequestCount);
+        await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
+            executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Structured_file_temporary_correction_becomes_common_result_after_approval_miss()
+    {
+        var config = CreateApprovalGatedShellConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[FileWriteTool.ToolName] =
+            ToolApprovalMode.Approval;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment, config);
+        var executor = new DispatchingToolExecutor(
+            registry,
+            policy,
+            new FixedApprovalService(new ToolApprovalCheckResult([FileWriteTool.ToolName], [])));
+        var call = CreateToolCall(
+            "call-structured-temporary-correction",
+            FileWriteTool.ToolName,
+            ToolInput.Create(
+                "Path", Path.Combine(Path.GetTempPath(), "netclaw-structured-output.txt"),
+                "Content", "unused"));
+        var context = CreateInteractivePersonalContext("signalr/structured-temporary-correction");
+
+        var decision = await executor.EvaluateAuthorizationAsync(
+            call,
+            context,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+        Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+        await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
+            executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
     }
 
     [Fact]

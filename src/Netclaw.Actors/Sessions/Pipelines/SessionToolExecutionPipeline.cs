@@ -661,46 +661,25 @@ internal sealed class SessionToolExecutionPipeline
         catch (ToolCorrectionRequiredException correctionEx)
         {
             sw.Stop();
-            var presentation = ToolCorrectionPresentation.Build(correctionEx.Corrections);
-            var correctionReceipt = new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: ToolRemediationCode.UseNativeTool);
+            var delivery = ToolCorrectionDelivery.Create(
+                correctionEx.Corrections,
+                managedTemporaryCall);
             return new ToolCallResult(new SerializableChatMessage
             {
                 Role = Protocol.ChatRole.Tool,
-                Content = presentation.Content,
+                Content = delivery.Content,
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
                 authorizationAttemptId,
-                Receipt: correctionReceipt,
-                ExposureRequest: new ToolExposureRequest(presentation.NativeTool));
+                Receipt: delivery.Receipt,
+                ExposureRequest: delivery.NativeTool is { } nativeTool
+                    ? new ToolExposureRequest(nativeTool)
+                    : null,
+                ManagedTemporaryCorrectionUpdate: delivery.ManagedTemporaryStateChange);
         }
         catch (ToolApprovalRequiredException approvalEx)
         {
-            if (approvalEx.Correction is ToolCorrection.ManagedTemporaryDirectorySuggested managedTemporaryCorrection
-                && managedTemporaryCall is { } correctedCall)
-            {
-                sw.Stop();
-                var correctionReceipt = new ToolInvocationReceipt(
-                    ToolInvocationOutcomeCategory.RecoverableCorrection,
-                    remediationCode: ToolRemediationCode.UseManagedTemporaryDirectory);
-                var newCorrectionKey = new ManagedTemporaryCorrectionKey(
-                    correctedCall,
-                    managedTemporaryCorrection.Target);
-                return new ToolCallResult(new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.Tool,
-                    Content = ManagedTemporaryCorrection.BuildSuggestion(
-                        managedTemporaryCorrection.Target.ManagedTemporaryDirectory),
-                    ToolCallId = new ToolCallId(tc.CallId),
-                    Name = tc.Name
-                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
-                    authorizationAttemptId,
-                    Receipt: correctionReceipt,
-                    ManagedTemporaryCorrectionUpdate: new ManagedTemporaryCorrectionChange.Arm(newCorrectionKey));
-            }
-
             var projectScopeCorrection = BuildProjectScopeDeclarationCorrection(
                 approvalEx.Correction,
                 batch.SetWorkingDirectoryAvailable,

@@ -401,6 +401,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             result.Content);
         Assert.Equal(ToolRemediationCode.UseNativeTool, completed.ToolReceipts["call-native-temporary-collection"].RemediationCode);
         Assert.Equal("file_write", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
+        Assert.Empty(completed.ManagedTemporaryCorrectionChanges);
     }
 
     [Fact]
@@ -442,6 +443,61 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.DoesNotContain("Managed temporary directory", result.Content, StringComparison.Ordinal);
         Assert.Equal(ToolRemediationCode.UseNativeTool, completed.ToolReceipts["call-native-read-without-temporary"].RemediationCode);
         Assert.Equal("file_read", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
+    }
+
+    [Theory]
+    [InlineData(ShellTool.ToolName)]
+    [InlineData(FileWriteTool.ToolName)]
+    public async Task Temporary_only_policy_result_uses_the_common_correction_delivery(
+        string toolName)
+    {
+        var executor = CreateApprovalGatedShellExecutor();
+        var probe = CreateTestProbe("temporary-only-policy-result");
+        var sessionId = new SessionId("D1/temporary-only-policy-result");
+        var arguments = toolName == ShellTool.ToolName
+            ? new Dictionary<string, object?>
+            {
+                ["Command"] = "gh api repos/example/project",
+                ["WorkingDirectory"] = Path.GetTempPath(),
+                ["_rationale"] = "Inspect a disposable diagnostic artifact."
+            }
+            : new Dictionary<string, object?>
+            {
+                ["Path"] = Path.Combine(Path.GetTempPath(), "netclaw-structured-output.txt"),
+                ["Content"] = "unused",
+                ["_rationale"] = "Write a disposable diagnostic artifact."
+            };
+        var call = new FunctionCallContent(
+            $"call-temporary-only-{toolName}",
+            toolName,
+            arguments);
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, [call], sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .InSessionDirectory(ManagedTemporarySessionDirectory)
+            .WithApprovals(
+                new ApprovalChannel(),
+                _ => throw new InvalidOperationException("The correction must not prompt."),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal(
+            "Tool execution deferred: use_managed_temporary_directory\n" +
+            $"Managed temporary directory: '{TestManagedTemporaryDirectory}'.\n" +
+            "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths.",
+            result.Content);
+        Assert.Equal(
+            ToolRemediationCode.UseManagedTemporaryDirectory,
+            completed.ToolReceipts[call.CallId].RemediationCode);
+        Assert.IsType<ManagedTemporaryCorrectionChange.Arm>(
+            Assert.Single(completed.ManagedTemporaryCorrectionChanges));
+        Assert.Empty(completed.ToolExposureRequests);
     }
 
     [Fact]
@@ -1447,13 +1503,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             FunctionCallContent toolCall,
             ToolExecutionContext? context = null,
             CancellationToken ct = default)
-            => throw new ToolApprovalRequiredException(
-                new ToolApprovalContext(
-                    ToolName: toolCall.Name,
-                    DisplayText: Command,
-                    Patterns: ["gh api"],
-                    CandidateVerbs: ["gh api"],
-                    Options: []),
+            => throw new ToolCorrectionRequiredException(
                 new ToolCorrection.ManagedTemporaryDirectorySuggested(Key.Target));
     }
 

@@ -1466,40 +1466,23 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 }
                 catch (ToolCorrectionRequiredException correctionEx)
                 {
-                    // The coordinator selects all compatible correction facts.
-                    // The child presents them and requests the named native tool for the next model turn.
-                    var presentation = ToolCorrectionPresentation.Build(correctionEx.Corrections);
-                    toolContext.Outputs.TryComplete(new ToolInvocationReceipt(
-                        ToolInvocationOutcomeCategory.RecoverableCorrection,
-                        remediationCode: ToolRemediationCode.UseNativeTool));
+                    var delivery = ToolCorrectionDelivery.Create(
+                        correctionEx.Corrections,
+                        managedTemporaryCall);
+                    toolContext.Outputs.TryComplete(delivery.Receipt);
                     return BuildToolResult(
                         cleanedTc,
-                        presentation.Content,
+                        delivery.Content,
                         toolContext,
                         modelInputBudget,
-                        exposureRequest: new ToolExposureRequest(presentation.NativeTool));
+                        delivery.ManagedTemporaryStateChange,
+                        delivery.NativeTool is { } nativeTool
+                            ? new ToolExposureRequest(nativeTool)
+                            : null);
                 }
                 catch (ToolApprovalRequiredException approvalEx)
                 {
                     var ctx = approvalEx.ApprovalContext;
-                    if (approvalEx.Correction is ToolCorrection.ManagedTemporaryDirectorySuggested managedTemporaryCorrection
-                        && managedTemporaryCall is { } correctedCall)
-                    {
-                        toolContext.Outputs.TryComplete(new ToolInvocationReceipt(
-                            ToolInvocationOutcomeCategory.RecoverableCorrection,
-                            remediationCode: ToolRemediationCode.UseManagedTemporaryDirectory));
-                        var newCorrectionKey = new ManagedTemporaryCorrectionKey(
-                            correctedCall,
-                            managedTemporaryCorrection.Target);
-                        return BuildToolResult(
-                            cleanedTc,
-                            ManagedTemporaryCorrection.BuildSuggestion(
-                                managedTemporaryCorrection.Target.ManagedTemporaryDirectory),
-                            toolContext,
-                            modelInputBudget,
-                            new ManagedTemporaryCorrectionChange.Arm(newCorrectionKey));
-                    }
-
                     var projectScopeCorrection =
                         SessionToolExecutionPipeline.BuildProjectScopeDeclarationCorrection(
                             approvalEx.Correction,
