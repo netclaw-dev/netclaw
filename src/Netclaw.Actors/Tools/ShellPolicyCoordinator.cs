@@ -151,19 +151,8 @@ internal sealed class ShellPolicyCoordinator(
             toolCall,
             context,
             projection,
+            continuation.Correction,
             cancellationToken);
-        if (decision.Outcome == ToolAuthorizationOutcome.RequiresApproval
-            && continuation.Correction is { } correction
-            && decision.ApprovalContext is { } finalApprovalContext)
-        {
-            decision = (correction is ToolCorrection.ManagedTemporaryDirectorySuggested
-                ? ToolAuthorizationDecision.RequireAgentCorrection(correction)
-                : ToolAuthorizationDecision.RequiresApproval(
-                    finalApprovalContext,
-                    decision.ApprovalMatches,
-                    correction))
-                .WithShellPolicyTrace(decision.ShellPolicyTrace);
-        }
 
         return (
             decision,
@@ -201,6 +190,7 @@ internal sealed class ShellPolicyCoordinator(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         ShellPolicyProjection projection,
+        ToolCorrection? correction,
         CancellationToken cancellationToken)
     {
         var evaluation = new ShellPolicyEvaluation(projection);
@@ -211,6 +201,7 @@ internal sealed class ShellPolicyCoordinator(
                 toolCall,
                 context,
                 evaluation,
+                correction,
                 cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -229,6 +220,7 @@ internal sealed class ShellPolicyCoordinator(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         ShellPolicyEvaluation evaluation,
+        ToolCorrection? correction,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
@@ -239,7 +231,7 @@ internal sealed class ShellPolicyCoordinator(
                 candidate.Candidate.Shell is null
                 || candidate.Candidate.VerbTokens is null))
         {
-            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name);
+            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, correction);
         }
 
         var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
@@ -272,7 +264,7 @@ internal sealed class ShellPolicyCoordinator(
                     intentDirectory,
                     candidate.IntentFallbackDirectories)))
         {
-            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name);
+            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, correction);
         }
         cancellationToken.ThrowIfCancellationRequested();
 
@@ -347,7 +339,7 @@ internal sealed class ShellPolicyCoordinator(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return CompleteFinal(evaluation, context);
+        return CompleteFinal(evaluation, context, correction);
     }
 
     private static void ApplyReviewedSafeCoverage(
@@ -396,18 +388,20 @@ internal sealed class ShellPolicyCoordinator(
 
     private static ToolAuthorizationDecision CompleteFinal(
         ShellPolicyEvaluation evaluation,
-        ToolExecutionContext context)
+        ToolExecutionContext context,
+        ToolCorrection? correction)
     {
         var projection = evaluation.Projection;
         var approvalMatches = evaluation.ApprovalMatches;
         var uncovered = evaluation.UncoveredCandidates;
         if (uncovered.Count > 0)
         {
-            return evaluation.Complete(
-                ToolAuthorizationDecision.RequiresApproval(
-                    evaluation.GetUncoveredApprovalContext(
-                        ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context)),
-                    approvalMatches));
+            return CompleteApprovalOrCorrection(
+                evaluation,
+                evaluation.GetUncoveredApprovalContext(
+                    ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context)),
+                approvalMatches,
+                correction);
         }
 
         if (!evaluation.AllCovered)
@@ -453,15 +447,34 @@ internal sealed class ShellPolicyCoordinator(
 
     private static ToolAuthorizationDecision CompleteOneTimeOrPrompt(
         ShellPolicyEvaluation evaluation,
-        string toolName)
+        string toolName,
+        ToolCorrection? correction)
     {
         var projection = evaluation.Projection;
         return projection.HasExactOneTimeApproval(toolName, projection.ApprovalContext)
             ? evaluation.Complete(
                 ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval),
                 allowsUncoveredOneTime: true)
-            : evaluation.Complete(
-                ToolAuthorizationDecision.RequiresApproval(projection.ApprovalContext));
+            : CompleteApprovalOrCorrection(
+                evaluation,
+                projection.ApprovalContext,
+                [],
+                correction);
+    }
+
+    private static ToolAuthorizationDecision CompleteApprovalOrCorrection(
+        ShellPolicyEvaluation evaluation,
+        ToolApprovalContext approvalContext,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches,
+        ToolCorrection? correction)
+    {
+        var decision = correction is ToolCorrection.ManagedTemporaryDirectorySuggested
+            ? ToolAuthorizationDecision.RequireAgentCorrection(correction, approvalMatches)
+            : ToolAuthorizationDecision.RequiresApproval(
+                approvalContext,
+                approvalMatches,
+                correction);
+        return evaluation.Complete(decision);
     }
 
     private static ToolAuthorizationDecision Complete(

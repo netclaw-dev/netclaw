@@ -26,6 +26,7 @@ internal enum ShellPolicyTraceOutcome
     RequiresApproval = 3,
     Deny = 4,
     TraceTruncated = 5,
+    RequiresAgentCorrection = 6,
 }
 
 internal enum ShellPolicyTraceReason
@@ -53,6 +54,7 @@ internal enum ShellPolicyTraceReason
     ApprovalExemptShellCandidates = 20,
     TraceLimitReached = 21,
     PolicyDenied = 22,
+    AgentCorrection = 23,
 }
 
 internal enum ShellScopeRelation
@@ -287,6 +289,9 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             ToolAuthorizationOutcome.RequiresApproval => (
                 ShellPolicyTraceOutcome.RequiresApproval,
                 ShellPolicyTraceReason.UncoveredCandidates),
+            ToolAuthorizationOutcome.RequiresAgentCorrection => (
+                ShellPolicyTraceOutcome.RequiresAgentCorrection,
+                ShellPolicyTraceReason.AgentCorrection),
             ToolAuthorizationOutcome.Denied => (
                 ShellPolicyTraceOutcome.Deny,
                 ToTraceReason(decision.DenyReason)),

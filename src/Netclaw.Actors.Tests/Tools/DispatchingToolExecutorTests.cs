@@ -3952,6 +3952,11 @@ public class DispatchingToolExecutorTests
         Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
         var correction = Assert.IsType<ToolCorrection.NativeToolSuggested>(decision.AgentCorrection);
         Assert.Equal("file_read", correction.ToolName.Value);
+        var completion = Assert.Single(
+            decision.ShellPolicyTrace.Rows,
+            row => row.Stage == ShellPolicyTraceStage.Completion);
+        Assert.Equal(ShellPolicyTraceOutcome.RequiresAgentCorrection, completion.Outcome);
+        Assert.Equal(ShellPolicyTraceReason.AgentCorrection, completion.Reason);
 
         var exception = await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
             _executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
@@ -4040,22 +4045,41 @@ public class DispatchingToolExecutorTests
     public async Task Coordinator_returns_temporary_only_correction_after_approval_miss()
     {
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
+        ToolApprovalMatch? approvedMatch = null;
         var approvalService = new FixedShellApprovalService(request =>
-            new ShellApprovalMatchResult(
-                new PersistentGrantStoreStatus.Ready(),
-                Array.AsReadOnly(request.Candidates
-                    .Select(candidate => new ShellGrantCandidateMatch(
+        {
+            Assert.Equal(2, request.Candidates.Count);
+            var matches = request.Candidates.Select((candidate, index) =>
+            {
+                if (index != 0)
+                {
+                    return new ShellGrantCandidateMatch(
                         candidate.CandidateId,
                         Match: null,
                         GrantCoverage: null,
-                        NearMisses: []))
-                    .ToArray())));
+                        NearMisses: []);
+                }
+
+                approvedMatch = new ToolApprovalMatch(
+                    candidate.Candidate.Verb,
+                    "session",
+                    "this chat");
+                return new ShellGrantCandidateMatch(
+                    candidate.CandidateId,
+                    approvedMatch,
+                    ShellCoverageKind.Session,
+                    NearMisses: []);
+            }).ToArray();
+            return new ShellApprovalMatchResult(
+                new PersistentGrantStoreStatus.Ready(),
+                Array.AsReadOnly(matches));
+        });
         var executor = new DispatchingToolExecutor(registry, policy, approvalService);
         var call = CreateToolCall(
             "call-temporary-only-correction",
             ShellTool.ToolName,
             ToolInput.Create(
-                "Command", "gh api repos/example/project",
+                "Command", "gh api repos/example/project && git push",
                 "WorkingDirectory", Path.GetTempPath()));
         var context = CreateInteractivePersonalContext("signalr/temporary-only-correction");
 
@@ -4066,6 +4090,13 @@ public class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
         Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
+        Assert.NotNull(approvedMatch);
+        Assert.Equal(approvedMatch, Assert.Single(decision.ApprovalMatches));
+        var completion = Assert.Single(
+            decision.ShellPolicyTrace.Rows,
+            row => row.Stage == ShellPolicyTraceStage.Completion);
+        Assert.Equal(ShellPolicyTraceOutcome.RequiresAgentCorrection, completion.Outcome);
+        Assert.Equal(ShellPolicyTraceReason.AgentCorrection, completion.Reason);
         Assert.Equal(1, approvalService.RequestCount);
         await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
             executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));

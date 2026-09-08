@@ -204,6 +204,7 @@ internal sealed class ShellPolicyEvaluation
                                                 || allowsUncoveredOneTime
                                                 && decision.AllowReason == ToolAllowReason.OneTimeApproval,
             ToolAuthorizationOutcome.RequiresApproval => Candidates.Count == 0 || !AllCovered,
+            ToolAuthorizationOutcome.RequiresAgentCorrection => Candidates.Count == 0 || !AllCovered,
             ToolAuthorizationOutcome.Denied => true,
             _ => false,
         };

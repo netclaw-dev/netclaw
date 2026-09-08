@@ -491,7 +491,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 AgentCorrection: ToolCorrection.ManagedTemporaryDirectorySuggested temporaryCorrection
             })
         {
-            accessDecision = ToolAuthorizationDecision.RequireAgentCorrection(temporaryCorrection);
+            accessDecision = ToolAuthorizationDecision.RequireAgentCorrection(
+                temporaryCorrection,
+                approvalMatches);
         }
 
         var authorizationDecision = CompleteAuthorizationDecision(accessDecision, approvalMatches);

@@ -32,7 +32,7 @@ internal enum ToolAuthorizationOutcome
     RequiresApproval,
 
     /// <summary>
-    /// The current attempt must not execute because the agent should call a native tool.
+    /// The current attempt must not execute because the agent must author a replacement call.
     /// </summary>
     RequiresAgentCorrection,
 
@@ -224,6 +224,7 @@ public sealed record ToolAuthorizationDecision
     /// A prompt decision can contain partial matches for a compound command.
     /// An allowed stored-approval decision contains a match for each required candidate.
     /// A one-time decision can contain stored matches for part of a compound command.
+    /// A correction decision can retain matches found before the correction became final.
     /// Policy, safe-rule, approval-exempt, and deny decisions contain an empty list.
     /// </remarks>
     internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches { get; }
@@ -318,11 +319,28 @@ public sealed record ToolAuthorizationDecision
         => RequireAgentCorrection(new ToolCorrectionCollection([correction]));
 
     /// <summary>
+    /// Creates a typed agent-correction result with prior stored approval matches.
+    /// </summary>
+    internal static ToolAuthorizationDecision RequireAgentCorrection(
+        ToolCorrection correction,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+        => RequireAgentCorrection(new ToolCorrectionCollection([correction]), approvalMatches);
+
+    /// <summary>
     /// Creates a typed agent-correction result that grants no execution authority.
     /// </summary>
     internal static ToolAuthorizationDecision RequireAgentCorrection(ToolCorrectionCollection corrections)
+        => RequireAgentCorrection(corrections, []);
+
+    /// <summary>
+    /// Creates a typed agent-correction result with prior stored approval matches.
+    /// </summary>
+    internal static ToolAuthorizationDecision RequireAgentCorrection(
+        ToolCorrectionCollection corrections,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches)
     {
         ArgumentNullException.ThrowIfNull(corrections);
+        ArgumentNullException.ThrowIfNull(approvalMatches);
         return new ToolAuthorizationDecision(
             ToolAuthorizationOutcome.RequiresAgentCorrection,
             null,
@@ -330,7 +348,7 @@ public sealed record ToolAuthorizationDecision
             null,
             null,
             corrections,
-            []);
+            [.. approvalMatches]);
     }
 
     internal ToolAuthorizationDecision WithShellPolicyTrace(ShellPolicyDecisionTrace trace)

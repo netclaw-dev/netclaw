@@ -29,7 +29,7 @@ internal abstract record ToolCorrection
 /// <summary>Groups compatible correction facts for one tool attempt.</summary>
 /// <remarks>
 /// The collection has no authority or side effects. The caller defines the
-/// required retry and receipt behavior for all correction facts.
+/// applicable facts, and the delivery factory defines response and state behavior.
 /// </remarks>
 internal sealed class ToolCorrectionCollection
 {
