@@ -29,6 +29,8 @@ temporary, and project advice from existing invocation facts and policy.
 Native advice precedes stored grants. Temporary-only and project-only advice
 retain existing stored-grant and exact one-time approval precedence.
 Corrections precede an `Auto` allow. Hard denials precede all advice.
+Reviewed diagnostics without file output retain their requested temporary directory. Normal authorization still applies.
+A redirect that writes a file or an additional unclassified command can still require relocation advice.
 Parent and child deliver the common result and retain their state and transport duties.
 Project advice requires a visible declaration tool that accepts the exact directory.
 That advice can apply without an approval bridge; temporary advice retains its interactive capability requirement.

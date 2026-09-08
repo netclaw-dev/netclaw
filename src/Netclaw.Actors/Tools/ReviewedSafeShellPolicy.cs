@@ -233,6 +233,22 @@ internal sealed class ReviewedSafeShellPolicy
         ShellPolicyResolvedPathView? resolvedPaths)
         => resolvedPaths?.HasUnprovedNonFileSystemSemantics == true;
 
+    /// <summary>Classifies diagnostic syntax without granting path or execution authority.</summary>
+    internal bool IsReviewedDiagnosticInvocation(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        ShellPathStyle pathStyle)
+    {
+        if (candidates.Count == 0)
+            return false;
+
+        var facts = ShellPolicyPathFacts.Create(candidates, pathStyle);
+        return candidates.Select((candidate, index) => IsReviewedDiagnosticSyntax(
+            candidate,
+            candidate.SourceOccurrence,
+            facts[index].Real,
+            out _)).All(static diagnostic => diagnostic);
+    }
+
     private bool IsReviewedDiagnosticSyntax(
         ApprovalCandidate candidate,
         CommandOccurrence? sourceOccurrence,

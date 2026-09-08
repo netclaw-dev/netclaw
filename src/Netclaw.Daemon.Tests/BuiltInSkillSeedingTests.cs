@@ -98,7 +98,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
             "Apply all compatible advice in a correction response before the next call",
             "A shell call can return correction advice under Auto",
             "Advice grants no authority. Every replacement call passes current policy",
-            "If you require the exact platform path, retry unchanged once through normal policy"
+            "If you require the exact platform path, retry unchanged once through normal policy",
+            "Reviewed diagnostics without file output do not receive temporary relocation advice"
         };
         foreach (var statement in statements)
         {

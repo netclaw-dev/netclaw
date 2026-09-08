@@ -4149,6 +4149,44 @@ public class DispatchingToolExecutorTests
         }
     }
 
+    [Theory]
+    [InlineData(ToolApprovalMode.Auto, "", nameof(ToolAuthorizationOutcome.Allowed))]
+    [InlineData(ToolApprovalMode.Approval, "", nameof(ToolAuthorizationOutcome.RequiresApproval))]
+    [InlineData(ToolApprovalMode.Deny, "", nameof(ToolAuthorizationOutcome.Denied))]
+    [InlineData(ToolApprovalMode.Auto, " > result.log", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]
+    [InlineData(ToolApprovalMode.Approval, " > result.log", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]
+    [InlineData(ToolApprovalMode.Deny, " > result.log", nameof(ToolAuthorizationOutcome.Denied))]
+    [InlineData(ToolApprovalMode.Auto, "; git push", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]
+    [InlineData(ToolApprovalMode.Approval, "; git push", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]
+    public async Task Temporary_relocation_preserves_reviewed_diagnostics_and_normal_authority(
+        ToolApprovalMode mode, string suffix, string expected)
+    {
+        var config = CreateApprovalGatedShellConfig();
+        config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[ShellTool.ToolName] = mode;
+        var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(
+            ShellEnvironment, config, SafeVerbLoader.Load());
+        var context = CreateInteractivePersonalContext("signalr/temp-diagnostic");
+        var directory = Path.GetTempPath();
+        var diagnostic = ShellEnvironment.Grammar == ShellGrammar.Bash ? "pwd" : "Get-Location";
+        var call = CreateToolCall("temp-diagnostic", ShellTool.ToolName,
+            ToolInput.Create("Command", diagnostic + suffix, "WorkingDirectory", directory));
+
+        var result = await new ShellPolicyCoordinator(registry, policy, approvalService: null).EvaluateAsync(
+            registry.GetByName(ShellTool.ToolName)!, call, context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(expected, result.Decision.Outcome.ToString());
+        Assert.Equal(directory, call.Arguments!["WorkingDirectory"]);
+        Assert.Null(context.Receipt);
+        if (expected == nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))
+            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.Decision.AgentCorrection);
+        else
+            Assert.Null(result.Decision.AgentCorrections);
+        if (expected == nameof(ToolAuthorizationOutcome.Allowed))
+            Assert.Equal(Path.GetFullPath(directory), result.AuthorizedAnalysis!.WorkingDirectory);
+        else
+            Assert.Null(result.AuthorizedAnalysis);
+    }
+
     [Fact]
     public async Task Coordinator_returns_temporary_only_correction_after_approval_miss()
     {

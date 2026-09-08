@@ -70,6 +70,7 @@ Keep shell approval friction bounded:
 10. A shell call can return correction advice under Auto. Auto removes approval prompts; it does not remove corrections.
 11. Advice grants no authority. Every replacement call passes current policy.
 12. If you require the exact platform path, retry unchanged once through normal policy.
+13. Reviewed diagnostics without file output do not receive temporary relocation advice. Normal approval and denial rules still apply.
 
 ## Project Directory
 

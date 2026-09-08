@@ -855,7 +855,15 @@ public sealed class ToolAccessPolicy
         IReadOnlyList<ApprovalCandidate> candidates,
         IDictionary<string, object?>? arguments,
         ToolInvocationContext invocation)
-        => _temporaryPathCorrectionPolicy.Evaluate(analysis, candidates, arguments, invocation);
+    {
+        var correction = _temporaryPathCorrectionPolicy.Evaluate(analysis, candidates, arguments, invocation);
+        // Diagnostic classification suppresses relocation advice only. Normal authorization still owns execution and path access.
+        return correction is not null
+               && _safeVerbPolicy is not null
+               && _safeVerbPolicy.IsReviewedDiagnosticInvocation(candidates, analysis.Environment.PathStyle)
+            ? null
+            : correction;
+    }
 
     internal ToolCorrection.ProjectDirectorySuggested? EvaluateShellProjectCorrection(
         IReadOnlyList<ApprovalCandidate> candidates,
