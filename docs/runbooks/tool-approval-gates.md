@@ -244,11 +244,12 @@ authority, if any, covers each command occurrence.
 
 | Step | Input | Output | Owner |
 |------|-------|--------|-------|
-| Preflight and syntax analysis | Original tool call, shell environment, initial cwd, audience, and run scope | ShellSyntaxTree facts followed by hard deny, path deny, approval mode, or auto allow | ShellSyntaxTree and Netclaw |
+| Preflight and syntax analysis | Original tool call, shell environment, initial cwd, audience, and run scope | Canonical analysis and access, hard-denial, mode, and channel checks | `ToolAccessPolicy` |
+| Correction collection | Canonical analysis, exposed tools, and invocation facts | Compatible advice; applicable corrections precede an Auto allow | `ShellPolicyCoordinator` |
 | Policy projection | Syntax facts plus the unchanged approval context | Stable call-local candidate IDs and immutable scope facts | Netclaw |
 | Grant match | Candidates plus one session/persistent store snapshot | One typed match or one bounded near miss per candidate | Approval actor |
 | Coverage | Grant matches, reviewed-safe policy, and an exact one-time retry | One coverage result per candidate | Netclaw |
-| Completion | All candidate coverage results | `Allowed`, `RequiresApproval`, or `Denied` | Netclaw |
+| Completion | Coverage results and applicable advice | `Allowed`, `RequiresApproval`, `RequiresAgentCorrection`, or `Denied` | `ShellPolicyCoordinator` |
 
 The coordinator does not rewrite the original command. A prompt and an eventual
 execution still refer to the exact tool call the model authored. Candidate IDs
@@ -260,6 +261,7 @@ The coordinator returns one closed result shape:
 |---------|---------------|-------------|
 | `Allowed` | One allow reason and any stored matches that helped cover the call | Execute the original tool call |
 | `RequiresApproval` | A narrowed approval context plus any partial stored matches | Prompt only for the uncovered candidates |
+| `RequiresAgentCorrection` | The complete compatible collection and any prior approval matches | Deliver the advice without execution, a prompt, or a new grant |
 | `Denied` | One stable deny reason | Return the denial without execution or prompt |
 
 The important value-domain rules are:
@@ -405,6 +407,80 @@ Suppose the store has a Bash token-prefix grant for `git status` under
 an `OutsideDirectory` near miss. The candidate remains uncovered, so the final
 output is `RequiresApproval`. A same-verb grant is diagnostic evidence, not
 authority for a peer directory.
+
+### Checked process startup
+
+The dispatcher keeps the exact authorized command and directory in `ShellProcessLaunch`.
+It copies the approval state for that invocation and retains the child environment.
+The launch requires an absolute directory; its callers select that directory before construction.
+
+The launch follows this sequence:
+
+1. Check cancellation and current command and path policy.
+2. Prepare the managed temporary directory and the child environment.
+3. Capture known path targets and check current authority.
+4. Repeat the hard checks and reject changed path targets.
+5. Start one process without another await or actor message.
+
+A queued command with a valid grant can start once.
+A queued command whose grant was revoked fails without a process.
+These checks narrow filesystem races; they do not provide an OS sandbox.
+
+The foreground caller owns cancellation and process disposal.
+The background start task owns the process until the job actor adopts it.
+Actor stop cancels startup and reclaims a process that was not adopted.
+The job actor retains timeout, cancellation, output capture, and completion duties.
+It drains stdout and stderr to a bounded log while the process runs.
+`check_background_job` returns the current output tail and log path.
+Capture waits for complete lines, so output without a newline can remain buffered until EOF.
+
+### Maintainer boundaries
+
+Use [the engineering glossary](../spec/GLOSSARY.md) for shared terms.
+The coordinator owns shell correction selection.
+`TemporaryPathCorrectionPolicy` supplies directory eligibility and target facts.
+`ToolCorrectionDelivery` creates the common response, receipt, and proposed retry-state change.
+Parent and child callers deliver that result and apply their own lifecycle state.
+Their correction exception requires the complete collection; it has no single-correction adapter.
+
+The non-shell approval path still needs a single temporary-directory fact before stored grants are checked.
+`ToolAuthorizationDecision.AgentCorrection` serves that path and validates that exactly one fact exists.
+The single-fact decision factories and shared grant-evidence adapter therefore remain in use.
+The direct `ShellTool` API also retains its hard-policy contract for host callers.
+These consumers prevent blanket removal of every adapter or direct-call entry point.
+
+#### The same policy change before and after consolidation
+
+The comparison uses baseline `99cee4d2` and integrated source `03de93d5`.
+The fixed exercise redirects platform-temporary advice to the host's run-local managed directory.
+The session-storage implementation arrived separately in #2090; this comparison does not credit consolidation for that storage change.
+
+| Component | Baseline responsibility | Current responsibility for the same change |
+|-----------|-------------------------|--------------------------------------------|
+| Temporary-path policy | Select the session-directory target | Read the managed target from `ToolInvocationContext.SessionStorage` |
+| `ToolAccessPolicy` | Attach shell directory advice to an approval request | Supply deterministic shell facts; retain non-shell approval policy |
+| Shell coordinator | Complete shell approval after separate advice paths | Collect advice and select the terminal shell result |
+| Parent and child callers | Select advice within approval-exception branches | Deliver the common result and apply exact retry state |
+| Remediation presenter | Render the selected next action | Render the selected next action; it grants no authority |
+
+Changing the host's target now needs no new parent or child selection branch.
+The temporary-path policy owns target eligibility; the coordinator composes its result with other advice.
+A new correction kind still needs an explicit delivery shape and meaningful caller tests.
+This result demonstrates fewer independent decision sites, not unrestricted extension through configuration.
+
+The source inventory gives these concrete changes:
+
+- Parent and child components that select correction policy: two to zero.
+- Process-creation sites across foreground, stream, and background shell modes: three to one.
+- `ShellPolicyAuthorization` and `ToolAccessDecision` wrappers disappear; `ToolAuthorizationDecision` carries the common terminal result.
+- No old/new evaluator selector or comparison-only production implementation remains in these paths.
+- The five coordinator support files grow from 1,701 to 1,908 physical lines; this is not a code-size reduction.
+
+The count includes comments and blank lines at those exact revisions.
+It covers `ShellPolicyCoordinator`, `ShellPolicyEvaluation`, `ShellPolicyProjection`, `ShellPolicyDecisionTrace`, and `ShellApprovalEvidence`.
+It excludes callers, startup, tests, and docs and does not attribute every intervening edit to this project.
+Keep merged PR history for detailed changes and test evidence.
+Rollout, old-binary recovery checks, and real-model usability evidence remain separate from this source inventory.
 
 ### Persistent approvals
 

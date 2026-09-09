@@ -383,11 +383,6 @@ public sealed record ToolAuthorizationDecision
 
 internal sealed class ToolCorrectionRequiredException : InvalidOperationException
 {
-    internal ToolCorrectionRequiredException(ToolCorrection correction)
-        : this(new ToolCorrectionCollection([correction]))
-    {
-    }
-
     internal ToolCorrectionRequiredException(ToolCorrectionCollection corrections)
         : base("Tool invocation requires agent correction.")
     {
@@ -396,9 +391,4 @@ internal sealed class ToolCorrectionRequiredException : InvalidOperationExceptio
     }
 
     internal ToolCorrectionCollection Corrections { get; }
-
-    internal ToolCorrection Correction
-        => Corrections.Items.Count == 1
-            ? Corrections.Items[0]
-            : throw new InvalidOperationException("A scalar correction consumer received multiple corrections.");
 }

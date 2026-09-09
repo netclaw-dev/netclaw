@@ -465,7 +465,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         if (Corrections.TryGetValue(toolCall.Name, out var correction))
         {
             BeforeCorrection?.Invoke();
-            throw new ToolCorrectionRequiredException(correction);
+            throw new ToolCorrectionRequiredException(new ToolCorrectionCollection([correction]));
         }
 
         if (FailForTools.Contains(toolCall.Name))
@@ -481,7 +481,7 @@ internal sealed class FakeToolExecutor : IToolExecutor
         if (Corrections.TryGetValue(toolCall.Name, out var correction))
         {
             BeforeCorrection?.Invoke();
-            throw new ToolCorrectionRequiredException(correction);
+            throw new ToolCorrectionRequiredException(new ToolCorrectionCollection([correction]));
         }
 
         if (FailForTools.Contains(toolCall.Name))

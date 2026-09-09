@@ -3934,7 +3934,7 @@ public partial class DispatchingToolExecutorTests
 
         var exception = await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
             executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
-        var thrownCorrection = Assert.IsType<ToolCorrection.NativeToolSuggested>(exception.Correction);
+        var thrownCorrection = Assert.IsType<ToolCorrection.NativeToolSuggested>(Assert.Single(exception.Corrections.Items));
         Assert.Equal("file_read", thrownCorrection.ToolName.Value);
         Assert.Null(context.Receipt);
         Assert.Equal(0, approvalService.RequestCount);
@@ -3965,7 +3965,7 @@ public partial class DispatchingToolExecutorTests
 
         var exception = await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
             _executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken));
-        Assert.IsType<ToolCorrection.NativeToolSuggested>(exception.Correction);
+        Assert.IsType<ToolCorrection.NativeToolSuggested>(Assert.Single(exception.Corrections.Items));
     }
 
     [Fact]
@@ -4307,20 +4307,6 @@ public partial class DispatchingToolExecutorTests
         Assert.Null(context.Receipt);
     }
 
-    [Fact]
-    public void Scalar_correction_accessor_rejects_multiple_corrections()
-    {
-        var exception = new ToolCorrectionRequiredException(
-            new ToolCorrectionCollection(
-                [
-                    new ToolCorrection.NativeToolSuggested(new ToolName(FileWriteTool.ToolName)),
-                    new ToolCorrection.ManagedTemporaryDirectorySuggested(
-                        new ManagedTemporaryCorrectionTarget("/session/tmp", "/tmp"))
-                ]));
-
-        Assert.Throws<InvalidOperationException>(() => _ = exception.Correction);
-    }
-
     [Theory]
     [InlineData(ShellGrammar.Bash, "printf marker; file_read --path report.txt")]
     [InlineData(ShellGrammar.PowerShell, "Write-Output marker; file_read -Path report.txt")]
@@ -4352,7 +4338,7 @@ public partial class DispatchingToolExecutorTests
         var exception = await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
             executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken));
 
-        var correction = Assert.IsType<ToolCorrection.NativeToolSuggested>(exception.Correction);
+        var correction = Assert.IsType<ToolCorrection.NativeToolSuggested>(Assert.Single(exception.Corrections.Items));
         Assert.Equal("file_read", correction.ToolName.Value);
         Assert.False(recordingShell.WasCalled);
     }

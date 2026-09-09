@@ -1452,7 +1452,8 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         }
 
         private static ToolCorrectionRequiredException CreateCorrection()
-            => new(new ToolCorrection.NativeToolSuggested(new ToolName("file_read")));
+            => new(new ToolCorrectionCollection(
+                [new ToolCorrection.NativeToolSuggested(new ToolName("file_read"))]));
     }
 
     private static DispatchingToolExecutor CreateApprovalGatedShellExecutor()
@@ -1510,7 +1511,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             ToolExecutionContext? context = null,
             CancellationToken ct = default)
             => throw new ToolCorrectionRequiredException(
-                new ToolCorrection.ManagedTemporaryDirectorySuggested(Key.Target));
+                new ToolCorrectionCollection([new ToolCorrection.ManagedTemporaryDirectorySuggested(Key.Target)]));
     }
 
     private sealed class ManagedTemporaryRetryApprovalExecutor
