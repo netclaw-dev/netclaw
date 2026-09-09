@@ -15,6 +15,34 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public partial class DispatchingToolExecutorTests
 {
+    [Fact]
+    public async Task Background_launch_rejects_missing_trust_context_before_the_handoff()
+    {
+        using var directory = new DisposableTempDir();
+        var context = TestToolExecutionContext.CreateBound("launch/missing-boundary", directory.Path, TrustAudience.Personal);
+        var call = CreateToolCall("missing-boundary", ShellTool.ToolName, ToolInput.Create("Command", "echo rejected"));
+
+        var failure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            _executor.PrepareShellLaunchAsync(call, context, TestContext.Current.CancellationToken));
+
+        Assert.Contains("trust boundary", failure.Message);
+    }
+
+    [Fact]
+    public async Task Background_launch_rejects_a_cwd_that_depends_on_the_daemon_directory()
+    {
+        using var directory = new DisposableTempDir();
+        var context = TestToolExecutionContext.CreateBound("launch/relative", directory.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
+        var call = CreateToolCall("relative-cwd", ShellTool.ToolName,
+            ToolInput.Create("Command", "echo rejected", "WorkingDirectory", "."));
+
+        var failure = await Assert.ThrowsAsync<ShellProcessStartException>(() =>
+            _executor.PrepareShellLaunchAsync(call, context, TestContext.Current.CancellationToken));
+
+        Assert.Contains("absolute working directory", failure.Message);
+    }
+
     [Theory]
     [InlineData("normal")]
     [InlineData("stream")]
@@ -27,7 +55,8 @@ public partial class DispatchingToolExecutorTests
         var service = new FixedShellApprovalService(request =>
             LaunchGrantResult(request, ++checks == 1));
         var executor = new DispatchingToolExecutor(registry, policy, service);
-        var context = TestToolExecutionContext.CreateBound("launch/revoked", directory.Path, TrustAudience.Personal);
+        var context = TestToolExecutionContext.CreateBound("launch/revoked", directory.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var marker = Path.Combine(directory.Path, "must-not-exist.txt");
         var call = CreateToolCall("launch-revoked", ShellTool.ToolName,
             ToolInput.Create("Command", "echo forbidden > must-not-exist.txt"));
@@ -65,7 +94,8 @@ public partial class DispatchingToolExecutorTests
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var service = new FixedShellApprovalService(request => LaunchGrantResult(request, true));
         var executor = new DispatchingToolExecutor(registry, policy, service);
-        var context = TestToolExecutionContext.CreateBound("launch/exact", directory.Path, TrustAudience.Personal);
+        var context = TestToolExecutionContext.CreateBound("launch/exact", directory.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var call = CreateToolCall("launch-exact", ShellTool.ToolName,
             ToolInput.Create("Command", "echo once >> count.txt"));
         var launch = await executor.PrepareShellLaunchAsync(call, context, TestContext.Current.CancellationToken);
@@ -89,7 +119,8 @@ public partial class DispatchingToolExecutorTests
         using var directory = new DisposableTempDir();
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var executor = new DispatchingToolExecutor(registry, policy, GrantEveryShellCandidate());
-        var context = TestToolExecutionContext.CreateBound("launch/cancel", directory.Path, TrustAudience.Personal);
+        var context = TestToolExecutionContext.CreateBound("launch/cancel", directory.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var call = CreateToolCall("launch-cancel", ShellTool.ToolName,
             ToolInput.Create("Command", "echo forbidden > cancelled.txt"));
         var launch = await executor.PrepareShellLaunchAsync(call, context, TestContext.Current.CancellationToken);
@@ -107,7 +138,8 @@ public partial class DispatchingToolExecutorTests
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var service = new FixedShellApprovalService(request => LaunchGrantResult(request, false));
         var executor = new DispatchingToolExecutor(registry, policy, service);
-        var context = TestToolExecutionContext.CreateBound("launch/one-time", directory.Path, TrustAudience.Personal);
+        var context = TestToolExecutionContext.CreateBound("launch/one-time", directory.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var call = CreateToolCall("launch-one-time", ShellTool.ToolName,
             ToolInput.Create("Command", "echo approved > once.txt"));
         var decision = await executor.EvaluateAuthorizationAsync(call, context, TestContext.Current.CancellationToken);
@@ -147,7 +179,8 @@ public partial class DispatchingToolExecutorTests
             return LaunchGrantResult(request, true);
         });
         var executor = new DispatchingToolExecutor(registry, policy, service);
-        var context = TestToolExecutionContext.CreateBound("launch/causal", directory.Path, TrustAudience.Personal);
+        var context = TestToolExecutionContext.CreateBound("launch/causal", directory.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var call = CreateToolCall("launch-causal", ShellTool.ToolName,
             ToolInput.Create("Command", $"cd '{alias}' && echo forbidden > marker.txt; head result.log"));
         var launch = await executor.PrepareShellLaunchAsync(call, context, TestContext.Current.CancellationToken);

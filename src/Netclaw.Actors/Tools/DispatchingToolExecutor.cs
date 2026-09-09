@@ -506,6 +506,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         ToolExecutionContext context,
         CancellationToken ct)
     {
+        if (context.RunScope.Session is not ToolSessionScope.Bound || context.Boundary is null)
+            throw new InvalidOperationException("A background launch requires a bound session and a trust boundary.");
+
         var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
         if (authorized.Tool is not ShellTool shellTool || authorized.AuthorizedAnalysis is not { } analysis)
             throw new InvalidOperationException("Background execution requires an authorized shell tool.");

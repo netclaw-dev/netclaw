@@ -38,6 +38,8 @@ public sealed class ShellProcessLaunch
         Command = command;
         WorkingDirectory = context.ResolveShellCwd(workingDirectory)
             ?? throw new InvalidOperationException("Shell execution requires a working directory.");
+        if (!Path.IsPathFullyQualified(WorkingDirectory))
+            throw new ShellProcessStartException("Shell execution requires an absolute working directory.");
         _context = context;
         _commandPolicy = commandPolicy;
         _pathPolicy = pathPolicy;

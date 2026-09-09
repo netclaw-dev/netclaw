@@ -313,6 +313,7 @@ Rules:
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
 - Submission confirms acceptance. A queued job still needs a policy check when its slot opens.
 - The job keeps its exact command, cwd, shell, and child environment while it waits.
+- Use an absolute `WorkingDirectory`, or omit it to use the session or project directory.
 - A revoked grant or a newly protected path can cause a failed launch. Read the job result before another request.
 - A background job keeps its own lifetime after submission. Use its job identifier to cancel it.
 - Job definitions persist to `~/.netclaw/jobs/{id}.json` until 24 hours after

@@ -3,7 +3,7 @@
 ### Requirement: Every routed shell launch checks current authority
 
 Normal, streamed, and background shell calls SHALL use the same checked process start boundary.
-The boundary SHALL retain the exact command, cwd, shell identity, and child environment.
+The boundary SHALL retain the exact command, absolute cwd, shell identity, and child environment.
 It SHALL check current policy before launch and reject a denied, corrected, or cancelled request without a process.
 One accepted launch request SHALL start at most one process.
 See the [engineering glossary](../../../../../docs/spec/GLOSSARY.md) for shared terms.
@@ -23,6 +23,11 @@ See the [engineering glossary](../../../../../docs/spec/GLOSSARY.md) for shared 
 - **GIVEN** a queued command refers to an allowed path
 - **WHEN** that path becomes a link to protected storage
 - **THEN** the launch fails without a process
+
+#### Scenario: Relative cwd cannot bind the launch
+- **WHEN** a shell request supplies a relative working directory
+- **THEN** the request fails before process creation
+- **AND** it does not inherit the daemon directory
 
 #### Scenario: Cancellation precedes launch
 - **WHEN** the process owner cancels the request before launch
