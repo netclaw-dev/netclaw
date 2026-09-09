@@ -56,7 +56,9 @@ public sealed class SqliteSessionStorageResolver : ISessionStorageResolver
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = paths.SqliteDbPath,
-            Mode = SqliteOpenMode.ReadWriteCreate
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            // Cache misses own their native connection; shared pool state and reclamation cannot affect the transaction.
+            Pooling = false
         }.ToString();
         _sessionsDirectory = Path.GetFullPath(sessionsDirectory);
         _sessionLogsDirectory = paths.SessionLogsDirectory;

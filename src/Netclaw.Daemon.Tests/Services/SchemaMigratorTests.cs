@@ -174,7 +174,7 @@ public sealed class SchemaMigratorTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        SqliteTestPools.Clear(_paths);
         _dir.Dispose();
     }
 }

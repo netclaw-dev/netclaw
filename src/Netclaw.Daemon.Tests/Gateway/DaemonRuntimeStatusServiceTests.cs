@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using System.Net;
 using Microsoft.Extensions.AI;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
@@ -115,14 +114,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         if (!Directory.Exists(path))
             return;
 
-        // Clear only the connection pool for THIS test's database, not all pools.
-        // Using ClearAllPools() would interfere with other parallel tests.
-        var dbPath = Path.Combine(path, "netclaw.db");
-        if (File.Exists(dbPath))
-        {
-            var connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
-            SqliteConnection.ClearPool(new SqliteConnection(connectionString));
-        }
+        SqliteTestPools.Clear(new NetclawPaths(path));
 
         for (var i = 0; i < 8; i++)
         {

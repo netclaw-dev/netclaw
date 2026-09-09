@@ -23,7 +23,7 @@ public sealed class SessionStorageResolverTests : IDisposable
 
     public void Dispose()
     {
-        SqliteConnection.ClearAllPools();
+        SqliteTestPools.Clear(new NetclawPaths(_basePath));
         if (Directory.Exists(_basePath))
             Directory.Delete(_basePath, recursive: true);
     }
@@ -35,14 +35,69 @@ public sealed class SessionStorageResolverTests : IDisposable
         await MigrateAsync(paths, paths.SqliteDbPath);
         var resolver = new SqliteSessionStorageResolver(paths, new FakeTimeProvider());
         var sessionId = new SessionId("signalr/new-session");
+        using var ready = new CountdownEvent(16);
+        using var start = new ManualResetEventSlim();
 
-        var resolutions = await Task.WhenAll(
-            Enumerable.Range(0, 16)
-                .Select(_ => Task.Run(() => resolver.Resolve(sessionId))));
+        var tasks = Enumerable.Range(0, 16)
+            .Select(_ => Task.Factory.StartNew(
+                () => ResolveAfterSignal(resolver, sessionId, ready, start),
+                TestContext.Current.CancellationToken,
+                TaskCreationOptions.LongRunning,
+                TaskScheduler.Default))
+            .ToArray();
+        ready.Wait(TestContext.Current.CancellationToken);
+        start.Set();
+        var resolutions = await Task.WhenAll(tasks);
 
         var root = Assert.IsType<SessionStorageBinding>(resolutions[0].Binding).EnvelopeRoot;
         Assert.All(resolutions, result => Assert.Equal(root, result.Binding?.EnvelopeRoot));
         Assert.Equal(1, CountBindings(paths));
+    }
+
+    [Fact]
+    public async Task Resolution_does_not_inherit_state_from_a_shared_pooled_connection()
+    {
+        var paths = CreatePaths();
+        await MigrateAsync(paths, paths.SqliteDbPath);
+        using var pooledConnection = new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = paths.SqliteDbPath,
+            Mode = SqliteOpenMode.ReadWriteCreate
+        }.ToString());
+        pooledConnection.Open();
+        using (var command = pooledConnection.CreateCommand())
+        {
+            // A pool can return a native handle with state from a previous owner.
+            command.CommandText = "PRAGMA query_only=ON";
+            command.ExecuteNonQuery();
+        }
+        pooledConnection.Close();
+
+        var storage = new SqliteSessionStorageResolver(paths, new FakeTimeProvider())
+            .Resolve(new SessionId("signalr/isolated-connection"));
+
+        Assert.NotNull(storage.Binding);
+        Assert.Equal(1, CountBindings(paths));
+    }
+
+    [Fact]
+    public async Task Fixture_cleanup_preserves_another_database_pool()
+    {
+        var paths = CreatePaths();
+        await MigrateAsync(paths, paths.SqliteDbPath);
+        Assert.Equal(0, CountBindings(paths));
+        using var otherFixture = new SessionStorageResolverTests();
+        var otherPaths = otherFixture.CreatePaths();
+        using var otherConnection = new SqliteConnection($"Data Source={otherPaths.SqliteDbPath}");
+        otherConnection.Open();
+        var otherHandle = otherConnection.Handle;
+        otherConnection.Close();
+
+        Dispose();
+
+        Assert.False(Directory.Exists(_basePath));
+        otherConnection.Open();
+        Assert.Same(otherHandle, otherConnection.Handle);
     }
 
     [Fact]

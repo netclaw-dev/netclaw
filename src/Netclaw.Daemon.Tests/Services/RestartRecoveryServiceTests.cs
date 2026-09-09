@@ -6,7 +6,6 @@
 using System.Collections.Concurrent;
 using Akka.Actor;
 using Akka.Hosting;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -76,7 +75,7 @@ public sealed class RestartRecoveryServiceTests : IDisposable
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
-        SqliteConnection.ClearAllPools();
+        SqliteTestPools.Clear(_paths);
         _dir.Dispose();
     }
 
