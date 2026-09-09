@@ -525,6 +525,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         if (!ReferenceEquals(tool.ShellEnvironment, _policy.ShellEnvironment))
             throw new InvalidOperationException("Shell execution and authorization must use the same environment.");
 
+        var workingDirectory = analysis.WorkingDirectory
+            ?? throw new InvalidOperationException("Authorized shell execution requires a working directory.");
         var launchContext = new ToolExecutionContext(context.RunScope, context.ExecutionTimeout);
         launchContext.Approval.RestoreAuthorizationAttemptId(context.Approval.AuthorizationAttemptId);
         if (context.Approval.OneTimeApprovedToolName is { } approvedTool)
@@ -536,11 +538,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         var exactCall = new FunctionCallContent(callId, ShellTool.ToolName, new Dictionary<string, object?>
         {
             ["Command"] = analysis.Source,
-            ["WorkingDirectory"] = analysis.WorkingDirectory
+            ["WorkingDirectory"] = workingDirectory
         });
         return tool.CreateLaunch(
             analysis.Source,
-            analysis.WorkingDirectory,
+            workingDirectory,
             launchContext.Invocation,
             async cancellationToken =>
             {

@@ -280,7 +280,8 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
             FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
             => Task.FromResult(new ShellProcessLaunch(
                 ToolArgumentHelper.GetString(toolCall.Arguments, "Command")!,
-                ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"),
+                context.ResolveShellCwd(ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"))
+                    ?? throw new InvalidOperationException("The test launch requires a working directory."),
                 context.Invocation,
                 new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
                 new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),

@@ -20,6 +20,18 @@ public sealed class ShellProcessLaunchTests
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
     [Fact]
+    public void Launch_does_not_select_a_working_directory_from_context()
+    {
+        using var directory = new DisposableTempDir();
+        var environment = TestShellEnvironment.Current;
+        var context = TestToolExecutionContext.CreateBound("launch/cwd", directory.Path, TrustAudience.Personal);
+
+        Assert.Throws<ArgumentNullException>(() => new ShellProcessLaunch(
+            "echo unexpected", null!, context.Invocation,
+            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []), static _ => Task.CompletedTask));
+    }
+
+    [Fact]
     public async Task Child_environment_remains_the_submission_snapshot()
     {
         using var directory = new DisposableTempDir();

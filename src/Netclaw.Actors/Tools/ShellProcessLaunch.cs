@@ -23,21 +23,21 @@ public sealed class ShellProcessLaunch
 
     internal ShellProcessLaunch(
         string command,
-        string? workingDirectory,
+        string workingDirectory,
         ToolInvocationContext context,
         ShellCommandPolicy commandPolicy,
         ToolPathPolicy pathPolicy,
         Func<CancellationToken, Task> authorize)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(command);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(authorize);
         if (!ReferenceEquals(commandPolicy.Environment, pathPolicy.Environment))
             throw new ArgumentException("Shell command and path policies must use the same shell environment.");
 
         Command = command;
-        WorkingDirectory = context.ResolveShellCwd(workingDirectory)
-            ?? throw new InvalidOperationException("Shell execution requires a working directory.");
+        WorkingDirectory = workingDirectory;
         if (!Path.IsPathFullyQualified(WorkingDirectory))
             throw new ShellProcessStartException("Shell execution requires an absolute working directory.");
         _context = context;
@@ -130,6 +130,8 @@ public sealed class ShellProcessLaunch
 
     private void PrepareDirectories()
     {
+        // Reject unsafe filesystem links before the child can use session temporary storage.
+        // Prepare creates the directory and sets TMPDIR, TMP, and TEMP on the child environment only.
         var temporaryError = ManagedTemporaryEnvironment.Prepare(_startInfo, Storage.ManagedTemporary);
         if (temporaryError is not null)
             throw new ShellProcessStartException(temporaryError);

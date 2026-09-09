@@ -26,7 +26,7 @@ internal static class BackgroundShellLaunchFixture
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.Personal
             });
-        return new ShellProcessLaunch(command, workingDirectory, context.Invocation,
+        return new ShellProcessLaunch(command, workingDirectory ?? sessionDirectory, context.Invocation,
             new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []),
             static _ => Task.CompletedTask);
     }

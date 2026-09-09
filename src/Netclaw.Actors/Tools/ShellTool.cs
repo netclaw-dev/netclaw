@@ -426,14 +426,18 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 
     internal ShellProcessLaunch CreateLaunch(
         string command,
-        string? workingDirectory,
+        string workingDirectory,
         ToolInvocationContext context,
         Func<CancellationToken, Task> authorize)
         => new(command, workingDirectory, context, _commandPolicy, _pathPolicy, authorize);
 
     // Direct host callers retain the public tool's hard-policy contract. Routed calls require the coordinator.
     private ShellProcessLaunch CreateDirectLaunch(string command, string? workingDirectory, ToolInvocationContext context)
-        => CreateLaunch(command, workingDirectory, context, static _ => Task.CompletedTask);
+    {
+        var resolvedDirectory = context.ResolveShellCwd(workingDirectory)
+            ?? throw new InvalidOperationException("Shell execution requires a working directory.");
+        return CreateLaunch(command, resolvedDirectory, context, static _ => Task.CompletedTask);
+    }
 
     private static readonly TimeSpan CoalesceInterval = TimeSpan.FromMilliseconds(500);
 
