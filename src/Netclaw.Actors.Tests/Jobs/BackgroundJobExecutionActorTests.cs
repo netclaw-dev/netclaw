@@ -3,11 +3,17 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Tools;
+using Netclaw.Actors.Tests.Tools;
+using Netclaw.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tests.Utilities;
@@ -66,8 +72,57 @@ public class BackgroundJobExecutionActorTests : TestKit
             definition,
             outputPath,
             TimeProvider.System,
-            environment ?? ShellEnvironment));
+            BackgroundShellLaunchFixture.Create(
+                definition.Command, _dir.Path, definition.SessionId.Value, environment ?? ShellEnvironment, definition.WorkingDirectory)));
         return Sys.ActorOf(ForwardingParent.Props(props, probe), $"exec-{definition.Id}");
+    }
+
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    [SlopwatchSuppress("SW001", "This test uses the native Bash TCP redirection and process identifier.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Native Bash process ownership proof")]
+    public async Task Stop_before_actor_adoption_reclaims_the_real_process()
+    {
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var command = $"printf '%s\\n' $$ > /dev/tcp/127.0.0.1/{port}; sleep 120";
+        var definition = MakeDefinition(command);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var context = TestToolExecutionContext.CreateBound("test/thread", _dir.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
+        var launch = new ShellProcessLaunch(command, _dir.Path, context.Invocation,
+            new ShellCommandPolicy(ShellEnvironment), new ToolPathPolicy(ShellEnvironment, []), async ct =>
+            {
+                entered.SetResult();
+                await release.Task.WaitAsync(ct);
+            });
+        var actor = Sys.ActorOf(Props.Create(() => new BackgroundJobExecutionActor(
+            definition, _store.GetOutputLogPath(definition.Id), TimeProvider.System, launch)));
+        await WatchAsync(actor);
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        // System messages precede user messages. Suspend prevents adoption but still permits Stop.
+        ((IInternalActorRef)actor).Suspend();
+        release.SetResult();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        try
+        {
+            using var connection = await listener.AcceptTcpClientAsync(deadline.Token);
+            using var reader = new StreamReader(connection.GetStream());
+            var pid = int.Parse((await reader.ReadLineAsync(deadline.Token))!);
+            using var process = Process.GetProcessById(pid);
+            Assert.False(process.HasExited);
+            Sys.Stop(actor);
+            await ExpectTerminatedAsync(actor, cancellationToken: deadline.Token);
+            await process.WaitForExitAsync(deadline.Token);
+            Assert.True(process.HasExited);
+        }
+        finally
+        {
+            Sys.Stop(actor);
+        }
     }
 
     [Fact]

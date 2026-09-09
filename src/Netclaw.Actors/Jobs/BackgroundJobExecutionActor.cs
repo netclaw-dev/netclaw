@@ -22,38 +22,31 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
     private readonly BackgroundJobDefinition _definition;
     private readonly string _outputLogPath;
     private readonly TimeProvider _timeProvider;
-    private readonly ShellExecutionEnvironment _environment;
+    private readonly ShellProcessLaunch _launch;
+    private readonly CancellationTokenSource _launchCancellation = new();
     private readonly ILoggingAdapter _log;
     private Process? _process;
+    private Task<Process>? _startTask;
     private ICancelable? _timeoutHandle;
 
     public BackgroundJobExecutionActor(
         BackgroundJobDefinition definition,
         string outputLogPath,
-        TimeProvider timeProvider)
-        : this(
-            definition,
-            outputLogPath,
-            timeProvider,
-            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux))
-    {
-    }
-
-    public BackgroundJobExecutionActor(
-        BackgroundJobDefinition definition,
-        string outputLogPath,
         TimeProvider timeProvider,
-        ShellExecutionEnvironment environment)
+        ShellProcessLaunch launch)
     {
         _definition = definition;
         _outputLogPath = outputLogPath;
         _timeProvider = timeProvider;
-        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
+        _launch = launch ?? throw new ArgumentNullException(nameof(launch));
         _log = Context.GetLogger();
 
         Receive<CancelBackgroundJob>(_ => HandleCancel());
         Receive<TimeoutTick>(_ => HandleTimeout());
         Receive<ProcessExited>(HandleProcessExited);
+        Receive<ProcessStarted>(HandleProcessStarted);
+        Receive<Status.Failure>(failure =>
+            ReportCompletion(BackgroundJobStatus.Failed, -1, $"Failed to start: {failure.Cause.Message}"));
     }
 
     protected override void PreStart()
@@ -61,7 +54,8 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(_outputLogPath)!);
-            SpawnProcess();
+            _startTask = _launch.StartAsync(_launchCancellation.Token);
+            _startTask.PipeTo(Self, success: process => new ProcessStarted(process));
         }
         catch (Exception ex)
         {
@@ -72,6 +66,10 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 
     protected override void PostStop()
     {
+        _launchCancellation.Cancel();
+        _launchCancellation.Dispose();
+        if (_process is null && _startTask is { } pendingStart)
+            _ = DisposeUnclaimedProcessAsync(pendingStart, _log);
         _timeoutHandle?.Cancel();
         KillProcess();
 
@@ -92,91 +90,9 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
         }
     }
 
-    private void SpawnProcess()
+    private void HandleProcessStarted(ProcessStarted started)
     {
-        var psi = _environment.CreateProcessStartInfo(_definition.Command);
-        if (string.IsNullOrWhiteSpace(_definition.ManagedTemporaryDirectory)
-            || string.IsNullOrWhiteSpace(_definition.ManagedTemporaryAuthorityRoot))
-        {
-            ReportCompletion(
-                BackgroundJobStatus.Failed,
-                -1,
-                "Error: Background job has no managed temporary storage context.");
-            return;
-        }
-
-        ManagedTemporaryLocation temporaryLocation;
-        try
-        {
-            temporaryLocation = ManagedTemporaryLocation.FromPersistedPaths(
-                _definition.ManagedTemporaryDirectory,
-                _definition.ManagedTemporaryAuthorityRoot);
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                   or IOException
-                                   or NotSupportedException
-                                   or UnauthorizedAccessException
-                                   or System.Security.SecurityException)
-        {
-            ReportCompletion(
-                BackgroundJobStatus.Failed,
-                -1,
-                $"Error preparing managed temporary directory: {ex.Message}");
-            return;
-        }
-
-        var temporaryDirectoryError = ManagedTemporaryEnvironment.Prepare(psi, temporaryLocation);
-        if (temporaryDirectoryError is not null)
-        {
-            ReportCompletion(BackgroundJobStatus.Failed, -1, temporaryDirectoryError);
-            return;
-        }
-
-        if (!string.IsNullOrWhiteSpace(_definition.WorkingDirectory))
-        {
-            // ProcessStartInfo.WorkingDirectory must point at an existing directory or
-            // Process.Start throws an opaque, platform-specific error that surfaces as a
-            // cryptic "Failed to start: ...". Report the missing directory with the mkdir
-            // remedy so the agent creates it instead of retry-looping on the opaque error.
-            if (!Directory.Exists(_definition.WorkingDirectory))
-            {
-                if (File.Exists(_definition.WorkingDirectory))
-                {
-                    ReportCompletion(BackgroundJobStatus.Failed, -1,
-                        $"Working directory '{_definition.WorkingDirectory}' is a file, not a directory.");
-                    return;
-                }
-
-                var mkdirHint = CreateDirectoryHint(_definition.WorkingDirectory);
-                ReportCompletion(BackgroundJobStatus.Failed, -1,
-                    $"Working directory '{_definition.WorkingDirectory}' does not exist. "
-                    + $"Create it first, e.g.: {mkdirHint}");
-                return;
-            }
-
-            psi.WorkingDirectory = _definition.WorkingDirectory;
-        }
-
-        try
-        {
-            _process = Process.Start(psi);
-        }
-        catch (Exception ex)
-        {
-            ReportCompletion(
-                BackgroundJobStatus.Failed,
-                -1,
-                $"Failed to start shell '{_environment.ExecutableName}' "
-                + $"at '{_environment.ExecutablePath}': {ex.Message}");
-            return;
-        }
-
-        if (_process is null)
-        {
-            ReportCompletion(BackgroundJobStatus.Failed, -1, "Process.Start returned null");
-            return;
-        }
-
+        _process = started.Process;
         _process.StandardInput.Close();
 
         _log.Info("Background job {JobId} started PID {Pid}: {Command}",
@@ -233,6 +149,31 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
         });
     }
 
+    // The start task owns the process until this actor adopts it. Stop must reclaim an undelivered result.
+    private static async Task DisposeUnclaimedProcessAsync(Task<Process> startTask, ILoggingAdapter log)
+    {
+        try
+        {
+            using var process = await startTask.ConfigureAwait(false);
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException ex)
+            {
+                log.Debug("The unclaimed background process already exited: {Error}", ex.Message);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            log.Debug("Background process startup was cancelled before ownership transfer.");
+        }
+        catch (Exception ex)
+        {
+            log.Error(ex, "Failed to reclaim a background process after its actor stopped.");
+        }
+    }
+
     private static async Task PumpToLogAsync(StreamReader reader, JobOutputLog outputLog, bool isStderr)
     {
         while (await reader.ReadLineAsync() is { } line)
@@ -240,11 +181,6 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
             await outputLog.WriteLineAsync(line, isStderr);
         }
     }
-
-    private string CreateDirectoryHint(string path)
-        => _environment.PathStyle == ShellPathStyle.Windows
-            ? $"New-Item -ItemType Directory -Force -Path '{path.Replace("'", "''", StringComparison.Ordinal)}'"
-            : $"mkdir -p -- '{path.Replace("'", "'\\''", StringComparison.Ordinal)}'";
 
     private void HandleProcessExited(ProcessExited msg)
     {
@@ -268,6 +204,7 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 
     private void HandleCancel()
     {
+        _launchCancellation.Cancel();
         _log.Info("Background job {JobId} cancellation requested", _definition.Id);
         _timeoutHandle?.Cancel();
         KillProcess();
@@ -311,6 +248,8 @@ public sealed class BackgroundJobExecutionActor : ReceiveActor
 
         Context.Stop(Self);
     }
+
+    private sealed record ProcessStarted(Process Process);
 
     private sealed record ProcessExited(int ExitCode, string? Output);
 

@@ -725,7 +725,7 @@ public class ShellToolTests
                     "WorkingDirectory",
                     root.FullName),
                 CreateExecutionContext().Invocation,
-                analysis,
+                tool.CreateLaunch(command, root.FullName, CreateExecutionContext().Invocation, static _ => Task.CompletedTask),
                 TestContext.Current.CancellationToken);
 
             Assert.Contains("protected file path", result);

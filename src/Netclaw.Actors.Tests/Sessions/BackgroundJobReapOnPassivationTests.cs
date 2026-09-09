@@ -276,6 +276,16 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
 
     private sealed class PermissiveToolExecutor : IToolExecutor
     {
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromResult(new ShellProcessLaunch(
+                ToolArgumentHelper.GetString(toolCall.Arguments, "Command")!,
+                ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"),
+                context.Invocation,
+                new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
+                new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),
+                static _ => Task.CompletedTask));
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => Task.CompletedTask;
 

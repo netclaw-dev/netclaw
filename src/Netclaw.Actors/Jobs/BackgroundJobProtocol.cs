@@ -75,16 +75,17 @@ public static partial class BackgroundJobProtocol
     /// </summary>
     public sealed record StartBackgroundJob : IBackgroundJobCommand
     {
-        public required string Command { get; init; }
-        public string? WorkingDirectory { get; init; }
-        /// <summary>Gets the directory exposed through the child process temporary variables.</summary>
-        public required string ManagedTemporaryDirectory { get; init; }
-        /// <summary>Gets the storage root that must contain the managed temporary directory.</summary>
-        public required string ManagedTemporaryStorageRoot { get; init; }
-        public required Protocol.SessionId SessionId { get; init; }
+        public required Tools.ShellProcessLaunch Launch { get; init; }
+        public string Command => Launch.Command;
+        public string WorkingDirectory => Launch.WorkingDirectory;
+        public string ManagedTemporaryDirectory => Launch.Storage.ManagedTemporary.Directory.Value;
+        public string ManagedTemporaryStorageRoot => Launch.Storage.ManagedTemporary.StorageRoot.Value;
+        public Protocol.SessionId SessionId => new(Launch.Context.SessionId
+            ?? throw new InvalidOperationException("A background launch requires a session."));
+        public TrustAudience Audience => Launch.Context.Audience;
+        public TrustBoundary Boundary => Launch.Context.Boundary
+            ?? throw new InvalidOperationException("A background launch requires a trust boundary.");
         public required string Rationale { get; init; }
-        public required TrustAudience Audience { get; init; }
-        public required TrustBoundary Boundary { get; init; }
         public required Channels.ChannelType OriginChannelType { get; init; }
 
         /// <summary>

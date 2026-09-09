@@ -634,10 +634,10 @@ internal sealed class SessionToolExecutionPipeline
                 }
                 else if (batch.BackgroundJobs is BackgroundJobDispatch.Available backgroundJobs)
                 {
-                    await _executor.AuthorizeAsync(tc, context, batch.CancellationToken);
+                    var launch = await _executor.PrepareShellLaunchAsync(tc, context, batch.CancellationToken);
                     sw.Stop();
                     var backgroundResult = await RouteToBackgroundJobAsync(
-                        tc, batch, context,
+                        tc, batch, context, launch,
                         meta, backgroundJobs.Manager,
                         // Honor the agent's requested timeout; when absent, no
                         // kill timer is armed — a background job is a detached
@@ -766,10 +766,10 @@ internal sealed class SessionToolExecutionPipeline
                     && string.Equals(tc.Name, Tools.ShellTool.ToolName, StringComparison.Ordinal)
                     && batch.BackgroundJobs is BackgroundJobDispatch.Available backgroundJobs)
                 {
-                    await _executor.AuthorizeAsync(tc, context, batch.CancellationToken);
+                    var launch = await _executor.PrepareShellLaunchAsync(tc, context, batch.CancellationToken);
                     sw.Stop();
                     var backgroundResult = await RouteToBackgroundJobAsync(
-                        tc, batch, context,
+                        tc, batch, context, launch,
                         meta, backgroundJobs.Manager,
                         // Honor the agent's requested timeout; when absent, no
                         // kill timer is armed — a background job is a detached
@@ -1025,27 +1025,11 @@ internal sealed class SessionToolExecutionPipeline
         FunctionCallContent tc,
         SessionToolBatch batch,
         ToolExecutionContext context,
+        Tools.ShellProcessLaunch launch,
         ToolCallMeta meta,
         IActorRef backgroundJobManager,
         int timeoutSeconds)
     {
-        var command = ToolArgumentHelper.GetString(tc.Arguments, "Command");
-        var workingDirectory = context.ResolveShellCwd(
-            ToolArgumentHelper.GetString(tc.Arguments, "WorkingDirectory"));
-
-        if (string.IsNullOrWhiteSpace(command))
-        {
-            var message = new SerializableChatMessage
-            {
-                Role = Protocol.ChatRole.Tool,
-                Content = "Error: background shell execution requires a 'command' parameter",
-                ToolCallId = new ToolCallId(tc.CallId),
-                Name = tc.Name
-            };
-            return new ToolCallResult(
-                message, [], [], [], [], context.Approval.AuthorizationAttemptId);
-        }
-
         // A background job inherits the submitting turn's authority context.
         // There is no safe default — defaulting a missing context to Personal
         // would silently escalate the job's audience.
@@ -1054,23 +1038,16 @@ internal sealed class SessionToolExecutionPipeline
             throw new InvalidOperationException(
                 "Background-job submission requires turn authority context; trust context cannot be defaulted.");
 
-        var storage = context.SessionStorage
-            ?? throw new InvalidOperationException("Background shell execution requires resolved session storage.");
         var startCmd = new StartBackgroundJob
         {
-            Command = command,
-            WorkingDirectory = workingDirectory,
-            ManagedTemporaryDirectory = storage.ManagedTemporary.Directory.Value,
-            ManagedTemporaryStorageRoot = storage.ManagedTemporary.StorageRoot.Value,
-            SessionId = batch.SessionId,
+            Launch = launch,
             Rationale = meta.Rationale ?? "background shell execution",
-            Audience = batch.TurnContext.Audience,
-            Boundary = batch.TurnContext.Boundary,
             OriginChannelType = channelType.Value,
             TimeoutSeconds = timeoutSeconds,
             SenderId = batch.TurnContext.RequesterSenderId
         };
 
+        batch.CancellationToken.ThrowIfCancellationRequested();
         try
         {
             var started = await backgroundJobManager.Ask<BackgroundJobStarted>(
@@ -1095,11 +1072,11 @@ internal sealed class SessionToolExecutionPipeline
             var jobInfo = new Jobs.ActiveJobInfo
             {
                 JobId = started.JobId,
-                Command = command,
+                Command = launch.Command,
                 Rationale = startCmd.Rationale,
                 StartedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds(),
-                Audience = batch.TurnContext.Audience,
-                Boundary = batch.TurnContext.Boundary,
+                Audience = startCmd.Audience,
+                Boundary = startCmd.Boundary,
                 OutputLogPath = started.OutputLogPath
             };
             return new ToolCallResult(

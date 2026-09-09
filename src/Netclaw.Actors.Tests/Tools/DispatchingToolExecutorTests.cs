@@ -19,7 +19,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public class DispatchingToolExecutorTests
+public partial class DispatchingToolExecutorTests
 {
     private const string MissingShellCommandError =
         "Error parsing arguments for tool 'shell_execute': Required parameter 'Command' is missing.";
@@ -3519,7 +3519,7 @@ public class DispatchingToolExecutorTests
     }
 
     [Fact]
-    public async Task Authorization_only_and_each_execution_use_separate_authorizations()
+    public async Task Authorization_only_does_not_replace_dispatch_or_launch_checks()
     {
         var approvalService = GrantEveryShellCandidate();
         var executor = CreateApprovalGatedShellExecutor(ShellEnvironment, approvalService);
@@ -3534,10 +3534,15 @@ public class DispatchingToolExecutorTests
                 "Inspect the current working directory."));
 
         await executor.AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
-        _ = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
-        _ = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+        Assert.Equal(1, approvalService.RequestCount);
 
+        var first = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+        Assert.Contains("Exit code: 0", first);
         Assert.Equal(3, approvalService.RequestCount);
+
+        var second = await executor.ExecuteAsync(call, context, TestContext.Current.CancellationToken);
+        Assert.Contains("Exit code: 0", second);
+        Assert.Equal(5, approvalService.RequestCount);
     }
 
     [Theory]

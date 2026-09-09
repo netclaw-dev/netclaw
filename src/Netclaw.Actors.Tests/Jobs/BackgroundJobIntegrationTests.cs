@@ -3,6 +3,13 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
+using System.Net;
+using System.Net.Sockets;
+using Microsoft.Extensions.AI;
+using Netclaw.Actors.Tools;
+using Netclaw.Actors.Tests.Tools;
+using Netclaw.Security;
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
@@ -61,17 +68,74 @@ public class BackgroundJobIntegrationTests : TestKit
 
     private StartBackgroundJob MakeStartCommand(string command, ChannelType channelType = ChannelType.Slack, string? workingDirectory = null) => new()
     {
-        Command = command,
-        ManagedTemporaryDirectory = Path.Combine(Path.GetTempPath(), "netclaw-tests", "managed-temp"),
-        ManagedTemporaryStorageRoot = Path.Combine(Path.GetTempPath(), "netclaw-tests"),
-        WorkingDirectory = workingDirectory,
-        SessionId = new SessionId("C0123ABC/1712000000.000001"),
+        Launch = BackgroundShellLaunchFixture.Create(command, _dir.Path, "C0123ABC/1712000000.000001", TestShellEnvironment.Current, workingDirectory),
         Rationale = "integration test",
-        Audience = TrustAudience.Personal,
-        Boundary = TrustBoundary.Personal,
         OriginChannelType = channelType,
         TimeoutSeconds = 30
     };
+
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    [SlopwatchSuppress("SW001", "This test uses native Bash TCP redirection and a process identifier.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Native Bash detached process proof")]
+    public async Task Dispatcher_launch_survives_submission_cancellation_and_the_manager_can_stop_it()
+    {
+        // The original manager constructor must accept the canonical identity carried by a checked launch.
+        var manager = Sys.ActorOf(Props.Create(() => new BackgroundJobManagerActor(_store, TimeProvider.System)));
+        await manager.Ask<BackgroundJobManagerHealthResponse>(GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        var port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        var command = $"printf '%s\\n' $$ > /dev/tcp/127.0.0.1/{port}; sleep 120";
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode> { [ShellTool.ToolName] = ToolApprovalMode.Auto }
+        };
+        var commandPolicy = new ShellCommandPolicy(TestShellEnvironment.Current);
+        var pathPolicy = new ToolPathPolicy(TestShellEnvironment.Current, []);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        var policy = TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy);
+        var executor = new DispatchingToolExecutor(registry, policy);
+        var context = TestToolExecutionContext.CreateBound("launch/detached", _dir.Path,
+            new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
+        using var submissionCancellation = new CancellationTokenSource();
+        var launch = await executor.PrepareShellLaunchAsync(
+            new FunctionCallContent("detached", ShellTool.ToolName, ToolInput.Create("Command", command)),
+            context, submissionCancellation.Token);
+        var request = new StartBackgroundJob
+        {
+            Launch = launch,
+            Rationale = "Verify detached lifetime.",
+            OriginChannelType = ChannelType.Tui
+        };
+        var accepted = await manager.Ask<BackgroundJobStarted>(request, TimeSpan.FromSeconds(10), submissionCancellation.Token);
+        submissionCancellation.Cancel();
+        using var deadline = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        deadline.CancelAfter(TimeSpan.FromSeconds(20));
+        try
+        {
+            using var connection = await listener.AcceptTcpClientAsync(deadline.Token);
+            using var reader = new StreamReader(connection.GetStream());
+            using var process = Process.GetProcessById(int.Parse((await reader.ReadLineAsync(deadline.Token))!));
+            Assert.False(process.HasExited);
+            var status = await manager.Ask<BackgroundJobStatusResponse>(
+                new QueryBackgroundJob(accepted.JobId, request.SessionId, request.Audience, request.Boundary),
+                TimeSpan.FromSeconds(10), deadline.Token);
+            Assert.Equal(BackgroundJobStatus.Running, status.Status);
+            await manager.Ask<BackgroundJobCancelResponse>(
+                new CancelBackgroundJob(accepted.JobId, request.SessionId, request.Audience, request.Boundary),
+                TimeSpan.FromSeconds(10), deadline.Token);
+            await process.WaitForExitAsync(deadline.Token);
+            Assert.True(process.HasExited);
+        }
+        finally
+        {
+            Sys.Stop(manager);
+        }
+    }
 
     [Fact]
     public async Task BackgroundJob_Completes_And_DeliversResult_ViaGateway()

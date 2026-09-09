@@ -1426,6 +1426,13 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         public int ExecutionBoundaryAttempts { get; private set; }
 
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+        {
+            AuthorizationAttempts++;
+            throw CreateCorrection();
+        }
+
         public Task AuthorizeAsync(
             FunctionCallContent toolCall,
             ToolExecutionContext? context = null,

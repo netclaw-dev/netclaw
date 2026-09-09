@@ -411,6 +411,16 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
 
     private sealed class EchoExecutor : IToolExecutor
     {
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromResult(new ShellProcessLaunch(
+                ToolArgumentHelper.GetString(toolCall.Arguments, "Command")!,
+                ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"),
+                context.Invocation,
+                new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
+                new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),
+                static _ => Task.CompletedTask));
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => Task.CompletedTask;
 
@@ -423,6 +433,10 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
 
     private sealed class DenyingExecutor : IToolExecutor
     {
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromException<ShellProcessLaunch>(new ToolAccessDeniedException("shell_disabled"));
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => Task.FromException(new ToolAccessDeniedException("shell_disabled"));
 

@@ -12,6 +12,7 @@ using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Actors.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using static Netclaw.Actors.Jobs.BackgroundJobProtocol;
 
@@ -55,12 +56,12 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
 
     private readonly BackgroundJobDefinitionStore _store;
     private readonly TimeProvider _timeProvider;
-    private readonly ShellExecutionEnvironment _environment;
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly ILoggingAdapter _log;
 
     private readonly HashSet<string> _activeJobIds = [];
     private readonly Queue<string> _deferredQueue = new();
+    private readonly Dictionary<string, ShellProcessLaunch> _pendingLaunches = new();
     private readonly Dictionary<string, BackgroundJobDefinition> _definitions = [];
 
     /// <summary>
@@ -74,27 +75,26 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
     /// </summary>
     public ITimerScheduler Timers { get; set; } = null!;
 
-    public BackgroundJobManagerActor(
-        BackgroundJobDefinitionStore store,
-        TimeProvider timeProvider,
-        IOperationalNotificationSink? notificationSink = null)
-        : this(
-            store,
-            timeProvider,
-            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
-            notificationSink)
-    {
-    }
-
+    /// <summary>
+    /// Retains the earlier host constructor. Each checked launch supplies its authorized shell identity.
+    /// </summary>
     public BackgroundJobManagerActor(
         BackgroundJobDefinitionStore store,
         TimeProvider timeProvider,
         ShellExecutionEnvironment environment,
         IOperationalNotificationSink? notificationSink = null)
+        : this(store, timeProvider, notificationSink)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+    }
+
+    public BackgroundJobManagerActor(
+        BackgroundJobDefinitionStore store,
+        TimeProvider timeProvider,
+        IOperationalNotificationSink? notificationSink = null)
     {
         _store = store;
         _timeProvider = timeProvider;
-        _environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _notificationSink = notificationSink ?? NullNotificationSink.Instance;
         _log = Context.GetLogger();
 
@@ -125,6 +125,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
 
     private async Task HandleStartAsync(StartBackgroundJob cmd)
     {
+        ArgumentNullException.ThrowIfNull(cmd.Launch);
         var jobId = new BackgroundJobId(Guid.NewGuid().ToString("N")[..12]);
         var now = _timeProvider.GetUtcNow();
 
@@ -148,6 +149,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
 
         _store.Save(definition);
         _definitions[jobId.Value] = definition;
+        _pendingLaunches.Add(jobId.Value, cmd.Launch);
 
         var outputLogPath = _store.GetOutputLogPathOnly(jobId);
 
@@ -167,6 +169,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
     private void HandleCompleted(BackgroundJobCompleted completed)
     {
         _activeJobIds.Remove(completed.JobId.Value);
+        _pendingLaunches.Remove(completed.JobId.Value);
 
         BackgroundJobDefinition? def = null;
         var wasReaped = false;
@@ -209,6 +212,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
                 CompletedAtMs = nowMs
             };
             _definitions[def.Id.Value] = reaped;
+            _pendingLaunches.Remove(def.Id.Value);
             _store.Save(reaped);
 
             var child = Context.Child($"job-{def.Id.Value}");
@@ -259,6 +263,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
                 CompletedAtMs = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds()
             };
             _definitions[cmd.JobId.Value] = updated;
+            _pendingLaunches.Remove(cmd.JobId.Value);
             _store.Save(updated);
             Sender.Tell(new BackgroundJobCancelResponse(cmd.JobId, true));
         }
@@ -423,6 +428,7 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
                 if (_store.DeleteJobArtifacts(def.Id))
                 {
                     _definitions.Remove(def.Id.Value);
+                    _pendingLaunches.Remove(def.Id.Value);
                     swept++;
                     _log.Info(
                         "Swept terminal background job {JobId} (status={Status}, completed_at={CompletedAtMs}) past retention window",
@@ -523,7 +529,8 @@ public sealed class BackgroundJobManagerActor : ReceiveActor, IWithTimers
                 running,
                 outputLogPath,
                 _timeProvider,
-                _environment);
+                _pendingLaunches[running.Id.Value]);
+        _pendingLaunches.Remove(running.Id.Value);
         Context.ActorOf(props, $"job-{running.Id}");
     }
 

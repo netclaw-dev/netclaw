@@ -435,7 +435,7 @@ public sealed class ToolPathPolicy
     // skips a failed resolution, while the deny-check call sites (IsDeniedAgainst,
     // CommandReferencesDeniedPath) fail closed. A blanket catch here would hide
     // that distinction and force every caller back to the same (wrong) answer.
-    private static bool TryResolveSymlinksInPath(string path, out string canonical)
+    internal static bool TryResolveSymlinksInPath(string path, out string canonical)
     {
         canonical = string.Empty;
         if (string.IsNullOrEmpty(path))
