@@ -857,23 +857,35 @@ public sealed class ToolAccessPolicy
         ToolInvocationContext invocation)
     {
         var correction = _temporaryPathCorrectionPolicy.Evaluate(analysis, candidates, arguments, invocation);
+        if (correction is null)
+            return null;
+
+        if (_safeVerbPolicy is null)
+            return correction;
+
         // Diagnostic classification suppresses relocation advice only. Normal authorization still owns execution and path access.
-        return correction is not null
-               && _safeVerbPolicy is not null
-               && _safeVerbPolicy.IsReviewedDiagnosticInvocation(candidates, analysis.Environment.PathStyle)
-            ? null
-            : correction;
+        if (_safeVerbPolicy.IsReviewedDiagnosticInvocation(candidates, analysis.Environment.PathStyle))
+            return null;
+
+        return correction;
     }
 
     internal ToolCorrection.ProjectDirectorySuggested? EvaluateShellProjectCorrection(
         IReadOnlyList<ApprovalCandidate> candidates,
         string? cwd,
         ToolInvocationContext invocation)
-        => !_temporaryPathCorrectionPolicy.IsPlatformTemporaryRoot(cwd)
-           && _safeVerbPolicy is not null
-           && _safeVerbPolicy.CanShortCircuitAfterProjectDeclaration(candidates, cwd, invocation)
-            ? new ToolCorrection.ProjectDirectorySuggested(cwd!)
-            : null;
+    {
+        if (_temporaryPathCorrectionPolicy.IsPlatformTemporaryRoot(cwd))
+            return null;
+
+        if (_safeVerbPolicy is null)
+            return null;
+
+        if (!_safeVerbPolicy.CanShortCircuitAfterProjectDeclaration(candidates, cwd, invocation))
+            return null;
+
+        return new ToolCorrection.ProjectDirectorySuggested(cwd!);
+    }
 
     private ToolApprovalMode GetApprovalMode(
         ToolName toolName,

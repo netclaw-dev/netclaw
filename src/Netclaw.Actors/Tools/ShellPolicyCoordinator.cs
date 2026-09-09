@@ -81,12 +81,8 @@ internal sealed class ShellPolicyCoordinator(
             : CollectApplicableCorrections(analysis, toolCall, context, preflight);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (corrections is not null
-            && (corrections.Items.Any(static correction => correction is ToolCorrection.NativeToolSuggested)
-                || preflight is ShellPolicyPreflightResult.Complete
-                {
-                    Decision.AllowReason: ToolAllowReason.PolicyAuto
-                }))
+        // A native tool needs a separate call. Shell approval cannot authorize that replacement.
+        if (corrections?.Items.Any(static correction => correction is ToolCorrection.NativeToolSuggested) == true)
         {
             return (
                 Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace),
@@ -96,6 +92,14 @@ internal sealed class ShellPolicyCoordinator(
         if (preflight is ShellPolicyPreflightResult.Complete complete)
         {
             var preflightDecision = complete.Decision;
+            // Auto permits execution, but the agent must first receive any applicable directory advice.
+            if (preflightDecision.AllowReason == ToolAllowReason.PolicyAuto && corrections is not null)
+            {
+                return (
+                    Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace),
+                    null);
+            }
+
             if (preflightDecision.NeedsApproval
                 && preflightDecision.ApprovalContext is { } approvalContext
                 && OneTimeApprovalKeys.Matches(
@@ -162,6 +166,7 @@ internal sealed class ShellPolicyCoordinator(
         ToolExecutionContext context,
         ShellPolicyPreflightResult preflight)
     {
+        // Denial and approval without command analysis cannot become advice to submit a different call.
         if (preflight is ShellPolicyPreflightResult.Complete { Decision.Allowed: false })
             return null;
 
@@ -170,12 +175,27 @@ internal sealed class ShellPolicyCoordinator(
         if (native is not null)
             applicable.Add(native.Correction);
 
-        // A native operation without relocation support must keep its target. Retry keys never authorize replacement native calls.
-        if (native is { SupportsManagedTemporaryDirectory: false }
-            || native is null && context.Approval.ManagedTemporaryRetry is not null)
-        {
-            return applicable.Count == 0 ? null : new ToolCorrectionCollection(applicable);
-        }
+        var directory = SelectDirectoryCorrection(native, analysis, toolCall, context, preflight);
+        if (directory is not null)
+            applicable.Add(directory);
+
+        return applicable.Count == 0 ? null : new ToolCorrectionCollection(applicable);
+    }
+
+    private ToolCorrection? SelectDirectoryCorrection(
+        NativeToolShellCorrection? native,
+        ShellCommandAnalysis analysis,
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        ShellPolicyPreflightResult preflight)
+    {
+        // For example, file_read must keep its source path; file_write can create output in the managed temporary directory.
+        if (native is { SupportsManagedTemporaryDirectory: false })
+            return null;
+
+        // An exact shell retry already received directory advice. A native replacement is a new call and cannot use that retry.
+        if (native is null && context.Approval.ManagedTemporaryRetry is not null)
+            return null;
 
         IReadOnlyList<ApprovalCandidate> candidates;
         bool isMessy;
@@ -195,21 +215,40 @@ internal sealed class ShellPolicyCoordinator(
             isMessy = approval.IsMessy;
         }
 
+        // Relocation changes the directory, so project advice for the original directory no longer applies.
         var temporary = policy.EvaluateShellTemporaryCorrection(analysis, candidates, toolCall.Arguments, context.Invocation);
         if (temporary is not null)
-            applicable.Add(temporary);
+            return temporary;
 
-        // Relocation invalidates project advice for the original directory. A native replacement also requires fresh policy.
-        if (native is null && temporary is null && !isMessy
-            && policy.EvaluateShellProjectCorrection(candidates, analysis.WorkingDirectory, context.Invocation) is { } project
-            && registry.GetByName(SetWorkingDirectoryTool.ToolName) is SetWorkingDirectoryTool declaration
-            && policy.IsToolExposed(declaration, context.Invocation)
-            && declaration.CanDeclare(project.Directory, context.Invocation))
-        {
-            applicable.Add(project);
-        }
+        // Project advice applies to shell calls. The replacement native tool must pass its own policy checks.
+        if (native is not null)
+            return null;
 
-        return applicable.Count == 0 ? null : new ToolCorrectionCollection(applicable);
+        if (isMessy)
+            return null;
+
+        return GetAvailableProjectCorrection(candidates, analysis.WorkingDirectory, context.Invocation);
+    }
+
+    private ToolCorrection.ProjectDirectorySuggested? GetAvailableProjectCorrection(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? workingDirectory,
+        ToolInvocationContext invocation)
+    {
+        var project = policy.EvaluateShellProjectCorrection(candidates, workingDirectory, invocation);
+        if (project is null)
+            return null;
+
+        if (registry.GetByName(SetWorkingDirectoryTool.ToolName) is not SetWorkingDirectoryTool declaration)
+            return null;
+
+        if (!policy.IsToolExposed(declaration, invocation))
+            return null;
+
+        if (!declaration.CanDeclare(project.Directory, invocation))
+            return null;
+
+        return project;
     }
 
     private async Task<ToolAuthorizationDecision> CompleteAsync(
