@@ -50,12 +50,14 @@ public partial class DispatchingToolExecutorTests
     public async Task Launch_rechecks_revoked_grants_in_every_mode(string mode)
     {
         using var directory = new DisposableTempDir();
+        // macOS temporary roots contain symlinks. Stored-grant tests need a physical path, not an exact-approval path.
+        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var checks = 0;
         var service = new FixedShellApprovalService(request =>
             LaunchGrantResult(request, ++checks == 1));
         var executor = new DispatchingToolExecutor(registry, policy, service);
-        var context = TestToolExecutionContext.CreateBound("launch/revoked", directory.Path,
+        var context = TestToolExecutionContext.CreateBound("launch/revoked", sessionDirectory,
             new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var marker = Path.Combine(directory.Path, "must-not-exist.txt");
         var call = CreateToolCall("launch-revoked", ShellTool.ToolName,
@@ -91,10 +93,11 @@ public partial class DispatchingToolExecutorTests
     public async Task Launch_retains_exact_arguments_and_starts_once()
     {
         using var directory = new DisposableTempDir();
+        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var service = new FixedShellApprovalService(request => LaunchGrantResult(request, true));
         var executor = new DispatchingToolExecutor(registry, policy, service);
-        var context = TestToolExecutionContext.CreateBound("launch/exact", directory.Path,
+        var context = TestToolExecutionContext.CreateBound("launch/exact", sessionDirectory,
             new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var call = CreateToolCall("launch-exact", ShellTool.ToolName,
             ToolInput.Create("Command", "echo once >> count.txt"));
@@ -117,9 +120,10 @@ public partial class DispatchingToolExecutorTests
     public async Task Launch_cancellation_after_authorization_creates_no_process()
     {
         using var directory = new DisposableTempDir();
+        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var executor = new DispatchingToolExecutor(registry, policy, GrantEveryShellCandidate());
-        var context = TestToolExecutionContext.CreateBound("launch/cancel", directory.Path,
+        var context = TestToolExecutionContext.CreateBound("launch/cancel", sessionDirectory,
             new TestToolExecutionContextOptions { Audience = TrustAudience.Personal, Boundary = TrustBoundary.Personal });
         var call = CreateToolCall("launch-cancel", ShellTool.ToolName,
             ToolInput.Create("Command", "echo forbidden > cancelled.txt"));
