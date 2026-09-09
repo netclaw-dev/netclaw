@@ -80,7 +80,10 @@ internal sealed record ToolCorrectionDelivery(
         {
             [ToolCorrection.ProjectDirectorySuggested project] => CreateProject(project.Directory),
             [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
-            [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] => CreateTemporary(temporary.Target, managedTemporaryCall),
+            [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] when managedTemporaryCall is not null
+                => CreateTemporary(temporary.Target, managedTemporaryCall),
+            [ToolCorrection.ManagedTemporaryDirectorySuggested]
+                => throw new InvalidOperationException("A temporary correction requires exact call semantics."),
             [ToolCorrection.NativeToolSuggested native, ToolCorrection.ManagedTemporaryDirectorySuggested temporary]
                 => CreateNative(native.ToolName, temporary.Target),
             [ToolCorrection.ManagedTemporaryDirectorySuggested temporary, ToolCorrection.NativeToolSuggested native]
@@ -116,11 +119,8 @@ internal sealed record ToolCorrectionDelivery(
 
     private static ToolCorrectionDelivery CreateTemporary(
         ManagedTemporaryCorrectionTarget retryTarget,
-        ManagedTemporaryCallSemantics? managedTemporaryCall)
+        ManagedTemporaryCallSemantics managedTemporaryCall)
     {
-        if (managedTemporaryCall is null)
-            throw new InvalidOperationException("A temporary correction requires exact call semantics.");
-
         var correctionKey = new ManagedTemporaryCorrectionKey(managedTemporaryCall, retryTarget);
         return new ToolCorrectionDelivery(
             ManagedTemporaryCorrection.BuildSuggestion(retryTarget.ManagedTemporaryDirectory),

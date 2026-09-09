@@ -256,23 +256,30 @@ internal sealed class ReviewedSafeShellPolicy
         out ApprovalShell shell)
     {
         shell = default;
-        if (candidate is not
-            {
-                Shell: { } candidateShell,
-                VerbTokens: { }
-            }
-            || sourceOccurrence is null
-            || HasFileWritingRedirect(resolvedPaths)
-            || HasUnprovedNonFileSystemSemantics(resolvedPaths)
-            || !_safeVerbs.TryMatchReviewedDiagnostic(
-                candidateShell,
-                candidate.VerbTokens,
-                out var matchedTokenCount)
-            || sourceOccurrence.Arguments.Any(argument =>
-                argument.Element.PrecedingVerbElementCount < matchedTokenCount))
-        {
+        if (candidate is not { Shell: { } candidateShell })
             return false;
-        }
+
+        if (candidate.VerbTokens is not { } verbTokens)
+            return false;
+
+        if (sourceOccurrence is null)
+            return false;
+
+        if (HasFileWritingRedirect(resolvedPaths))
+            return false;
+
+        if (HasUnprovedNonFileSystemSemantics(resolvedPaths))
+            return false;
+
+        if (!_safeVerbs.TryMatchReviewedDiagnostic(
+                candidateShell,
+                verbTokens,
+                out var matchedTokenCount))
+            return false;
+
+        // Arguments before the matched verb phrase can change its meaning. The reviewed catalog does not authorize those forms.
+        if (sourceOccurrence.Arguments.Any(argument => argument.Element.PrecedingVerbElementCount < matchedTokenCount))
+            return false;
 
         shell = candidateShell;
         return true;
