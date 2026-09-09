@@ -76,61 +76,48 @@ internal sealed record ToolCorrectionDelivery(
     {
         ArgumentNullException.ThrowIfNull(corrections);
 
-        ToolName? nativeTool = null;
-        string? projectDirectory = null;
-        ManagedTemporaryCorrectionTarget? managedTemporaryTarget = null;
-        foreach (var correction in corrections.Items)
+        return corrections.Items switch
         {
-            switch (correction)
-            {
-                case ToolCorrection.NativeToolSuggested native when nativeTool is null:
-                    nativeTool = native.ToolName;
-                    break;
-                case ToolCorrection.ManagedTemporaryDirectorySuggested managed
-                    when managedTemporaryTarget is null:
-                    managedTemporaryTarget = managed.Target;
-                    break;
-                case ToolCorrection.ProjectDirectorySuggested project when projectDirectory is null:
-                    projectDirectory = project.Directory;
-                    break;
-                default:
-                    throw new InvalidOperationException("The correction collection has an unsupported correction or duplicate fact.");
-            }
-        }
+            [ToolCorrection.ProjectDirectorySuggested project] => CreateProject(project.Directory),
+            [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
+            [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] => CreateTemporary(temporary.Target, managedTemporaryCall),
+            [ToolCorrection.NativeToolSuggested native, ToolCorrection.ManagedTemporaryDirectorySuggested temporary]
+                => CreateNative(native.ToolName, temporary.Target),
+            [ToolCorrection.ManagedTemporaryDirectorySuggested temporary, ToolCorrection.NativeToolSuggested native]
+                => CreateNative(native.ToolName, temporary.Target),
+            _ => throw new InvalidOperationException("The correction collection has an unsupported combination or duplicate fact.")
+        };
+    }
 
-        if (projectDirectory is not null)
-        {
-            if (nativeTool is not null || managedTemporaryTarget is not null)
-                throw new InvalidOperationException("Project advice cannot accompany advice that replaces its target.");
+    private static ToolCorrectionDelivery CreateProject(string directory)
+        => new(
+            "Tool execution deferred: working_directory_not_declared\n" +
+            $"Project directory: '{directory}'.",
+            new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.RecoverableCorrection,
+                remediationCode: ToolRemediationCode.SetWorkingDirectory),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
 
-            return new ToolCorrectionDelivery(
-                "Tool execution deferred: working_directory_not_declared\n" +
-                $"Project directory: '{projectDirectory}'.",
-                new ToolInvocationReceipt(
-                    ToolInvocationOutcomeCategory.RecoverableCorrection,
-                    remediationCode: ToolRemediationCode.SetWorkingDirectory),
-                NativeTool: null,
-                ManagedTemporaryStateChange: null);
-        }
+    private static ToolCorrectionDelivery CreateNative(ToolName tool, ManagedTemporaryCorrectionTarget? temporaryTarget)
+    {
+        var content = $"Shell execution stopped because '{tool}' is a native Netclaw tool.";
+        if (temporaryTarget is { } target)
+            content += $"\nManaged temporary directory: '{target.ManagedTemporaryDirectory}'.";
 
-        if (nativeTool is { } replacementTool)
-        {
-            var content = $"Shell execution stopped because '{replacementTool}' is a native Netclaw tool.";
-            if (managedTemporaryTarget is { } temporaryTarget)
-                content += $"\nManaged temporary directory: '{temporaryTarget.ManagedTemporaryDirectory}'.";
+        return new ToolCorrectionDelivery(
+            content,
+            new ToolInvocationReceipt(
+                ToolInvocationOutcomeCategory.RecoverableCorrection,
+                remediationCode: ToolRemediationCode.UseNativeTool),
+            tool,
+            ManagedTemporaryStateChange: null);
+    }
 
-            return new ToolCorrectionDelivery(
-                content,
-                new ToolInvocationReceipt(
-                    ToolInvocationOutcomeCategory.RecoverableCorrection,
-                    remediationCode: ToolRemediationCode.UseNativeTool),
-                replacementTool,
-                ManagedTemporaryStateChange: null);
-        }
-
-        if (managedTemporaryTarget is not { } retryTarget)
-            throw new InvalidOperationException("The correction collection has no supported delivery result.");
-
+    private static ToolCorrectionDelivery CreateTemporary(
+        ManagedTemporaryCorrectionTarget retryTarget,
+        ManagedTemporaryCallSemantics? managedTemporaryCall)
+    {
         if (managedTemporaryCall is null)
             throw new InvalidOperationException("A temporary correction requires exact call semantics.");
 

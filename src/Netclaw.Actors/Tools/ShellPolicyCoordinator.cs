@@ -291,44 +291,22 @@ internal sealed class ShellPolicyCoordinator(
     {
         cancellationToken.ThrowIfCancellationRequested();
         var projection = evaluation.Projection;
-        if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent
-            || projection.Candidates.Count == 0
-            || projection.Candidates.Any(static candidate =>
-                candidate.Candidate.Shell is null
-                || candidate.Candidate.VerbTokens is null))
+        if (RequiresExactApproval(projection))
         {
             return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
         }
 
-        var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
-            ? ApprovalShell.Bash
-            : ApprovalShell.PowerShell;
-        if (projection.Candidates.Any(candidate =>
-                candidate.Candidate.Shell != expectedShell
-                || candidate.Candidate.VerbTokens!.Count == 0
-                || candidate.Candidate.VerbTokens.Any(static token =>
-                    token.Length == 0 || token.Any(char.IsWhiteSpace))))
-        {
-            throw new InvalidOperationException("Invalid shell policy projection.");
-        }
+        ValidateCandidateSyntax(projection);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (projection.Candidates.Any(candidate =>
-                candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
-                && policy.CausalIntentReferencesProtectedPath(
-                    projection.PathFacts[candidate.Id.Value])))
+        if (HasProtectedIntentPath(projection))
         {
             return evaluation.Complete(
                 ToolAuthorizationDecision.Deny("shell_references_protected_path"));
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (projection.Candidates.Any(candidate =>
-                candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
-                && candidate.IntentDirectory is { } intentDirectory
-                && !policy.AreCausalIntentDirectoriesEligible(
-                    intentDirectory,
-                    candidate.IntentFallbackDirectories)))
+        if (HasIneligibleIntentDirectory(projection))
         {
             return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
         }
@@ -408,15 +386,94 @@ internal sealed class ShellPolicyCoordinator(
         return CompleteFinal(evaluation, context, corrections);
     }
 
+    private static bool RequiresExactApproval(ShellPolicyProjection projection)
+    {
+        // Unresolved syntax needs an exact approval unless the causal projection supplies the missing intent.
+        if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent)
+            return true;
+
+        if (projection.Candidates.Count == 0)
+            return true;
+
+        foreach (var candidate in projection.Candidates)
+        {
+            if (candidate.Candidate.Shell is null)
+                return true;
+
+            if (candidate.Candidate.VerbTokens is null)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void ValidateCandidateSyntax(ShellPolicyProjection projection)
+    {
+        var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        foreach (var candidate in projection.Candidates)
+        {
+            if (candidate.Candidate.Shell != expectedShell)
+                throw new InvalidOperationException("Invalid shell policy projection.");
+
+            // RequiresExactApproval handles missing facts before this validation of supplied facts.
+            var tokens = candidate.Candidate.VerbTokens!;
+            if (tokens.Count == 0)
+                throw new InvalidOperationException("Invalid shell policy projection.");
+
+            foreach (var token in tokens)
+            {
+                if (token.Length == 0 || token.Any(char.IsWhiteSpace))
+                    throw new InvalidOperationException("Invalid shell policy projection.");
+            }
+        }
+    }
+
+    private bool HasProtectedIntentPath(ShellPolicyProjection projection)
+    {
+        foreach (var candidate in projection.Candidates)
+        {
+            if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
+                continue;
+
+            if (policy.CausalIntentReferencesProtectedPath(projection.PathFacts[candidate.Id.Value]))
+                return true;
+        }
+
+        return false;
+    }
+
+    private bool HasIneligibleIntentDirectory(ShellPolicyProjection projection)
+    {
+        foreach (var candidate in projection.Candidates)
+        {
+            if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
+                continue;
+
+            if (candidate.IntentDirectory is not { } directory)
+                continue;
+
+            if (!policy.AreCausalIntentDirectoriesEligible(directory, candidate.IntentFallbackDirectories))
+                return true;
+        }
+
+        return false;
+    }
+
     private static void ApplyReviewedSafeCoverage(
         ShellPolicyEvaluation evaluation,
         ToolAccessPolicy policy,
         ToolInvocationContext invocation)
     {
-        foreach (var candidate in evaluation.Projection.GrantCandidates.Where(candidate =>
-                     candidate.CanUseRealReviewedSafePolicy
-                     && !evaluation.IsCovered(candidate.Id)))
+        foreach (var candidate in evaluation.Projection.GrantCandidates)
         {
+            if (!candidate.CanUseRealReviewedSafePolicy)
+                continue;
+
+            if (evaluation.IsCovered(candidate.Id))
+                continue;
+
             if (!policy.IsReviewedSafeCandidate(
                     candidate,
                     evaluation.Projection.PathFacts[candidate.Id.Value],
@@ -430,15 +487,18 @@ internal sealed class ShellPolicyCoordinator(
                 ShellPolicyCoverageSource.ReviewedSafeReal);
         }
 
-        foreach (var candidate in evaluation.Candidates.Where(candidate =>
-                     candidate.Role == ShellPolicyCandidateRole.CausalIntentConsumer
-                     && !evaluation.IsCovered(candidate.Id)))
+        foreach (var candidate in evaluation.Candidates)
         {
-            if (candidate.IntentDirectory is null
-                || candidate.IntentPrerequisites.Count == 0
-                || candidate.IntentPrerequisites.Any(prerequisite =>
-                    !evaluation.IsCovered(prerequisite))
-                || !policy.IsReviewedSafeIntentCandidate(
+            if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
+                continue;
+
+            if (evaluation.IsCovered(candidate.Id))
+                continue;
+
+            if (!HasCoveredIntentPrerequisites(candidate, evaluation))
+                continue;
+
+            if (!policy.IsReviewedSafeIntentCandidate(
                     candidate,
                     evaluation.Projection.PathFacts[candidate.Id.Value],
                     invocation))
@@ -450,6 +510,24 @@ internal sealed class ShellPolicyCoordinator(
                 candidate,
                 ShellPolicyCoverageSource.ReviewedSafeIntent);
         }
+    }
+
+    private static bool HasCoveredIntentPrerequisites(ShellPolicyCandidate candidate, ShellPolicyEvaluation evaluation)
+    {
+        if (candidate.IntentDirectory is null)
+            return false;
+
+        // An intent consumer needs explicit prerequisite evidence; an empty list cannot establish coverage.
+        if (candidate.IntentPrerequisites.Count == 0)
+            return false;
+
+        foreach (var prerequisite in candidate.IntentPrerequisites)
+        {
+            if (!evaluation.IsCovered(prerequisite))
+                return false;
+        }
+
+        return true;
     }
 
     private static ToolAuthorizationDecision CompleteFinal(
