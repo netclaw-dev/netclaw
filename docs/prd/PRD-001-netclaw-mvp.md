@@ -90,6 +90,7 @@ the CLI starts instantly.
 | SignalR hub | `/hub/session` — primary client API |
 | Slack adapter | Socket Mode, in-process channel |
 | Tool execution | Shell, web fetch, GitHub CLI, MCP |
+| System skills | Restore the daemon-owned `.system` tree from embedded resources before skill discovery |
 | Health endpoint | `GET /api/health/ready` |
 | Config hot-reload | FileSystemWatcher on `~/.netclaw/` |
 

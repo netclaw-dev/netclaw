@@ -529,17 +529,12 @@
     },
     "SkillSync": {
       "type": "object",
-      "description": "Startup synchronization behavior for system skills.",
+      "description": "Skill index access behavior.",
       "properties": {
         "Enabled": {
           "type": "boolean",
           "default": true,
-          "description": "When false, the skill sync subsystem is disabled entirely."
-        },
-        "DisableSystemSkillSync": {
-          "type": "boolean",
-          "default": false,
-          "description": "When true, skip feed sync at startup and use local built-in/on-disk system skills only."
+          "description": "When false, skill index tools are unavailable to the session."
         }
       },
       "additionalProperties": false

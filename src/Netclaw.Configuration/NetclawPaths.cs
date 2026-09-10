@@ -38,7 +38,6 @@ public sealed class NetclawPaths
     // ── Skills directory (procedural context) ──
     public string SkillsDirectory => Path.Combine(BasePath, "skills");
     public string SystemSkillsDirectory => Path.Combine(SkillsDirectory, ".system");
-    public string SkillSyncStatePath => Path.Combine(SystemSkillsDirectory, ".sync-state.json");
 
     // ── Server feed skills (from private skill-server instances) ──
     public string ServerFeedsDirectory => Path.Combine(SkillsDirectory, ".server-feeds");

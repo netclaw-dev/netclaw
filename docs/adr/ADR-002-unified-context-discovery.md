@@ -37,30 +37,28 @@ budget without adding capability the agent didn't already have.
 
 ```
 ~/.netclaw/skills/
-  ├── netclaw-identity.md    (built-in, copied from embedded resources)
-  ├── netclaw-diagnostics.md       (built-in)
+  ├── .system/               (system skills restored from the daemon binary)
   └── user-created-skill.md     (user-created)
 
 Startup:
-  CopyBuiltInSkills() → SkillScanner.Scan() → SkillRegistry → SkillIndexContextLayer
+  Restore embedded system tree → SkillScanner.Scan() → SkillRegistry → SkillIndexContextLayer
 
 System prompt injection:
-  SkillIndexContextLayer → "[skills — read with file_read for full instructions]
-    netclaw-identity (/home/user/.netclaw/skills/netclaw-identity.md)
+  SkillIndexContextLayer → "[skills — load with skill_load(name)]
+    netclaw-identity
       How to read and update Netclaw identity files ...
-    memorizer-usage (/home/user/.netclaw/skills/memorizer-usage.md)
+    memorizer-usage
       How to use the Memorizer MCP server ...
-    netclaw-diagnostics (/home/user/.netclaw/skills/netclaw-diagnostics.md)
+    netclaw-diagnostics
       How to check Netclaw configuration ..."
 ```
 
-Skills are `.md` files scanned at startup. The compressed index in the system
-prompt lists each skill's name, file path, and description. The agent uses
-`file_read` directly to load full skill content — no dedicated search tool
-needed.
+Skills are discovered at startup. The compressed index lists each skill name and
+description. The agent uses `skill_load(name)` to load skill guidance. The agent
+uses `skill_read_resource(skillName, resourcePath)` for bundled files.
 
-Built-in skills ship as embedded resources and are copied to `~/.netclaw/skills/`
-on first run. User edits are preserved (existing files are not overwritten).
+System skills ship as embedded resources. Startup replaces only
+`~/.netclaw/skills/.system/`. User skills remain unchanged.
 
 ### Observational Memory (Within-Session)
 
@@ -171,7 +169,7 @@ Three context layers provide the agent with memory, skill, and tool awareness:
 | `MemoryIndexContextLayer` | `FileBacked` | 4-tool guidance, two-phase retrieval, quality bar for store, update/delete instructions |
 | | `MemorizerConnected` | Same + subagent delegation note, latency warning for store |
 | | `MemorizerDisconnected` | Troubleshooting guidance, fallback to identity files |
-| `SkillIndexContextLayer` | — | Compressed index of available skills with file paths for `file_read` |
+| `SkillIndexContextLayer` | — | Compressed index with `skill_load` and `skill_read_resource` guidance |
 
 Pre-compaction memory flush is handled by `IMemoryExtractor` implementations:
 `FileMemoryExtractor` saves to `FileMemoryStore` with `["extraction", "compaction"]`

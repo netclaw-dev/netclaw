@@ -388,18 +388,6 @@ start_eval_daemon() {
         exit 1
     fi
 
-    # Copy system skills from the repo into the eval home so Skill Discovery
-    # tests use the skills being developed, not whatever is synced on the host.
-    # SkillScanner expects <skills>/.system/<skill-name>/SKILL.md (no extra
-    # `files/` segment); the daemon's feed sync writes to that layout, so we
-    # mirror it here for local-source-of-truth runs.
-    mkdir -p "$EVAL_HOME/skills/.system"
-    if [[ -d "$EVAL_ASSET_ROOT/feeds/skills/.system/files" ]]; then
-        cp -r "$EVAL_ASSET_ROOT/feeds/skills/.system/files/." "$EVAL_HOME/skills/.system/"
-    else
-        echo "WARN: no system skills under NETCLAW_EVAL_ASSET_ROOT — Skill Discovery evals will fail." >&2
-    fi
-
     # Copy user skills from eval fixtures (non-system skills for activation testing).
     if [[ -d "$EVAL_ASSET_ROOT/evals/fixtures/skills" ]]; then
         cp -r "$EVAL_ASSET_ROOT/evals/fixtures/skills/." "$EVAL_HOME/skills/"
@@ -571,11 +559,6 @@ start_eval_daemon() {
         -e "NETCLAW_Security__ShellExecutionMode=HostAllowed"
         -e "NETCLAW_Security__StrictDefaults=false"
         -e "NETCLAW_Tools__ShellMode=HostAllowed"
-        # Evals test the source tree, not the published feed. Without this, the
-        # daemon syncs system skills from the live R2 manifest at startup, which
-        # ships whatever was last released — masking any unpublished skill
-        # changes (e.g. version bumps in this PR) and the local copies above.
-        -e "NETCLAW_SkillSync__DisableSystemSkillSync=true"
         -e "NETCLAW_SkillFeeds__Feeds__0__Name=eval-feed"
         -e "NETCLAW_SkillFeeds__Feeds__0__Url=http://127.0.0.1:1"
         -e "NETCLAW_SkillFeeds__Feeds__0__Enabled=true"
@@ -1323,7 +1306,8 @@ assert_skill_progressive_disclosure() {
     daemon_log_skill_loaded_via_skill_tool 'netclaw-operations' \
         && stdout_tool_called 'skill_read_resource' \
         && stdout_no_skill_file_read_called \
-        && { stdout_contains 'ReminderAutoDisabled' || stdout_contains '5 consecutive'; }
+        && stdout_contains '5 consecutive' \
+        && stdout_contains 'ReminderAutoDisabled'
 }
 
 assert_skill_memory_knowledge() {

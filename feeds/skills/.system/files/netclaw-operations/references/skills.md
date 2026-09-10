@@ -36,7 +36,8 @@ Register additional skill directories (e.g. `~/.claude/skills/`):
 | `netclaw skill source enable <name>` | Enable a disabled source |
 | `netclaw skill source disable <name>` | Disable without removing |
 
-The daemon automatically rebuilds one complete inventory across native,
-managed-feed, and external sources after syncs and supported mutations. Native
-skills take precedence over managed feeds, which take precedence over external
-sources. No restart is needed.
+The daemon restores its system skills from its binary before its first scan.
+It rebuilds one complete inventory across system, native, managed-feed, and
+external sources after syncs and supported mutations. Native skills take
+precedence over managed feeds, which take precedence over external sources.
+No restart is needed for supported mutations.

@@ -709,8 +709,8 @@ static void ConfigureDaemonServices(
     toolRegistry.WithFirstPartyTools(toolAccessPolicy, searchBackend,
         webhooksConfig.Enabled ? webhookRouteStore : null);
 
-    // Skills system: seed built-in skills to .system/, register sync service
-    CopyBuiltInSkills(paths.SystemSkillsDirectory);
+    // The daemon owns only the .system tree. Restore it before the first scan.
+    EmbeddedSystemSkillRestorer.Restore(paths);
     var skillRegistry = new SkillRegistry();
 
     // External skill sources (Claude Code, Open Code, custom paths)
@@ -940,20 +940,7 @@ static void ConfigureDaemonServices(
         sp.GetServices<IContextLayerProvider>().ToList());
     services.AddHostedService<ToolIndexUpdater>();
 
-    // System skills feed sync — checks CDN for updated skills at startup.
-    // Runs after initial skill scan; re-scans and updates the index if any skills changed.
-    // Also enriches skills with keyword indexes for deterministic auto-loading.
-    // Never blocks startup on network failures.
-    // Gated on SkillSyncConfig.Enabled — when disabled, no CDN sync occurs.
-    if (skillSyncConfig.Enabled)
-    {
-        services.AddHttpClient<SystemSkillSyncService>(client =>
-            client.Timeout = FeedConstants.FeedHttpTimeout).AddNetclawHeaders("skill-sync");
-        services.AddHostedService<SystemSkillSyncService>();
-    }
-
     // Server feed sync — syncs skills from private skill-server instances at startup.
-    // Runs after SystemSkillSyncService; each feed syncs independently.
     if (skillFeedsConfig.Feeds.Any(f => f.Enabled))
     {
         services.AddHostedService<ServerFeedSkillSyncService>();
@@ -1237,30 +1224,6 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
         default:
             throw new ArgumentOutOfRangeException(nameof(config.Backend), config.Backend,
                 $"Unknown search backend: {config.Backend}");
-    }
-}
-
-/// <summary>
-/// Copies built-in system skills from the daemon's embedded resources into
-/// build output as <c>BuiltInSkills/{skill-name}/SKILL.md</c> (with companion files).
-/// Only writes files that do not already exist (feed updates are preserved).
-/// </summary>
-static void CopyBuiltInSkills(string skillsDirectory)
-{
-    var builtInDir = Path.Combine(AppContext.BaseDirectory, "BuiltInSkills");
-    if (!Directory.Exists(builtInDir))
-        return;
-
-    foreach (var sourceFile in Directory.EnumerateFiles(builtInDir, "*", SearchOption.AllDirectories))
-    {
-        var relativePath = Path.GetRelativePath(builtInDir, sourceFile);
-        var targetPath = Path.Combine(skillsDirectory, relativePath);
-
-        if (File.Exists(targetPath))
-            continue;
-
-        Directory.CreateDirectory(Path.GetDirectoryName(targetPath)!);
-        File.Copy(sourceFile, targetPath);
     }
 }
 

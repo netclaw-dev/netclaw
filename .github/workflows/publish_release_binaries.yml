@@ -628,16 +628,7 @@ jobs:
         docker buildx imagetools create --tag "${REPO}:beta" "${REPO}:${LP}"
 
   # ────────────────────────────────────────────────────────────────────
-  # Job 6: Publish system skills feed to R2
-  # ────────────────────────────────────────────────────────────────────
-  publish-skills:
-    name: Publish Skills Feed
-    needs: publish-binary-manifest
-    uses: ./.github/workflows/publish_skills.yml
-    secrets: inherit
-
-  # ────────────────────────────────────────────────────────────────────
-  # Job 7: Trigger netclaw.dev website rebuild
+  # Job 6: Trigger netclaw.dev website rebuild
   # ────────────────────────────────────────────────────────────────────
   # The website rebuilds at deploy time by fetching the GitHub Releases API,
   # so it needs the release to be created but has no dependency on binary

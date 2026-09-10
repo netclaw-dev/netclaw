@@ -67,6 +67,7 @@ assert_field '(.Models.Definitions[.Models.Roles.Main] | has("ContextWindow"))' 
 assert_field '(.Models.Definitions[.Models.Roles.Main] | has("InputModalities"))'   'false' "$config_json" || :
 assert_field '(.Models.Definitions[.Models.Roles.Main] | has("OutputModalities"))'  'false' "$config_json" || :
 assert_field '.Security.DeploymentPosture'  'Personal'                 "$config_json" || :
+assert_field '(.SkillSync | has("DisableSystemSkillSync"))' 'false' "$config_json" || :
 
 echo "init-wizard: checking identity/SOUL.md for typed user name..."
 if ! grep -q 'Name: SmokeTester' "$SOUL_PATH" 2>/dev/null; then

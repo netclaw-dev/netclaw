@@ -4,6 +4,9 @@
 
 - Validate attachment destinations before directory creation or file copy. Deny linked and write-protected destinations.
 
+- System skills now restore from the installed daemon binary before discovery.
+  Startup replaces only the managed `.system` tree and keeps user skills unchanged.
+
 - Public and Team file tools keep access to their current session and exact
   legacy log. Other sessions require explicit configured roots.
 - Child runs inherit parent roots and restrictions. Legacy cross-run raw logs
