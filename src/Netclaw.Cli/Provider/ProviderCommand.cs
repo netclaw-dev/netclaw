@@ -261,6 +261,16 @@ internal static class ProviderCommand
             authMethod = AuthMethod.ApiKey;
         }
 
+        // An explicit --auth api-key on a credential-optional provider must not
+        // silently write an entry with no key. That would report success while the
+        // gateway keeps answering 401 — a silent fallback, which CLAUDE.md forbids.
+        if (forceApiKey && apiKey is null && supportedAuth.Contains(AuthMethod.None))
+        {
+            writer.WriteLine($"Error: Provider '{type}' requires --api-key when using --auth api-key.");
+            writer.WriteLine("Omit --auth api-key to configure this provider without authentication.");
+            return 1;
+        }
+
         ProviderCredentialWriter.WriteProvider(
             paths, name, type, authMethod, endpoint,
             oauthResult: null, apiKey: apiKey, registry);
@@ -570,9 +580,11 @@ internal static class ProviderCommand
 
     private static void WriteProviderGuidance(IProviderDescriptor descriptor, TextWriter writer)
     {
-        if (descriptor.Auth is EndpointOnlyAuth)
+        if (descriptor.Auth.IsCredentialOptional())
         {
-            writer.WriteLine($"{descriptor.DisplayName} runs locally. No authentication required.");
+            writer.WriteLine(descriptor.Auth.OffersOptionalApiKey()
+                ? $"{descriptor.DisplayName} runs locally. Authentication is optional: pass --api-key to send a Bearer token."
+                : $"{descriptor.DisplayName} runs locally. No authentication required.");
             return;
         }
 

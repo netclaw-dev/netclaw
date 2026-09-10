@@ -33,11 +33,30 @@ public sealed class ApiKeyAuth : IProviderAuth
 }
 
 /// <summary>
-/// Provider requires no authentication — just an endpoint (Ollama, OpenAI-compatible).
+/// Provider requires no authentication — just an endpoint (Ollama).
 /// </summary>
 public sealed class EndpointOnlyAuth : IProviderAuth
 {
     public IReadOnlyList<AuthMethod> SupportedAuthMethods { get; } = [AuthMethod.None];
+}
+
+/// <summary>
+/// Provider works without authentication but sends an API key as a Bearer
+/// token when the operator supplies one (OpenAI-compatible gateways in front
+/// of a protected vLLM / llama.cpp / SGLang endpoint).
+/// </summary>
+/// <remarks>
+/// <see cref="AuthMethod.None"/> stays first so the default path is unchanged:
+/// an operator who presses Enter through the key prompt gets the same
+/// credential-free configuration they get today. The runtime does not branch on
+/// <c>AuthMethod</c> for these providers — <c>ProviderEntry.ApiKey</c> is sent
+/// whenever it is present — so the key remains optional at probe time and at
+/// chat time.
+/// </remarks>
+public sealed class OptionalApiKeyAuth : IProviderAuth
+{
+    public IReadOnlyList<AuthMethod> SupportedAuthMethods { get; } =
+        [AuthMethod.None, AuthMethod.ApiKey];
 }
 
 /// <summary>
@@ -117,6 +136,28 @@ public sealed class MultiAuth : IProviderAuth
 
 public static class ProviderAuthExtensions
 {
+    /// <summary>
+    /// True when the provider can operate with no stored credential. Setup
+    /// surfaces use this to skip the auth-method picker and to treat a blank
+    /// API key as a valid answer instead of a validation error.
+    /// </summary>
+    /// <remarks>
+    /// Prefer this over matching the concrete <see cref="EndpointOnlyAuth"/>
+    /// type or over testing <c>SupportedAuthMethods is [AuthMethod.None]</c>.
+    /// Those forms silently exclude every other credential-optional provider,
+    /// which is how <see cref="OptionalApiKeyAuth"/> endpoints lost their
+    /// credential input entirely.
+    /// </remarks>
+    public static bool IsCredentialOptional(this IProviderAuth auth)
+        => auth.SupportedAuthMethods.Contains(AuthMethod.None);
+
+    /// <summary>
+    /// True when the provider has no required credential but accepts an
+    /// optional Bearer key. Setup surfaces render a skippable key prompt.
+    /// </summary>
+    public static bool OffersOptionalApiKey(this IProviderAuth auth)
+        => auth is OptionalApiKeyAuth;
+
     public static OAuthAuth? GetOAuthConfig(this IProviderAuth auth) => auth switch
     {
         OAuthAuth o => o,

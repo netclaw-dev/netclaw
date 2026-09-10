@@ -8,6 +8,7 @@ using Netclaw.Cli.Config;
 using Netclaw.Cli.Provider;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -108,6 +109,96 @@ public sealed class ProviderCommandTests : IDisposable
         // Verify provider loader decrypts back to usable plaintext
         var loaded = ProviderCommand.LoadProviders(_paths);
         Assert.Equal("sk-or-test-123", loaded["my-openrouter"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public async Task Add_OpenAiCompatibleWithApiKey_PersistsBearerKeyWithoutRequiringAuthMethod()
+    {
+        // The endpoint is credential-optional, so no AuthMethod is written — but the
+        // key must still land in secrets.json and round-trip to the runtime, which
+        // sends it as a Bearer header whenever it is present.
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "my-vllm", "openai-compatible",
+                "--endpoint", "http://my-gpu-server:8000/v1", "--api-key", "sk-gateway-test-123"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var entry = config.RootElement.GetProperty("Providers").GetProperty("my-vllm");
+        Assert.Equal("openai-compatible", entry.GetProperty("Type").GetString());
+        Assert.Equal("http://my-gpu-server:8000/v1", entry.GetProperty("Endpoint").GetString());
+
+        // A supplied key is recorded descriptively so `provider list` reports it.
+        Assert.Equal("ApiKey", entry.GetProperty("AuthMethod").GetString());
+
+        var secrets = ReadConfigFile(_paths.SecretsPath);
+        var encrypted = secrets.RootElement
+            .GetProperty("Providers").GetProperty("my-vllm")
+            .GetProperty("ApiKey").GetString();
+        Assert.StartsWith("ENC:", encrypted);
+
+        var loaded = ProviderCommand.LoadProviders(_paths);
+        Assert.Equal("sk-gateway-test-123", loaded["my-vllm"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public async Task Add_OpenAiCompatibleWithoutApiKey_StaysUnauthenticated()
+    {
+        // Regression guard: the credential-free path must keep working after the
+        // descriptor started offering an optional Bearer key.
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "my-llamacpp", "openai-compatible",
+                "--endpoint", "http://my-gpu-server:8080"],
+            _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+
+        var loaded = ProviderCommand.LoadProviders(_paths);
+        Assert.True(loaded["my-llamacpp"].ApiKey.IsNullOrEmpty());
+        Assert.Equal(AuthMethod.None, loaded["my-llamacpp"].AuthMethod);
+    }
+
+    [Fact]
+    public async Task Add_CredentialOptionalProviderWithAuthApiKeyButNoKey_FailsLoudly()
+    {
+        // --auth api-key is an explicit request for key auth. Writing a
+        // credential-free entry would report success while the gateway answers 401.
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "my-vllm", "openai-compatible",
+                "--endpoint", "http://my-gpu-server:8000/v1", "--auth", "api-key"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("requires --api-key", _output.ToString());
+        Assert.False(File.Exists(_paths.NetclawConfigPath)
+            && ReadConfigFile(_paths.NetclawConfigPath).RootElement
+                .TryGetProperty("Providers", out var providers)
+            && providers.TryGetProperty("my-vllm", out _));
+    }
+
+    [Fact]
+    public void OpenAiCompatibleDescriptor_OffersOptionalApiKeyAndStaysCredentialOptional()
+    {
+        var descriptor = ProviderCommand.CreateDefaultRegistry().Get("openai-compatible");
+
+        Assert.IsType<Netclaw.Providers.OptionalApiKeyAuth>(descriptor.Auth);
+        Assert.True(descriptor.Auth.IsCredentialOptional());
+        Assert.True(descriptor.Auth.OffersOptionalApiKey());
+        Assert.Equal(
+            [AuthMethod.None, AuthMethod.ApiKey],
+            descriptor.Auth.SupportedAuthMethods);
+    }
+
+    [Fact]
+    public void OllamaDescriptor_RemainsEndpointOnlyWithoutOptionalKey()
+    {
+        // Ollama has no gateway story: it must not grow a key prompt.
+        var descriptor = ProviderCommand.CreateDefaultRegistry().Get("ollama");
+
+        Assert.IsType<Netclaw.Providers.EndpointOnlyAuth>(descriptor.Auth);
+        Assert.True(descriptor.Auth.IsCredentialOptional());
+        Assert.False(descriptor.Auth.OffersOptionalApiKey());
     }
 
     [Fact]
