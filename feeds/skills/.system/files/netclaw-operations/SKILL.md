@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.70.0"
+  version: "2.71.0"
 ---
 
 # Netclaw Operations
@@ -43,6 +43,8 @@ When available, use `file_read` for a known local file read.
 When available, use `file_list` for a known local directory listing.
 Use `file_search` for bounded recursive name or literal text search.
 Use `file_read` for image metadata.
+Use `attach_file` with the authorized source path. The tool copies it into the session when necessary.
+A linked or protected destination causes a denial. Do not use shell to bypass that denial.
 Issue independent `file_read` calls in parallel when several paths are known.
 Use `tool_output_read` to continue a spilled result by call id.
 When available, use `file_write` or `file_edit` for a known local file change.

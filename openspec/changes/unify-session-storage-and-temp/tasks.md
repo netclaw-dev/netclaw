@@ -86,3 +86,10 @@
 - [x] 10.3 Verify real file tools, child authority, explicit profiles, and the existing shell denial boundary.
 - [x] 10.4 Align specification, glossary references, profile comments, operations skill, and release notes.
 - [x] 10.5 Run focused and related tests, evals, Slopwatch, headers, and strict OpenSpec validation; record limits.
+
+## 11. Validate tool-managed attachment destinations
+
+- [x] 11.1 Reproduce linked and protected destinations with an authorized source and an ordinary copy control.
+- [x] 11.2 Validate destinations before file operations through the shared path policy.
+- [x] 11.3 Verify no side effects on denial, attach-only profiles, collisions, and direct attachments.
+- [ ] 11.4 Run related tests, skill evals, Slopwatch, headers, and strict specification validation.

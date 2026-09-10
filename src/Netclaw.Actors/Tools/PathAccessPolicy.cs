@@ -158,6 +158,25 @@ internal sealed class PathAccessPolicy
         return AllowIfUnprotected(canonicalPath, ToProtectionOperation(operation));
     }
 
+    /// <summary>Checks a tool-managed attachment destination before any file operation.</summary>
+    internal PathAccessDecision EvaluateAttachmentDestination(string path, ToolInvocationContext context)
+    {
+        if (string.IsNullOrWhiteSpace(context.SessionDirectory))
+            return PathAccessDecision.Deny("Error: invalid_context: No session directory available.", PathAccessFailure.InvalidInput);
+
+        var canonicalPath = PathUtility.Normalize(path);
+        var sessionDirectory = PathUtility.Normalize(context.SessionDirectory);
+        if (GetHostPathRelationship(canonicalPath, [sessionDirectory]) != PathRelationship.WithinTrustedRoot)
+        {
+            return PathAccessDecision.Deny(
+                $"Error: Attachment destination must stay inside the current session directory without links ({sessionDirectory}).",
+                PathAccessFailure.AccessDenied, canonicalPath);
+        }
+
+        // Source authorization permits this tool-managed copy. It does not grant general file-write access.
+        return AllowIfUnprotected(canonicalPath, FileOperation.Write);
+    }
+
     /// <summary>Applies file protection to one parser-canonical shell path.</summary>
     public PathAccessDecision EvaluateShellPath(
         CanonicalShellPath path,

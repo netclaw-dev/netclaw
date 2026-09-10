@@ -291,6 +291,102 @@ public class AttachFileToolTests : IDisposable
         Assert.Equal("image/png", attachment.MimeType.Value);
     }
 
+    [Theory]
+    [InlineData("attachments")]
+    [InlineData("workspace")]
+    [InlineData("ancestor")]
+    [InlineData("protected")]
+    public async Task AuthorityRegression_AttachmentDestination_denies_before_copy(string boundary)
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        var envelope = Path.Combine(paths.SessionsDirectory, "current");
+        var session = Path.Combine(envelope, "workspace");
+        var outside = Path.Combine(_dir.Path, "outside");
+        Directory.CreateDirectory(outside);
+        Directory.CreateDirectory(paths.SessionsDirectory);
+        var source = Path.Combine(_dir.Path, "source.txt");
+        await File.WriteAllTextAsync(source, "source marker", TestContext.Current.CancellationToken);
+
+        if (boundary == "ancestor")
+            Directory.CreateSymbolicLink(envelope, outside);
+        else
+            Directory.CreateDirectory(envelope);
+        if (boundary == "workspace")
+            Directory.CreateSymbolicLink(session, outside);
+        else
+            Directory.CreateDirectory(session);
+        var attachments = Path.Combine(session, "attachments");
+        if (boundary == "attachments")
+            Directory.CreateSymbolicLink(attachments, outside);
+
+        var tool = new AttachFileTool(new ToolConfig(), paths, new ToolPathPolicy(
+            boundary == "protected" ? [attachments] : [], [], []));
+        var before = Directory.GetFiles(outside, "*", SearchOption.AllDirectories);
+        var context = TestToolExecutionContext.CreateBound("current", session, TrustAudience.Personal);
+        await tool.ExecuteAsync(ToolInput.Create("Path", source), context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(before, Directory.GetFiles(outside, "*", SearchOption.AllDirectories));
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+        Assert.Empty(context.FileAttachments);
+        Assert.Equal("source marker", await File.ReadAllTextAsync(source, TestContext.Current.CancellationToken));
+        if (boundary != "attachments")
+            Assert.False(Directory.Exists(attachments));
+    }
+
+    [Fact]
+    public async Task AuthorityRegression_AttachmentDestination_copy_preserves_collision_and_direct_access()
+    {
+        var source = Path.Combine(_dir.Path, "report.txt");
+        var session = Path.Combine(_dir.Path, "session");
+        var attachments = Path.Combine(session, "attachments");
+        Directory.CreateDirectory(attachments);
+        await File.WriteAllTextAsync(source, "new report", TestContext.Current.CancellationToken);
+        var previous = Path.Combine(attachments, "report.txt");
+        await File.WriteAllTextAsync(previous, "previous report", TestContext.Current.CancellationToken);
+        var context = TestToolExecutionContext.CreateBound("current", session, TrustAudience.Personal);
+
+        await _tool.ExecuteAsync(ToolInput.Create("Path", source, "DisplayName", "Report.txt"), context,
+            TestContext.Current.CancellationToken);
+
+        var attachment = Assert.Single(context.FileAttachments);
+        Assert.Equal(Path.Combine(attachments, "report-1.txt"), attachment.FilePath);
+        Assert.Equal("Report.txt", attachment.FileName);
+        Assert.Equal("text/plain", attachment.MimeType.Value);
+        Assert.Equal("new report", await File.ReadAllTextAsync(attachment.FilePath, TestContext.Current.CancellationToken));
+        Assert.Equal("previous report", await File.ReadAllTextAsync(previous, TestContext.Current.CancellationToken));
+        var direct = TestToolExecutionContext.CreateBound("current", session, TrustAudience.Personal);
+        await _tool.ExecuteAsync(ToolInput.Create("Path", attachment.FilePath), direct, TestContext.Current.CancellationToken);
+        Assert.Equal(attachment.FilePath, Assert.Single(direct.FileAttachments).FilePath);
+        Assert.Equal(2, Directory.GetFiles(attachments).Length);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    public async Task AuthorityRegression_AttachmentDestination_attach_permission_does_not_require_general_writes(TrustAudience audience)
+    {
+        var source = Path.Combine(_dir.Path, "report.txt");
+        await File.WriteAllTextAsync(source, "report", TestContext.Current.CancellationToken);
+        var session = Path.Combine(_dir.Path, "session");
+        var config = new ToolConfig();
+        var profile = audience == TrustAudience.Public ? config.AudienceProfiles.Public : config.AudienceProfiles.Team;
+        profile.AttachFiles.Roots.Add(source);
+        profile.WriteFiles.Mode = ToolFilesystemMode.None;
+        var tool = new AttachFileTool(config, new NetclawPaths(_dir.Path), new ToolPathPolicy([]));
+        var context = TestToolExecutionContext.CreateBound("current", session, audience);
+
+        await tool.ExecuteAsync(ToolInput.Create("Path", source), context, TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
+        var copy = Assert.Single(context.FileAttachments).FilePath;
+        Assert.Equal("report", await File.ReadAllTextAsync(copy, TestContext.Current.CancellationToken));
+        var write = TestToolExecutionContext.CreateBound("current", session, audience);
+        await new FileWriteTool(config, new NetclawPaths(_dir.Path), new ToolPathPolicy([])).ExecuteAsync(
+            ToolInput.Create("Path", copy, "Content", "replacement"), write, TestContext.Current.CancellationToken);
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, write.Receipt?.Category);
+        Assert.Equal("report", await File.ReadAllTextAsync(copy, TestContext.Current.CancellationToken));
+    }
+
     [Fact]
     public async Task Public_context_cannot_attach_file_outside_session_directory()
     {
