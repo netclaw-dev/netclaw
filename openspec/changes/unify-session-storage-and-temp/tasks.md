@@ -92,4 +92,4 @@
 - [x] 11.1 Reproduce linked and protected destinations with an authorized source and an ordinary copy control.
 - [x] 11.2 Validate destinations before file operations through the shared path policy.
 - [x] 11.3 Verify no side effects on denial, attach-only profiles, collisions, and direct attachments.
-- [ ] 11.4 Run related tests, skill evals, Slopwatch, headers, and strict specification validation.
+- [x] 11.4 Run related tests, skill evals, Slopwatch, headers, and strict specification validation.
