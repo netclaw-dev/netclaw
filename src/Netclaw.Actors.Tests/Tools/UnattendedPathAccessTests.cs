@@ -137,7 +137,7 @@ public sealed class UnattendedPathAccessTests : IDisposable
             PathAccessPolicy.FileOperation.Write);
 
         AssertDenied(decision, Path.GetFullPath(outside));
-        Assert.Contains("unattended session", decision.Error);
+        Assert.Contains("unattended session", Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error);
     }
 
     [Fact]
@@ -286,8 +286,8 @@ public sealed class UnattendedPathAccessTests : IDisposable
             PathAccessPolicy.FileOperation.Read);
 
         AssertDenied(decision, string.Empty, PathAccessPolicy.PathAccessFailure.MissingBase);
-        Assert.Contains("invalid_context", decision.Error, StringComparison.Ordinal);
-        Assert.DoesNotContain("set_working_directory", decision.Error, StringComparison.Ordinal);
+        Assert.Contains("invalid_context", Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error, StringComparison.Ordinal);
+        Assert.DoesNotContain("set_working_directory", Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error, StringComparison.Ordinal);
     }
 
     [Fact]

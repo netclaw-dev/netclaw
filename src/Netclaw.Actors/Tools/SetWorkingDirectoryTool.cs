@@ -8,6 +8,8 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 
+using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
+
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
@@ -62,10 +64,17 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
             return Task.FromResult(context.InvalidInput("Error: path must be absolute."));
 
         var access = _pathAccessPolicy.Evaluate(raw, context, PathAccessPolicy.FileOperation.DeclareProjectScope);
-        if (!access.Allowed)
-            return Task.FromResult(context.PathAccessFailure(access.Error, access.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied));
-
-        var fullPath = access.CanonicalPath;
+        string fullPath;
+        switch (access)
+        {
+            case PathAccessDecision.Denied denied:
+                return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
+            case PathAccessDecision.Allowed allowed:
+                fullPath = allowed.CanonicalPath;
+                break;
+            default:
+                throw new InvalidOperationException("Unexpected path decision.");
+        }
 
         if (!Directory.Exists(fullPath))
             return Task.FromResult(context.NotFound($"Error: directory does not exist: {fullPath}"));
@@ -78,7 +87,7 @@ public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDire
            && _pathAccessPolicy.Evaluate(
                path,
                context,
-               PathAccessPolicy.FileOperation.DeclareProjectScope) is { Allowed: true } access
+               PathAccessPolicy.FileOperation.DeclareProjectScope) is PathAccessDecision.Allowed access
            && PathUtility.AreEquivalentPaths(path, access.CanonicalPath)
            && Directory.Exists(access.CanonicalPath);
 

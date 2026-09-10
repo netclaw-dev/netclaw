@@ -8,6 +8,8 @@ using Netclaw.Security;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
+using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
+
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
@@ -69,7 +71,7 @@ internal sealed class ReviewedSafeShellPolicy
         var pathStyle = candidates[0].Shell == ApprovalShell.PowerShell
             ? ShellPathStyle.Windows
             : ShellPathStyle.Posix;
-        if (_pathAccessPolicy.EvaluateReviewedShellPath(fullCwd, context, pathStyle).Allowed)
+        if (_pathAccessPolicy.EvaluateReviewedShellPath(fullCwd, context, pathStyle) is PathAccessDecision.Allowed)
         {
             return false;
         }
@@ -78,7 +80,7 @@ internal sealed class ReviewedSafeShellPolicy
             fullCwd,
             context,
             PathAccessPolicy.FileOperation.DeclareProjectScope);
-        if (!declaration.Allowed)
+        if (declaration is not PathAccessDecision.Allowed admittedDeclaration)
             return false;
 
         foreach (var candidate in candidates)
@@ -92,7 +94,7 @@ internal sealed class ReviewedSafeShellPolicy
                     candidate.SourceOccurrence,
                     context,
                     resolvedPaths,
-                    declaration.CanonicalPath))
+                    admittedDeclaration.CanonicalPath))
             {
                 return false;
             }
@@ -111,11 +113,11 @@ internal sealed class ReviewedSafeShellPolicy
                 return false;
             }
 
-            if (!_pathAccessPolicy.EvaluateReviewedShellPath(
+            if (_pathAccessPolicy.EvaluateReviewedShellPath(
                     fullDirectory,
                     context,
                     pathStyle,
-                    declaration.CanonicalPath).Allowed)
+                    admittedDeclaration.CanonicalPath) is not PathAccessDecision.Allowed)
             {
                 return false;
             }
@@ -217,7 +219,7 @@ internal sealed class ReviewedSafeShellPolicy
         return _pathAccessPolicy.EvaluateReviewedShellPath(
             realPath.Value,
             context,
-            pathStyle).Allowed;
+            pathStyle) is PathAccessDecision.Allowed;
     }
 
     private static bool HasFileWritingRedirect(ShellPolicyResolvedPathView? resolvedPaths)
@@ -310,12 +312,12 @@ internal sealed class ReviewedSafeShellPolicy
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
                 || fact.Paths.Any(path =>
-                    !_pathAccessPolicy.EvaluateReviewedShellPath(
+                    _pathAccessPolicy.EvaluateReviewedShellPath(
                         path.Value,
                         context,
                         path.PathStyle,
                         proposedProjectRoot,
-                        includeTrustedRootInLinkCheck).Allowed))
+                        includeTrustedRootInLinkCheck) is not PathAccessDecision.Allowed))
             {
                 return false;
             }

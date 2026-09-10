@@ -50,42 +50,32 @@ internal sealed class PathAccessPolicy
     }
 
     /// <summary>Returns the canonical path and the typed result of one access check.</summary>
-    internal sealed record PathAccessDecision
+    internal abstract class PathAccessDecision
     {
-        private PathAccessDecision(
-            bool allowed,
-            string canonicalPath,
-            string error,
-            PathAccessFailure? failure)
+        private PathAccessDecision() { }
+
+        internal sealed class Allowed(string canonicalPath) : PathAccessDecision
         {
-            Allowed = allowed;
-            CanonicalPath = canonicalPath;
-            Error = error;
-            Failure = failure;
+            public string CanonicalPath { get; } = canonicalPath;
         }
 
-        /// <summary>Gets whether the policy allowed the operation.</summary>
-        public bool Allowed { get; }
+        internal sealed class Denied(
+            string error,
+            PathAccessFailure failure,
+            string? diagnosticPath) : PathAccessDecision
+        {
+            public string Error { get; } = error;
+            public PathAccessFailure Failure { get; } = failure;
+            public string? DiagnosticPath { get; } = diagnosticPath;
+        }
 
-        /// <summary>Gets the canonical path when path resolution succeeded.</summary>
-        public string CanonicalPath { get; }
+        public static PathAccessDecision Allow(string canonicalPath) => new Allowed(canonicalPath);
 
-        /// <summary>Gets the operator-readable error for a denied operation.</summary>
-        public string Error { get; }
-
-        /// <summary>Gets the failure category for a denied operation.</summary>
-        public PathAccessFailure? Failure { get; }
-
-        /// <summary>Creates an allowed decision for a canonical path.</summary>
-        public static PathAccessDecision Allow(string canonicalPath)
-            => new(true, canonicalPath, string.Empty, null);
-
-        /// <summary>Creates a denied decision with a failure category and optional canonical path.</summary>
         public static PathAccessDecision Deny(
             string error,
             PathAccessFailure failure,
             string canonicalPath = "")
-            => new(false, canonicalPath, error, failure);
+            => new Denied(error, failure, canonicalPath.Length == 0 ? null : canonicalPath);
     }
 
     private readonly ToolAudienceProfileResolver _profileResolver;

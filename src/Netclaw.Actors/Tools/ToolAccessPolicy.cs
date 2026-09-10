@@ -539,10 +539,10 @@ public sealed class ToolAccessPolicy
             if (expandedWorkingDirectory is null)
                 return ToolAuthorizationDecision.Deny("shell_invalid_working_directory");
 
-            if (!_pathAccessPolicy.Evaluate(
+            if (_pathAccessPolicy.Evaluate(
                     expandedWorkingDirectory,
                     context.Invocation,
-                    PathAccessPolicy.FileOperation.Write).Allowed)
+                    PathAccessPolicy.FileOperation.Write) is not PathAccessPolicy.PathAccessDecision.Allowed)
                 return ToolAuthorizationDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
@@ -574,7 +574,7 @@ public sealed class ToolAccessPolicy
                      .Where(static path => !IsNullDevice(path))
                      .DistinctBy(static path => (path.PathStyle, path.Value)))
         {
-            if (!_pathAccessPolicy.EvaluateShellPath(path, context).Allowed)
+            if (_pathAccessPolicy.EvaluateShellPath(path, context) is not PathAccessPolicy.PathAccessDecision.Allowed)
                 return ToolAuthorizationDecision.Deny("shell_path_outside_trust_zone");
         }
 
@@ -652,9 +652,9 @@ public sealed class ToolAccessPolicy
             return null;
 
         var decision = _pathAccessPolicy.Evaluate(rawPath, context, request.Operation);
-        return !decision.Allowed
-               && decision.Failure is PathAccessPolicy.PathAccessFailure.AccessDenied
-            ? ToolAuthorizationDecision.Deny("path_access_denied", decision.Error)
+        return decision is PathAccessPolicy.PathAccessDecision.Denied
+            { Failure: PathAccessPolicy.PathAccessFailure.AccessDenied } denied
+            ? ToolAuthorizationDecision.Deny("path_access_denied", denied.Error)
             : null;
     }
 

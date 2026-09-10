@@ -178,7 +178,7 @@ public sealed class SessionStorageFileAccessPolicyTests : IDisposable
             PathAccessPolicy.FileOperation.Read);
 
         AssertDenied(decision, Path.GetFullPath(requestedPath));
-        Assert.Contains("symlinked paths", decision.Error, StringComparison.Ordinal);
+        Assert.Contains("symlinked paths", Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error, StringComparison.Ordinal);
     }
 
     [Theory]

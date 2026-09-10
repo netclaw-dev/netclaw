@@ -9,6 +9,8 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 
+using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
+
 namespace Netclaw.Actors.Tools;
 
 [NetclawTool(ToolName,
@@ -58,10 +60,17 @@ public sealed partial class FileSearchTool : NetclawTool<FileSearchTool.Params>
             return context.InvalidInput(limitError);
 
         var access = _pathAccessPolicy.Evaluate(args.Root, context, PathAccessPolicy.FileOperation.Read);
-        if (!access.Allowed)
-            return context.PathAccessFailure(access.Error, access.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied);
-
-        var root = access.CanonicalPath;
+        string root;
+        switch (access)
+        {
+            case PathAccessDecision.Denied denied:
+                return context.PathAccessFailure(denied.Error, denied.Failure);
+            case PathAccessDecision.Allowed allowed:
+                root = allowed.CanonicalPath;
+                break;
+            default:
+                throw new InvalidOperationException("Unexpected path decision.");
+        }
 
         if (!Directory.Exists(root))
             return context.NotFound($"Error: Directory not found: {root}");
@@ -133,7 +142,7 @@ public sealed partial class FileSearchTool : NetclawTool<FileSearchTool.Params>
                 continue;
             }
 
-            if (!_pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read).Allowed)
+            if (_pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read) is not PathAccessDecision.Allowed)
             {
                 state.SkippedEntries++;
                 continue;

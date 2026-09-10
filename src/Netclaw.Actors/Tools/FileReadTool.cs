@@ -14,6 +14,8 @@ using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 
+using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
+
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
@@ -86,10 +88,17 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             return context.InvalidInput("Error: 'path' parameter is required.");
 
         var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Read);
-        if (!access.Allowed)
-            return context.PathAccessFailure(access.Error, access.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied);
-
-        var authorizedPath = access.CanonicalPath;
+        string authorizedPath;
+        switch (access)
+        {
+            case PathAccessDecision.Denied denied:
+                return context.PathAccessFailure(denied.Error, denied.Failure);
+            case PathAccessDecision.Allowed allowed:
+                authorizedPath = allowed.CanonicalPath;
+                break;
+            default:
+                throw new InvalidOperationException("Unexpected path decision.");
+        }
 
         if (!File.Exists(authorizedPath))
             return context.NotFound($"Error: File not found: {authorizedPath}");

@@ -110,12 +110,10 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
 
         var decision = policy.Evaluate(path, ctx, PathAccessPolicy.FileOperation.Read);
 
-        Assert.Equal(expectedAllow, decision.Allowed);
-        Assert.Equal(Path.GetFullPath(path), decision.CanonicalPath);
-        Assert.Equal(expectedAllow, string.IsNullOrEmpty(decision.Error));
-        Assert.Equal(
-            expectedAllow ? null : PathAccessPolicy.PathAccessFailure.AccessDenied,
-            decision.Failure);
+        if (expectedAllow)
+            AssertAllowed(decision, path);
+        else
+            AssertDenied(decision, Path.GetFullPath(path));
     }
 
     [Theory]
@@ -139,12 +137,10 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
 
         var decision = policy.Evaluate(path, ctx, PathAccessPolicy.FileOperation.Attach);
 
-        Assert.Equal(expectedAllow, decision.Allowed);
-        Assert.Equal(Path.GetFullPath(path), decision.CanonicalPath);
-        Assert.Equal(expectedAllow, string.IsNullOrEmpty(decision.Error));
-        Assert.Equal(
-            expectedAllow ? null : PathAccessPolicy.PathAccessFailure.AccessDenied,
-            decision.Failure);
+        if (expectedAllow)
+            AssertAllowed(decision, path);
+        else
+            AssertDenied(decision, Path.GetFullPath(path));
     }
 
     public static TheoryData<TrustAudience, bool, bool> AttachToolReachCases => new()
@@ -290,11 +286,9 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
         var path = Path.Combine(_outsideDir, "report.png");
         var decision = policy.Evaluate(path, ctx, PathAccessPolicy.FileOperation.Attach);
 
-        Assert.Equal(expectedAllow, decision.Allowed);
-        Assert.Equal(Path.GetFullPath(path), decision.CanonicalPath);
-        Assert.Equal(expectedAllow, string.IsNullOrEmpty(decision.Error));
-        Assert.Equal(
-            expectedAllow ? null : PathAccessPolicy.PathAccessFailure.AccessDenied,
-            decision.Failure);
+        if (expectedAllow)
+            AssertAllowed(decision, path);
+        else
+            AssertDenied(decision, Path.GetFullPath(path));
     }
 }

@@ -9,6 +9,8 @@ using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
 
+using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
+
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
@@ -51,10 +53,17 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
         // directories to the audience's read roots and emits an
         // audience-sanitized error (no configured root paths leaked to Public).
         var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Read);
-        if (!access.Allowed)
-            return Task.FromResult(context.PathAccessFailure(access.Error, access.Failure ?? PathAccessPolicy.PathAccessFailure.AccessDenied));
-
-        var authorizedPath = access.CanonicalPath;
+        string authorizedPath;
+        switch (access)
+        {
+            case PathAccessDecision.Denied denied:
+                return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
+            case PathAccessDecision.Allowed allowed:
+                authorizedPath = allowed.CanonicalPath;
+                break;
+            default:
+                throw new InvalidOperationException("Unexpected path decision.");
+        }
 
         if (!Directory.Exists(authorizedPath))
         {
@@ -84,12 +93,12 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
     private string FormatListing(string directory, ToolInvocationContext context)
     {
         var dirs = Directory.EnumerateDirectories(directory)
-            .Where(path => _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read).Allowed)
+            .Where(path => _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read) is PathAccessDecision.Allowed)
             .Select(Path.GetFileName)
             .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
         var files = Directory.EnumerateFiles(directory)
-            .Where(path => _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read).Allowed)
+            .Where(path => _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Read) is PathAccessDecision.Allowed)
             .Select(Path.GetFileName)
             .OrderBy(static name => name, StringComparer.OrdinalIgnoreCase)
             .ToList();
