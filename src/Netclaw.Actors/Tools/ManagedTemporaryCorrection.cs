@@ -61,7 +61,7 @@ internal sealed class ToolCorrectionCollection
 /// <summary>Defines the shared correction content, receipt, and actor state change.</summary>
 internal sealed record ToolCorrectionDelivery(
     string Content,
-    ToolInvocationReceipt Receipt,
+    ToolInvocationReceipt.Correction Receipt,
     ToolName? NativeTool,
     ManagedTemporaryCorrectionChange? ManagedTemporaryStateChange)
 {
@@ -96,9 +96,7 @@ internal sealed record ToolCorrectionDelivery(
         => new(
             "Tool execution deferred: working_directory_not_declared\n" +
             $"Project directory: '{directory}'.",
-            new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: ToolRemediationCode.SetWorkingDirectory),
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory),
             NativeTool: null,
             ManagedTemporaryStateChange: null);
 
@@ -110,9 +108,7 @@ internal sealed record ToolCorrectionDelivery(
 
         return new ToolCorrectionDelivery(
             content,
-            new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: ToolRemediationCode.UseNativeTool),
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.UseNativeTool),
             tool,
             ManagedTemporaryStateChange: null);
     }
@@ -124,9 +120,7 @@ internal sealed record ToolCorrectionDelivery(
         var correctionKey = new ManagedTemporaryCorrectionKey(managedTemporaryCall, retryTarget);
         return new ToolCorrectionDelivery(
             ManagedTemporaryCorrection.BuildSuggestion(retryTarget.ManagedTemporaryDirectory),
-            new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: ToolRemediationCode.UseManagedTemporaryDirectory),
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.UseManagedTemporaryDirectory),
             NativeTool: null,
             new ManagedTemporaryCorrectionChange.Arm(correctionKey));
     }

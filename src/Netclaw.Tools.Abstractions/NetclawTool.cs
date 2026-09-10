@@ -47,7 +47,7 @@ public abstract partial class NetclawTool<TParams> : INetclawTool where TParams 
         if (TryParse(arguments, out var error, out var args))
             return await ExecuteAsync(args, context, ct);
 
-        context.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
+        context.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
         return error;
     }
 

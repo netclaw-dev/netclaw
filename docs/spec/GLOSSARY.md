@@ -250,6 +250,9 @@ A tool receipt is trusted internal data about one completed invocation attempt.
 The attempt can end before the tool implementation runs. An actor uses the
 receipt to update state without parsing model-facing text or authored arguments.
 
+Success carries file activity and an optional project declaration. A correction carries its remediation code.
+Other outcomes carry no success payload. The internal cases preserve the constructor guards and collection ownership.
+
 **Code anchor:** `ToolInvocationReceipt`
 
 Example:

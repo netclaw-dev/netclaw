@@ -877,3 +877,35 @@ permitted tool call -> generate output path -> check destination
 
 This order does not bind the write to an operating-system directory handle.
 A process with directory-write permission can still replace a directory after the check.
+
+## Internal result contracts
+
+These changes retain the [engineering glossary](../../../docs/spec/GLOSSARY.md) and the existing authority model.
+
+| Contract | Producer and consumer | Lifetime and compatibility |
+|---|---|---|
+| Path result | `PathAccessPolicy` produces `Allowed` or `Denied`; file tools and shell policy consume the cases | Call-local; errors and public tool text retain their shapes |
+| Tool receipt | Tool completion creates `Succeeded`, `Correction`, or `OtherOutcome`; actors update context from the matching case | Call-local and actor-local; `ToolExecutionCompleted` excludes serialization verification; no persistence format changes |
+| Child result | The child actor returns `SubAgentResult`; the spawner adds typed locations; `SpawnAgentTool` consumes the enriched case | Actor-local; public `SpawnAsync` maps back to the unchanged `SubAgentResult` shape |
+| Git head | The inspector parses head state; the context renderer consumes detached or attached state | Call-local snapshots; the public flat snapshot retains its JSON members through an explicit map |
+
+Ordered child flow:
+
+```text
+child actor -> completion without locations
+spawner -> SuccessfulRun(Completed or Partial, locations) or OtherRun(Failed or Cancelled)
+spawn_agent -> one successful-case path block
+public SpawnAsync adapter -> original SubAgentResult fields
+```
+
+Partial completion already counts as success. It retains its reason, delta, and paths.
+A child location is data. It does not grant file authority.
+Case constructors retain enum validation, canonical-path checks, and activity collection ownership.
+The aggregate receipt factory is removed. Types now exclude failure activity and correction without remediation.
+The success receipt retains a private copy of its activity collection.
+
+Git snapshots retain optional branch metadata for compatibility. A null commit still represents an unborn branch.
+Detached state cannot carry branch or upstream metadata. Divergence requires an upstream.
+Malformed Git status becomes the existing `Unavailable` inspection through the existing `FormatException` path.
+The public snapshot remains a boundary shape; its independent fields are not a closed internal state.
+No compiler-exhaustiveness claim applies to these C# hierarchies. Consumers retain explicit unexpected-case checks.

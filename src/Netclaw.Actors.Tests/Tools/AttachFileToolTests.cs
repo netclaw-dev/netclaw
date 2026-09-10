@@ -54,7 +54,7 @@ public class AttachFileToolTests : IDisposable
         Assert.Contains("invalid_context", result, StringComparison.Ordinal);
         Assert.DoesNotContain("set_working_directory", result, StringComparison.Ordinal);
         Assert.Equal(ToolInvocationOutcomeCategory.InvalidInput, context.Receipt?.Category);
-        Assert.Null(context.Receipt?.RemediationCode);
+        Assert.IsNotType<ToolInvocationReceipt.Correction>(context.Receipt);
     }
 
     [Fact]

@@ -61,7 +61,7 @@ public sealed class StructuredWorkspaceToolTests : IDisposable
         Assert.Contains("skipped=1", result, StringComparison.Ordinal);
         Assert.Contains("truncated=false", result, StringComparison.Ordinal);
         Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
-        Assert.Empty(context.Receipt?.FileActivity ?? []);
+        Assert.False(context.Receipt is ToolInvocationReceipt.Succeeded { FileActivity.Count: > 0 });
     }
 
     [Fact]

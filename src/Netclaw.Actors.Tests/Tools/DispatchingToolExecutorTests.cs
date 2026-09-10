@@ -356,7 +356,7 @@ public partial class DispatchingToolExecutorTests
             Assert.Equal(
                 ToolInvocationOutcomeCategory.Success,
                 continuationContext.Invocation.Receipt?.Category);
-            Assert.Empty(continuationContext.Invocation.Receipt?.FileActivity ?? []);
+            Assert.False(continuationContext.Invocation.Receipt is ToolInvocationReceipt.Succeeded { FileActivity.Count: > 0 });
         }
         finally
         {
@@ -454,7 +454,7 @@ public partial class DispatchingToolExecutorTests
         var ex = await Assert.ThrowsAsync<ToolAccessDeniedException>(() => _restrictedExecutor.ExecuteAsync(toolCall, context, TestContext.Current.CancellationToken));
         Assert.Equal("shell_requires_personal_context", ex.DenyReason);
         Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
-        Assert.Empty(context.Receipt?.FileActivity ?? []);
+        Assert.False(context.Receipt is ToolInvocationReceipt.Succeeded { FileActivity.Count: > 0 });
     }
 
     [Fact]
@@ -4410,7 +4410,7 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Contains("Meta argument '_background'", result, StringComparison.Ordinal);
         Assert.Equal(ToolInvocationOutcomeCategory.InvalidInput, context.Receipt?.Category);
-        Assert.Null(context.Receipt?.RemediationCode);
+        Assert.IsNotType<ToolInvocationReceipt.Correction>(context.Receipt);
         Assert.Equal(0, approvalService.RequestCount);
     }
 

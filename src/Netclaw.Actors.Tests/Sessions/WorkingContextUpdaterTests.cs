@@ -53,11 +53,9 @@ public class WorkingContextUpdaterTests
     {
         var category = Enum.Parse<ToolInvocationOutcomeCategory>(categoryName);
         var result = Result("call-1", "file_read", "successful-looking presentation");
-        var receipt = category == ToolInvocationOutcomeCategory.RecoverableCorrection
-            ? new ToolInvocationReceipt(
-                category,
-                remediationCode: ToolRemediationCode.SetWorkingDirectory)
-            : new ToolInvocationReceipt(category);
+        ToolInvocationReceipt receipt = category == ToolInvocationOutcomeCategory.RecoverableCorrection
+            ? new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory)
+            : new ToolInvocationReceipt.OtherOutcome(category);
 
         var updated = WorkingContextUpdater.UpdateFromToolReceipts(
             WorkingContext.Empty,
@@ -86,53 +84,34 @@ public class WorkingContextUpdaterTests
     {
         var outputs = new ToolExecutionOutputs();
 
-        Assert.True(outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied)));
+        Assert.True(outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied)));
         Assert.False(outputs.TryComplete(Success(
             Path.GetFullPath(Path.Combine(Path.GetTempPath(), "late.txt")),
             ToolFileActivityKind.Read)));
         Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, outputs.Receipt?.Category);
-        Assert.Empty(outputs.Receipt?.FileActivity ?? []);
+        Assert.False(outputs.Receipt is ToolInvocationReceipt.Succeeded { FileActivity.Count: > 0 });
     }
 
     [Fact]
-    public void Non_success_receipt_rejects_file_activity()
-    {
-        var path = Path.GetFullPath(Path.Combine(Path.GetTempPath(), "invalid.txt"));
-
-        var exception = Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt(
-            ToolInvocationOutcomeCategory.AccessDenied,
-            [new ToolFileActivity(path, ToolFileActivityKind.Read)]));
-
-        Assert.Contains("successful", exception.Message, StringComparison.OrdinalIgnoreCase);
-    }
+    public void Other_outcome_rejects_success_category()
+        => Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.Success));
 
     [Fact]
-    public void Recoverable_receipt_requires_remediation()
-    {
-        Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt(
-            ToolInvocationOutcomeCategory.RecoverableCorrection));
-    }
+    public void Other_outcome_rejects_correction_without_remediation()
+        => Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.RecoverableCorrection));
 
     [Fact]
-    public void Non_corrective_receipt_rejects_remediation()
-    {
-        Assert.Throws<ArgumentException>(() => new ToolInvocationReceipt(
-            ToolInvocationOutcomeCategory.AccessDenied,
-            remediationCode: ToolRemediationCode.SetWorkingDirectory));
-    }
+    public void Other_outcome_rejects_undefined_category()
+        => Assert.Throws<ArgumentOutOfRangeException>(() => new ToolInvocationReceipt.OtherOutcome((ToolInvocationOutcomeCategory)int.MaxValue));
 
     [Fact]
     public void Remediation_rejects_undefined_code()
     {
-        Assert.Throws<ArgumentOutOfRangeException>(() => new ToolInvocationReceipt(
-            ToolInvocationOutcomeCategory.RecoverableCorrection,
-            remediationCode: (ToolRemediationCode)int.MaxValue));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new ToolInvocationReceipt.Correction((ToolRemediationCode)int.MaxValue));
     }
 
     private static ToolInvocationReceipt Success(string path, ToolFileActivityKind kind)
-        => new(
-            ToolInvocationOutcomeCategory.Success,
-            [new ToolFileActivity(path, kind)]);
+        => new ToolInvocationReceipt.Succeeded([new ToolFileActivity(path, kind)], null);
 
     private static SerializableChatMessage Result(string callId, string name, string content)
         => new()

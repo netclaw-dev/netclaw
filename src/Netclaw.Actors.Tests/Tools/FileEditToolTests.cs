@@ -67,7 +67,7 @@ public class FileEditToolTests : IDisposable
 
         Assert.Contains("matches 3 locations", result);
         Assert.DoesNotContain("Next action", result, StringComparison.Ordinal);
-        Assert.Equal(ToolRemediationCode.ProvideUniqueOldString, context.Receipt?.RemediationCode);
+        Assert.Equal(ToolRemediationCode.ProvideUniqueOldString, Assert.IsType<ToolInvocationReceipt.Correction>(context.Receipt).RemediationCode);
         Assert.Equal(original, await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 
@@ -82,7 +82,7 @@ public class FileEditToolTests : IDisposable
         var result = await _tool.ExecuteAsync(ToolInput.Create("Path", filePath, "OldString", "goodbye", "NewString", "farewell"), context, CancellationToken.None);
 
         Assert.Contains("not found", result);
-        Assert.Equal(ToolRemediationCode.ProvideUniqueOldString, context.Receipt?.RemediationCode);
+        Assert.Equal(ToolRemediationCode.ProvideUniqueOldString, Assert.IsType<ToolInvocationReceipt.Correction>(context.Receipt).RemediationCode);
         Assert.Equal(original, await File.ReadAllTextAsync(filePath, TestContext.Current.CancellationToken));
     }
 

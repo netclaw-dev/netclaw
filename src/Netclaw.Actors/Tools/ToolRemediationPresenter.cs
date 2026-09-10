@@ -15,7 +15,7 @@ internal static class ToolRemediationPresenter
         ToolInvocationReceipt? receipt,
         bool setWorkingDirectoryAvailable)
     {
-        if (receipt?.RemediationCode is not { } remediationCode)
+        if (receipt is not ToolInvocationReceipt.Correction { RemediationCode: var remediationCode })
             return message;
 
         var action = remediationCode switch

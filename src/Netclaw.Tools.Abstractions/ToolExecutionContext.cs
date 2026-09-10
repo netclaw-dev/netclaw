@@ -60,57 +60,49 @@ internal sealed record ToolFileActivity
     public ToolFileActivityKind Kind { get; }
 }
 
-internal sealed record ToolInvocationReceipt
+internal abstract class ToolInvocationReceipt
 {
-    public ToolInvocationReceipt(
-        ToolInvocationOutcomeCategory category,
-        IReadOnlyList<ToolFileActivity>? fileActivity = null,
-        ToolRemediationCode? remediationCode = null,
-        string? declaredProjectDirectory = null)
-    {
-        if (!Enum.IsDefined(category))
-            throw new ArgumentOutOfRangeException(nameof(category));
-
-        var activity = fileActivity?.ToArray() ?? [];
-        if (category != ToolInvocationOutcomeCategory.Success
-            && (activity.Length > 0 || declaredProjectDirectory is not null))
-        {
-            throw new ArgumentException("Only successful outcomes may report working-context activity.");
-        }
-
-        if (category != ToolInvocationOutcomeCategory.RecoverableCorrection
-            && remediationCode is not null)
-        {
-            throw new ArgumentException("Only a recoverable correction may report remediation.", nameof(remediationCode));
-        }
-
-        if (category == ToolInvocationOutcomeCategory.RecoverableCorrection
-            && remediationCode is null)
-        {
-            throw new ArgumentException("A recoverable correction requires remediation.", nameof(remediationCode));
-        }
-
-        if (remediationCode is { } code && !Enum.IsDefined(code))
-            throw new ArgumentOutOfRangeException(nameof(remediationCode));
-
-        if (declaredProjectDirectory is not null
-            && !IsCanonicalAbsolutePath(declaredProjectDirectory))
-        {
-            throw new ArgumentException(
-                "Declared project directory requires a canonical absolute path.",
-                nameof(declaredProjectDirectory));
-        }
-
-        Category = category;
-        FileActivity = Array.AsReadOnly(activity);
-        RemediationCode = remediationCode;
-        DeclaredProjectDirectory = declaredProjectDirectory;
-    }
+    private ToolInvocationReceipt(ToolInvocationOutcomeCategory category) => Category = category;
 
     public ToolInvocationOutcomeCategory Category { get; }
-    public IReadOnlyList<ToolFileActivity> FileActivity { get; }
-    public ToolRemediationCode? RemediationCode { get; }
-    public string? DeclaredProjectDirectory { get; }
+
+    internal sealed class Succeeded : ToolInvocationReceipt
+    {
+        public Succeeded(IReadOnlyList<ToolFileActivity> fileActivity, string? declaredProjectDirectory)
+            : base(ToolInvocationOutcomeCategory.Success)
+        {
+            if (declaredProjectDirectory is not null && !IsCanonicalAbsolutePath(declaredProjectDirectory))
+                throw new ArgumentException("Declared project directory requires a canonical absolute path.", nameof(declaredProjectDirectory));
+            FileActivity = Array.AsReadOnly(fileActivity.ToArray());
+            DeclaredProjectDirectory = declaredProjectDirectory;
+        }
+
+        public IReadOnlyList<ToolFileActivity> FileActivity { get; }
+        public string? DeclaredProjectDirectory { get; }
+    }
+
+    internal sealed class Correction : ToolInvocationReceipt
+    {
+        public Correction(ToolRemediationCode remediationCode) : base(ToolInvocationOutcomeCategory.RecoverableCorrection)
+        {
+            if (!Enum.IsDefined(remediationCode))
+                throw new ArgumentOutOfRangeException(nameof(remediationCode));
+            RemediationCode = remediationCode;
+        }
+
+        public ToolRemediationCode RemediationCode { get; }
+    }
+
+    internal sealed class OtherOutcome : ToolInvocationReceipt
+    {
+        public OtherOutcome(ToolInvocationOutcomeCategory category) : base(category)
+        {
+            if (!Enum.IsDefined(category))
+                throw new ArgumentOutOfRangeException(nameof(category));
+            if (category is ToolInvocationOutcomeCategory.Success or ToolInvocationOutcomeCategory.RecoverableCorrection)
+                throw new ArgumentException("This outcome requires its dedicated receipt case.", nameof(category));
+        }
+    }
 
     internal static bool IsCanonicalAbsolutePath(string path)
     {

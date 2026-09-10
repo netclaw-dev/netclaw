@@ -82,6 +82,20 @@ public sealed class SubAgentSpawner
         string? systemPromptOverlay = null,
         ChannelWriter<ToolActivityUpdate>? activitySink = null)
     {
+        var result = await SpawnRunAsync(profile, task, runtimeContext, context, ct, systemPromptOverlay, activitySink)
+            .ConfigureAwait(false);
+        return result.ToProtocolResult();
+    }
+
+    internal async Task<EnrichedChildRunResult> SpawnRunAsync(
+        SubAgentProfile profile,
+        string task,
+        string? runtimeContext,
+        ToolInvocationContext context,
+        CancellationToken ct,
+        string? systemPromptOverlay,
+        ChannelWriter<ToolActivityUpdate>? activitySink)
+    {
         // Parent-side spawn breadcrumbs — each event is fanned out to daemon.log/Seq and
         // the parent's session.log from one place (see SubAgentSpawnBreadcrumbs), covering
         // request → outcome plus early rejections that happen before the child even exists.
@@ -91,12 +105,12 @@ public sealed class SubAgentSpawner
         {
             SubAgentSpawnBreadcrumbs.NoSessionContext(_logger, context, profile.Name);
             activitySink?.TryComplete();
-            return new SubAgentResult
+            return new EnrichedChildRunResult.OtherRun(new SubAgentResult
             {
                 Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnUnavailable),
                 Output = $"Cannot spawn subagent '{profile.Name}': no session context available.",
                 AgentName = new AgentName(profile.Name)
-            };
+            });
         }
 
         var exposure = ResolveTools(context);
@@ -104,12 +118,12 @@ public sealed class SubAgentSpawner
         {
             SubAgentSpawnBreadcrumbs.NoToolsAvailable(_logger, context, profile.Name);
             activitySink?.TryComplete();
-            return new SubAgentResult
+            return new EnrichedChildRunResult.OtherRun(new SubAgentResult
             {
                 Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.NoToolsAvailable),
                 Output = $"Cannot spawn subagent '{profile.Name}': no tools are available under the parent audience policy.",
                 AgentName = new AgentName(profile.Name)
-            };
+            });
         }
 
         var definition = new SubAgentDefinition
@@ -154,20 +168,20 @@ public sealed class SubAgentSpawner
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             activitySink?.TryComplete();
-            return CancelledResult(definition.Name, runId, scopeId);
+            return new EnrichedChildRunResult.OtherRun(CancelledResult(definition.Name, runId, scopeId));
         }
         catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
             SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, runId, ex);
             activitySink?.TryComplete();
-            return new SubAgentResult
+            return new EnrichedChildRunResult.OtherRun(new SubAgentResult
             {
                 Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
                 Output = $"Subagent error: {ex.Message}",
                 AgentName = definition.Name,
                 RunId = runId,
                 ScopeId = scopeId
-            };
+            });
         }
         catch (Exception ex) when (FatalExceptionPolicy.IsFatal(ex))
         {
@@ -236,7 +250,7 @@ public sealed class SubAgentSpawner
                 OutcomeReason = SubAgentOutcomeReason.CancelledByParent
             });
             activitySink?.TryComplete();
-            return CancelledResult(definition.Name, runId, scopeId);
+            return new EnrichedChildRunResult.OtherRun(CancelledResult(definition.Name, runId, scopeId));
         }
         catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
@@ -332,12 +346,13 @@ public sealed class SubAgentSpawner
 
             SubAgentSpawnBreadcrumbs.Completed(_logger, context, profile.Name, runId, result.Success, sw.ElapsedMilliseconds);
 
-            return result with
+            var response = result with { RunId = runId, ScopeId = scopeId };
+            return result.Completion switch
             {
-                RunId = runId,
-                ScopeId = scopeId,
-                LogPath = result.Success ? childStorage.LogPath.Value : null,
-                ArtifactDirectory = result.Success ? childStorage.ArtifactDirectory.Value : null
+                ChildRunCompletion.Completed or ChildRunCompletion.Partial =>
+                    new EnrichedChildRunResult.SuccessfulRun(response,
+                        new EnrichedChildRunResult.RunLocations(childStorage.LogPath, childStorage.ArtifactDirectory)),
+                _ => new EnrichedChildRunResult.OtherRun(response)
             };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -356,7 +371,7 @@ public sealed class SubAgentSpawner
                 Duration = sw.Elapsed
             });
 
-            return CancelledResult(definition.Name, runId, scopeId);
+            return new EnrichedChildRunResult.OtherRun(CancelledResult(definition.Name, runId, scopeId));
         }
         catch (Exception ex) when (!FatalExceptionPolicy.IsFatal(ex))
         {
@@ -376,14 +391,14 @@ public sealed class SubAgentSpawner
             });
 
             SubAgentSpawnBreadcrumbs.RunFailed(_logger, context, profile.Name, runId, ex);
-            return new SubAgentResult
+            return new EnrichedChildRunResult.OtherRun(new SubAgentResult
             {
                 Completion = new ChildRunCompletion.Failed(SubAgentOutcomeReason.SpawnError),
                 Output = $"Subagent error: {ex.Message}",
                 AgentName = new AgentName(profile.Name),
                 RunId = runId,
                 ScopeId = scopeId
-            };
+            });
         }
         finally
         {
@@ -528,4 +543,60 @@ public sealed class SubAgentSpawner
         // operator's quality workflow aligned without exposing SOUL.md or TOOLING.md.
         return _promptProvider.GetOperatingRules(context.Audience);
     }
+}
+
+/// <summary>Separates child completion from the locations that the spawner adds.</summary>
+internal abstract class EnrichedChildRunResult
+{
+    private EnrichedChildRunResult(SubAgentResult response)
+        => Response = response with { LogPath = null, ArtifactDirectory = null };
+
+    // Preserve the public response at the adapter boundary. Locations exist only on SuccessfulRun.
+    internal SubAgentResult Response { get; }
+
+    internal sealed record RunLocations
+    {
+        internal RunLocations(SessionLogPath logPath, ArtifactDirectory artifactDirectory)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(logPath.Value);
+            ArgumentException.ThrowIfNullOrWhiteSpace(artifactDirectory.Value);
+            LogPath = logPath;
+            ArtifactDirectory = artifactDirectory;
+        }
+
+        internal SessionLogPath LogPath { get; }
+        internal ArtifactDirectory ArtifactDirectory { get; }
+    }
+
+    internal sealed class SuccessfulRun : EnrichedChildRunResult
+    {
+        internal SuccessfulRun(SubAgentResult response, RunLocations locations) : base(response)
+        {
+            if (response.Completion is not (ChildRunCompletion.Completed or ChildRunCompletion.Partial))
+                throw new ArgumentException("A successful run requires completed or partial completion.", nameof(response));
+            Locations = locations ?? throw new ArgumentNullException(nameof(locations));
+        }
+
+        internal RunLocations Locations { get; }
+    }
+
+    internal sealed class OtherRun : EnrichedChildRunResult
+    {
+        internal OtherRun(SubAgentResult response) : base(response)
+        {
+            if (response.Completion is not (ChildRunCompletion.Failed or ChildRunCompletion.Cancelled))
+                throw new ArgumentException("An unsuccessful run requires failed or cancelled completion.", nameof(response));
+        }
+    }
+
+    internal SubAgentResult ToProtocolResult() => this switch
+    {
+        SuccessfulRun success => Response with
+        {
+            LogPath = success.Locations.LogPath.Value,
+            ArtifactDirectory = success.Locations.ArtifactDirectory.Value
+        },
+        OtherRun => Response,
+        _ => throw new InvalidOperationException("Unexpected enriched child result.")
+    };
 }

@@ -93,3 +93,10 @@
 - [x] 11.2 Validate destinations before file operations through the shared path policy.
 - [x] 11.3 Verify no side effects on denial, attach-only profiles, collisions, and direct attachments.
 - [x] 11.4 Run related tests, skill evals, Slopwatch, headers, and strict specification validation.
+
+## 12. Simplify internal result contracts
+
+- [x] 12.1 Inventory receipt, child, and Git consumers; preserve public shapes and partial-child semantics.
+- [x] 12.2 Convert internal cases and consumers with boundary maps; preserve existing guards and collection ownership.
+- [x] 12.3 Verify context updates, failed outcomes, child completion, and old Git JSON shapes.
+- [ ] 12.4 Run actor and daemon tests, relevant evals, Slopwatch, headers, and strict specification validation.

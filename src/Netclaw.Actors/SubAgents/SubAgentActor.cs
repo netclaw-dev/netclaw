@@ -588,7 +588,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             _subSessionId,
                             callId.Value,
                             receipt?.Category.ToString(),
-                            receipt?.RemediationCode?.ToString());
+                            (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
                     }
                     if (msg.ToolExposureRequests.TryGetValue(callId.Value, out var exposureRequest))
                         TryActivateDiscoveredTool(exposureRequest.ToolName.Value);
@@ -1176,9 +1176,8 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
     private void TryApplyProjectDirectory(string? toolName, ToolInvocationReceipt? receipt)
     {
         if (toolName is not SetWorkingDirectoryTool.ToolName
-            || receipt is not
+            || receipt is not ToolInvocationReceipt.Succeeded
             {
-                Category: ToolInvocationOutcomeCategory.Success,
                 DeclaredProjectDirectory: { } projectDirectory
             })
         {
@@ -1427,7 +1426,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 if (interpretation.Rejection is { } rejection)
                 {
                     toolContext.Outputs.TryComplete(
-                        new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
+                        new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
                     return BuildToolResult(tc, rejection.Message, toolContext, modelInputBudget);
                 }
 
@@ -1567,7 +1566,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     }
 
                     toolContext.Outputs.TryComplete(
-                        new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
+                        new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
 
                     return BuildToolResult(
                         tc,
@@ -1602,7 +1601,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         FileNotFoundException or DirectoryNotFoundException => ToolInvocationOutcomeCategory.NotFound,
                         _ => ToolInvocationOutcomeCategory.TransientFailure
                     };
-                    toolContext.Outputs.TryComplete(new ToolInvocationReceipt(category));
+                    toolContext.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(category));
                     var error = ex is ToolAccessDeniedException denied
                         ? denied.ToAgentResult()
                         : $"Error: {ex.Message}";
@@ -1693,7 +1692,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         }
 
         var receipt = toolContext.Receipt
-            ?? new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success);
+            ?? new ToolInvocationReceipt.Succeeded([], null);
         return new SubAgentToolCallResult(
             new SerializableChatMessage
             {
@@ -1783,10 +1782,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         public void Apply(ToolInvocationReceipt? receipt)
         {
-            if (receipt?.Category != ToolInvocationOutcomeCategory.Success)
+            if (receipt is not ToolInvocationReceipt.Succeeded success)
                 return;
 
-            foreach (var activity in receipt.FileActivity)
+            foreach (var activity in success.FileActivity)
             {
                 _workingContext = _workingContext.AddRecentFile(activity.CanonicalPath);
                 if (activity.Kind == ToolFileActivityKind.Read)

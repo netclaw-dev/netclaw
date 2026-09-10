@@ -158,7 +158,7 @@ public class FileWriteToolTests : IDisposable
         Assert.Contains("Successfully wrote", result, StringComparison.Ordinal);
         Assert.Equal("done", await File.ReadAllTextAsync(expected, TestContext.Current.CancellationToken));
         Assert.Equal(ToolInvocationOutcomeCategory.Success, context.Receipt?.Category);
-        var activity = Assert.Single(context.Receipt?.FileActivity ?? []);
+        var activity = Assert.Single(Assert.IsType<ToolInvocationReceipt.Succeeded>(context.Receipt).FileActivity);
         Assert.Equal(expected, activity.CanonicalPath);
         Assert.Equal(ToolFileActivityKind.Changed, activity.Kind);
     }
@@ -201,7 +201,7 @@ public class FileWriteToolTests : IDisposable
             CancellationToken.None);
 
         Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
-        Assert.Empty(context.Receipt?.FileActivity ?? []);
+        Assert.False(context.Receipt is ToolInvocationReceipt.Succeeded { FileActivity.Count: > 0 });
         Assert.False(File.Exists(filePath));
     }
 

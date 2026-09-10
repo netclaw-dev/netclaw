@@ -2119,9 +2119,7 @@ public class SubAgentActorTests : TestKit
         var editTool = new FakeNetclawTool(
             "file_edit",
             "Successfully edited src/Calculator.cs: replaced 1 occurrence(s)",
-            onExecute: context => context.TryComplete(new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.Success,
-                [new ToolFileActivity(changedPath, ToolFileActivityKind.Changed)])));
+            onExecute: context => context.TryComplete(new ToolInvocationReceipt.Succeeded([new ToolFileActivity(changedPath, ToolFileActivityKind.Changed)], null)));
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =
@@ -2154,7 +2152,7 @@ public class SubAgentActorTests : TestKit
             "file_edit",
             "Error: Permission denied: src/Calculator.cs",
             onExecute: context => context.TryComplete(
-                new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied)));
+                new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied)));
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall =
@@ -2222,9 +2220,7 @@ public class SubAgentActorTests : TestKit
         var readTool = new FakeNetclawTool(
             FileReadTool.ToolName,
             "content",
-            onExecute: context => context.TryComplete(new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.Success,
-                declaredProjectDirectory: forgedProject)));
+            onExecute: context => context.TryComplete(new ToolInvocationReceipt.Succeeded([], forgedProject)));
         var fakeClient = new FakeChatClient
         {
             ToolCallsOnFirstCall = [CreateToolCall("call-read", FileReadTool.ToolName)]

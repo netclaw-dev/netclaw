@@ -960,8 +960,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (result.Name is not SetWorkingDirectoryTool.ToolName
                 || result.ToolCallId is not { } callId
                 || !msg.ToolReceipts.TryGetValue(callId.Value, out var receipt)
-                || receipt.Category != ToolInvocationOutcomeCategory.Success
-                || receipt.DeclaredProjectDirectory is not { } projectDir)
+                || receipt is not ToolInvocationReceipt.Succeeded { DeclaredProjectDirectory: { } projectDir })
             {
                 continue;
             }
@@ -4676,7 +4675,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             toolCallId.Value,
             toolMessage.Name ?? "unknown",
             result.Receipt?.Category.ToString(),
-            result.Receipt?.RemediationCode?.ToString());
+            (result.Receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
 
         EmitOutput(new ToolResultOutput
         {
@@ -4700,9 +4699,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             TryActivateDiscoveredTool(toolMessage.Content.Trim());
 
         if (toolMessage.Name is SetWorkingDirectoryTool.ToolName
-            && result.Receipt is
+            && result.Receipt is ToolInvocationReceipt.Succeeded
             {
-                Category: ToolInvocationOutcomeCategory.Success,
                 DeclaredProjectDirectory: { } projectDir
             })
         {

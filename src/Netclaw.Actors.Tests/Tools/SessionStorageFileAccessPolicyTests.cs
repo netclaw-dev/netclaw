@@ -379,7 +379,7 @@ public sealed class SessionStorageFileAccessPolicyTests : IDisposable
         {
             Assert.Empty(context.FileAttachments);
             Assert.Empty(context.ModelInputFiles);
-            Assert.Empty(context.Receipt!.FileActivity);
+            Assert.False(context.Receipt is ToolInvocationReceipt.Succeeded { FileActivity.Count: > 0 });
         }
     }
 

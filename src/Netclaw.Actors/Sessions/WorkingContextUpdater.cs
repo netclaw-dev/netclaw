@@ -24,12 +24,12 @@ internal static class WorkingContextUpdater
         {
             if (result.ToolCallId is not { } callId
                 || !receipts.TryGetValue(callId.Value, out var receipt)
-                || receipt.Category != ToolInvocationOutcomeCategory.Success)
+                || receipt is not ToolInvocationReceipt.Succeeded success)
             {
                 continue;
             }
 
-            foreach (var activity in receipt.FileActivity)
+            foreach (var activity in success.FileActivity)
                 updated = updated.AddRecentFile(activity.CanonicalPath);
         }
 
@@ -40,11 +40,11 @@ internal static class WorkingContextUpdater
         WorkingContext current,
         ToolInvocationReceipt? receipt)
     {
-        if (receipt?.Category != ToolInvocationOutcomeCategory.Success)
+        if (receipt is not ToolInvocationReceipt.Succeeded success)
             return current;
 
         var updated = current;
-        foreach (var activity in receipt.FileActivity)
+        foreach (var activity in success.FileActivity)
             updated = updated.AddRecentFile(activity.CanonicalPath);
         return updated;
     }

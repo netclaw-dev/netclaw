@@ -170,7 +170,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 context.Approval.AuthorizationAttemptId.Value,
                 context.SessionId,
                 toolCall.CallId);
-            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.NotFound));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.NotFound));
             return $"Unknown tool: {toolCall.Name}";
         }
 
@@ -188,7 +188,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 context.Approval.AuthorizationAttemptId.Value,
                 context.SessionId,
                 toolCall.CallId);
-            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
             return rejection.Message;
         }
 
@@ -208,7 +208,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                     ct)
                 : await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct);
 
-            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
 
             var redacted = SecretOutputRedactor.Redact(result);
 
@@ -283,7 +283,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 context.Approval.AuthorizationAttemptId.Value,
                 context.SessionId,
                 toolCall.CallId);
-            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.NotFound));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.NotFound));
             yield return new ToolCompletedUpdate($"Unknown tool: {toolCall.Name}");
             yield break;
         }
@@ -301,7 +301,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 context.Approval.AuthorizationAttemptId.Value,
                 context.SessionId,
                 toolCall.CallId);
-            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
             yield return new ToolCompletedUpdate(rejection.Message);
             yield break;
         }
@@ -335,7 +335,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             {
                 case ToolCompletedUpdate completed:
                     sw.Stop();
-                    context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success));
+                    context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
                     var redacted = SecretOutputRedactor.Redact(completed.Result);
                     var modelResult = tool.SuppressOutputRedaction ? completed.Result : redacted;
                     modelResult = await ToolOutputSpill.BoundAndSpillAsync(
@@ -380,7 +380,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             IOException or TimeoutException => ToolInvocationOutcomeCategory.TransientFailure,
             _ => ToolInvocationOutcomeCategory.TransientFailure
         };
-        context.Outputs.TryComplete(new ToolInvocationReceipt(category));
+        context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(category));
     }
 
     /// <summary>

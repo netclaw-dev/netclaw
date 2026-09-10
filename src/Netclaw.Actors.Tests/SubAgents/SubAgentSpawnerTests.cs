@@ -575,9 +575,11 @@ public sealed class SubAgentSpawnerTests : TestKit
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task AuthorityRegression_Child_spawner_retains_team_file_authority(bool legacy)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AuthorityRegression_Child_spawner_retains_team_file_authority(bool legacy, bool partial)
     {
         using var directory = new DisposableTempDir();
         var paths = new NetclawPaths(directory.Path);
@@ -639,7 +641,9 @@ public sealed class SubAgentSpawnerTests : TestKit
         await File.WriteAllTextAsync(artifact, "child-artifact", TestContext.Current.CancellationToken);
         probe.Reply(new SubAgentResult
         {
-            Completion = new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
+            Completion = partial
+                ? new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolIterationBudgetExhausted, WorkingContextDelta.Empty)
+                : new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
             Output = "child-summary", AgentName = new AgentName("reader")
         });
         var completed = await spawn;

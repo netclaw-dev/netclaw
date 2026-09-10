@@ -298,7 +298,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             result.Content);
         Assert.Equal(
             ToolRemediationCode.SetWorkingDirectory,
-            completed.ToolReceipts["call-1"].RemediationCode);
+            Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-1"]).RemediationCode);
         Assert.Empty(approvals);
         Assert.False(shellTool.WasCalled);
         Assert.Empty(completed.ManagedTemporaryCorrectionChanges);
@@ -378,7 +378,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
             result.Message.Content);
         Assert.Equal(ToolInvocationOutcomeCategory.RecoverableCorrection, result.Receipt?.Category);
-        Assert.Equal(ToolRemediationCode.UseNativeTool, result.Receipt?.RemediationCode);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(result.Receipt).RemediationCode);
         Assert.Equal("file_read", result.ExposureRequest?.ToolName.Value);
         Assert.True(AuthorizationAttemptId.TryParse(result.AuthorizationAttemptId.Value, out _));
         Assert.Empty(approvals);
@@ -425,7 +425,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             $"Managed temporary directory: '{Path.Combine(Path.GetTempPath(), "tmp", "parent")}'.\n" +
             "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
             result.Content);
-        Assert.Equal(ToolRemediationCode.UseNativeTool, completed.ToolReceipts["call-native-temporary-collection"].RemediationCode);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-native-temporary-collection"]).RemediationCode);
         Assert.Equal("file_write", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
         Assert.Empty(completed.ManagedTemporaryCorrectionChanges);
     }
@@ -467,7 +467,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
             result.Content);
         Assert.DoesNotContain("Managed temporary directory", result.Content, StringComparison.Ordinal);
-        Assert.Equal(ToolRemediationCode.UseNativeTool, completed.ToolReceipts["call-native-read-without-temporary"].RemediationCode);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-native-read-without-temporary"]).RemediationCode);
         Assert.Equal("file_read", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
     }
 
@@ -520,7 +520,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             result.Content);
         Assert.Equal(
             ToolRemediationCode.UseManagedTemporaryDirectory,
-            completed.ToolReceipts[call.CallId].RemediationCode);
+            Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts[call.CallId]).RemediationCode);
         Assert.IsType<ManagedTemporaryCorrectionChange.Arm>(
             Assert.Single(completed.ManagedTemporaryCorrectionChanges));
         Assert.Empty(completed.ToolExposureRequests);
@@ -557,7 +557,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             "Error: invalid_context: No project or session directory is available.\n" +
             "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
             completed.Result.Message.Content);
-        Assert.Equal(ToolRemediationCode.SetWorkingDirectory, completed.Result.Receipt?.RemediationCode);
+        Assert.Equal(ToolRemediationCode.SetWorkingDirectory, Assert.IsType<ToolInvocationReceipt.Correction>(completed.Result.Receipt).RemediationCode);
     }
 
     [Fact]
@@ -622,7 +622,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                 "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths.",
                 result.Content));
         Assert.All(completed.ToolReceipts.Values, receipt =>
-            Assert.Equal(ToolRemediationCode.UseManagedTemporaryDirectory, receipt.RemediationCode));
+            Assert.Equal(ToolRemediationCode.UseManagedTemporaryDirectory, Assert.IsType<ToolInvocationReceipt.Correction>(receipt).RemediationCode));
         Assert.Equal(2, completed.ManagedTemporaryCorrectionChanges.Count);
         Assert.All(completed.ManagedTemporaryCorrectionChanges,
             change => Assert.IsType<ManagedTemporaryCorrectionChange.Arm>(change));
@@ -1413,9 +1413,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         {
             var requiredContext = context
                 ?? throw new InvalidOperationException("Execution context is required.");
-            requiredContext.Outputs.TryComplete(new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: ToolRemediationCode.SetWorkingDirectory));
+            requiredContext.Outputs.TryComplete(new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory));
             return Task.FromResult("Error: invalid_context: No project or session directory is available.");
         }
     }

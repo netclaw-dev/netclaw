@@ -335,7 +335,7 @@ internal sealed class SessionToolExecutionPipeline
                         batch.SessionId.Value,
                         callId,
                         receipt.Category,
-                        receipt.RemediationCode?.ToString());
+                        (receipt as ToolInvocationReceipt.Correction)?.RemediationCode.ToString());
             }
 
             if (batch.StreamResults)
@@ -447,7 +447,7 @@ internal sealed class SessionToolExecutionPipeline
                 ToolCallId = new ToolCallId(tc.CallId),
                 Name = tc.Name
             }, [], [], [], [], authorizationAttemptId, FailureCode: rejection.DenyReason,
-                Receipt: new ToolInvocationReceipt(ToolInvocationOutcomeCategory.InvalidInput));
+                Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.InvalidInput));
         }
 
         var meta = interpretation.Meta;
@@ -610,7 +610,7 @@ internal sealed class SessionToolExecutionPipeline
                     [],
                     [],
                     authorizationAttemptId,
-                    Receipt: new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied),
+                    Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied),
                     ManagedTemporaryCorrectionUpdate: consumedManagedTemporaryKey is { } deniedConsumed
                         ? new ManagedTemporaryCorrectionChange.Consume(deniedConsumed)
                         : null);
@@ -693,7 +693,7 @@ internal sealed class SessionToolExecutionPipeline
                     Name = tc.Name
                 }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
                     authorizationAttemptId,
-                    Receipt: new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
+                    Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
             }
 
             // Mid-turn approval pause: emit request to channel, block on TCS
@@ -812,7 +812,7 @@ internal sealed class SessionToolExecutionPipeline
                     invocation: context.Invocation,
                     canDeclare: batch.CanDeclareWorkingDirectory);
                 resultText = string.IsNullOrEmpty(hint) ? reason : $"{reason}\n{hint}";
-                context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
+                context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
 
             }
         }
@@ -820,7 +820,7 @@ internal sealed class SessionToolExecutionPipeline
         {
             sw.Stop();
             resultText = ex.ToAgentResult();
-            context.Outputs.TryComplete(new ToolInvocationReceipt(ToolInvocationOutcomeCategory.AccessDenied));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
 
         }
         catch (OperationCanceledException) when (batch.CancellationToken.IsCancellationRequested)
@@ -841,7 +841,7 @@ internal sealed class SessionToolExecutionPipeline
                 FileNotFoundException or DirectoryNotFoundException => ToolInvocationOutcomeCategory.NotFound,
                 _ => ToolInvocationOutcomeCategory.TransientFailure
             };
-            context.Outputs.TryComplete(new ToolInvocationReceipt(category));
+            context.Outputs.TryComplete(new ToolInvocationReceipt.OtherOutcome(category));
 
         }
 
@@ -856,7 +856,7 @@ internal sealed class SessionToolExecutionPipeline
                 modelInputMaterialization.RequestedCount - modelInputMaterialization.MediaReferences.Count);
 
         var receipt = context.Receipt
-            ?? new ToolInvocationReceipt(ToolInvocationOutcomeCategory.Success);
+            ?? new ToolInvocationReceipt.Succeeded([], null);
         var message = new SerializableChatMessage
         {
             Role = Protocol.ChatRole.Tool,

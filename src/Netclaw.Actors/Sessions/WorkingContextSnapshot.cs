@@ -26,6 +26,71 @@ public sealed record GitWorkingContextSnapshot
     public int Modified { get; init; }
     public int Untracked { get; init; }
     public ImmutableHashSet<string> ChangedFiles { get; init; } = [];
+
+    internal GitHeadState HeadState => GitHeadState.Create(Detached, Branch, Head, Upstream, Ahead, Behind);
+}
+
+internal abstract class GitHeadState
+{
+    private GitHeadState() { }
+
+    internal sealed class DetachedHead(string head) : GitHeadState
+    {
+        internal string Head { get; } = !string.IsNullOrWhiteSpace(head)
+            ? head : throw new FormatException("A detached Git head requires a commit.");
+    }
+
+    internal sealed class AttachedHead(string? branch, string? head, BranchTracking? tracking) : GitHeadState
+    {
+        // Public snapshots can omit branch metadata. A null commit also represents an unborn branch.
+        internal string? Branch { get; } = branch;
+        internal string? Head { get; } = head;
+        internal BranchTracking? Tracking { get; } = tracking;
+    }
+
+    internal sealed class BranchTracking
+    {
+        internal BranchTracking(string upstream, int ahead, int behind)
+        {
+            if (string.IsNullOrWhiteSpace(upstream) || ahead < 0 || behind < 0)
+                throw new FormatException("Git tracking requires an upstream and nonnegative counts.");
+            Upstream = upstream;
+            Ahead = ahead;
+            Behind = behind;
+        }
+
+        internal string Upstream { get; }
+        internal int Ahead { get; }
+        internal int Behind { get; }
+    }
+
+    internal static GitHeadState Create(bool detached, string? branch, string? head, string? upstream, int ahead, int behind)
+    {
+        if (detached)
+        {
+            if (branch is not null || upstream is not null || ahead != 0 || behind != 0)
+                throw new FormatException("A detached Git head cannot carry branch or tracking metadata.");
+            return new DetachedHead(head ?? throw new FormatException("A detached Git head requires a commit."));
+        }
+
+        if (upstream is null && (ahead != 0 || behind != 0))
+            throw new FormatException("Git divergence requires an upstream.");
+        return new AttachedHead(branch, head, upstream is null ? null : new BranchTracking(upstream, ahead, behind));
+    }
+
+    internal GitWorkingContextSnapshot ApplyTo(GitWorkingContextSnapshot snapshot) => this switch
+    {
+        DetachedHead detached => snapshot with
+        {
+            Detached = true, Head = detached.Head, Branch = null, Upstream = null, Ahead = 0, Behind = 0
+        },
+        AttachedHead branch => snapshot with
+        {
+            Detached = false, Head = branch.Head, Branch = branch.Branch,
+            Upstream = branch.Tracking?.Upstream, Ahead = branch.Tracking?.Ahead ?? 0, Behind = branch.Tracking?.Behind ?? 0
+        },
+        _ => throw new InvalidOperationException("Unexpected Git head state.")
+    };
 }
 
 public abstract record GitWorkingContextInspection
@@ -86,14 +151,24 @@ public sealed record WorkingContextSnapshot
             case GitWorkingContextInspection.Available { Snapshot: var git }:
                 sb.Append("\ngit:")
                     .Append("\n  worktree: ").Append(git.Worktree)
-                    .Append("\n  common_dir: ").Append(git.CommonDirectory)
-                    .Append("\n  branch: ").Append(git.Detached ? "(detached)" : git.Branch)
-                    .Append("\n  head: ").Append(git.Head ?? "(unborn)");
-                if (git.Upstream is not null)
+                    .Append("\n  common_dir: ").Append(git.CommonDirectory);
+                switch (git.HeadState)
                 {
-                    sb.Append("\n  upstream: ").Append(git.Upstream)
-                        .Append("\n  ahead: ").Append(git.Ahead)
-                        .Append("\n  behind: ").Append(git.Behind);
+                    case GitHeadState.DetachedHead detached:
+                        sb.Append("\n  branch: (detached)").Append("\n  head: ").Append(detached.Head);
+                        break;
+                    case GitHeadState.AttachedHead branch:
+                        sb.Append("\n  branch: ").Append(branch.Branch)
+                            .Append("\n  head: ").Append(branch.Head ?? "(unborn)");
+                        if (branch.Tracking is { } tracking)
+                        {
+                            sb.Append("\n  upstream: ").Append(tracking.Upstream)
+                                .Append("\n  ahead: ").Append(tracking.Ahead)
+                                .Append("\n  behind: ").Append(tracking.Behind);
+                        }
+                        break;
+                    default:
+                        throw new InvalidOperationException("Unexpected Git head state.");
                 }
 
                 sb.Append("\n  staged: ").Append(git.Staged)
@@ -384,21 +459,16 @@ public sealed class GitWorkingContextInspector : IGitWorkingContextInspector
             }
         }
 
-        return new GitWorkingContextSnapshot
+        var headState = GitHeadState.Create(detached, branch, head, upstream, ahead, behind);
+        return headState.ApplyTo(new GitWorkingContextSnapshot
         {
             Worktree = worktree,
             CommonDirectory = commonDirectory,
-            Branch = branch,
-            Detached = detached,
-            Head = head,
-            Upstream = upstream,
-            Ahead = ahead,
-            Behind = behind,
             Staged = staged,
             Modified = modified,
             Untracked = untracked,
             ChangedFiles = files.ToImmutable()
-        };
+        });
     }
 
     internal readonly record struct GitInspectionDeadline(DateTimeOffset ExpiresAt)

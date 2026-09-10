@@ -765,9 +765,7 @@ public class CompactionIntegrationTests : LlmSessionTestBase
         ];
         _fakeToolExecutor.Results["file_read"] = "public readonly record struct Rect { ... }";
         var canonicalPath = Path.GetFullPath(Path.Join(Path.GetTempPath(), "src", "Rect.cs"));
-        _fakeToolExecutor.Receipts["file_read"] = new ToolInvocationReceipt(
-            ToolInvocationOutcomeCategory.Success,
-            [new ToolFileActivity(canonicalPath, ToolFileActivityKind.Read)]);
+        _fakeToolExecutor.Receipts["file_read"] = new ToolInvocationReceipt.Succeeded([new ToolFileActivity(canonicalPath, ToolFileActivityKind.Read)], null);
         _fakeChatClient.UsageOverride = new UsageDetails
         {
             InputTokenCount = 100,
