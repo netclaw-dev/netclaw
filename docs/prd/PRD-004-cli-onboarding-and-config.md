@@ -107,6 +107,8 @@ Top-level domains:
 
 The daemon restores its system skills from the installed binary. The `Skill Sources`
 domain configures user and private server sources. It does not configure system skill updates.
+Operators can use `netclaw skill sync` to run the configured external source
+sync pass. The command does not add sources or write configuration.
 
 Command ownership stays explicit:
 

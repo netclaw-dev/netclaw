@@ -91,6 +91,7 @@ the CLI starts instantly.
 | Slack adapter | Socket Mode, in-process channel |
 | Tool execution | Shell, web fetch, GitHub CLI, MCP |
 | System skills | Restore the daemon-owned `.system` tree from embedded resources before skill discovery |
+| External skills | Sync configured private server feeds at startup, on the configured interval, or through `netclaw skill sync` |
 | Health endpoint | `GET /api/health/ready` |
 | Config hot-reload | FileSystemWatcher on `~/.netclaw/` |
 

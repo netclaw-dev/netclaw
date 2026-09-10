@@ -940,11 +940,10 @@ static void ConfigureDaemonServices(
         sp.GetServices<IContextLayerProvider>().ToList());
     services.AddHostedService<ToolIndexUpdater>();
 
-    // Server feed sync — syncs skills from private skill-server instances at startup.
-    if (skillFeedsConfig.Feeds.Any(f => f.Enabled))
-    {
-        services.AddHostedService<ServerFeedSkillSyncService>();
-    }
+    // One instance owns startup, timer, and operator-triggered feed sync passes.
+    // It remains available with no configured feeds so the API can report an empty pass.
+    services.AddSingleton<ServerFeedSkillSyncService>();
+    services.AddHostedService(sp => sp.GetRequiredService<ServerFeedSkillSyncService>());
 
     // Skill directory watcher — auto-rescan when skill files change on disk.
     // Covers native skills directory, server feeds, and all external sources.

@@ -55,6 +55,9 @@ internal static class SkillCommand
         if (subcommand is "list")
             return RunListAsync(daemonApi, output ?? Console.Out);
 
+        if (subcommand is "sync")
+            return RunSyncAsync(daemonApi, output ?? Console.Out);
+
         return Task.FromResult(subcommand switch
         {
             "show" => RunShow(args, paths),
@@ -160,6 +163,87 @@ internal static class SkillCommand
         output.WriteLine();
         output.WriteLine($"{skills.Count} skill(s)");
         return 0;
+    }
+
+    private static async Task<int> RunSyncAsync(DaemonApi? daemonApi, TextWriter output)
+    {
+        if (daemonApi is null)
+        {
+            output.WriteLine("Daemon unavailable: the daemon API is not configured.");
+            return 1;
+        }
+
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            ConsoleCancelEventHandler cancelHandler = (_, eventArgs) =>
+            {
+                eventArgs.Cancel = true;
+                cancellation.Cancel();
+            };
+            Console.CancelKeyPress += cancelHandler;
+            SkillSyncResult.Response? result;
+            try
+            {
+                result = await daemonApi.SyncSkillsAsync(cancellation.Token);
+            }
+            finally
+            {
+                Console.CancelKeyPress -= cancelHandler;
+            }
+
+            if (result is null || string.IsNullOrWhiteSpace(result.PassId)
+                || result.Sources is null || result.Inventory is null
+                || result.Sources.Any(static source => string.IsNullOrWhiteSpace(source.Name)
+                    || string.IsNullOrWhiteSpace(source.Sidecar)))
+            {
+                output.WriteLine($"Skill sync failed: the daemon at {daemonApi.Endpoint} returned an unreadable result.");
+                return 1;
+            }
+
+            output.WriteLine($"Skill sync pass {result.PassId}");
+            foreach (var source in result.Sources)
+            {
+                var state = source.FailedCount > 0 || source.RejectedCount > 0 ? "failed" : "ok";
+                output.WriteLine(
+                    $"{source.Name}: {state} changed={source.ChangedCount} unchanged={source.UnchangedCount} rejected={source.RejectedCount} failed={source.FailedCount} sidecar={source.Sidecar}");
+                if (!string.IsNullOrWhiteSpace(source.Error))
+                    output.WriteLine($"  Error: {source.Error}");
+            }
+
+            output.WriteLine(result.Inventory.Succeeded
+                ? $"Inventory: ok accepted={result.Inventory.AcceptedCount} rejected={result.Inventory.RejectedCount}"
+                : "Inventory: failed");
+            if (!string.IsNullOrWhiteSpace(result.Inventory.Error))
+                output.WriteLine($"  Error: {result.Inventory.Error}");
+            return result.Succeeded ? 0 : 1;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
+        {
+            output.WriteLine($"Skill sync unavailable: the daemon at {daemonApi.Endpoint} does not serve /api/skills/sync yet.");
+            output.WriteLine("Restart the daemon so it matches this CLI version.");
+            return 1;
+        }
+        catch (HttpRequestException ex)
+        {
+            output.WriteLine($"Skill sync unavailable: could not reach the daemon at {daemonApi.Endpoint} ({ex.Message}).");
+            return 1;
+        }
+        catch (OperationCanceledException)
+        {
+            output.WriteLine("Skill sync wait canceled. The daemon can still complete the shared pass.");
+            return 1;
+        }
+        catch (JsonException)
+        {
+            output.WriteLine($"Skill sync failed: the daemon at {daemonApi.Endpoint} returned an unreadable result.");
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            output.WriteLine($"Skill sync failed: {ex.Message}");
+            return 1;
+        }
     }
 
     // ── Subcommand implementations ──
@@ -634,6 +718,7 @@ internal static class SkillCommand
         Console.WriteLine();
         Console.WriteLine("Subcommands:");
         Console.WriteLine("  list                                          List all discovered skills (default)");
+        Console.WriteLine("  sync                                          Sync configured external skill sources");
         Console.WriteLine("  show <name>                                   Show skill details and content");
         Console.WriteLine("  validate <path>                               Validate a SKILL.md file's frontmatter");
         Console.WriteLine("  remove <name>                                 Remove a native skill");
@@ -646,7 +731,7 @@ internal static class SkillCommand
         Console.WriteLine("  source enable <name>                          Enable an external source");
         Console.WriteLine("  source disable <name>                         Disable an external source");
         Console.WriteLine();
-        Console.WriteLine("`list` needs the running daemon (it includes live MCP prompt skills);");
+        Console.WriteLine("`list` and `sync` need the running daemon (list includes live MCP prompt skills);");
         Console.WriteLine("every other subcommand is offline — no daemon required.");
         return 0;
     }

@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -18,6 +19,7 @@ using Netclaw.Security.Skills;
 using Netclaw.SkillClient;
 using Netclaw.Tests.Utilities;
 using Xunit;
+using SkillScanResult = Netclaw.Security.Skills.SkillScanResult;
 
 namespace Netclaw.Daemon.Tests.Services;
 
@@ -42,6 +44,262 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
     }
 
     public void Dispose() => _dir.Dispose();
+
+    [Fact]
+    public async Task SyncAsync_overlapping_callers_join_one_pass()
+    {
+        var handler = new ControlledFeedHandler(holdIndex: true);
+        var service = CreateControlledService(handler, syncIntervalMinutes: 0);
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await handler.FirstIndexRequest.Task;
+
+        var first = service.SyncAsync(TestContext.Current.CancellationToken);
+        var second = service.SyncAsync(TestContext.Current.CancellationToken);
+        handler.ReleaseIndex();
+
+        var results = await Task.WhenAll(first, second);
+        Assert.Equal(results[0].PassId, results[1].PassId);
+        Assert.Equal(1, handler.IndexRequestCount);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task SyncAsync_canceled_wait_does_not_cancel_the_shared_pass()
+    {
+        var handler = new ControlledFeedHandler(holdIndex: true);
+        var service = CreateControlledService(handler, syncIntervalMinutes: 0);
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await handler.FirstIndexRequest.Task;
+
+        using var canceledWait = new CancellationTokenSource();
+        var canceled = service.SyncAsync(canceledWait.Token);
+        var healthy = service.SyncAsync(TestContext.Current.CancellationToken);
+        canceledWait.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => canceled);
+
+        handler.ReleaseIndex();
+        var result = await healthy;
+        Assert.NotNull(result);
+        Assert.Equal(1, handler.IndexRequestCount);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task SyncAsync_rejects_calls_before_start_and_after_stop()
+    {
+        var handler = new ControlledFeedHandler(holdIndex: false);
+        var service = CreateControlledService(handler, syncIntervalMinutes: 0);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.SyncAsync(TestContext.Current.CancellationToken));
+
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await service.SyncAsync(TestContext.Current.CancellationToken);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.SyncAsync(TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task StopAsync_cancels_a_manual_pass_after_zero_interval_startup_completed()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var scanner = new LifetimeScanner(blockOnScan: 2, observeCancellation: true);
+        using var service = CreateLifecycleService(scanner, new FakeTimeProvider(), intervalMinutes: 0);
+        await service.StartAsync(ct);
+        await service.ExecuteTask!.WaitAsync(ct);
+        Assert.True(service.ExecuteTask.IsCompletedSuccessfully);
+        var originalState = File.ReadAllBytes(_paths.ServerFeedSyncStatePath("team"));
+
+        try
+        {
+            var manual = service.SyncAsync(ct);
+            await scanner.Blocked.Task.WaitAsync(ct);
+            await service.StopAsync(ct);
+
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manual);
+            await scanner.Exited.Task.WaitAsync(ct);
+            Assert.Equal(originalState, File.ReadAllBytes(_paths.ServerFeedSyncStatePath("team")));
+        }
+        finally
+        {
+            scanner.Release();
+        }
+    }
+
+    [Fact]
+    public async Task Dispose_cancels_active_pass_without_StopAsync()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var scanner = new LifetimeScanner(blockOnScan: 1, observeCancellation: true);
+        using var service = CreateLifecycleService(scanner, new FakeTimeProvider(), intervalMinutes: 0);
+        await service.StartAsync(ct);
+        await scanner.Blocked.Task.WaitAsync(ct);
+        var manual = service.SyncAsync(ct);
+
+        try
+        {
+            service.Dispose();
+
+            await scanner.Exited.Task.WaitAsync(ct);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manual);
+            await service.ExecuteTask!.WaitAsync(ct);
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.SyncAsync(ct));
+            Assert.False(File.Exists(_paths.ServerFeedSyncStatePath("team")));
+            Assert.Empty(_skillRegistry.GetAll());
+        }
+        finally
+        {
+            scanner.Release();
+        }
+    }
+
+    [Fact]
+    public async Task StopAsync_timeout_keeps_pass_token_valid_until_scanner_exits()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var scanner = new LifetimeScanner(blockOnScan: 1, observeCancellation: false);
+        using var service = CreateLifecycleService(scanner, new FakeTimeProvider(), intervalMinutes: 0);
+        await service.StartAsync(ct);
+        await scanner.Blocked.Task.WaitAsync(ct);
+        var manual = service.SyncAsync(ct);
+        using var stopBudget = new CancellationTokenSource();
+
+        try
+        {
+            var stop = service.StopAsync(stopBudget.Token);
+            stopBudget.Cancel();
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stop);
+
+            Assert.False(manual.IsCompleted);
+            // The fake delays cancellation acknowledgment. Its token must remain valid until it exits.
+            Assert.True(scanner.LifetimeToken.WaitHandle.WaitOne(0));
+            service.Dispose();
+            Assert.True(scanner.LifetimeToken.WaitHandle.WaitOne(0));
+            await Assert.ThrowsAsync<InvalidOperationException>(() => service.SyncAsync(ct));
+
+            scanner.Release();
+            await scanner.Exited.Task.WaitAsync(ct);
+            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manual);
+            Assert.False(File.Exists(_paths.ServerFeedSyncStatePath("team")));
+            Assert.Empty(_skillRegistry.GetAll());
+        }
+        finally
+        {
+            scanner.Release();
+        }
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_stops_normally_when_stop_precedes_scheduler_cancellation()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var time = new TimerSignalTimeProvider();
+        var scanner = new LifetimeScanner(blockOnScan: 0, observeCancellation: true);
+        using var service = CreateLifecycleService(scanner, time, intervalMinutes: 1);
+        await service.StartAsync(ct);
+        await time.TimerCreated.Task.WaitAsync(ct);
+
+        // Cancel runs callbacks before StopAsync calls the base scheduler stop.
+        // Force the due timer through that exact gap and await its normal completion.
+        using var cancellation = scanner.LifetimeToken.Register(() =>
+        {
+            time.Advance(TimeSpan.FromMinutes(1));
+            service.ExecuteTask!.WaitAsync(ct).GetAwaiter().GetResult();
+        });
+
+        await Task.Run(() => service.StopAsync(ct), ct);
+        Assert.True(service.ExecuteTask!.IsCompletedSuccessfully);
+    }
+
+    [Fact]
+    public async Task SyncAsync_with_no_enabled_sources_returns_an_empty_successful_result()
+    {
+        var handler = new ControlledFeedHandler(holdIndex: false);
+        var service = CreateControlledService(handler, syncIntervalMinutes: 0, enabled: false);
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        var result = await service.SyncAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Sources);
+        Assert.True(result.Inventory.Succeeded);
+        Assert.Equal(0, handler.IndexRequestCount);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task SyncAsync_reports_a_failed_feed_and_a_healthy_feed()
+    {
+        var handler = new MultiFeedHandler();
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = 0,
+            Feeds =
+            [
+                new SkillFeedSource { Name = "healthy", Url = "https://healthy.test/", TimeoutSeconds = 30 },
+                new SkillFeedSource { Name = "failed", Url = "https://failed.test/", TimeoutSeconds = 30 },
+            ],
+        };
+        var service = CreateService(feeds, handler, new NoOpSkillContentScanner(), new FakeTimeProvider());
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        var result = await service.SyncAsync(TestContext.Current.CancellationToken);
+
+        var healthy = Assert.Single(result.Sources, source => source.Name == "healthy");
+        Assert.Equal(0, healthy.FailedCount);
+        Assert.Equal("absent", healthy.Sidecar);
+        var failed = Assert.Single(result.Sources, source => source.Name == "failed");
+        Assert.Equal(1, failed.FailedCount);
+        Assert.Equal("not-run", failed.Sidecar);
+        Assert.False(result.Succeeded);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task SyncAsync_reports_required_index_failure()
+    {
+        var handler = new MultiFeedHandler(failEveryFeed: true);
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = 0,
+            Feeds = [new SkillFeedSource { Name = "failed", Url = "https://failed.test/", TimeoutSeconds = 30 }],
+        };
+        var service = CreateService(feeds, handler, new NoOpSkillContentScanner(), new FakeTimeProvider());
+        await service.StartAsync(TestContext.Current.CancellationToken);
+
+        var result = await service.SyncAsync(TestContext.Current.CancellationToken);
+
+        var source = Assert.Single(result.Sources);
+        Assert.Equal(1, source.FailedCount);
+        Assert.Equal("not-run", source.Sidecar);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task ExecuteAsync_does_not_queue_a_duplicate_first_timer_tick()
+    {
+        var time = new TimerSignalTimeProvider();
+        var handler = new ControlledFeedHandler(holdIndex: false);
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = 1,
+            Feeds = [new SkillFeedSource { Name = "team", Url = BaseUrl, TimeoutSeconds = 30 }],
+        };
+        var service = CreateService(feeds, handler, new NoOpSkillContentScanner(), time);
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        var firstTimer = await time.TimerCreated.Task.WaitAsync(TestContext.Current.CancellationToken);
+        // A recurring timer before the initial delay would retain a duplicate tick.
+        Assert.Equal(Timeout.InfiniteTimeSpan, firstTimer.Period);
+        Assert.Equal(TimeSpan.FromMinutes(1), firstTimer.DueTime);
+        time.Advance(TimeSpan.FromMinutes(1));
+        var periodicTimer = await time.PeriodicTimerCreated.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(TimeSpan.FromMinutes(1), periodicTimer.Period);
+        Assert.Equal(time.GetUtcNow(), periodicTimer.CreatedAt);
+        await handler.SecondIndexRequest.Task.WaitAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(2, handler.IndexRequestCount);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+    }
 
     [Fact]
     public async Task ExtractArchiveAsync_AllowsArbitraryResourcesAndPreservesExecutableMode()
@@ -115,7 +373,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", agentContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         var agentPath = Path.Combine(_paths.ServerFeedAgentDirectory("team"), "code-reviewer.md");
         Assert.True(File.Exists(agentPath));
@@ -155,7 +413,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         handler.AddErrorResponse(BaseUrl + "subagents/v1/index.json", HttpStatusCode.NotFound);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         var skillPath = Path.Combine(_paths.ServerFeedDirectory("team"), "feed-skill", "SKILL.md");
         Assert.True(File.Exists(skillPath));
@@ -198,7 +456,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", deliveredContent, expectedDigest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.Equal(oldContent, File.ReadAllText(Path.Combine(agentDir, "code-reviewer.md")));
         Assert.True(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
@@ -249,7 +507,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", invalidContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.Equal(oldContent, File.ReadAllText(Path.Combine(agentDir, "code-reviewer.md")));
         Assert.True(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
@@ -301,7 +559,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", invalidContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.Equal(oldContent, File.ReadAllText(Path.Combine(agentDir, "code-reviewer.md")));
         Assert.True(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
@@ -336,7 +594,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", agentContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.False(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
         Assert.True(File.Exists(Path.Combine(_paths.AgentsDirectory, "stale-agent.md")));
@@ -355,6 +613,19 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             scanner ?? new NoOpSkillContentScanner(),
             NullLogger<ServerFeedSkillSyncService>.Instance,
             []);
+
+    private static async Task RunSyncAsync(ServerFeedSkillSyncService service)
+    {
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        try
+        {
+            await service.SyncAsync(TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
+    }
 
     private ServerFeedSkillSyncService CreateService(FakeHttpMessageHandler handler)
     {
@@ -382,8 +653,56 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
                 if (feed.ApiKey is { Value: { Length: > 0 } apiKey })
                     client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
                 return new SkillServerClient(client);
-            });
+            },
+            TimeSpan.Zero);
     }
+
+    private ServerFeedSkillSyncService CreateControlledService(
+        ControlledFeedHandler handler,
+        int syncIntervalMinutes,
+        bool enabled = true)
+    {
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = syncIntervalMinutes,
+            Feeds = enabled
+                ? [new SkillFeedSource { Name = "team", Url = BaseUrl, TimeoutSeconds = 30 }]
+                : [],
+        };
+        return new ServerFeedSkillSyncService(
+            feeds,
+            _paths,
+            _skillRegistry,
+            _skillIndexPublisher,
+            new FakeTimeProvider(),
+            new NoOpSkillContentScanner(),
+            NullLogger<ServerFeedSkillSyncService>.Instance,
+            [],
+            feed => new SkillServerClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri(feed.Url),
+            }),
+            TimeSpan.Zero);
+    }
+
+    private ServerFeedSkillSyncService CreateService(
+        SkillFeedsConfig feeds,
+        HttpMessageHandler handler,
+        ISkillContentScanner scanner,
+        TimeProvider timeProvider) => new(
+            feeds,
+            _paths,
+            _skillRegistry,
+            _skillIndexPublisher,
+            timeProvider,
+            scanner,
+            NullLogger<ServerFeedSkillSyncService>.Instance,
+            [],
+            feed => new SkillServerClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri(feed.Url),
+            }),
+            TimeSpan.Zero);
 
     private SkillSyncState ReadAgentSyncState()
     {
@@ -401,6 +720,183 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             }
             """,
             "application/json");
+    }
+
+    private sealed class ControlledFeedHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource _releaseIndex = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly bool _holdIndex;
+        private int _indexRequestCount;
+
+        public ControlledFeedHandler(bool holdIndex) => _holdIndex = holdIndex;
+
+        public TaskCompletionSource FirstIndexRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource SecondIndexRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int IndexRequestCount => Volatile.Read(ref _indexRequestCount);
+
+        public void ReleaseIndex() => _releaseIndex.TrySetResult();
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/.well-known/agent-skills/index.json", StringComparison.Ordinal))
+            {
+                var requestCount = Interlocked.Increment(ref _indexRequestCount);
+                FirstIndexRequest.TrySetResult();
+                if (requestCount == 2)
+                    SecondIndexRequest.TrySetResult();
+                if (_holdIndex)
+                    await _releaseIndex.Task.WaitAsync(cancellationToken);
+
+                return JsonResponse("{\"skills\":[]}");
+            }
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/subagents/v1/index.json", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+
+        internal static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private sealed class MultiFeedHandler : HttpMessageHandler
+    {
+        private readonly bool _failEveryFeed;
+
+        public MultiFeedHandler(bool failEveryFeed = false) => _failEveryFeed = failEveryFeed;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.Host == "failed.test" || _failEveryFeed)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/.well-known/agent-skills/index.json", StringComparison.Ordinal))
+                return Task.FromResult(ControlledFeedHandler.JsonResponse("{\"skills\":[]}"));
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+    }
+
+    private sealed class TimerSignalTimeProvider : FakeTimeProvider
+    {
+        public TaskCompletionSource<TimerCreation> TimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource<TimerCreation> PeriodicTimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            var creation = new TimerCreation(GetUtcNow(), dueTime, period);
+            TimerCreated.TrySetResult(creation);
+            if (period != Timeout.InfiniteTimeSpan)
+                PeriodicTimerCreated.TrySetResult(creation);
+            return timer;
+        }
+
+        public sealed record TimerCreation(DateTimeOffset CreatedAt, TimeSpan DueTime, TimeSpan Period);
+    }
+
+    private ServerFeedSkillSyncService CreateLifecycleService(
+        LifetimeScanner scanner,
+        TimeProvider timeProvider,
+        int intervalMinutes)
+    {
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = intervalMinutes,
+            Feeds = [new SkillFeedSource { Name = "team", Url = BaseUrl, TimeoutSeconds = 30 }],
+        };
+        return CreateService(feeds, new LifecycleFeedHandler(), scanner, timeProvider);
+    }
+
+    private sealed class LifetimeScanner(int blockOnScan, bool observeCancellation) : ISkillContentScanner
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _scanCount;
+
+        public TaskCompletionSource Blocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource Exited { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public CancellationToken LifetimeToken { get; private set; }
+
+        public void Release() => _release.TrySetResult();
+
+        public async Task<SkillScanResult> ScanAsync(string skillName, string content, CancellationToken cancellationToken)
+        {
+            LifetimeToken = cancellationToken;
+            if (Interlocked.Increment(ref _scanCount) != blockOnScan)
+                return SkillScanResult.Allow();
+
+            Blocked.TrySetResult();
+            try
+            {
+                // Delayed acknowledgment models a dependency that cannot stop immediately.
+                if (observeCancellation)
+                    await _release.Task.WaitAsync(cancellationToken);
+                else
+                    await _release.Task;
+                cancellationToken.ThrowIfCancellationRequested();
+                return SkillScanResult.Allow();
+            }
+            finally
+            {
+                Exited.TrySetResult();
+            }
+        }
+    }
+
+    private sealed class LifecycleFeedHandler : HttpMessageHandler
+    {
+        private int _revision;
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            if (request.RequestUri!.AbsolutePath.EndsWith("/.well-known/agent-skills/index.json", StringComparison.Ordinal))
+            {
+                _revision++;
+                var index = new
+                {
+                    skills = new[]
+                    {
+                        new
+                        {
+                            name = "lifecycle-probe",
+                            type = "skill",
+                            description = "Lifecycle probe.",
+                            url = BaseUrl + "probe/SKILL.md",
+                            digest = "sha256:" + SkillSyncHelpers.ComputeSha256(SkillContent()),
+                            version = _revision.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        },
+                    },
+                };
+                return Task.FromResult(FakeHttpMessageHandler.JsonResponse(index));
+            }
+
+            if (request.RequestUri.AbsolutePath == "/probe/SKILL.md")
+            {
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(SkillContent(), Encoding.UTF8, "text/markdown"),
+                });
+            }
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
+
+        private string SkillContent() => $"---\nname: lifecycle-probe\ndescription: Lifecycle probe.\n---\nRevision {_revision}.";
     }
 
     private static void AddNativeSubAgentResponses(

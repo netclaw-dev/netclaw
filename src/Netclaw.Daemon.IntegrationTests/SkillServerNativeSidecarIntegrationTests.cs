@@ -118,7 +118,15 @@ public sealed class SkillServerNativeSidecarIntegrationTests : IAsyncLifetime
             NullLogger<ServerFeedSkillSyncService>.Instance,
             []);
 
-        await service.SyncOnceAsync(CancellationToken.None);
+        await service.StartAsync(CancellationToken.None);
+        try
+        {
+            await service.SyncAsync(CancellationToken.None);
+        }
+        finally
+        {
+            await service.StopAsync(CancellationToken.None);
+        }
 
         var skillPath = Path.Combine(paths.ServerFeedDirectory("real-skillserver"), "review-code", "SKILL.md");
         Assert.True(File.Exists(skillPath));

@@ -840,7 +840,7 @@ static async Task RunAsync(string[] args)
     if (mode is "skill")
     {
         var skillSubcommand = args.Length > 1 ? args[1] : "list";
-        if (skillSubcommand is "list")
+        if (skillSubcommand is "list" or "sync")
         {
             // `skill list` is served by the daemon's live registry — the only view
             // that includes dynamic MCP prompt skills. It requires the daemon; when
@@ -860,7 +860,7 @@ static async Task RunAsync(string[] args)
             }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
             {
-                Console.Error.WriteLine($"skill list: could not load local configuration: {ex.Message}");
+                Console.Error.WriteLine($"skill {skillSubcommand}: could not load local configuration: {ex.Message}");
                 Console.Error.WriteLine("Fix the file it names (under ~/.netclaw/config) and retry.");
                 Environment.ExitCode = 1;
             }

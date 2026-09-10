@@ -1,6 +1,6 @@
 # SPEC-004: CLI Contract
 
-Source PRDs: `PRD-004`, `PRD-002`
+Source PRDs: `PRD-004`, `PRD-002`, `PRD-001`
 
 ## Purpose
 
@@ -94,6 +94,57 @@ Behavior:
 - smoke test command runs optional live integration checks outside CI-required
   test suite
 
+### 7) External Skill Sync
+
+`netclaw skill sync` runs the daemon's configured external source job immediately.
+It does not save configuration or add sources. System skills come from the installed binary.
+See the [engineering glossary](GLOSSARY.md) for shared terms.
+
+The command sends an authenticated `POST /api/skills/sync` request.
+The endpoint uses the existing daemon authorization policy.
+An unauthenticated request receives HTTP 401 and cannot start a pass.
+An authenticated request can join a pass that startup, the timer, or another operator started.
+
+`ServerFeedSkillSyncService` owns the active task and its lifetime token in process memory.
+The CLI owns only its request wait. The feed helpers retain the existing durable files and sync receipts.
+
+```text
+CLI -> daemon authorization -> ServerFeedSkillSyncService
+  service stopped: return HTTP 503
+  active pass exists: join that task
+  otherwise: start a pass with the daemon lifetime token
+  for each enabled feed:
+    run the existing RFC skill and native sub-agent sync
+    collect its result; continue after a source failure
+  refresh the complete inventory through SkillInventoryRefresher
+  return the source results and the inventory result
+CLI -> print the result -> exit 0 or 1
+```
+
+The client has no fixed HTTP timeout for this operation. Existing source timeouts still apply.
+Ctrl+C cancels the CLI wait. It does not cancel the shared pass.
+Daemon shutdown closes admission and cancels that pass. A joined HTTP request then receives HTTP 503.
+An interval of zero disables periodic checks. Startup and manual checks remain available.
+
+| Result | Command behavior |
+|---|---|
+| All sources and the inventory refresh succeed | Exit 0, including an empty source list |
+| A source download fails or its scanner rejects a skill | Exit 1; report counts; let other feeds finish |
+| The optional native sidecar does not exist | Report `absent`; RFC sync can succeed |
+| An advertised sidecar page is missing or malformed | Report failure; retain existing managed agents |
+| The final inventory refresh fails | Exit 1, even if all downloads succeed |
+| The daemon predates the endpoint | Exit 1; request a daemon restart |
+
+The response includes one pass ID, per-source counts, sidecar status, and the final inventory result.
+Overlapping callers receive the same pass ID. Source errors in this response do not include credentials or remote response bodies.
+Inventory rejection counts can include pre-existing source conflicts. They do not make a completed inventory refresh fail.
+This command does not add a transaction across feed files, the registry, and the prompt index.
+It preserves the existing per-skill replacement and prune rules.
+
+For example, a healthy feed can update while another feed returns HTTP 500. The command reports both results and exits 1.
+A rejected skill retains its prior bytes and receipt. Other accepted skills from that feed can still update.
+Download failures do not create security alerts. This change does not alter the existing scanner or alert policy.
+
 ## Output and Exit Codes
 
 - default output: human readable text
@@ -108,7 +159,7 @@ Behavior:
 ## Safety Rules
 
 - read-only default for all inspection commands
-- mutating commands require explicit confirmation or `--yes`
+- mutating commands require explicit confirmation or `--yes`, except `skill sync`; that command explicitly requests the existing daemon job
 - no command may silently broaden exposure policy
 
 ## Onboarding State Persistence

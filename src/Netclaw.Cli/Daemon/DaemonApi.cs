@@ -159,6 +159,22 @@ public sealed class DaemonApi
         return await JsonSerializer.DeserializeAsync<SkillInventory.Response>(stream, JsonDefaults.Api, cts.Token);
     }
 
+    /// <summary>
+    /// Runs the daemon-owned skill sync pass. This request has no client timeout.
+    /// A source pass can exceed normal status request limits. The caller controls
+    /// only its wait through <paramref name="ct"/>.
+    /// </summary>
+    public async Task<SkillSyncResult.Response?> SyncSkillsAsync(CancellationToken ct = default)
+    {
+        var client = CreateHttpClient();
+        client.Timeout = Timeout.InfiniteTimeSpan;
+        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_endpoint}/api/skills/sync");
+        using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
+        response.EnsureSuccessStatusCode();
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<SkillSyncResult.Response>(stream, JsonDefaults.Api, ct);
+    }
+
     // ── Reminders ─────────────────────────────────────────────────────
 
     public async Task<HttpResponseMessage> ListRemindersAsync(CancellationToken ct = default)

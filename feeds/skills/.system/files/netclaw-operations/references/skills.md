@@ -6,8 +6,8 @@
 
 The `netclaw skill` CLI manages skills and skill sources. `netclaw skill list`
 needs the running daemon, because it lists the daemon's live registry — the
-only view that includes dynamic MCP prompt skills. Every other subcommand is
-offline — no daemon required.
+only view that includes dynamic MCP prompt skills. `netclaw skill sync` also
+needs the daemon. Other subcommands are offline.
 
 During an agent session, use `skill_load(name)` to activate guidance and
 `skill_read_resource(name, path)` for bundled files. Skill origin and physical
@@ -17,6 +17,7 @@ commands below only for explicit operator inspection and diagnostics.
 | Command | What it does |
 |---------|--------------|
 | `netclaw skill list` | List all discovered skills with source, version, status |
+| `netclaw skill sync` | Run one external source sync pass and report each source result |
 | `netclaw skill show <name>` | Show skill metadata and full content |
 | `netclaw skill validate <path>` | Validate a SKILL.md file's frontmatter format |
 | `netclaw skill remove <name>` | Remove a native skill (refuses system/external) |
@@ -45,3 +46,7 @@ It rebuilds one complete inventory across system, native, managed-feed, and
 external sources after syncs and supported mutations. Native skills take
 precedence over managed feeds, which take precedence over external sources.
 No restart is needed for supported mutations.
+
+`netclaw skill sync` uses the daemon's configured sources. It cannot add a
+source or write configuration. The command waits for the shared daemon pass.
+If its wait is canceled, the daemon can still finish that pass.

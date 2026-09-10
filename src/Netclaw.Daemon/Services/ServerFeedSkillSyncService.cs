@@ -36,6 +36,11 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
     private readonly ISkillContentScanner _scanner;
     private readonly ILogger<ServerFeedSkillSyncService> _logger;
     private readonly Func<SkillFeedSource, SkillServerClient> _clientFactory;
+    private readonly object _syncLock = new();
+    private CancellationTokenSource? _lifetimeCancellation;
+    private Task<SkillSyncResult.Response>? _activePass;
+    private bool _started;
+    private bool _stopped;
 
     // Random jitter (0–5 min) so multiple daemon instances don't all poll at once
     private readonly TimeSpan _initialJitter;
@@ -54,7 +59,8 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             timeProvider,
             scanner,
             logger,
-            CreateSkillServerClient)
+            CreateSkillServerClient,
+            CreateInitialJitter())
     {
     }
 
@@ -76,7 +82,8 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             scanner,
             logger,
             externalSources,
-            CreateSkillServerClient)
+            CreateSkillServerClient,
+            CreateInitialJitter())
     {
     }
 
@@ -89,7 +96,8 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
         IReadOnlyList<ResolvedExternalSource> externalSources,
-        Func<SkillFeedSource, SkillServerClient> clientFactory)
+        Func<SkillFeedSource, SkillServerClient> clientFactory,
+        TimeSpan initialJitter)
         : this(
             feedsConfig,
             paths,
@@ -102,7 +110,8 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             timeProvider,
             scanner,
             logger,
-            clientFactory)
+            clientFactory,
+            initialJitter)
     {
     }
 
@@ -113,7 +122,8 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
-        Func<SkillFeedSource, SkillServerClient> clientFactory)
+        Func<SkillFeedSource, SkillServerClient> clientFactory,
+        TimeSpan initialJitter)
     {
         _feedsConfig = feedsConfig;
         _paths = paths;
@@ -122,13 +132,74 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         _scanner = scanner;
         _logger = logger;
         _clientFactory = clientFactory;
-        _initialJitter = TimeSpan.FromSeconds(Random.Shared.Next(0, 300));
+        _initialJitter = initialJitter;
+    }
+
+    public override Task StartAsync(CancellationToken cancellationToken)
+    {
+        lock (_syncLock)
+        {
+            _lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            _started = true;
+        }
+
+        return base.StartAsync(cancellationToken);
+    }
+
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        Task<SkillSyncResult.Response>? activePass;
+        CancellationTokenSource? lifetimeCancellation;
+        lock (_syncLock)
+        {
+            _stopped = true;
+            activePass = _activePass;
+            lifetimeCancellation = _lifetimeCancellation;
+            _lifetimeCancellation = null;
+        }
+
+        lifetimeCancellation?.Cancel();
+        try
+        {
+            await base.StopAsync(cancellationToken).ConfigureAwait(false);
+            if (activePass is not null)
+            {
+                await activePass.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (lifetimeCancellation?.IsCancellationRequested == true
+            && !cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogDebug("Host shutdown canceled the active skill sync pass.");
+        }
+        finally
+        {
+            DisposeLifetimeAfterPass(lifetimeCancellation, activePass);
+        }
+    }
+
+    public override void Dispose()
+    {
+        Task<SkillSyncResult.Response>? activePass;
+        CancellationTokenSource? lifetimeCancellation;
+        lock (_syncLock)
+        {
+            _stopped = true;
+            activePass = _activePass;
+            lifetimeCancellation = _lifetimeCancellation;
+            _lifetimeCancellation = null;
+        }
+
+        lifetimeCancellation?.Cancel();
+        DisposeLifetimeAfterPass(lifetimeCancellation, activePass);
+        base.Dispose();
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // Initial sync at startup — no jitter
-        await SyncAllFeedsAsync(stoppingToken);
+        if (!await RunScheduledSyncAsync(stoppingToken))
+            return;
 
         var intervalMinutes = _feedsConfig.SyncIntervalMinutes;
         if (intervalMinutes <= 0)
@@ -145,8 +216,6 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             "Server feed periodic sync scheduled every {IntervalMinutes}m (first check in {FirstDelayMinutes:F1}m)",
             intervalMinutes, firstDelay.TotalMinutes);
 
-        using var timer = new PeriodicTimer(interval, _timeProvider);
-
         // Wait the jittered first interval
         try
         {
@@ -157,50 +226,137 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             return;
         }
 
+        // Create the timer after the first delay. Creating it before the delay
+        // queues a tick and causes an immediate duplicate pass.
+        using var timer = new PeriodicTimer(interval, _timeProvider);
+
         // First periodic sync
-        await SyncAllFeedsAsync(stoppingToken);
+        if (!await RunScheduledSyncAsync(stoppingToken))
+            return;
 
         // Subsequent syncs on the regular interval
         while (await timer.WaitForNextTickAsync(stoppingToken))
         {
-            await SyncAllFeedsAsync(stoppingToken);
+            if (!await RunScheduledSyncAsync(stoppingToken))
+                return;
         }
     }
 
-    internal Task SyncOnceAsync(CancellationToken cancellationToken)
-        => SyncAllFeedsAsync(cancellationToken);
-
-    private async Task SyncAllFeedsAsync(CancellationToken cancellationToken)
+    private async Task<bool> RunScheduledSyncAsync(CancellationToken stoppingToken)
     {
-        foreach (var feed in _feedsConfig.Feeds.Where(f => f.Enabled))
+        try
+        {
+            await SyncAsync(stoppingToken);
+            return true;
+        }
+        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || IsStopped())
+        {
+            return false;
+        }
+        catch (InvalidOperationException) when (stoppingToken.IsCancellationRequested || IsStopped())
+        {
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// Joins the daemon-owned sync pass. Caller cancellation ends only this wait.
+    /// </summary>
+    internal async Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken)
+    {
+        Task<SkillSyncResult.Response> pass;
+        bool joined;
+        lock (_syncLock)
+        {
+            if (!_started)
+                throw new InvalidOperationException("The skill sync service has not started.");
+            if (_stopped || _lifetimeCancellation is null)
+                throw new InvalidOperationException("The skill sync service has stopped.");
+
+            if (_activePass is null || _activePass.IsCompleted)
+            {
+                pass = RunPassAsync(_lifetimeCancellation.Token);
+                _activePass = pass;
+                joined = false;
+            }
+            else
+            {
+                pass = _activePass;
+                joined = true;
+            }
+        }
+
+        if (joined)
+            _logger.LogDebug("Joined the active external skill sync pass.");
+
+        return await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task<SkillSyncResult.Response> RunPassAsync(CancellationToken cancellationToken)
+    {
+        var sources = new List<SkillSyncResult.SourceRow>();
+        foreach (var feed in _feedsConfig.Feeds.Where(static feed => feed.Enabled))
         {
             try
             {
-                await SyncFeedAsync(feed, cancellationToken);
+                sources.Add(await SyncFeedAsync(feed, cancellationToken));
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception ex)
             {
                 _logger.LogWarning(ex,
                     "Server feed sync failed for '{FeedName}' ({FeedUrl}) — using on-disk skills",
                     feed.Name, feed.Url);
+                sources.Add(new SkillSyncResult.SourceRow
+                {
+                    Name = feed.Name,
+                    FailedCount = 1,
+                    Sidecar = "not-run",
+                    Error = "The source sync failed. Existing files remain in use.",
+                });
             }
         }
 
-        // Rebuild the registry from disk. Guarded because the scan walks the same
-        // feed tree this service (and others) may be mutating concurrently — a
-        // directory vanishing mid-scan must not tear down the background service.
         try
         {
-            RescanAndUpdateIndex();
+            var scan = RescanAndUpdateIndex();
+            return new SkillSyncResult.Response
+            {
+                PassId = Guid.NewGuid().ToString("N"),
+                Sources = sources,
+                Inventory = new SkillSyncResult.InventoryRow
+                {
+                    Succeeded = true,
+                    AcceptedCount = scan.AcceptedSkills.Count,
+                    RejectedCount = scan.Issues.Count,
+                },
+            };
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Skill index rebuild after server feed sync failed — registry left as-is");
+                "Skill inventory publication after server feed sync failed");
+            return new SkillSyncResult.Response
+            {
+                PassId = Guid.NewGuid().ToString("N"),
+                Sources = sources,
+                Inventory = new SkillSyncResult.InventoryRow
+                {
+                    Succeeded = false,
+                    Error = "The skill inventory refresh failed.",
+                },
+            };
         }
     }
 
-    private async Task SyncFeedAsync(SkillFeedSource feed, CancellationToken cancellationToken)
+    private async Task<SkillSyncResult.SourceRow> SyncFeedAsync(SkillFeedSource feed, CancellationToken cancellationToken)
     {
         var feedDir = _paths.ServerFeedDirectory(feed.Name);
         Directory.CreateDirectory(feedDir);
@@ -208,6 +364,10 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         var syncState = SkillSyncHelpers.ReadSyncState(
             _paths.ServerFeedSyncStatePath(feed.Name), _logger);
         var now = _timeProvider.GetUtcNow();
+        var changedCount = 0;
+        var unchangedCount = 0;
+        var rejectedCount = 0;
+        var failedCount = 0;
 
         RfcSkillIndex? index;
         using var client = _clientFactory(feed);
@@ -223,21 +383,21 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                 _logger.LogWarning(
                     "Server feed '{FeedName}' RFC index fetch timed out — using on-disk skills",
                     feed.Name);
-                return;
+                return SourceFailure(feed.Name, "not-run", "The RFC index request timed out.");
             }
             catch (HttpRequestException ex)
             {
                 _logger.LogWarning(
                     "Server feed '{FeedName}' RFC index fetch failed: {Message} — using on-disk skills",
                     feed.Name, ex.Message);
-                return;
+                return SourceFailure(feed.Name, "not-run", "The RFC index request failed.");
             }
         }
 
         if (index is null)
         {
             _logger.LogDebug("Server feed '{FeedName}' returned no RFC index", feed.Name);
-            return;
+            return SourceFailure(feed.Name, "not-run", "The RFC index response was unusable.");
         }
 
         if (index.Skills.Count == 0)
@@ -262,6 +422,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                 && existing.Version == version
                 && string.Equals(existing.Sha256, digestHex, StringComparison.OrdinalIgnoreCase))
             {
+                unchangedCount++;
                 continue;
             }
 
@@ -273,18 +434,27 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                     var archiveBytes = await DownloadAndVerifyBytesAsync(
                         client, entry.Url, digestHex, entry.Name, feed.TimeoutSeconds, cancellationToken);
                     if (archiveBytes is null)
+                    {
+                        failedCount++;
                         continue;
+                    }
 
                     downloadedFiles = await ExtractArchiveAsync(entry.Name, feed.Name, archiveBytes, cancellationToken);
                     if (downloadedFiles is null)
+                    {
+                        rejectedCount++;
                         continue;
+                    }
                 }
                 else
                 {
                     var mainContent = await DownloadAndVerifyAsync(
                         client, entry.Url, digestHex, entry.Name, feed.TimeoutSeconds, cancellationToken);
                     if (mainContent is null)
+                    {
+                        failedCount++;
                         continue;
+                    }
 
                     var mainScan = await _scanner.ScanAsync(entry.Name, mainContent, cancellationToken);
                     if (!mainScan.IsAllowed)
@@ -292,6 +462,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                         _logger.LogWarning(
                             "Rejected skill '{SkillName}' from feed '{FeedName}': {Reason}",
                             entry.Name, feed.Name, mainScan.Reason);
+                        rejectedCount++;
                         continue;
                     }
 
@@ -312,6 +483,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                                     "Rejected resource path for '{SkillName}' from feed '{FeedName}': {Path}",
                                     entry.Name, feed.Name, resource.Path);
                                 allFilesOk = false;
+                                rejectedCount++;
                                 break;
                             }
 
@@ -322,6 +494,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                             if (fileContent is null)
                             {
                                 allFilesOk = false;
+                                failedCount++;
                                 break;
                             }
 
@@ -333,6 +506,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                                     "Rejected resource for '{SkillName}' from feed '{FeedName}' at {Path}: {Reason}",
                                     entry.Name, feed.Name, normalizedPath, fileScan.Reason);
                                 allFilesOk = false;
+                                rejectedCount++;
                                 break;
                             }
 
@@ -358,12 +532,14 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                     "Synced skill '{SkillName}' v{Version} from feed '{FeedName}'",
                     entry.Name, version, feed.Name);
                 updated = true;
+                changedCount++;
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
                 _logger.LogWarning(ex,
                     "Failed to sync skill '{SkillName}' from feed '{FeedName}' — keeping existing version",
                     entry.Name, feed.Name);
+                failedCount++;
             }
         }
 
@@ -373,8 +549,13 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             // only reached with a confirmed, non-empty index, so a transient outage
             // or empty response never triggers a skill prune.
             var serverSkillNames = index.Skills.Select(e => e.Name).ToList();
+            var removedSkillCount = syncState.Skills.Keys.Count(name =>
+                !serverSkillNames.Contains(name, StringComparer.Ordinal));
             if (SkillSyncHelpers.PruneRemovedSkills(feedDir, serverSkillNames, syncState, _logger))
+            {
                 updated = true;
+                changedCount += removedSkillCount;
+            }
         }
 
         if (updated)
@@ -384,10 +565,23 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                 _paths.ServerFeedSyncStatePath(feed.Name), syncState);
         }
 
-        await SyncNativeSubAgentsAsync(feed, client, now, cancellationToken);
+        var sidecar = await SyncNativeSubAgentsAsync(feed, client, now, cancellationToken);
+        if (sidecar == "failed")
+            failedCount++;
+
+        return new SkillSyncResult.SourceRow
+        {
+            Name = feed.Name,
+            ChangedCount = changedCount,
+            UnchangedCount = unchangedCount,
+            RejectedCount = rejectedCount,
+            FailedCount = failedCount,
+            Sidecar = sidecar,
+            Error = failedCount > 0 ? "One or more source items failed." : null,
+        };
     }
 
-    private async Task SyncNativeSubAgentsAsync(
+    private async Task<string> SyncNativeSubAgentsAsync(
         SkillFeedSource feed,
         SkillServerClient client,
         DateTimeOffset now,
@@ -398,7 +592,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             _logger.LogWarning(
                 "Skipping native sub-agent sync for feed '{FeedName}': unsafe managed feed directory name",
                 feed.Name);
-            return;
+            return "failed";
         }
 
         var feedDir = _paths.ServerFeedAgentDirectory(feed.Name);
@@ -418,25 +612,25 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             _logger.LogWarning(
                 "Server feed '{FeedName}' native sidecar fetch timed out — keeping managed sub-agents",
                 feed.Name);
-            return;
+            return "failed";
         }
         catch (HttpRequestException ex)
         {
             _logger.LogDebug(
                 "Server feed '{FeedName}' native sidecar fetch failed: {Message} — keeping managed sub-agents",
                 feed.Name, ex.Message);
-            return;
+            return ex.StatusCode == System.Net.HttpStatusCode.NotFound ? "absent" : "failed";
         }
         catch (JsonException ex)
         {
             _logger.LogWarning(ex,
                 "Server feed '{FeedName}' native sidecar is malformed — keeping managed sub-agents",
                 feed.Name);
-            return;
+            return "failed";
         }
 
         if (subAgentIndex is null)
-            return;
+            return "absent";
 
         var advertisedNames = new List<string>();
         var changed = false;
@@ -488,6 +682,8 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             SkillSyncHelpers.WriteSyncState(
                 _paths.ServerFeedAgentSyncStatePath(feed.Name), syncState);
         }
+
+        return fullySuccessful ? "complete" : "failed";
     }
 
     private async Task<NativeSubAgentSyncResult> SyncNativeSubAgentAsync(
@@ -632,6 +828,9 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
 
     private static SkillServerClient CreateSkillServerClient(SkillFeedSource feed)
         => new(feed.Url, feed.ApiKey?.Value);
+
+    private static TimeSpan CreateInitialJitter()
+        => TimeSpan.FromSeconds(Random.Shared.Next(0, 300));
 
     private async Task<string?> DownloadAndVerifyAsync(
         SkillServerClient client, string url, string expectedSha256Hex, string label,
@@ -840,7 +1039,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         return mode == 0 ? null : mode;
     }
 
-    private void RescanAndUpdateIndex()
+    private MergedSkillScanResult RescanAndUpdateIndex()
     {
         var mergedResult = _inventoryRefresher.Refresh();
 
@@ -863,6 +1062,45 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                 "Skill index updated after server feed sync ({SkillCount} skills)",
                 mergedResult.AcceptedSkills.Count);
         }
+
+        return mergedResult;
+    }
+
+    private static SkillSyncResult.SourceRow SourceFailure(
+        string name,
+        string sidecar,
+        string error) => new()
+    {
+        Name = name,
+        FailedCount = 1,
+        Sidecar = sidecar,
+        Error = error,
+    };
+
+    private static void DisposeLifetimeAfterPass(
+        CancellationTokenSource? lifetimeCancellation,
+        Task<SkillSyncResult.Response>? activePass)
+    {
+        if (lifetimeCancellation is null)
+            return;
+
+        if (activePass is null || activePass.IsCompleted)
+        {
+            lifetimeCancellation.Dispose();
+            return;
+        }
+
+        _ = activePass.ContinueWith(
+            _ => lifetimeCancellation.Dispose(),
+            CancellationToken.None,
+            TaskContinuationOptions.ExecuteSynchronously,
+            TaskScheduler.Default);
+    }
+
+    private bool IsStopped()
+    {
+        lock (_syncLock)
+            return _stopped;
     }
 
     internal static string NormalizeDigest(string digest)

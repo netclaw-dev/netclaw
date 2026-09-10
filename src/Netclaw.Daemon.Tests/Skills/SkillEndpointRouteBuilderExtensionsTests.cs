@@ -9,10 +9,14 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Security;
+using Netclaw.Daemon.Services;
 using Netclaw.Daemon.Skills;
+using Netclaw.Security.Skills;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -32,7 +36,11 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
 
     public void Dispose() => _dir.Dispose();
 
-    private async Task<WebApplication> CreateAppAsync(bool spoofLoopback, SkillRegistry registry, NetclawPaths paths)
+    private async Task<WebApplication> CreateAppAsync(
+        bool spoofLoopback,
+        SkillRegistry registry,
+        NetclawPaths paths,
+        ServerFeedSkillSyncService? syncService = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -42,6 +50,7 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         builder.Services.AddLogging();
         builder.Services.AddSingleton(registry);
         builder.Services.AddSingleton(paths);
+        builder.Services.AddSingleton(syncService ?? CreateSyncService(registry, paths));
 
         var app = builder.Build();
 
@@ -73,6 +82,51 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var response = await client.GetAsync("/api/skills", ct);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Sync_requires_authorization_for_an_unauthenticated_post()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: false, new SkillRegistry(), paths);
+
+        var response = await app.GetTestClient().PostAsync("/api/skills/sync", null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Sync_returns_503_when_the_service_is_not_started()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
+
+        var response = await app.GetTestClient().PostAsync("/api/skills/sync", null, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Sync_post_returns_503_when_host_stop_cancels_the_joined_pass()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        var registry = new SkillRegistry();
+        var handler = new BlockingFeedHandler();
+        var logger = new JoinSignalLogger();
+        using var syncService = CreateBlockingSyncService(registry, paths, handler, logger);
+        await syncService.StartAsync(TestContext.Current.CancellationToken);
+        await handler.IndexRequest.Task;
+
+        await using var app = await CreateAppAsync(spoofLoopback: true, registry, paths, syncService);
+        var post = app.GetTestClient().PostAsync("/api/skills/sync", null, TestContext.Current.CancellationToken);
+        await logger.Joined.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await syncService.StopAsync(TestContext.Current.CancellationToken);
+
+        var response = await post;
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken));
+        Assert.Equal("Skill sync stopped", problem.RootElement.GetProperty("title").GetString());
     }
 
     [Fact]
@@ -141,5 +195,78 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var file = Assert.Single(inventory.Skills, s => s.Name == "demo-file");
         Assert.Equal("native", file.Source);
         Assert.Null(file.ServerName);
+    }
+
+    private static ServerFeedSkillSyncService CreateSyncService(SkillRegistry registry, NetclawPaths paths)
+    {
+        var publisher = new SkillIndexPublisher(
+            registry,
+            new SkillIndexContextLayer(),
+            static (_, _) => true);
+        return new ServerFeedSkillSyncService(
+            new SkillFeedsConfig(),
+            paths,
+            new SkillInventoryRefresher(paths, new SkillFeedsConfig(), [], registry, publisher),
+            TimeProvider.System,
+            new NoOpSkillContentScanner(),
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerFeedSkillSyncService>.Instance);
+    }
+
+    private static ServerFeedSkillSyncService CreateBlockingSyncService(
+        SkillRegistry registry,
+        NetclawPaths paths,
+        BlockingFeedHandler handler,
+        ILogger<ServerFeedSkillSyncService> logger)
+    {
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = 0,
+            Feeds = [new SkillFeedSource { Name = "team", Url = "https://feed.test/", TimeoutSeconds = 30 }],
+        };
+        var publisher = new SkillIndexPublisher(registry, new SkillIndexContextLayer(), static (_, _) => true);
+        return new ServerFeedSkillSyncService(
+            feeds,
+            paths,
+            registry,
+            publisher,
+            TimeProvider.System,
+            new NoOpSkillContentScanner(),
+            logger,
+            [],
+            feed => new Netclaw.SkillClient.SkillServerClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri(feed.Url),
+            }),
+            TimeSpan.Zero);
+    }
+
+    private sealed class BlockingFeedHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource<HttpResponseMessage> _response = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource IndexRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            IndexRequest.TrySetResult();
+            return await _response.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    private sealed class JoinSignalLogger : ILogger<ServerFeedSkillSyncService>
+    {
+        public TaskCompletionSource Joined { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception) == "Joined the active external skill sync pass.")
+                Joined.TrySetResult();
+        }
     }
 }
