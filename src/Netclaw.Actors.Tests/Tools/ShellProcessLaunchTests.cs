@@ -17,7 +17,6 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public sealed class ShellProcessLaunchTests
 {
-    public static bool IsPosix => !OperatingSystem.IsWindows();
 
     [Fact]
     public void Launch_does_not_select_a_working_directory_from_context()
@@ -60,7 +59,8 @@ public sealed class ShellProcessLaunchTests
     }
 
     [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "POSIX-only symbolic-link semantics")]
     public async Task Final_start_rejects_a_link_that_changes_after_authorization()
     {
         using var directory = new DisposableTempDir();
@@ -83,7 +83,8 @@ public sealed class ShellProcessLaunchTests
     }
 
     [SlopwatchSuppress("SW001", "This test uses the native Bash TCP redirection and process identifiers.")]
-    [Theory(SkipUnless = nameof(IsPosix), Skip = "Native Bash process-tree proof")]
+    [Theory(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "Native Bash process-tree proof")]
     [InlineData(false)]
     [InlineData(true)]
     public async Task Foreground_cancellation_stops_the_parent_and_child_process(bool stream)

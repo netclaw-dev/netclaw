@@ -1,8 +1,8 @@
 {
   "version": 1,
   "createdAt": "2026-05-12T17:20:55.7365203+00:00",
-  "updatedAt": "2026-07-08T22:05:54.9570245+00:00",
-  "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC",
+  "updatedAt": "2026-09-10T13:51:43.2738955+00:00",
+  "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC. The BuiltInSkillSeedingTests entries are conditional xUnit platform gates. Supported systems execute the tests; unsupported systems report explicit skips.",
   "entries": [
     {
       "hash": "9d4a53dc5193e639",
@@ -201,6 +201,24 @@
       "codeSnippet": "Task.Delay(Timeout.InfiniteTimeSpan, ct)",
       "message": "Test uses Task.Delay(Timeout.InfiniteTimeSpan) which may indicate a timing-dependent test",
       "baselinedAt": "2026-07-08T22:05:54.957+00:00"
+    },
+    {
+      "hash": "6678c335cb502724",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Daemon.Tests/BuiltInSkillSeedingTests.cs",
+      "lineNumber": 126,
+      "codeSnippet": "Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),\n        Skip = \"Symbolic link fixture requires POSIX filesystem support\")",
+      "message": "Test method 'Restore_rejects_a_symbolic_link_for_the_managed_tree' is disabled: Symbolic link fixture requires POSIX filesystem support",
+      "baselinedAt": "2026-09-10T13:51:43.27388+00:00"
+    },
+    {
+      "hash": "48454923737c5dce",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Daemon.Tests/BuiltInSkillSeedingTests.cs",
+      "lineNumber": 156,
+      "codeSnippet": "Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsLinux),\n        Skip = \"Cleanup failure requires Linux directory permission semantics\")",
+      "message": "Test method 'Restore_keeps_the_committed_tree_when_backup_cleanup_fails' is disabled: Cleanup failure requires Linux directory permission semantics",
+      "baselinedAt": "2026-09-10T13:51:43.273895+00:00"
     }
   ]
 }

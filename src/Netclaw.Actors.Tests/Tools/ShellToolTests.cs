@@ -17,9 +17,6 @@ public class ShellToolTests
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly ShellTool _tool = CreateTool();
 
-    public static bool IsWindows => OperatingSystem.IsWindows();
-    public static bool IsPosix => !OperatingSystem.IsWindows();
-
     private static ToolExecutionContext CreateExecutionContext()
     {
         var sessionDirectory = Path.Combine(
@@ -197,7 +194,8 @@ public class ShellToolTests
 
     [SlopwatchSuppress("SW001", "This native fallback test requires Windows PowerShell 5.1.")]
     [Trait("Category", "NativeShell")]
-    [Fact(SkipUnless = nameof(IsWindows), Skip = "Native Windows PowerShell 5.1 execution requires Windows.")]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),
+        Skip = "Native Windows PowerShell 5.1 execution requires Windows.")]
     public async Task Windows_power_shell_51_executes_through_the_selected_host()
     {
         var environment = TestShellEnvironment.CreateWindowsPowerShell51();
@@ -251,7 +249,8 @@ public class ShellToolTests
     }
 
     [SlopwatchSuppress("SW001", "Reproduces a backgrounded child holding the pipe open; the case needs POSIX `&` semantics.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "Requires POSIX background-job (`&`) semantics.")]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "Requires POSIX background-job (`&`) semantics.")]
     public async Task Direct_process_exit_with_backgrounded_child_holding_pipe_open_returns_promptly()
     {
         // The direct bash process exits at once. The backgrounded sleep
@@ -595,7 +594,6 @@ public class ShellToolTests
         Assert.Contains("Access denied", result);
     }
 
-
     [Fact]
     public async Task High_risk_glob_on_netclaw_config_is_blocked()
     {
@@ -696,7 +694,8 @@ public class ShellToolTests
     }
 
     [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only symbolic-link semantics")]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "POSIX-only symbolic-link semantics")]
     public async Task Authorized_execution_rechecks_current_symbolic_link_state()
     {
         var root = Directory.CreateTempSubdirectory("netclaw-shell-recheck-");

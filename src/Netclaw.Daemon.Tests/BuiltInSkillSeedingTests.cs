@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Runtime.Versioning;
 using System.Text.Json;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
@@ -122,12 +123,10 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Contains(registry.Search("diagnostics"), skill => skill.Name == "netclaw-operations");
     }
 
-    [Fact]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "Symbolic link fixture requires POSIX filesystem support")]
     public void Restore_rejects_a_symbolic_link_for_the_managed_tree()
     {
-        if (OperatingSystem.IsWindows())
-            return;
-
         var paths = CreatePaths();
         var externalDirectory = Path.Combine(_directory.Path, "external-system-skills");
         Directory.CreateDirectory(externalDirectory);
@@ -154,12 +153,11 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         Assert.Equal("unmanaged file", File.ReadAllText(paths.SystemSkillsDirectory));
     }
 
-    [Fact]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsLinux),
+        Skip = "Cleanup failure requires Linux directory permission semantics")]
+    [SupportedOSPlatform("linux")]
     public void Restore_keeps_the_committed_tree_when_backup_cleanup_fails()
     {
-        if (!OperatingSystem.IsLinux())
-            return;
-
         var paths = CreatePaths();
         var oldSkill = Path.Combine(paths.SystemSkillsDirectory, "old-skill", "SKILL.md");
         Directory.CreateDirectory(Path.GetDirectoryName(oldSkill)!);
