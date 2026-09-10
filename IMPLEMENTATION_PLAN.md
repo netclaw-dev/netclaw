@@ -118,7 +118,9 @@ Use the [engineering glossary](docs/spec/GLOSSARY.md) for path and authority ter
 - [x] Deny implicit sibling access for Public and Team; preserve current roots and exact own legacy logs.
 - [x] Verify parent/child authority and the approved legacy cross-run log exception.
 - [x] Keep result conversion and attachment-destination investigation in separate review slices.
-- [ ] Complete deterministic boundary tests, system-skill evals, and repository quality gates.
+- [x] Complete deterministic boundary tests, system-skill evals, and repository quality gates.
+  Local actor tests: 3,883 passed; six platform-specific skips. Daemon tests: 1,098 passed.
+  Focused child-log and operations evals each passed five runs. Native Windows proof remains pending.
 
 ### Priority: Unify Session Storage And Temporary Files
 

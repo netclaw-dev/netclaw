@@ -2529,10 +2529,11 @@ assert_parent_child_log_handoff() {
             path=$(jq -r '.Path // .Root // empty' <<<"$arguments")
             if [[ "$path" == /home/netclaw/.netclaw/sessions/*/subagents/*/logs/session.log \
                 || "$path" == /home/netclaw/.netclaw/sessions/*/subagents/*/logs ]]; then
-                grep -qaF "TOOL_RESULT: $tool_name call_id=$call_id result=" "$headless_log" \
+                if grep -qaF "TOOL_RESULT: $tool_name call_id=$call_id result=" "$headless_log" \
                     && ! grep -qaF "TOOL_RESULT: $tool_name call_id=$call_id result=Error:" "$headless_log" \
-                    && jq -e '.response | length > 0' "$STDOUT_FILE" >/dev/null
-                return
+                    && jq -e '.response | length > 0' "$STDOUT_FILE" >/dev/null; then
+                    return 0
+                fi
             fi
         done < <(jq -r --arg tool_name "$tool_name" '
             .toolCalls[]?

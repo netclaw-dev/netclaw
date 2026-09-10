@@ -85,4 +85,4 @@
 - [x] 10.2 Restrict shared roots to Personal; retain exact own legacy logs, inherited child roots, link checks, and protected paths.
 - [x] 10.3 Verify real file tools, child authority, explicit profiles, and the existing shell denial boundary.
 - [x] 10.4 Align specification, glossary references, profile comments, operations skill, and release notes.
-- [ ] 10.5 Run focused and related tests, evals, Slopwatch, headers, and strict OpenSpec validation; record limits.
+- [x] 10.5 Run focused and related tests, evals, Slopwatch, headers, and strict OpenSpec validation; record limits.
