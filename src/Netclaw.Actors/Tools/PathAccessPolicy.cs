@@ -13,6 +13,12 @@ namespace Netclaw.Actors.Tools;
 /// <summary>
 /// Owns canonical path resolution and file-protection decisions.
 /// </summary>
+/// <remarks>
+/// File tools use this policy to resolve paths and check the current invocation's audience and operation profile.
+/// Bounded profiles require a trusted root and a safe link relationship. File protection remains a separate gate after path authority.
+/// Session roots supply implicit authority; configured roots can supply explicit authority. A returned child path supplies neither.
+/// The policy checks paths but does not perform file operations or grant shell access.
+/// </remarks>
 internal sealed class PathAccessPolicy
 {
     /// <summary>Classifies why a path access decision failed.</summary>
@@ -638,6 +644,9 @@ internal sealed class PathAccessPolicy
         FileOperation operation)
     {
         var relationship = GetHostPathRelationship(fullPath, roots);
+        // Only an outside-root result can use the legacy exception. Link failures remain denials.
+        // A null binding identifies legacy storage, whose raw log sits outside its session directory.
+        // Project declarations require directory authority; an exact log file cannot supply it.
         if (relationship != PathRelationship.OutsideTrustedRoots
             || operation == FileOperation.DeclareProjectScope
             || context.SessionStorage is not { Binding: null } storage
@@ -646,8 +655,8 @@ internal sealed class PathAccessPolicy
             return relationship;
         }
 
-        // A legacy run owns this file, not its directory or another run's log.
-        // Equality grants authority; the common relationship check retains link checks.
+        // Exact equality permits this run's log without adding its shared parent to the trusted roots.
+        // The caller still enforces the operation profile and file protection. This check retains link checks.
         return GetHostPathRelationship(fullPath, [fullPath]);
     }
 
@@ -663,8 +672,8 @@ internal sealed class PathAccessPolicy
                 if (!PathUtility.IsWithinRoot(fullPath, root))
                     continue;
 
-                // Narrow authority must not omit links above the current envelope.
-                // The storage ancestor supplies link facts, not an access grant.
+                // A link above the envelope can redirect an otherwise valid session path.
+                // Check from the shared storage ancestor, but grant access only through the narrower root above.
                 var linkRoot = _sessionRoots.FirstOrDefault(storageRoot =>
                     PathUtility.IsWithinRoot(root, storageRoot)) ?? root;
                 return PathUtility.ContainsSymlinkSegment(linkRoot, fullPath, includeRoot: true)
@@ -686,18 +695,10 @@ internal sealed class PathAccessPolicy
     }
 
     /// <summary>
-    /// Resolves trusted roots for an unattended invocation from the shared
-    /// Netclaw session roots and current project
-    /// directory, available for both reads and writes. Read access
-    /// additionally includes the non-sensitive global read roots (skills,
-    /// identity, workspaces). Write/attach access additionally includes the
-    /// configured <em>workspaces</em> directory only — the operator's designated
-    /// writable working area — but NOT skills/identity, which are system-managed
-    /// (an unattended session must never rewrite its own identity or skills).
-    /// Plain file writes are not gated by the interactive approval system, so
-    /// confining them to only the current session and project blocked legitimate cross-run state in
-    /// the workspace without a security benefit. No additional plumbing — the
-    /// cached read roots and workspaces root already exist on this policy.
+    /// Bounds an All profile when the invocation cannot request interactive approval or proposes a project scope.
+    /// Session roots still depend on the audience. The current project supplies another root for each operation.
+    /// Reads also use the global read roots. Writes and attachments also use the configured workspaces root.
+    /// File protection remains authoritative within these roots.
     /// </summary>
     private IReadOnlyList<string> ResolveUnattendedTrustedRoots(ToolInvocationContext context, FileOperation accessKind)
     {
@@ -721,9 +722,13 @@ internal sealed class PathAccessPolicy
 
     private void AddSessionRoots(List<string> roots, ToolInvocationContext context)
     {
+        // Shared session directories grant cross-session access. Only Personal receives that implicit authority.
+        // Public and Team can still use roots that the operator explicitly configures for their profile.
         if (context.Audience == TrustAudience.Personal)
             roots.AddRange(_sessionRoots);
 
+        // Versioned parent and child runs share one envelope, so this root preserves access between those runs.
+        // Other session envelopes remain outside this implicit grant, even when they have the same audience.
         if (context.SessionStorage?.Binding is { } binding)
             roots.Add(binding.EnvelopeRoot.Value);
 
