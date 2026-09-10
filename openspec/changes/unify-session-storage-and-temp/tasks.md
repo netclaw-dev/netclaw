@@ -78,3 +78,11 @@
 - [x] 9.4 Run `openspec validate unify-session-storage-and-temp --strict`, focused tests, `dotnet build -c Release`, `dotnet test -c Release`, header verification, and Slopwatch; report existing skipped tests accurately instead of claiming zero skips
 - [ ] 9.5 Upgrade one existing session and restart one newly bound session; verify established and new paths remain usable, active writers remain healthy, paths stay stable, and no data is moved or deleted
 - [ ] 9.6 Harvest sanitized live traffic after the swap and classify remaining temp, log-discovery, worktree, configuration-read, and approval-friction patterns; add evidence to the corpus only after manual PII review
+
+## 10. Restore restricted session file authority
+
+- [x] 10.1 Prove sibling and legacy denial failures against the unchanged policy with nearby own-path controls.
+- [x] 10.2 Restrict shared roots to Personal; retain exact own legacy logs, inherited child roots, link checks, and protected paths.
+- [x] 10.3 Verify real file tools, child authority, explicit profiles, and the existing shell denial boundary.
+- [x] 10.4 Align specification, glossary references, profile comments, operations skill, and release notes.
+- [ ] 10.5 Run focused and related tests, evals, Slopwatch, headers, and strict OpenSpec validation; record limits.

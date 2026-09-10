@@ -13,10 +13,10 @@ namespace Netclaw.Actors.Tools;
 
 /// <summary>
 /// Attaches a file as output to the user.
-/// Paths inside the current session are attached directly. Paths from sibling
-/// Netclaw session directories are copied into the current session first.
+/// Paths inside the current session are attached directly. Policy-authorized paths outside the current workspace
+/// are copied into the current session first.
 /// Interactive Personal sessions can copy another policy-authorized readable
-/// source. Other callers remain limited to the session tree.
+/// source. Public and Team require current-session or explicit configured authority.
 /// </summary>
 [NetclawTool("attach_file",
     "Attach an existing authorized file to the user. Pass the source path directly; Netclaw copies the file into the current session when required. Do not copy the file with shell or another file tool first.",

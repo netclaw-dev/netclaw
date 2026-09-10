@@ -395,29 +395,6 @@ The existing `file_read`, `file_search`, `file_list`, `file_write`,
 `file_edit`, and `attach_file` tools SHALL use this decision. They SHALL keep
 their existing output, pagination, query, and approval contracts.
 
-The Netclaw sessions root SHALL be a trusted root for parent and child runs.
-A path in another session SHALL use the same decision as any other path below
-that root. Session identity SHALL NOT add another access-control rule.
-
-The system SHALL NOT add a log-specific tool, ownership check, projection, or
-query language. `file_read` and `file_search` SHALL remain compatible with an
-active log writer on POSIX and Windows.
-
-#### Scenario: Example - one session reads another session's log
-
-- **GIVEN** the audience permits `file_read`
-- **AND** two sessions are below the Netclaw sessions root
-- **WHEN** one session requests the other session's canonical log path
-- **THEN** one `Read` path access decision allows the request
-- **AND** `file_read` applies its normal output bounds
-
-#### Scenario: Example - parent searches a child log
-
-- **GIVEN** a parent receives a child log path from `spawn_agent`
-- **WHEN** it calls `file_search` for that path
-- **THEN** the shared path access decision evaluates the request
-- **AND** the parent needs no shell or log-specific tool
-
 #### Scenario: Example - an active Windows log remains readable
 
 - **GIVEN** a log writer holds its append handle open
@@ -497,6 +474,67 @@ active log writer on POSIX and Windows.
 - **WHEN** any file operation requests that path
 - **THEN** the shared decision denies the request
 - **AND** no caller can bypass that result with another path policy
+
+### Requirement: Session file authority
+
+`PathAccessPolicy` SHALL derive session authority from the invocation audience
+and the current session storage. Personal MAY use the shared sessions and
+legacy logs roots. Public and Team SHALL NOT receive these shared roots as
+implicit authority. Explicit configured roots SHALL retain their authority.
+
+The current envelope and workspace SHALL remain roots for parent and child
+runs. A child SHALL inherit its parent's audience and workspace restrictions.
+Each legacy run MAY access its exact raw log through its operation profile.
+This exact-file grant SHALL NOT authorize the log's parent directory, adjacent
+files, or project declarations. Legacy cross-run logs SHALL receive no implicit
+grant. Child summaries and workspace artifacts SHALL remain available.
+
+The path decision SHALL retain profile, link, and protected-path checks.
+A storage ancestor used to inspect links SHALL NOT grant directory authority.
+Public and Team shell capability SHALL remain denied. Storage paths, audience
+derivation on resumption, and memory policy SHALL remain unchanged.
+
+The system SHALL NOT add a log-specific tool, ownership registry, projection,
+or query language. `file_read` SHALL support an exact legacy log. Directory
+search SHALL require directory authority. Reads SHALL remain compatible with
+an active log writer on POSIX and Windows.
+
+#### Scenario: Restricted session reads its own log
+
+- **GIVEN** a Public or Team session with the default file profiles
+- **WHEN** it requests its exact versioned or legacy raw log through `file_read`
+- **THEN** the path decision allows the read and applies normal output bounds
+- **AND** a `None` profile or protected path still denies access
+
+#### Scenario: Restricted session cannot inspect a sibling session
+
+- **GIVEN** a Public or Team session without an explicit root for a sibling
+- **WHEN** it reads, lists, searches, or attaches the sibling's files
+- **THEN** the path decision denies access before content or filenames escape
+- **AND** a Team write cannot change or create a sibling file
+
+#### Scenario: Personal session retains cross-session access
+
+- **GIVEN** a Personal session whose operation profile admits shared roots
+- **WHEN** it requests another session's ordinary raw log
+- **THEN** the same path decision permits the read
+- **AND** link and protected-path checks still apply
+
+#### Scenario: Parent and child share versioned session authority
+
+- **GIVEN** a Team parent and child with the same versioned envelope
+- **WHEN** either reads the other's log or shared workspace artifact
+- **THEN** its inherited roots permit the operation
+- **AND** neither can read an unrelated session without explicit authority
+
+#### Scenario: Legacy child keeps only its own raw log grant
+
+- **GIVEN** a Team parent and child with separate legacy raw log paths
+- **WHEN** either reads its own exact log
+- **THEN** the operation succeeds
+- **WHEN** either reads the other's log or enumerates the shared log parent
+- **THEN** access is denied without explicit authority
+- **AND** the parent can still read the child's shared-workspace artifacts
 
 ### Requirement: Git worktrees compose existing tools
 

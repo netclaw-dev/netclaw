@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Public and Team file tools keep access to their current session and exact
+  legacy log. Other sessions require explicit configured roots.
+- Child runs inherit parent roots and restrictions. Legacy cross-run raw logs
+  require explicit authority; child summaries and shared artifacts remain available.
+- Personal file access, existing paths, and session resumption remain unchanged.
+
 - New sessions keep work files, attachment staging, artifacts, temporary
   files, worktrees, and logs in one versioned storage envelope.
 - Each parent and child process receives its own managed temporary directory

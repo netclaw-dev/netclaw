@@ -529,8 +529,9 @@ be built into `file_read`.
 ### Requirement: Attachment tool reach
 
 The system SHALL provide an `attach_file` first-party tool that sends a file to
-the user. Non-interactive, Team, and Public sessions SHALL only attach files
-inside the current session directory or a sibling Netclaw session directory.
+the user. Public and Team sessions SHALL attach only files admitted by their current
+session paths or explicit configured roots. Personal retains shared-session
+reach under its existing attach profile.
 Interactive Personal-audience sessions get shell-equivalent reach: any path that
 resolves through the read-access policy SHALL be attachable, and the file SHALL
 be copied into the current session's attachments directory before delivery.
@@ -693,3 +694,64 @@ process-start builder. The tool schema SHALL remain unchanged.
 - **THEN** both use the same absolute executable path
 - **AND** both use the same fixed arguments in the same order
 - **AND** both append the submitted command as one argument
+
+### Requirement: Session file authority
+
+`PathAccessPolicy` SHALL derive session authority from the invocation audience
+and the current session storage. Personal MAY use the shared sessions and
+legacy logs roots. Public and Team SHALL NOT receive these shared roots as
+implicit authority. Explicit configured roots SHALL retain their authority.
+
+The current envelope and workspace SHALL remain roots for parent and child
+runs. A child SHALL inherit its parent's audience and workspace restrictions.
+Each legacy run MAY access its exact raw log through its operation profile.
+This exact-file grant SHALL NOT authorize the log's parent directory, adjacent
+files, or project declarations. Legacy cross-run logs SHALL receive no implicit
+grant. Child summaries and workspace artifacts SHALL remain available.
+
+The path decision SHALL retain profile, link, and protected-path checks.
+A storage ancestor used to inspect links SHALL NOT grant directory authority.
+Public and Team shell capability SHALL remain denied. Storage paths, audience
+derivation on resumption, and memory policy SHALL remain unchanged.
+
+The system SHALL NOT add a log-specific tool, ownership registry, projection,
+or query language. `file_read` SHALL support an exact legacy log. Directory
+search SHALL require directory authority. Reads SHALL remain compatible with
+an active log writer on POSIX and Windows.
+
+#### Scenario: Restricted session reads its own log
+
+- **GIVEN** a Public or Team session with the default file profiles
+- **WHEN** it requests its exact versioned or legacy raw log through `file_read`
+- **THEN** the path decision allows the read and applies normal output bounds
+- **AND** a `None` profile or protected path still denies access
+
+#### Scenario: Restricted session cannot inspect a sibling session
+
+- **GIVEN** a Public or Team session without an explicit root for a sibling
+- **WHEN** it reads, lists, searches, or attaches the sibling's files
+- **THEN** the path decision denies access before content or filenames escape
+- **AND** a Team write cannot change or create a sibling file
+
+#### Scenario: Personal session retains cross-session access
+
+- **GIVEN** a Personal session whose operation profile admits shared roots
+- **WHEN** it requests another session's ordinary raw log
+- **THEN** the same path decision permits the read
+- **AND** link and protected-path checks still apply
+
+#### Scenario: Parent and child share versioned session authority
+
+- **GIVEN** a Team parent and child with the same versioned envelope
+- **WHEN** either reads the other's log or shared workspace artifact
+- **THEN** its inherited roots permit the operation
+- **AND** neither can read an unrelated session without explicit authority
+
+#### Scenario: Legacy child keeps only its own raw log grant
+
+- **GIVEN** a Team parent and child with separate legacy raw log paths
+- **WHEN** either reads its own exact log
+- **THEN** the operation succeeds
+- **WHEN** either reads the other's log or enumerates the shared log parent
+- **THEN** access is denied without explicit authority
+- **AND** the parent can still read the child's shared-workspace artifacts

@@ -110,6 +110,16 @@ the smallest repeatable manual script plus expected output.
 
 ## NOW
 
+### Priority: Restore Restricted Session File Authority
+
+Source PRDs: PRD-002 and PRD-007. Owner: `PathAccessPolicy`.
+Use the [engineering glossary](docs/spec/GLOSSARY.md) for path and authority terms.
+
+- [x] Deny implicit sibling access for Public and Team; preserve current roots and exact own legacy logs.
+- [x] Verify parent/child authority and the approved legacy cross-run log exception.
+- [x] Keep result conversion and attachment-destination investigation in separate review slices.
+- [ ] Complete deterministic boundary tests, system-skill evals, and repository quality gates.
+
 ### Priority: Unify Session Storage And Temporary Files
 
 - [x] New sessions bind one durable, versioned

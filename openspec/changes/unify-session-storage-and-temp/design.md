@@ -171,11 +171,11 @@ The final edit will condense or remove duplicate requirements, scenarios,
 helpers, and tests. It will not preserve an old abstraction only to avoid a
 mechanical change.
 
-The Netclaw sessions directory is a trusted root for every parent and child
-run. All session directories are below this root and are accessible to other
-sessions under normal audience and operation permissions. This design lets
-one session analyze another session's logs, which supports diagnosis on a
-heavily used Netclaw agent.
+Personal retains the shared sessions and legacy logs roots. Public and Team
+receive the current envelope and workspace roots. Each legacy run also receives
+its exact log path through the operation profile. The exact grant permits no
+parent enumeration or cross-run legacy log access. Children inherit parent
+roots and restrictions. A returned path does not grant additional authority.
 
 ```text
 tool exposure and audience capability
@@ -187,7 +187,7 @@ tool exposure and audience capability
 ```
 
 **Counterexample:** Session identity does not create a separate access-control
-list. The shared sessions root provides containment, while audience and
+list. The current session roots provide containment, while audience and
 operation permissions still control the requested action.
 
 **Counterexample:** Temporary-path detection does not produce or override a path
@@ -411,8 +411,8 @@ and exact child artifact directory. Existing file tools keep their normal
 output bounds and pagination.
 
 The shared `netclaw-tools` path access decision authorizes these paths. The
-Netclaw sessions root covers all new session envelopes. The legacy log root
-remains available while legacy sessions exist.
+Netclaw sessions root covers all new session envelopes. Personal retains the legacy log root. Public and Team receive only their
+exact current legacy log, subject to the operation profile.
 
 This design adds no log reader, query language, ownership list, or output
 contract. One session can inspect another session's log when its audience and
@@ -438,7 +438,8 @@ must not fail because the path is not ready.
 
 **Counterexample:** Netclaw does not add a special session-log reader. The
 parent does not need `find`, `grep`, or `cat`. It uses `file_read` on the path.
-It can use `file_search` or `file_list` on the path's directory.
+It can use `file_search` or `file_list` only when its roots authorize the directory.
+An exact legacy log grant permits no directory enumeration.
 
 **Example:** One Personal session uses `file_read` to diagnose another
 session's log below the shared sessions root.
@@ -567,7 +568,7 @@ The initial source audit identifies these implementation groups:
 | Durable pending approvals | `ToolApprovalState`, `SessionProtocol.Events`, `netclaw_messages.proto`, `NetclawProtoMapper` | Add the new field, retain field 19 as legacy-read-only, and test recovery without reinterpretation |
 | Model-visible guidance | shipped `AGENTS.md`, `SessionMessageAssembler`, `SubAgentActor`, `ToolChoiceGuidance`, `ShellTool` | Extend the existing session block with `temp_dir`, `artifact_dir`, `worktree_dir`, and `log_path`; preserve current `session_dir` assembly |
 | Workspace file schemas | `FileReadTool`, `FileListTool`, `FileSearchTool`, `FileWriteTool`, `FileEditTool`, `AttachFileTool` | Replace “session scratch” with “session directory” for relative-path fallback |
-| Session data access | `ToolExecutionContext`, `PathAccessPolicy`, `FileReadTool`, `FileSearchTool`, `SessionLogActor` | Use the shared sessions root and one path access decision; use a writer-compatible file share mode |
+| Session data access | `ToolExecutionContext`, `PathAccessPolicy`, `FileReadTool`, `FileSearchTool`, `SessionLogActor` | Use audience-scoped session roots and one path access decision; use a writer-compatible file share mode |
 | Ordinary config reads | `ToolPathPolicy`, `DaemonToolPathPolicyFactory`, configuration persistence and validation | Separate structured read denies from broad shell indicators; allow validated `netclaw.json`; keep secret and control-plane files denied |
 | Background-job recovery | `BackgroundJobDefinitionStore`, `BackgroundJobManagerActor` | Read records without managed-temp metadata; keep existing `Lost` transition and notification semantics |
 | Approval scopes and prompts | `ApprovalBucketBuilder`, `ToolAccessPolicy`, Slack and Discord approval builders, approval runbook | Name each storage path that suppresses a persistent folder grant |
@@ -800,7 +801,7 @@ That pass does not prove environment injection, access control, or recovery.
   the shared path access decision.
 - **The model tries to change a log.** -> Apply ordinary write and edit policy;
   read permission is not write permission.
-- **The model tries to read another session.** -> Use the shared sessions root,
+- **The model tries to read another session.** -> Use audience-scoped session roots,
   audience policy, and requested file operation.
 - **A file tool reads while the log writer stays open.** -> Use a compatible
   read share mode and test the active writer on Windows and POSIX.

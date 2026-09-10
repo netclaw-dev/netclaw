@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.69.0"
+  version: "2.70.0"
 ---
 
 # Netclaw Operations
@@ -109,7 +109,12 @@ The `[session]` block separates five paths:
 - `worktree_dir` is the session area for Git worktrees.
 - `log_path` is the exact raw audit log for the current run.
 
-Use the existing file tools to read an exact parent or child log path.
+Use `file_read` to read the exact `log_path` for the current run.
+Public and Team cannot access other sessions without explicit configured roots.
+Versioned parent and child runs share the current session envelope.
+Legacy runs can read their own exact log, but not separate parent or child logs.
+Use a legacy child's summary and shared-workspace artifacts instead.
+Directory list and search require directory authority; an exact log grants none.
 Do not use shell to find session logs.
 Normal audience and operation policy applies to every session path.
 Netclaw does not automatically remove managed temporary files or worktrees.

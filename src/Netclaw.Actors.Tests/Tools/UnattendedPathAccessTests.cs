@@ -291,7 +291,7 @@ public sealed class UnattendedPathAccessTests : IDisposable
     }
 
     [Fact]
-    public void Relative_traversal_into_shared_sessions_root_is_allowed()
+    public void Public_relative_traversal_into_shared_sessions_root_is_denied()
     {
         var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
         var context = Ctx(TrustAudience.Public, autonomous: true, withProject: false);
@@ -303,7 +303,10 @@ public sealed class UnattendedPathAccessTests : IDisposable
             context,
             PathAccessPolicy.FileOperation.Read);
 
-        AssertAllowed(decision, expectedPath);
+        AssertDenied(decision, expectedPath);
+        AssertAllowed(
+            policy.Evaluate("own.txt", context, PathAccessPolicy.FileOperation.Read),
+            Path.Combine(_sessionDir, "own.txt"));
     }
 
     [Fact]

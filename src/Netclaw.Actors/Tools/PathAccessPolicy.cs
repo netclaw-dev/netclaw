@@ -105,7 +105,7 @@ internal sealed class PathAccessPolicy
 
         // SessionsDirectory contains version-2 envelopes and legacy workspaces.
         // SessionLogsDirectory contains only legacy raw logs. Both roots remain
-        // readable so one session can inspect another session's authorized data.
+        // available to Personal; restricted audiences receive only their own paths.
         _sessionRoots = new[]
             {
                 paths.SessionsDirectory,
@@ -400,7 +400,7 @@ internal sealed class PathAccessPolicy
             return false;
         }
 
-        var relationship = GetHostPathRelationship(fullPath, roots);
+        var relationship = GetFilePathRelationship(fullPath, roots, context, accessKind);
         if (relationship == PathRelationship.WithinTrustedRoot)
         {
             error = string.Empty;
@@ -566,7 +566,7 @@ internal sealed class PathAccessPolicy
     /// Single source of truth for root resolution — used by both
     /// <see cref="GetTrustedRoots"/> and <see cref="TryResolvePath"/>.
     /// Public audience is excluded from global read roots (skills, identity,
-    /// workspaces) — it may only access the shared session trusted roots.
+    /// workspaces). Its implicit roots cover only the current session.
     /// </summary>
     private IReadOnlyList<string> ResolveAndMergeRoots(
         ToolFilesystemAccessProfile access,
@@ -608,7 +608,7 @@ internal sealed class PathAccessPolicy
             return false;
         }
 
-        var relationship = GetHostPathRelationship(fullPath, roots);
+        var relationship = GetFilePathRelationship(fullPath, roots, context, accessKind);
         if (relationship == PathRelationship.WithinTrustedRoot)
         {
             error = string.Empty;
@@ -631,7 +631,27 @@ internal sealed class PathAccessPolicy
         return false;
     }
 
-    private static PathRelationship GetHostPathRelationship(
+    private PathRelationship GetFilePathRelationship(
+        string fullPath,
+        IEnumerable<string> roots,
+        ToolInvocationContext context,
+        FileOperation operation)
+    {
+        var relationship = GetHostPathRelationship(fullPath, roots);
+        if (relationship != PathRelationship.OutsideTrustedRoots
+            || operation == FileOperation.DeclareProjectScope
+            || context.SessionStorage is not { Binding: null } storage
+            || !PathComparer.Equals(fullPath, storage.LogPath.Value))
+        {
+            return relationship;
+        }
+
+        // A legacy run owns this file, not its directory or another run's log.
+        // Equality grants authority; the common relationship check retains link checks.
+        return GetHostPathRelationship(fullPath, [fullPath]);
+    }
+
+    private PathRelationship GetHostPathRelationship(
         string fullPath,
         IEnumerable<string> roots)
     {
@@ -643,7 +663,11 @@ internal sealed class PathAccessPolicy
                 if (!PathUtility.IsWithinRoot(fullPath, root))
                     continue;
 
-                return PathUtility.ContainsSymlinkSegment(root, fullPath, includeRoot: true)
+                // Narrow authority must not omit links above the current envelope.
+                // The storage ancestor supplies link facts, not an access grant.
+                var linkRoot = _sessionRoots.FirstOrDefault(storageRoot =>
+                    PathUtility.IsWithinRoot(root, storageRoot)) ?? root;
+                return PathUtility.ContainsSymlinkSegment(linkRoot, fullPath, includeRoot: true)
                     ? PathRelationship.CrossesLinkBoundary
                     : PathRelationship.WithinTrustedRoot;
             }
@@ -697,7 +721,8 @@ internal sealed class PathAccessPolicy
 
     private void AddSessionRoots(List<string> roots, ToolInvocationContext context)
     {
-        roots.AddRange(_sessionRoots);
+        if (context.Audience == TrustAudience.Personal)
+            roots.AddRange(_sessionRoots);
 
         if (context.SessionStorage?.Binding is { } binding)
             roots.Add(binding.EnvelopeRoot.Value);

@@ -1,6 +1,6 @@
 ## Why
 
-Source PRDs: `PRD-001`, `PRD-002`, and `PRD-006`.
+Source PRDs: `PRD-001`, `PRD-002`, `PRD-006`, and `PRD-007`.
 
 Live sessions still create disposable work under shared platform temporary
 roots, even after prompt guidance and interactive correction changes. Parent
@@ -21,10 +21,9 @@ use separate directory trees.
 - Treat the complete current session envelope as an implicit trusted root for
   parent and child runs. Existing file tools apply their ordinary audience and
   operation permissions inside it.
-- Store all session directories below the trusted Netclaw sessions root.
-  Parent and child runs inherit this root, so they can access other sessions
-  under normal audience and operation permissions. This supports a session
-  that analyzes another session's logs on a heavily used Netclaw agent.
+- Preserve shared session roots for Personal. Public and Team receive the current
+  envelope and workspace, plus exact own legacy log authority. Children inherit
+  parent roots and restrictions. Legacy cross-run logs require explicit authority.
 - Set `TMPDIR`, `TMP`, and `TEMP` for each parent and child execution scope.
   The values must identify that run's managed temporary directory.
 - Retire the ambiguous “session scratch” vocabulary. Use `session_dir` for the

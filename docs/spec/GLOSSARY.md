@@ -479,10 +479,11 @@ A raw session log is the diagnostic file for one main session or subagent run.
 New-layout raw logs are physically inside the session storage envelope but are
 outside the session directory.
 
-All session storage is below the configured trusted sessions root. Parent and
-child runs inherit this root, so one session can access another session's data.
-This permits one session to analyze another session's logs on a busy agent.
-The normal audience and file-operation permissions still apply.
+Personal retains the shared session roots. Public and Team receive the current
+session envelope and workspace roots. Each legacy run can access its exact raw
+log, but this grants no access to adjacent files or separate parent/child logs.
+Children inherit parent roots and restrictions. The operation profile, explicit
+configured roots, link checks, and protected paths still control each request.
 
 These reads return normal bounded file-tool output. A raw session log does not
 use a separate activity projection or log-specific redaction layer.
