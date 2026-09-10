@@ -94,6 +94,28 @@ public sealed class TelegramTransport(
         var client = _client
             ?? throw new InvalidOperationException("The Telegram transport is not active.");
 
+        var rich = TelegramTextFormatter.ToRichHtml(text);
+        if (rich.ContainsTable)
+        {
+            try
+            {
+                await client.SendRichMessage(
+                    chatId,
+                    new InputRichMessage { Html = rich.Html },
+                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                return;
+            }
+            catch (ApiRequestException ex)
+            {
+                // A rejected rich message must still deliver its content. Log loudly so a
+                // Telegram API regression cannot silently degrade every table reply.
+                logger.LogWarning(
+                    ex,
+                    "Telegram rejected the rich table message for chat {ChatId}; falling back to flattened text.",
+                    chatId);
+            }
+        }
+
         try
         {
             await client.SendMessage(

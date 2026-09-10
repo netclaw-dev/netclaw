@@ -12,32 +12,47 @@ namespace Netclaw.Channels.Telegram;
 internal static partial class TelegramTextFormatter
 {
     public static string ToHtml(string markdown)
+        => Format(markdown, richTables: false).Html;
+
+    /// <summary>
+    /// Renders markdown with real <c>&lt;table&gt;</c> markup for the rich message API.
+    /// Classic <c>ParseMode.Html</c> rejects table tags, so only the rich send path may
+    /// use this output.
+    /// </summary>
+    internal static RichTelegramHtml ToRichHtml(string markdown)
+        => Format(markdown, richTables: true);
+
+    private static RichTelegramHtml Format(string markdown, bool richTables)
     {
         if (string.IsNullOrEmpty(markdown))
-            return string.Empty;
+            return new RichTelegramHtml(string.Empty, ContainsTable: false);
 
         var output = new StringBuilder(markdown.Length);
+        var containsTable = false;
         var position = 0;
         foreach (Match match in FencedCode().Matches(markdown))
         {
-            output.Append(FormatBlocks(markdown[position..match.Index]));
+            FormatBlocks(markdown[position..match.Index], richTables, output, ref containsTable);
             output.Append("<pre><code>");
             output.Append(WebUtility.HtmlEncode(match.Groups[1].Value));
             output.Append("</code></pre>");
             position = match.Index + match.Length;
         }
 
-        output.Append(FormatBlocks(markdown[position..]));
-        return output.ToString();
+        FormatBlocks(markdown[position..], richTables, output, ref containsTable);
+        return new RichTelegramHtml(output.ToString(), containsTable);
     }
 
-    private static string FormatBlocks(string markdown)
+    private static void FormatBlocks(
+        string markdown,
+        bool richTables,
+        StringBuilder output,
+        ref bool containsTable)
     {
         var lines = markdown.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
-        var output = new StringBuilder(markdown.Length);
         for (var index = 0; index < lines.Length; index++)
         {
-            if (TryFormatTable(lines, ref index, output))
+            if (TryFormatTable(lines, ref index, richTables, output, ref containsTable))
             {
                 if (index < lines.Length - 1)
                     output.Append('\n');
@@ -61,11 +76,14 @@ internal static partial class TelegramTextFormatter
             if (index < lines.Length - 1)
                 output.Append('\n');
         }
-
-        return output.ToString();
     }
 
-    private static bool TryFormatTable(string[] lines, ref int index, StringBuilder output)
+    private static bool TryFormatTable(
+        string[] lines,
+        ref int index,
+        bool richTables,
+        StringBuilder output,
+        ref bool containsTable)
     {
         if (index + 2 >= lines.Length)
             return false;
@@ -77,34 +95,54 @@ internal static partial class TelegramTextFormatter
             || separators.Any(separator => !TableSeparator().IsMatch(separator)))
             return false;
 
+        var rows = new List<IReadOnlyList<string>>();
         var rowIndex = index + 2;
-        var wroteRow = false;
         while (rowIndex < lines.Length)
         {
             var values = ParseTableRow(lines[rowIndex]);
             if (values.Count != headers.Count)
                 break;
-
-            if (wroteRow)
-                output.Append('\n');
-
-            for (var column = 0; column < headers.Count; column++)
-            {
-                output.Append(column == 0 ? "• " : "  ");
-                output.Append("<b>").Append(FormatInline(headers[column])).Append(":</b> ");
-                output.Append(FormatInline(values[column]));
-                if (column < headers.Count - 1)
-                    output.Append('\n');
-            }
-
-            wroteRow = true;
+            rows.Add(values);
             rowIndex++;
         }
 
-        if (!wroteRow)
+        if (rows.Count == 0)
             return false;
 
         index = rowIndex - 1;
+        containsTable = true;
+
+        if (!richTables)
+        {
+            for (var row = 0; row < rows.Count; row++)
+            {
+                if (row > 0)
+                    output.Append('\n');
+                for (var column = 0; column < headers.Count; column++)
+                {
+                    output.Append(column == 0 ? "• " : "  ");
+                    output.Append("<b>").Append(FormatInline(headers[column])).Append(":</b> ");
+                    output.Append(FormatInline(rows[row][column]));
+                    if (column < headers.Count - 1)
+                        output.Append('\n');
+                }
+            }
+
+            return true;
+        }
+
+        output.Append("<table bordered><tr>");
+        foreach (var header in headers)
+            output.Append("<th><b>").Append(FormatInline(header)).Append("</b></th>");
+        output.Append("</tr>");
+        foreach (var row in rows)
+        {
+            output.Append("<tr>");
+            foreach (var value in row)
+                output.Append("<td>").Append(FormatInline(value)).Append("</td>");
+            output.Append("</tr>");
+        }
+        output.Append("</table>");
         return true;
     }
 
@@ -224,3 +262,10 @@ internal static partial class TelegramTextFormatter
     [GeneratedRegex(@"^:?-{3,}:?$", RegexOptions.CultureInvariant)]
     private static partial Regex TableSeparator();
 }
+
+/// <summary>
+/// Render output for the rich message API. <see cref="ContainsTable"/> tells the sender
+/// whether the HTML carries a native <c>&lt;table&gt;</c> and must not go through the
+/// classic <c>ParseMode.Html</c> send path.
+/// </summary>
+internal sealed record RichTelegramHtml(string Html, bool ContainsTable);

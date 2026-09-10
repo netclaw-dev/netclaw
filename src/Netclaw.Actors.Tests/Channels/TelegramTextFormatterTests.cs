@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Channels.Telegram;
+using Telegram.Bot.Extensions;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -100,5 +101,54 @@ public sealed class TelegramTextFormatterTests
         var result = TelegramTextFormatter.ToHtml("A **broken marker stays visible.");
 
         Assert.Equal("A **broken marker stays visible.", result);
+    }
+
+    [Fact]
+    public void Rich_html_renders_table_as_native_table_markup()
+    {
+        var result = TelegramTextFormatter.ToRichHtml(
+            "| Name | Status |\n| --- | :---: |\n| **Bot** | Ready & waiting |\n| API | Online |");
+
+        Assert.Equal(
+            "<table bordered><tr><th><b>Name</b></th><th><b>Status</b></th></tr>"
+            + "<tr><td><b>Bot</b></td><td>Ready &amp; waiting</td></tr>"
+            + "<tr><td>API</td><td>Online</td></tr></table>",
+            result.Html);
+        Assert.True(result.ContainsTable);
+    }
+
+    [Fact]
+    public void Rich_html_matches_plain_html_when_no_table_present()
+    {
+        const string markdown = "## Heading\n\n- First **item**\n> A quote";
+
+        var rich = TelegramTextFormatter.ToRichHtml(markdown);
+
+        Assert.Equal(TelegramTextFormatter.ToHtml(markdown), rich.Html);
+        Assert.False(rich.ContainsTable);
+    }
+
+    [Fact]
+    public void Rich_html_keeps_fenced_table_as_plain_code()
+    {
+        const string markdown = "```\n| a | b |\n| --- | --- |\n| 1 | 2 |\n```";
+
+        var rich = TelegramTextFormatter.ToRichHtml(markdown);
+
+        Assert.Equal(TelegramTextFormatter.ToHtml(markdown), rich.Html);
+        Assert.False(rich.ContainsTable);
+    }
+
+    [Fact]
+    public void Library_carries_rich_table_html_into_a_sendable_rich_message()
+    {
+        var rich = TelegramTextFormatter.ToRichHtml(
+            "| Name | Status |\n| --- | --- |\n| **Bot** | Ready |");
+
+        var message = HtmlText.ToInputRichMessage(rich.Html);
+
+        // The library keeps rich HTML for the Bot API to parse, so the strongest
+        // offline assertion is a lossless round-trip into the sendable message type.
+        Assert.Equal(rich.Html, message.Html);
     }
 }
