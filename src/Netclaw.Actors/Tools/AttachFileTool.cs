@@ -52,17 +52,10 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
             return Task.FromResult(context.InvalidInput("Error: invalid_context: No session directory available."));
 
         var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Attach);
-        string requestedPath;
-        switch (access)
-        {
-            case PathAccessDecision.Denied denied:
-                return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
-            case PathAccessDecision.Allowed allowed:
-                requestedPath = allowed.CanonicalPath;
-                break;
-            default:
-                throw new InvalidOperationException("Unexpected path decision.");
-        }
+        if (access is PathAccessDecision.Denied denied)
+            return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
+
+        var requestedPath = access.GetAllowedPath();
 
         var sessionDir = PathUtility.Normalize(context.SessionDirectory);
 
@@ -72,16 +65,10 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var resolvedPath = ResolveFinalPath(requestedPath);
 
         var resolvedAccess = _pathAccessPolicy.Evaluate(resolvedPath, context, PathAccessPolicy.FileOperation.Attach);
-        switch (resolvedAccess)
-        {
-            case PathAccessDecision.Denied denied:
-                return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
-            case PathAccessDecision.Allowed allowed:
-                resolvedPath = allowed.CanonicalPath;
-                break;
-            default:
-                throw new InvalidOperationException("Unexpected path decision.");
-        }
+        if (resolvedAccess is PathAccessDecision.Denied resolvedDenied)
+            return Task.FromResult(context.PathAccessFailure(resolvedDenied.Error, resolvedDenied.Failure));
+
+        resolvedPath = resolvedAccess.GetAllowedPath();
         var resolvedInCurrentSession = PathUtility.IsWithinRoot(resolvedPath, sessionDir);
 
         var attachPath = resolvedInCurrentSession

@@ -80,17 +80,10 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>, IMa
     internal async Task<string> WriteFileAsync(string path, string content, ToolInvocationContext context, CancellationToken ct)
     {
         var access = _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Write);
-        string authorizedPath;
-        switch (access)
-        {
-            case PathAccessDecision.Denied denied:
-                return context.PathAccessFailure(denied.Error, denied.Failure);
-            case PathAccessDecision.Allowed allowed:
-                authorizedPath = allowed.CanonicalPath;
-                break;
-            default:
-                throw new InvalidOperationException("Unexpected path decision.");
-        }
+        if (access is PathAccessDecision.Denied denied)
+            return context.PathAccessFailure(denied.Error, denied.Failure);
+
+        var authorizedPath = access.GetAllowedPath();
 
         try
         {
@@ -126,17 +119,10 @@ public sealed partial class FileEditTool : NetclawTool<FileEditTool.Params>, IMa
     private async Task<string> EditFileAsync(string path, string oldString, string newString, bool replaceAll, ToolInvocationContext context, CancellationToken ct)
     {
         var access = _pathAccessPolicy.Evaluate(path, context, PathAccessPolicy.FileOperation.Write);
-        string authorizedPath;
-        switch (access)
-        {
-            case PathAccessDecision.Denied denied:
-                return context.PathAccessFailure(denied.Error, denied.Failure);
-            case PathAccessDecision.Allowed allowed:
-                authorizedPath = allowed.CanonicalPath;
-                break;
-            default:
-                throw new InvalidOperationException("Unexpected path decision.");
-        }
+        if (access is PathAccessDecision.Denied denied)
+            return context.PathAccessFailure(denied.Error, denied.Failure);
+
+        var authorizedPath = access.GetAllowedPath();
 
         if (!File.Exists(authorizedPath))
             return context.NotFound($"Error: File not found: {authorizedPath}");

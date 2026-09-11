@@ -60,17 +60,10 @@ public sealed partial class FileSearchTool : NetclawTool<FileSearchTool.Params>
             return context.InvalidInput(limitError);
 
         var access = _pathAccessPolicy.Evaluate(args.Root, context, PathAccessPolicy.FileOperation.Read);
-        string root;
-        switch (access)
-        {
-            case PathAccessDecision.Denied denied:
-                return context.PathAccessFailure(denied.Error, denied.Failure);
-            case PathAccessDecision.Allowed allowed:
-                root = allowed.CanonicalPath;
-                break;
-            default:
-                throw new InvalidOperationException("Unexpected path decision.");
-        }
+        if (access is PathAccessDecision.Denied denied)
+            return context.PathAccessFailure(denied.Error, denied.Failure);
+
+        var root = access.GetAllowedPath();
 
         if (!Directory.Exists(root))
             return context.NotFound($"Error: Directory not found: {root}");

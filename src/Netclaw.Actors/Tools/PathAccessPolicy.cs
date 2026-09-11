@@ -54,6 +54,15 @@ internal sealed class PathAccessPolicy
     {
         private PathAccessDecision() { }
 
+        /// <summary>Returns the canonical path after the caller handles a denied decision.</summary>
+        internal string GetAllowedPath() =>
+            this switch
+            {
+                Allowed allowed => allowed.CanonicalPath,
+                Denied => throw new InvalidOperationException("A denied path decision has no authorized path."),
+                _ => throw new InvalidOperationException("Unexpected path decision.")
+            };
+
         /// <summary>Permits the requested operation on this resolved path.</summary>
         internal sealed class Allowed(string canonicalPath) : PathAccessDecision
         {

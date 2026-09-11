@@ -53,17 +53,10 @@ public sealed partial class FileListTool : NetclawTool<FileListTool.Params>
         // directories to the audience's read roots and emits an
         // audience-sanitized error (no configured root paths leaked to Public).
         var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Read);
-        string authorizedPath;
-        switch (access)
-        {
-            case PathAccessDecision.Denied denied:
-                return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
-            case PathAccessDecision.Allowed allowed:
-                authorizedPath = allowed.CanonicalPath;
-                break;
-            default:
-                throw new InvalidOperationException("Unexpected path decision.");
-        }
+        if (access is PathAccessDecision.Denied denied)
+            return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
+
+        var authorizedPath = access.GetAllowedPath();
 
         if (!Directory.Exists(authorizedPath))
         {

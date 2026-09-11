@@ -88,17 +88,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             return context.InvalidInput("Error: 'path' parameter is required.");
 
         var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Read);
-        string authorizedPath;
-        switch (access)
-        {
-            case PathAccessDecision.Denied denied:
-                return context.PathAccessFailure(denied.Error, denied.Failure);
-            case PathAccessDecision.Allowed allowed:
-                authorizedPath = allowed.CanonicalPath;
-                break;
-            default:
-                throw new InvalidOperationException("Unexpected path decision.");
-        }
+        if (access is PathAccessDecision.Denied denied)
+            return context.PathAccessFailure(denied.Error, denied.Failure);
+
+        var authorizedPath = access.GetAllowedPath();
 
         if (!File.Exists(authorizedPath))
             return context.NotFound($"Error: File not found: {authorizedPath}");
