@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting.Server;
@@ -87,6 +88,7 @@ public static class SmokeLlmServerHost
         builder.WebHost.ConfigureKestrel(kestrel => kestrel.Listen(IPAddress.Loopback, options.Port));
 
         var app = builder.Build();
+        var skillFeed = new SkillFeedFixture();
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
         app.MapGet("/v1/models", () => Results.Ok(new
         {
@@ -103,6 +105,16 @@ public static class SmokeLlmServerHost
             }
         }));
         app.MapPost("/v1/chat/completions", context => HandleCompletionAsync(context, requestRecorder));
+        app.MapPost("/test/skill-feed/phase/{phase}", (string phase) =>
+            skillFeed.SetPhase(phase)
+                ? Results.NoContent()
+                : Results.BadRequest(new { error = "The phase must be A or B." }));
+        app.MapGet("/test/skill-feed/.well-known/agent-skills/index.json", (HttpRequest request) =>
+            Results.Json(skillFeed.CreateIndex(request)));
+        app.MapGet("/test/skill-feed/skill.md", () =>
+            Results.Text(skillFeed.GetSkill(), "text/markdown", Encoding.UTF8));
+        app.MapGet("/test/skill-feed/proof.txt", () =>
+            Results.Text(skillFeed.GetResource(), "text/plain", Encoding.UTF8));
 
         await app.StartAsync(cancellationToken);
         return app;
@@ -227,6 +239,69 @@ public static class SmokeLlmServerHost
         => root.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.String
             ? value.GetString()
             : null;
+}
+
+internal sealed class SkillFeedFixture
+{
+    private const string FeedPath = "/test/skill-feed";
+    private string _phase = "A";
+
+    public bool SetPhase(string phase)
+    {
+        if (phase is not ("A" or "B"))
+            return false;
+
+        Volatile.Write(ref _phase, phase);
+        return true;
+    }
+
+    public object CreateIndex(HttpRequest request)
+    {
+        var phase = Volatile.Read(ref _phase);
+        var version = GetVersion(phase);
+        var skill = GetSkill(phase);
+        var resource = GetResource(phase);
+        var baseUrl = $"{request.Scheme}://{request.Host}{FeedPath}";
+
+        return new
+        {
+            skills = new[]
+            {
+                new
+                {
+                    name = "smoke-feed-skill",
+                    type = "skill",
+                    description = "Native skill sync smoke proof",
+                    url = $"{baseUrl}/skill.md",
+                    digest = $"sha256:{GetDigest(skill)}",
+                    version,
+                    resources = new[]
+                    {
+                        new
+                        {
+                            path = "references/proof.txt",
+                            url = $"{baseUrl}/proof.txt",
+                            digest = $"sha256:{GetDigest(resource)}"
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    public string GetSkill() => GetSkill(Volatile.Read(ref _phase));
+
+    public string GetResource() => GetResource(Volatile.Read(ref _phase));
+
+    private static string GetVersion(string phase) => phase == "A" ? "1.0.0" : "2.0.0";
+
+    private static string GetSkill(string phase) =>
+        $"---\nname: smoke-feed-skill\ndescription: Native skill sync phase {phase}.\nmetadata:\n  version: \"{GetVersion(phase)}\"\n---\n\n# Native skill sync phase {phase}\n";
+
+    private static string GetResource(string phase) => $"native skill sync resource phase {phase}\n";
+
+    private static string GetDigest(string content) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 }
 
 public sealed record SmokeRequestRecord(string Route, string? Model, bool Stream, bool ToolsPresent);

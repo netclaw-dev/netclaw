@@ -85,5 +85,43 @@ public sealed class SmokeLlmServerTests : IAsyncLifetime
             await SmokeLlmServerHost.StartAsync(new SmokeLlmServerOptions(0, _requestRecordPath, IPAddress.Any), TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task Skill_feed_changes_all_content_as_one_version()
+    {
+        using var phaseAResponse = await Client.PostAsync(
+            "/test/skill-feed/phase/A",
+            null,
+            TestContext.Current.CancellationToken);
+        phaseAResponse.EnsureSuccessStatusCode();
+
+        var phaseAIndex = await Client.GetFromJsonAsync<JsonElement>(
+            "/test/skill-feed/.well-known/agent-skills/index.json",
+            TestContext.Current.CancellationToken);
+        Assert.Equal("1.0.0", phaseAIndex.GetProperty("skills")[0].GetProperty("version").GetString());
+        Assert.Equal(
+            "native skill sync resource phase A\n",
+            await Client.GetStringAsync("/test/skill-feed/proof.txt", TestContext.Current.CancellationToken));
+
+        using var phaseBResponse = await Client.PostAsync(
+            "/test/skill-feed/phase/B",
+            null,
+            TestContext.Current.CancellationToken);
+        phaseBResponse.EnsureSuccessStatusCode();
+
+        var phaseBIndex = await Client.GetFromJsonAsync<JsonElement>(
+            "/test/skill-feed/.well-known/agent-skills/index.json",
+            TestContext.Current.CancellationToken);
+        Assert.Equal("2.0.0", phaseBIndex.GetProperty("skills")[0].GetProperty("version").GetString());
+        Assert.Equal(
+            "native skill sync resource phase B\n",
+            await Client.GetStringAsync("/test/skill-feed/proof.txt", TestContext.Current.CancellationToken));
+
+        using var invalidResponse = await Client.PostAsync(
+            "/test/skill-feed/phase/C",
+            null,
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.BadRequest, invalidResponse.StatusCode);
+    }
+
     private HttpClient Client => _client ?? throw new InvalidOperationException("The test server is not initialized.");
 }
