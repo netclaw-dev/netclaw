@@ -103,30 +103,32 @@ See the [engineering glossary](GLOSSARY.md) for shared terms.
 The command sends an authenticated `POST /api/skills/sync` request.
 The endpoint uses the existing daemon authorization policy.
 An unauthenticated request receives HTTP 401 and cannot start a pass.
-An authenticated request can join a pass that startup, the timer, or another operator started.
+An authenticated request can join a pass that the startup path, timer, or another operator started.
 
-`ServerFeedSkillSyncService` owns the active task and its lifetime token in process memory.
-The CLI owns only its request wait. The feed helpers retain the existing durable files and sync receipts.
+`ServerFeedSkillSyncActor` owns the timer, active pass state, waiters, and lifetime token.
+This state is actor-local. The CLI owns only its call-local request wait.
+`ServerFeedSkillSyncService` runs one pass and keeps no lifecycle state.
+The feed helpers retain the existing durable files and sync receipts.
 
 ```text
-CLI -> daemon authorization -> ServerFeedSkillSyncService
-  service stopped: return HTTP 503
-  active pass exists: join that task
-  otherwise: start a pass with the daemon lifetime token
+CLI -> daemon authorization -> ServerFeedSkillSyncActor
+  actor stops during a pass: return HTTP 503
+  add the caller to the actor-local waiter set
+  active pass exists: wait for that pass
+  otherwise: call ServerFeedSkillSyncService with the actor lifetime token
   for each enabled feed:
     run the existing RFC skill and native sub-agent sync
     collect its result; continue after a source failure
   refresh the complete inventory through SkillInventoryRefresher
-  return the source results and the inventory result
+  send the result to the actor
+  actor -> send the same result to all waiters
 CLI -> print the result -> exit 0 or 1
 ```
 
 The client has no fixed HTTP timeout for this operation. Existing source timeouts still apply.
 The CLI prints a wait notice before it sends the request. The notice explains Ctrl+C.
 Ctrl+C cancels the CLI wait. It does not cancel the shared pass.
-Daemon shutdown closes admission and cancels that pass. A joined HTTP request then receives HTTP 503.
-If the host shutdown budget expires, the service logs a warning and returns control to the host.
-The pass retains its lifetime token until it completes, even after that timeout.
+Actor shutdown cancels the pass and fails its joined requests. Those HTTP requests receive HTTP 503.
 An interval of zero disables periodic checks. Startup and manual checks remain available.
 
 | Result | Command behavior |

@@ -6,6 +6,8 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Akka.Actor;
+using Akka.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.TestHost;
@@ -41,7 +43,8 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         bool spoofLoopback,
         SkillRegistry registry,
         NetclawPaths paths,
-        ServerFeedSkillSyncService? syncService = null)
+        ServerFeedSkillSyncService? syncService = null,
+        ILogger<ServerFeedSkillSyncActor>? actorLogger = null)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
@@ -51,7 +54,14 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         builder.Services.AddLogging();
         builder.Services.AddSingleton(registry);
         builder.Services.AddSingleton(paths);
-        builder.Services.AddSingleton(syncService ?? CreateSyncService(registry, paths));
+        builder.Services.AddSingleton(new SkillFeedsConfig { SyncIntervalMinutes = 0 });
+        var runner = syncService ?? CreateSyncService(registry, paths);
+        builder.Services.AddSingleton(runner);
+        builder.Services.AddSingleton<IServerFeedSkillSyncRunner>(runner);
+        if (actorLogger is not null)
+            builder.Services.AddSingleton(actorLogger);
+        builder.Services.AddAkka($"skill-endpoint-tests-{Guid.NewGuid():N}", (akka, _) =>
+            akka.WithServerFeedSkillSyncActor());
 
         var app = builder.Build();
 
@@ -97,17 +107,6 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Fact]
-    public async Task Sync_returns_503_when_the_service_is_not_started()
-    {
-        var paths = new NetclawPaths(_dir.Path);
-        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
-
-        var response = await app.GetTestClient().PostAsync("/api/skills/sync", null, TestContext.Current.CancellationToken);
-
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-    }
-
-    [Fact]
     public async Task Sync_post_returns_503_when_host_stop_cancels_the_joined_pass()
     {
         var paths = new NetclawPaths(_dir.Path);
@@ -115,14 +114,14 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var registry = new SkillRegistry();
         var handler = new BlockingFeedHandler();
         var logger = new JoinSignalLogger();
-        using var syncService = CreateBlockingSyncService(registry, paths, handler, logger);
-        await syncService.StartAsync(TestContext.Current.CancellationToken);
-        await handler.IndexRequest.Task;
+        var syncService = CreateBlockingSyncService(registry, paths, handler);
 
-        await using var app = await CreateAppAsync(spoofLoopback: true, registry, paths, syncService);
+        await using var app = await CreateAppAsync(spoofLoopback: true, registry, paths, syncService, logger);
+        await handler.IndexRequest.Task.WaitAsync(TestContext.Current.CancellationToken);
         var post = app.GetTestClient().PostAsync("/api/skills/sync", null, TestContext.Current.CancellationToken);
         await logger.Joined.Task.WaitAsync(TestContext.Current.CancellationToken);
-        await syncService.StopAsync(TestContext.Current.CancellationToken);
+        app.Services.GetRequiredService<IRequiredActor<ServerFeedSkillSyncActorKey>>()
+            .ActorRef.Tell(PoisonPill.Instance);
 
         var response = await post;
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
@@ -139,50 +138,42 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var registry = new SkillRegistry();
         var handler = new BlockingFeedHandler();
         var logger = new JoinSignalLogger();
-        using var syncService = CreateBlockingSyncService(registry, paths, handler, logger);
-        await syncService.StartAsync(ct);
-        try
-        {
-            await handler.IndexRequest.Task.WaitAsync(ct);
-            await using var app = await CreateAppAsync(spoofLoopback: true, registry, paths, syncService);
-            using var client = app.GetTestClient();
-            var firstPost = client.PostAsync("/api/skills/sync", null, ct);
-            var secondPost = client.PostAsync("/api/skills/sync", null, ct);
-            await logger.BothJoined.Task.WaitAsync(ct);
+        var syncService = CreateBlockingSyncService(registry, paths, handler);
+        await using var app = await CreateAppAsync(spoofLoopback: true, registry, paths, syncService, logger);
+        await handler.IndexRequest.Task.WaitAsync(ct);
+        using var client = app.GetTestClient();
+        var firstPost = client.PostAsync("/api/skills/sync", null, ct);
+        var secondPost = client.PostAsync("/api/skills/sync", null, ct);
+        await logger.BothJoined.Task.WaitAsync(ct);
 
-            handler.CompleteIndex();
-            using var firstResponse = await firstPost;
-            using var secondResponse = await secondPost;
-            Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
-            Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
-            var firstJson = await firstResponse.Content.ReadAsStringAsync(ct);
-            var secondJson = await secondResponse.Content.ReadAsStringAsync(ct);
-            Assert.Equal(firstJson, secondJson);
+        handler.CompleteIndex();
+        using var firstResponse = await firstPost;
+        using var secondResponse = await secondPost;
+        Assert.Equal(HttpStatusCode.OK, firstResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, secondResponse.StatusCode);
+        var firstJson = await firstResponse.Content.ReadAsStringAsync(ct);
+        var secondJson = await secondResponse.Content.ReadAsStringAsync(ct);
+        Assert.Equal(firstJson, secondJson);
 
-            using var wire = JsonDocument.Parse(firstJson);
-            Assert.False(wire.RootElement.TryGetProperty("succeeded", out _));
-            var result = JsonSerializer.Deserialize<SkillSyncResult.Response>(firstJson, ReadOptions);
-            Assert.NotNull(result);
-            Assert.False(string.IsNullOrWhiteSpace(result.PassId));
-            var source = Assert.Single(result.Sources);
-            Assert.Equal("team", source.Name);
-            Assert.Equal(1, source.ChangedCount);
-            Assert.Equal(0, source.UnchangedCount);
-            Assert.Equal(0, source.RejectedCount);
-            Assert.Equal(0, source.FailedCount);
-            Assert.Equal("absent", source.Sidecar);
-            Assert.Null(source.Error);
-            Assert.True(result.Inventory.Succeeded);
-            Assert.Equal(1, result.Inventory.AcceptedCount);
-            Assert.Equal(0, result.Inventory.RejectedCount);
-            Assert.Null(result.Inventory.Error);
-            Assert.NotNull(registry.GetByName("route-proof"));
-            Assert.Equal(1, handler.IndexRequestCount);
-        }
-        finally
-        {
-            await syncService.StopAsync(CancellationToken.None);
-        }
+        using var wire = JsonDocument.Parse(firstJson);
+        Assert.False(wire.RootElement.TryGetProperty("succeeded", out _));
+        var result = JsonSerializer.Deserialize<SkillSyncResult.Response>(firstJson, ReadOptions);
+        Assert.NotNull(result);
+        Assert.False(string.IsNullOrWhiteSpace(result.PassId));
+        var source = Assert.Single(result.Sources);
+        Assert.Equal("team", source.Name);
+        Assert.Equal(1, source.ChangedCount);
+        Assert.Equal(0, source.UnchangedCount);
+        Assert.Equal(0, source.RejectedCount);
+        Assert.Equal(0, source.FailedCount);
+        Assert.Equal("absent", source.Sidecar);
+        Assert.Null(source.Error);
+        Assert.True(result.Inventory.Succeeded);
+        Assert.Equal(1, result.Inventory.AcceptedCount);
+        Assert.Equal(0, result.Inventory.RejectedCount);
+        Assert.Null(result.Inventory.Error);
+        Assert.NotNull(registry.GetByName("route-proof"));
+        Assert.Equal(1, handler.IndexRequestCount);
     }
 
     [Fact]
@@ -195,14 +186,19 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var registry = new SkillRegistry();
 
         // A file skill under the native skills directory.
+        var skillDirectory = Path.Combine(paths.SkillsDirectory, "demo-file");
+        var skillFilePath = Path.Combine(skillDirectory, "SKILL.md");
         var fileSkill = new SkillEntry(
             "demo-file",
             "Demo File",
             "A file-backed skill.",
-            new FileSkillSource(
-                Path.Combine(paths.SkillsDirectory, "demo-file", "SKILL.md"),
-                Path.Combine(paths.SkillsDirectory, "demo-file")),
+            new FileSkillSource(skillFilePath, skillDirectory),
             Category: null);
+        Directory.CreateDirectory(skillDirectory);
+        await File.WriteAllTextAsync(
+            skillFilePath,
+            "---\nname: demo-file\ndescription: A file-backed skill.\n---\n\nDemo guidance.\n",
+            ct);
         registry.ReplaceAll([fileSkill]);
 
         // A dynamic MCP prompt skill — exists only in memory, never on disk.
@@ -271,8 +267,7 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
     private static ServerFeedSkillSyncService CreateBlockingSyncService(
         SkillRegistry registry,
         NetclawPaths paths,
-        BlockingFeedHandler handler,
-        ILogger<ServerFeedSkillSyncService> logger)
+        BlockingFeedHandler handler)
     {
         var feeds = new SkillFeedsConfig
         {
@@ -287,13 +282,12 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
             publisher,
             TimeProvider.System,
             new NoOpSkillContentScanner(),
-            logger,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerFeedSkillSyncService>.Instance,
             [],
             feed => new Netclaw.SkillClient.SkillServerClient(new HttpClient(handler)
             {
                 BaseAddress = new Uri(feed.Url),
-            }),
-            TimeSpan.Zero);
+            }));
     }
 
     private sealed class BlockingFeedHandler : HttpMessageHandler
@@ -338,7 +332,7 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         }
     }
 
-    private sealed class JoinSignalLogger : ILogger<ServerFeedSkillSyncService>
+    private sealed class JoinSignalLogger : ILogger<ServerFeedSkillSyncActor>
     {
         private int _joinedCount;
         public TaskCompletionSource Joined { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);

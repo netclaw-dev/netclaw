@@ -6,7 +6,6 @@
 using System.IO.Compression;
 using System.Text;
 using System.Text.Json;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
@@ -16,16 +15,16 @@ using Netclaw.SkillClient;
 
 namespace Netclaw.Daemon.Services;
 
-internal sealed class SkillSyncUnavailableException(string message) : InvalidOperationException(message);
+internal interface IServerFeedSkillSyncRunner
+{
+    Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken);
+}
 
 /// <summary>
-/// Syncs skills from private skill-server instances at daemon startup and
-/// periodically thereafter using the Cloudflare Agent Skills RFC discovery
-/// protocol. Each configured feed is synced independently — one failing
-/// server never blocks others. Never blocks startup on network failures;
-/// falls back to on-disk skills.
+/// Runs one skill sync pass through all configured skill-server instances.
+/// Each source remains independent, so one source failure does not block another.
 /// </summary>
-internal sealed class ServerFeedSkillSyncService : BackgroundService
+internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
 {
     private const string ArchiveType = "archive";
     private const string SkillFileName = "SKILL.md";
@@ -38,14 +37,6 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
     private readonly ISkillContentScanner _scanner;
     private readonly ILogger<ServerFeedSkillSyncService> _logger;
     private readonly Func<SkillFeedSource, SkillServerClient> _clientFactory;
-    private readonly object _syncLock = new();
-    private CancellationTokenSource? _lifetimeCancellation;
-    private Task<SkillSyncResult.Response>? _activePass;
-    private bool _started;
-    private bool _stopped;
-
-    // Random jitter (0–5 min) so multiple daemon instances don't all poll at once
-    private readonly TimeSpan _initialJitter;
 
     public ServerFeedSkillSyncService(
         SkillFeedsConfig feedsConfig,
@@ -61,8 +52,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             timeProvider,
             scanner,
             logger,
-            CreateSkillServerClient,
-            CreateInitialJitter())
+            CreateSkillServerClient)
     {
     }
 
@@ -84,8 +74,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             scanner,
             logger,
             externalSources,
-            CreateSkillServerClient,
-            CreateInitialJitter())
+            CreateSkillServerClient)
     {
     }
 
@@ -98,8 +87,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
         IReadOnlyList<ResolvedExternalSource> externalSources,
-        Func<SkillFeedSource, SkillServerClient> clientFactory,
-        TimeSpan initialJitter)
+        Func<SkillFeedSource, SkillServerClient> clientFactory)
         : this(
             feedsConfig,
             paths,
@@ -112,8 +100,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             timeProvider,
             scanner,
             logger,
-            clientFactory,
-            initialJitter)
+            clientFactory)
     {
     }
 
@@ -124,8 +111,7 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
-        Func<SkillFeedSource, SkillServerClient> clientFactory,
-        TimeSpan initialJitter)
+        Func<SkillFeedSource, SkillServerClient> clientFactory)
     {
         _feedsConfig = feedsConfig;
         _paths = paths;
@@ -134,170 +120,12 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         _scanner = scanner;
         _logger = logger;
         _clientFactory = clientFactory;
-        _initialJitter = initialJitter;
-    }
-
-    public override Task StartAsync(CancellationToken cancellationToken)
-    {
-        lock (_syncLock)
-        {
-            _lifetimeCancellation = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-            _started = true;
-        }
-
-        return base.StartAsync(cancellationToken);
-    }
-
-    public override async Task StopAsync(CancellationToken cancellationToken)
-    {
-        Task<SkillSyncResult.Response>? activePass;
-        CancellationTokenSource? lifetimeCancellation;
-        lock (_syncLock)
-        {
-            _stopped = true;
-            activePass = _activePass;
-            lifetimeCancellation = _lifetimeCancellation;
-            _lifetimeCancellation = null;
-        }
-
-        lifetimeCancellation?.Cancel();
-        try
-        {
-            await base.StopAsync(cancellationToken).ConfigureAwait(false);
-            if (activePass is not null)
-            {
-                await activePass.WaitAsync(cancellationToken).ConfigureAwait(false);
-            }
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            _logger.LogWarning("Host shutdown timed out while an external skill sync pass was still active.");
-        }
-        catch (OperationCanceledException) when (lifetimeCancellation?.IsCancellationRequested == true)
-        {
-            _logger.LogDebug("Host shutdown canceled the active skill sync pass.");
-        }
-        finally
-        {
-            DisposeLifetimeAfterPass(lifetimeCancellation, activePass);
-        }
-    }
-
-    public override void Dispose()
-    {
-        Task<SkillSyncResult.Response>? activePass;
-        CancellationTokenSource? lifetimeCancellation;
-        lock (_syncLock)
-        {
-            _stopped = true;
-            activePass = _activePass;
-            lifetimeCancellation = _lifetimeCancellation;
-            _lifetimeCancellation = null;
-        }
-
-        lifetimeCancellation?.Cancel();
-        DisposeLifetimeAfterPass(lifetimeCancellation, activePass);
-        base.Dispose();
-    }
-
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
-    {
-        // Initial sync at startup — no jitter
-        if (!await RunScheduledSyncAsync(stoppingToken))
-            return;
-
-        var intervalMinutes = _feedsConfig.SyncIntervalMinutes;
-        if (intervalMinutes <= 0)
-        {
-            _logger.LogInformation("Periodic server feed sync disabled (SyncIntervalMinutes=0)");
-            return;
-        }
-
-        var interval = TimeSpan.FromMinutes(intervalMinutes);
-
-        // First periodic tick includes jitter to stagger across instances
-        var firstDelay = interval + _initialJitter;
-        _logger.LogInformation(
-            "Server feed periodic sync scheduled every {IntervalMinutes}m (first check in {FirstDelayMinutes:F1}m)",
-            intervalMinutes, firstDelay.TotalMinutes);
-
-        // Wait the jittered first interval
-        try
-        {
-            await Task.Delay(firstDelay, _timeProvider, stoppingToken);
-        }
-        catch (OperationCanceledException)
-        {
-            return;
-        }
-
-        // Create the timer after the first delay. Creating it before the delay
-        // queues a tick and causes an immediate duplicate pass.
-        using var timer = new PeriodicTimer(interval, _timeProvider);
-
-        // First periodic sync
-        if (!await RunScheduledSyncAsync(stoppingToken))
-            return;
-
-        // Subsequent syncs on the regular interval
-        while (await timer.WaitForNextTickAsync(stoppingToken))
-        {
-            if (!await RunScheduledSyncAsync(stoppingToken))
-                return;
-        }
-    }
-
-    private async Task<bool> RunScheduledSyncAsync(CancellationToken stoppingToken)
-    {
-        try
-        {
-            await SyncAsync(stoppingToken);
-            return true;
-        }
-        catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested || IsStopped())
-        {
-            return false;
-        }
-        catch (InvalidOperationException) when (stoppingToken.IsCancellationRequested || IsStopped())
-        {
-            return false;
-        }
     }
 
     /// <summary>
-    /// Joins the daemon-owned sync pass. Caller cancellation ends only this wait.
+    /// Runs one complete synchronization pass.
     /// </summary>
-    internal async Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken)
-    {
-        Task<SkillSyncResult.Response> pass;
-        bool joined;
-        lock (_syncLock)
-        {
-            if (!_started)
-                throw new SkillSyncUnavailableException("The skill sync service has not started.");
-            if (_stopped || _lifetimeCancellation is null)
-                throw new SkillSyncUnavailableException("The skill sync service has stopped.");
-
-            if (_activePass is null || _activePass.IsCompleted)
-            {
-                pass = RunPassAsync(_lifetimeCancellation.Token);
-                _activePass = pass;
-                joined = false;
-            }
-            else
-            {
-                pass = _activePass;
-                joined = true;
-            }
-        }
-
-        if (joined)
-            _logger.LogDebug("Joined the active external skill sync pass.");
-
-        return await pass.WaitAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task<SkillSyncResult.Response> RunPassAsync(CancellationToken cancellationToken)
+    public async Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken)
     {
         var passId = Guid.NewGuid().ToString("N");
         _logger.LogInformation("External skill sync pass started. {PassId}", passId);
@@ -854,9 +682,6 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
     private static SkillServerClient CreateSkillServerClient(SkillFeedSource feed)
         => new(feed.Url, feed.ApiKey?.Value);
 
-    private static TimeSpan CreateInitialJitter()
-        => TimeSpan.FromSeconds(Random.Shared.Next(0, 300));
-
     private async Task<string?> DownloadAndVerifyAsync(
         SkillServerClient client, string url, string expectedSha256Hex, string label,
         int timeoutSeconds, CancellationToken cancellationToken)
@@ -1095,38 +920,12 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         string name,
         string sidecar,
         string error) => new()
-    {
-        Name = name,
-        FailedCount = 1,
-        Sidecar = sidecar,
-        Error = error,
-    };
-
-    private static void DisposeLifetimeAfterPass(
-        CancellationTokenSource? lifetimeCancellation,
-        Task<SkillSyncResult.Response>? activePass)
-    {
-        if (lifetimeCancellation is null)
-            return;
-
-        if (activePass is null || activePass.IsCompleted)
         {
-            lifetimeCancellation.Dispose();
-            return;
-        }
-
-        _ = activePass.ContinueWith(
-            _ => lifetimeCancellation.Dispose(),
-            CancellationToken.None,
-            TaskContinuationOptions.ExecuteSynchronously,
-            TaskScheduler.Default);
-    }
-
-    private bool IsStopped()
-    {
-        lock (_syncLock)
-            return _stopped;
-    }
+            Name = name,
+            FailedCount = 1,
+            Sidecar = sidecar,
+            Error = error,
+        };
 
     internal static string NormalizeDigest(string digest)
     {

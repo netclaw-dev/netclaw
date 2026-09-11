@@ -6,6 +6,8 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Akka.Actor;
+using Akka.Hosting;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Services;
@@ -32,19 +34,15 @@ public static class SkillEndpointRouteBuilderExtensions
             .RequireAuthorization();
 
         app.MapPost("/api/skills/sync", async Task<IResult> (
-                ServerFeedSkillSyncService syncService,
+                IRequiredActor<ServerFeedSkillSyncActorKey> syncActor,
                 CancellationToken cancellationToken) =>
             {
                 try
                 {
-                    return TypedResults.Ok(await syncService.SyncAsync(cancellationToken));
-                }
-                catch (SkillSyncUnavailableException ex)
-                {
-                    return TypedResults.Problem(
-                        statusCode: StatusCodes.Status503ServiceUnavailable,
-                        title: "Skill sync is unavailable",
-                        detail: ex.Message);
+                    var response = await syncActor.ActorRef.Ask<SkillSyncResult.Response>(
+                        ServerFeedSkillSyncActor.Run.Instance,
+                        cancellationToken);
+                    return TypedResults.Ok(response);
                 }
                 catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
                 {

@@ -54,7 +54,7 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
 
         var handler = new FakeHttpMessageHandler();
         AddSkills(handler, ("blocked", "Rejected body."), ("healthy", "Accepted body."));
-        using var service = CreateService(handler, new RejectSelectedSkillScanner(), static (_, _) => true);
+        var service = CreateService(handler, new RejectSelectedSkillScanner(), static (_, _) => true);
         var result = await RunAsync(service);
 
         var source = Assert.Single(result.Sources);
@@ -75,7 +75,7 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
     public async Task Source_exception_returns_a_safe_failure_row_and_still_refreshes_inventory()
     {
         var handler = new FakeHttpMessageHandler(_ => throw new InvalidOperationException("Private fixture error."));
-        using var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
+        var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
 
         var result = await RunAsync(service);
 
@@ -100,7 +100,7 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
 
         var handler = new FakeHttpMessageHandler();
         AddSkills(handler, ("healthy", "Accepted body."));
-        using var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
+        var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
         var result = await RunAsync(service);
 
         var source = Assert.Single(result.Sources);
@@ -136,7 +136,7 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         else
             handler.AddErrorResponse(BaseUrl + "subagents/v1/pages/a-z.json", HttpStatusCode.NotFound);
 
-        using var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
+        var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
         var result = await RunAsync(service);
 
         var source = Assert.Single(result.Sources);
@@ -154,7 +154,7 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         var handler = new FakeHttpMessageHandler();
         AddSkills(handler, ("healthy", "Accepted body."));
         var publicationCalls = 0;
-        using var service = CreateService(handler, new NoOpSkillContentScanner(), (_, _) =>
+        var service = CreateService(handler, new NoOpSkillContentScanner(), (_, _) =>
         {
             Interlocked.Increment(ref publicationCalls);
             throw new InvalidOperationException("Fixture publication failure.");
@@ -185,21 +185,10 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         scanner,
         NullLogger<ServerFeedSkillSyncService>.Instance,
         [],
-        feed => new SkillServerClient(new HttpClient(handler) { BaseAddress = new Uri(feed.Url) }),
-        TimeSpan.Zero);
+        feed => new SkillServerClient(new HttpClient(handler) { BaseAddress = new Uri(feed.Url) }));
 
-    private static async Task<SkillSyncResult.Response> RunAsync(ServerFeedSkillSyncService service)
-    {
-        await service.StartAsync(TestContext.Current.CancellationToken);
-        try
-        {
-            return await service.SyncAsync(TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            await service.StopAsync(CancellationToken.None);
-        }
-    }
+    private static Task<SkillSyncResult.Response> RunAsync(ServerFeedSkillSyncService service)
+        => service.SyncAsync(TestContext.Current.CancellationToken);
 
     private static void AddSkills(FakeHttpMessageHandler handler, params (string Name, string Body)[] skills)
     {

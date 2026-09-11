@@ -41,44 +41,35 @@ public sealed class ServerFeedSkillSyncToolIntegrationTests : IDisposable
     public async Task SyncAsync_updates_the_live_registry_for_SkillReadResourceTool()
     {
         var handler = new RevisionFeedHandler();
-        using var service = CreateService(handler);
+        var service = CreateService(handler);
         var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var context = TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
         });
-        await service.StartAsync(TestContext.Current.CancellationToken);
+        await service.SyncAsync(TestContext.Current.CancellationToken);
+        var initialResource = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "feed-resource-proof",
+                "ResourcePath", "references/proof.txt"),
+            context,
+            TestContext.Current.CancellationToken);
+        Assert.Equal("logical resource bytes: A\n", initialResource);
 
-        try
-        {
-            await service.SyncAsync(TestContext.Current.CancellationToken);
-            var initialResource = await tool.ExecuteAsync(
-                ToolInput.Create(
-                    "SkillName", "feed-resource-proof",
-                    "ResourcePath", "references/proof.txt"),
-                context,
-                TestContext.Current.CancellationToken);
-            Assert.Equal("logical resource bytes: A\n", initialResource);
+        handler.UseRevision("B");
 
-            handler.UseRevision("B");
+        var result = await service.SyncAsync(TestContext.Current.CancellationToken);
+        var source = Assert.Single(result.Sources);
+        Assert.Equal(1, source.ChangedCount);
 
-            var result = await service.SyncAsync(TestContext.Current.CancellationToken);
-            var source = Assert.Single(result.Sources);
-            Assert.Equal(1, source.ChangedCount);
+        var resource = await tool.ExecuteAsync(
+            ToolInput.Create(
+                "SkillName", "feed-resource-proof",
+                "ResourcePath", "references/proof.txt"),
+            context,
+            TestContext.Current.CancellationToken);
 
-            var resource = await tool.ExecuteAsync(
-                ToolInput.Create(
-                    "SkillName", "feed-resource-proof",
-                    "ResourcePath", "references/proof.txt"),
-                context,
-                TestContext.Current.CancellationToken);
-
-            Assert.Equal("logical resource bytes: B\n", resource);
-        }
-        finally
-        {
-            await service.StopAsync(CancellationToken.None);
-        }
+        Assert.Equal("logical resource bytes: B\n", resource);
     }
 
     private ServerFeedSkillSyncService CreateService(RevisionFeedHandler handler)
@@ -104,8 +95,7 @@ public sealed class ServerFeedSkillSyncToolIntegrationTests : IDisposable
             feed => new SkillServerClient(new HttpClient(handler, disposeHandler: false)
             {
                 BaseAddress = new Uri(feed.Url),
-            }),
-            TimeSpan.Zero);
+            }));
     }
 
     private sealed class RevisionFeedHandler : HttpMessageHandler
