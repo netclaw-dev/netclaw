@@ -20,11 +20,11 @@ internal static class PathAccessDecisionAssertions
 
     public static void AssertDenied(
         PathAccessPolicy.PathAccessDecision decision,
-        string expectedCanonicalPath,
+        string? expectedDiagnosticPath,
         PathAccessPolicy.PathAccessFailure expectedFailure = PathAccessPolicy.PathAccessFailure.AccessDenied)
     {
         var denied = Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision);
-        Assert.Equal(expectedCanonicalPath.Length == 0 ? null : expectedCanonicalPath, denied.DiagnosticPath);
+        Assert.Equal(expectedDiagnosticPath, denied.DiagnosticPath);
         Assert.NotEmpty(denied.Error);
         Assert.Equal(expectedFailure, denied.Failure);
     }

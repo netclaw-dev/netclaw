@@ -49,16 +49,18 @@ internal sealed class PathAccessPolicy
         DeclareProjectScope
     }
 
-    /// <summary>Returns the canonical path and the typed result of one access check.</summary>
+    /// <summary>Returns either permission to use a resolved path or the reason for denial.</summary>
     internal abstract class PathAccessDecision
     {
         private PathAccessDecision() { }
 
+        /// <summary>Permits the requested operation on this resolved path.</summary>
         internal sealed class Allowed(string canonicalPath) : PathAccessDecision
         {
             public string CanonicalPath { get; } = canonicalPath;
         }
 
+        /// <summary>Rejects the operation. Its path, if present, is diagnostic data only.</summary>
         internal sealed class Denied(
             string error,
             PathAccessFailure failure,
@@ -66,16 +68,19 @@ internal sealed class PathAccessPolicy
         {
             public string Error { get; } = error;
             public PathAccessFailure Failure { get; } = failure;
+            /// <summary>The rejected path, or null if resolution failed. It is not safe for unrestricted display.</summary>
             public string? DiagnosticPath { get; } = diagnosticPath;
         }
 
+        /// <summary>Records permission after the caller completes the required policy checks.</summary>
         public static PathAccessDecision Allow(string canonicalPath) => new Allowed(canonicalPath);
 
+        /// <summary>Records the failure without granting access to the diagnostic path.</summary>
         public static PathAccessDecision Deny(
             string error,
             PathAccessFailure failure,
-            string canonicalPath = "")
-            => new Denied(error, failure, canonicalPath.Length == 0 ? null : canonicalPath);
+            string diagnosticPath = "")
+            => new Denied(error, failure, string.IsNullOrEmpty(diagnosticPath) ? null : diagnosticPath);
     }
 
     private readonly ToolAudienceProfileResolver _profileResolver;

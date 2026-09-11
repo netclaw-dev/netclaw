@@ -101,12 +101,13 @@ public sealed class PublicAudienceFileAccessPolicyTests : IDisposable
         AssertDenied(decision, Path.GetFullPath(outsidePath));
         // Error must mention "Public" audience but should contain only session-scoped
         // roots (the session dir), not global infrastructure paths
-        Assert.Contains("Public", Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error);
-        Assert.DoesNotContain(_sessionDir, Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error);
-        Assert.DoesNotContain("configured roots", Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error, StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(_paths.SkillsDirectory, Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error);
-        Assert.DoesNotContain(_paths.IdentityDirectory, Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error);
-        Assert.DoesNotContain(_paths.WorkspacesDirectory, Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision).Error);
+        var denied = Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(decision);
+        Assert.Contains("Public", denied.Error);
+        Assert.DoesNotContain(_sessionDir, denied.Error);
+        Assert.DoesNotContain("configured roots", denied.Error, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(_paths.SkillsDirectory, denied.Error);
+        Assert.DoesNotContain(_paths.IdentityDirectory, denied.Error);
+        Assert.DoesNotContain(_paths.WorkspacesDirectory, denied.Error);
     }
 
     [Fact]
