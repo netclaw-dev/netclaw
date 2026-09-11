@@ -257,6 +257,12 @@ public sealed class SlackChannelHealthContractTests(ITestOutputHelper output)
 
         public void Disconnect() => _connected = false;
 
+        public Task DisconnectAsync()
+        {
+            _connected = false;
+            return Task.CompletedTask;
+        }
+
         public void DropConnection() => _connected = false;
 
         public void FailNextConnections(int count)
@@ -268,6 +274,8 @@ public sealed class SlackChannelHealthContractTests(ITestOutputHelper output)
         public void Dispose()
         {
         }
+
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 
     private sealed class RecordingNotificationSink : IOperationalNotificationSink

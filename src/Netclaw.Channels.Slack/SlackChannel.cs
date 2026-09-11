@@ -340,10 +340,12 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         ChannelTelemetry.For(ChannelType).RecordExtra("reconnect_attempt");
         _logger.LogInformation("Channel reconnect attempt {Attempt} started.", attempt);
 
-        // A clean reset prevents a failed SlackNet reconnect task from retaining the transport.
+        // Reset the transport before reconnecting. DisconnectAsync on SlackNet 0.18
+        // stops all socket work and is a no-op when nothing is connected; the guard
+        // keeps a failed reset from blocking the attempt.
         try
         {
-            _socketModeClient.Disconnect();
+            await _socketModeClient.DisconnectAsync();
         }
         catch (Exception ex)
         {
@@ -455,7 +457,17 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
         }
 
         _connected = false;
-        _socketModeClient.Disconnect();
+
+        // Shutdown must never block or fault the daemon. DisconnectAsync waits for all
+        // socket work to stop, so guard it like the other channel shutdown paths.
+        try
+        {
+            await _socketModeClient.DisconnectAsync();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Slack socket mode disconnect failed during shutdown.");
+        }
 
         if (_gateway is not null)
         {

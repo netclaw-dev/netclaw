@@ -81,9 +81,7 @@ catch (NetclawDirectoryInitializationException ex)
     return;
 }
 
-using var crashMonitor = DaemonCrashMonitor.Register(
-    bootstrapPaths,
-    benignUnobservedFilters: [KnownBenignExceptions.IsSlackNetReconnectingWebSocketDisposeRace]);
+using var crashMonitor = DaemonCrashMonitor.Register(bootstrapPaths);
 
 try
 {
