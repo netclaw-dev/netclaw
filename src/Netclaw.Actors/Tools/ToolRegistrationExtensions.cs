@@ -49,7 +49,7 @@ public static class ToolRegistrationExtensions
             registry.Register(new ListWebhooksTool(webhookRouteStore));
         if (searchBackend is not null)
             registry.Register(new WebSearchTool(searchBackend));
-        registry.Register(new WebFetchTool(config));
+        registry.Register(new WebFetchTool(config, sharedPathAccessPolicy));
         registry.RegisterCore(new SetWorkingDirectoryTool(sharedPathAccessPolicy));
 
         // Register search_tools and load_tool meta-tools (always loaded, "builtin" grant)

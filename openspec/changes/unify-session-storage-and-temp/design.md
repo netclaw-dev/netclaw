@@ -852,3 +852,28 @@ files.
 
 None. A later cleanup specification will define retention, active-session
 leases, quotas, and deletion.
+
+## Generated destination review correction
+
+Attachment copies and fetch responses use `PathAccessPolicy.EvaluateGeneratedDestination`.
+The caller selects the output directory from existing runtime data:
+
+| Caller | Directory source | Permission that permits the operation |
+|---|---|---|
+| Attachment copy | Current session workspace | Source attachment permission |
+| Bound web fetch | Current session workspace | Web tool permission |
+| Sessionless web fetch | Configured fetch directory | Web tool permission |
+
+The directory is call-local. The helper creates no ownership record or persistent grant.
+Its caller passes a generated filename, never a destination supplied by the model.
+The policy checks containment, links, and protected writes before the caller creates a directory or writes a file.
+It reports malformed paths as `InvalidInput`. The existing operation permission remains required.
+
+```text
+permitted tool call -> generate output path -> check destination
+  denied -> return error, create nothing
+  allowed -> create output directory -> write response or copy source
+```
+
+This order does not bind the write to an operating-system directory handle.
+A process with directory-write permission can still replace a directory after the check.

@@ -74,7 +74,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var attachPath = resolvedPath;
         if (!resolvedInCurrentSession)
         {
-            switch (ResolveCopyDestination(resolvedPath, sessionDir, context))
+            switch (ResolveCopyDestination(resolvedPath, sessionDir))
             {
                 case PathAccessDecision.Denied denied:
                     return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
@@ -85,6 +85,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
                     throw new InvalidOperationException("Unexpected path decision.");
             }
 
+            // Another process can still replace a directory after the check. These checks are not an OS sandbox.
             Directory.CreateDirectory(Path.GetDirectoryName(attachPath)!);
             File.Copy(resolvedPath, attachPath);
         }
@@ -112,10 +113,10 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
     }
 
     private PathAccessDecision ResolveCopyDestination(
-        string sourcePath, string sessionDir, ToolInvocationContext context)
+        string sourcePath, string sessionDir)
     {
         var attachmentsDir = Path.Combine(sessionDir, "attachments");
-        var directoryAccess = _pathAccessPolicy.EvaluateAttachmentDestination(attachmentsDir, context);
+        var directoryAccess = _pathAccessPolicy.EvaluateGeneratedDestination(attachmentsDir, sessionDir);
         if (directoryAccess is PathAccessDecision.Denied)
             return directoryAccess;
 
@@ -128,7 +129,7 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
 
         while (true)
         {
-            var access = _pathAccessPolicy.EvaluateAttachmentDestination(destination, context);
+            var access = _pathAccessPolicy.EvaluateGeneratedDestination(destination, sessionDir);
             if (access is PathAccessDecision.Denied || !File.Exists(destination))
                 return access;
 

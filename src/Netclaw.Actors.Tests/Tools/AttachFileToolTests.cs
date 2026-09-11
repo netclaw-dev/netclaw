@@ -387,6 +387,63 @@ public class AttachFileToolTests : IDisposable
         Assert.Equal("report", await File.ReadAllTextAsync(copy, TestContext.Current.CancellationToken));
     }
 
+    [Theory]
+    [InlineData("protected-suffix")]
+    [InlineData("file-link")]
+    [InlineData("dangling-link")]
+    public async Task ReviewRegression_Attachment_checks_each_destination_file(string boundary)
+    {
+        var source = Path.Combine(_dir.Path, "report.txt");
+        var session = Path.Combine(_dir.Path, "session");
+        var attachments = Path.Combine(session, "attachments");
+        var outside = Path.Combine(_dir.Path, "outside.txt");
+        Directory.CreateDirectory(attachments);
+        await File.WriteAllTextAsync(source, "source marker", TestContext.Current.CancellationToken);
+        var destination = Path.Combine(attachments, "report.txt");
+        var suffix = Path.Combine(attachments, "report-1.txt");
+        if (boundary == "protected-suffix")
+            await File.WriteAllTextAsync(destination, "previous marker", TestContext.Current.CancellationToken);
+        else
+        {
+            if (boundary == "file-link")
+                await File.WriteAllTextAsync(outside, "outside marker", TestContext.Current.CancellationToken);
+            File.CreateSymbolicLink(destination, outside);
+        }
+        var protectedPaths = new ToolPathPolicy(boundary == "protected-suffix" ? [suffix] : []);
+        var tool = new AttachFileTool(new ToolConfig(), new NetclawPaths(_dir.Path), protectedPaths);
+        var context = TestToolExecutionContext.CreateBound("probe", session, TrustAudience.Personal);
+
+        var result = await tool.ExecuteAsync(ToolInput.Create("Path", source), context, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("Error:", result);
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+        Assert.Empty(context.FileAttachments);
+        Assert.False(File.Exists(suffix));
+        Assert.Equal("source marker", await File.ReadAllTextAsync(source, TestContext.Current.CancellationToken));
+        if (boundary == "protected-suffix")
+            Assert.Equal("previous marker", await File.ReadAllTextAsync(destination, TestContext.Current.CancellationToken));
+        else if (boundary == "file-link")
+            Assert.Equal("outside marker", await File.ReadAllTextAsync(outside, TestContext.Current.CancellationToken));
+        else
+            Assert.False(File.Exists(outside));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ReviewRegression_Invalid_generated_destination_returns_a_denial(bool missingDirectory)
+    {
+        var output = Path.Combine(_dir.Path, "output");
+        var policy = new PathAccessPolicy(new ToolConfig(), new NetclawPaths(_dir.Path), new ToolPathPolicy([]));
+        var result = policy.EvaluateGeneratedDestination(missingDirectory ? Path.Combine(output, "file.txt") : "invalid\0path",
+            missingDirectory ? string.Empty : output);
+
+        var denied = Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(result);
+        Assert.Equal(PathAccessPolicy.PathAccessFailure.InvalidInput, denied.Failure);
+        Assert.StartsWith("Error:", denied.Error);
+        Assert.False(Directory.Exists(output));
+    }
+
     [Fact]
     public async Task Public_context_cannot_attach_file_outside_session_directory()
     {

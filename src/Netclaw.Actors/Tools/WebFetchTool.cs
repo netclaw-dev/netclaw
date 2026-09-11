@@ -11,6 +11,8 @@ using HtmlAgilityPack;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Tools;
+using Netclaw.Security;
+using static Netclaw.Actors.Tools.PathAccessPolicy;
 
 namespace Netclaw.Actors.Tools;
 
@@ -42,6 +44,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ];
 
+    private readonly PathAccessPolicy _pathAccessPolicy;
     private readonly WebFetchConfig _webFetchConfig;
     private readonly HttpClient _httpClient;
     private readonly string _fetchDirectory;
@@ -53,20 +56,19 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         [property: Description("Output format: 'raw' (default) preserves HTML structure (links, images, tables); 'text' extracts plain text only")]
         string? Format = null);
 
-    public WebFetchTool(ToolConfig config, HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
+    public WebFetchTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy protectedPaths,
+        HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
+        : this(config, new PathAccessPolicy(config, paths, protectedPaths), httpClient, fetchDirectory, timeProvider) { }
+
+    internal WebFetchTool(ToolConfig config, PathAccessPolicy pathAccessPolicy,
+        HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
     {
+        _pathAccessPolicy = pathAccessPolicy;
         _webFetchConfig = config.WebFetch;
         _httpClient = httpClient ?? new HttpClient();
-        _fetchDirectory = fetchDirectory
-            ?? Path.Combine(Path.GetTempPath(), "netclaw-fetch");
+        _fetchDirectory = fetchDirectory ?? Path.Combine(Path.GetTempPath(), "netclaw-fetch");
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
-
-    /// <summary>
-    /// Test convenience constructor — uses default config.
-    /// </summary>
-    public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
-        : this(new ToolConfig(), httpClient, fetchDirectory, timeProvider) { }
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
@@ -116,7 +118,11 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 
                 var extension = GetExtensionFromUrl(uri)
                     ?? GetFallbackExtension(contentType, isBinary: true);
-                var filePath = SaveBytesToFile(bytes, uri, fetchDir, extension);
+                var saved = SaveBytesToFile(bytes, uri, fetchDir, extension);
+                if (saved is PathAccessDecision.Denied denied)
+                    return context.PathAccessFailure(denied.Error, denied.Failure);
+                var filePath = saved is PathAccessDecision.Allowed allowed
+                    ? allowed.CanonicalPath : throw new InvalidOperationException("Unexpected destination decision.");
 
                 var binarySummary = FormatBinarySummary(uri.ToString(), filePath, bytes.Length, contentType);
                 return binaryTruncated ? binarySummary + TruncationNotice : binarySummary;
@@ -158,7 +164,11 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             if (string.IsNullOrWhiteSpace(savedContent))
                 return $"Fetched {args.Url} but the page contained no extractable content.";
 
-            var textFilePath = SaveToFile(savedContent, uri, fetchDir, textExtension);
+            var textSaved = SaveToFile(savedContent, uri, fetchDir, textExtension);
+            if (textSaved is PathAccessDecision.Denied textDenied)
+                return context.PathAccessFailure(textDenied.Error, textDenied.Failure);
+            var textFilePath = textSaved is PathAccessDecision.Allowed textAllowed
+                ? textAllowed.CanonicalPath : throw new InvalidOperationException("Unexpected destination decision.");
             var lineCount = savedContent.Count(c => c == '\n') + 1;
 
             var summary = FormatSummary(uri.ToString(), title, textFilePath, savedContent.Length, lineCount, previewText);
@@ -264,7 +274,6 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 
     private string BuildFilePath(Uri uri, string directory, string extension)
     {
-        Directory.CreateDirectory(directory);
         var sanitized = SanitizeForFilename(uri);
 
         // The timestamp is for a human to read and sort, not for uniqueness.
@@ -278,18 +287,26 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         return Path.Combine(directory, filename);
     }
 
-    private string SaveBytesToFile(byte[] content, Uri uri, string directory, string extension)
+    private PathAccessDecision SaveBytesToFile(byte[] content, Uri uri, string directory, string extension)
     {
-        var filePath = BuildFilePath(uri, directory, extension);
+        var decision = _pathAccessPolicy.EvaluateGeneratedDestination(BuildFilePath(uri, directory, extension), directory);
+        if (decision is not PathAccessDecision.Allowed allowed)
+            return decision;
+        var filePath = allowed.CanonicalPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         File.WriteAllBytes(filePath, content);
-        return filePath;
+        return decision;
     }
 
-    private string SaveToFile(string content, Uri uri, string directory, string extension)
+    private PathAccessDecision SaveToFile(string content, Uri uri, string directory, string extension)
     {
-        var filePath = BuildFilePath(uri, directory, extension);
+        var decision = _pathAccessPolicy.EvaluateGeneratedDestination(BuildFilePath(uri, directory, extension), directory);
+        if (decision is not PathAccessDecision.Allowed allowed)
+            return decision;
+        var filePath = allowed.CanonicalPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         File.WriteAllText(filePath, content, Encoding.UTF8);
-        return filePath;
+        return decision;
     }
 
     private static string FormatSummary(

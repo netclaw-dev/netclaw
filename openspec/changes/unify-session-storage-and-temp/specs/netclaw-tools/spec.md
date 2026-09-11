@@ -242,6 +242,8 @@ video keyframe extraction SHALL NOT be built into `file_read`.
 
 ### Requirement: Attachment tool reach
 
+All audiences SHALL apply the `ToolPathPolicy` read-deny check to attachment sources.
+
 The system SHALL provide an `attach_file` first-party tool that sends a file to
 the user. It SHALL authorize the source with the shared `Attach` path access
 decision. An explicit `Roots` or `None` attach profile SHALL remain authoritative
@@ -664,3 +666,30 @@ secret storage remain authoritative.
 - **THEN** it receives the persisted non-secret file content
 - **AND** the tool does not claim that the file explains the source or
   effective value of every configuration setting
+
+### Requirement: Generated fetch destinations
+
+`PathAccessPolicy` SHALL check generated fetch paths before directory creation or file writes.
+A bound session SHALL use its current workspace. A sessionless fetch SHALL use its configured fetch directory.
+The check SHALL reject paths outside that directory, filesystem links, and protected write destinations.
+A permitted fetch SHALL NOT require general file-write permission to save its response.
+The tool SHALL return an explicit denial for an invalid destination and SHALL NOT create files or directories there.
+These checks do not prevent another process from replacing a directory after validation.
+
+#### Scenario: Fetch saves a response in an ordinary directory
+
+- **GIVEN** a permitted fetch and an output directory without links or write protection
+- **WHEN** the tool receives text or binary content
+- **THEN** it creates the output directory if needed and saves the response there
+
+#### Scenario: Fetch cannot write through a linked directory
+
+- **GIVEN** a session workspace or sessionless fetch directory that is a link
+- **WHEN** the tool receives a response
+- **THEN** it returns `AccessDenied` without writing through that link
+
+#### Scenario: Fetch cannot write protected output
+
+- **GIVEN** an output directory that the protected-path policy denies for writes
+- **WHEN** the tool receives a response
+- **THEN** it returns `AccessDenied` without creating that directory or an output file

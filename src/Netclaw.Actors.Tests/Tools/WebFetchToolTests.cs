@@ -7,6 +7,7 @@ using System.Text;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -274,7 +275,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/test"),
@@ -315,7 +316,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/test", "Format", "text"),
@@ -347,7 +348,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(html, "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/page"),
@@ -371,7 +372,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(json, "application/json");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://api.example.com/data.json"),
@@ -394,7 +395,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(json, "application/json");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://api.example.com/data"),
@@ -415,7 +416,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(script, "text/plain");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/install.sh"),
@@ -435,7 +436,7 @@ public class WebFetchToolTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_rejects_invalid_url()
     {
-        var tool = new WebFetchTool(fetchDirectory: _dir.Path);
+        var tool = CreateTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "not-a-url"),
@@ -449,7 +450,7 @@ public class WebFetchToolTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_rejects_http_when_https_required()
     {
-        var tool = new WebFetchTool(fetchDirectory: _dir.Path);
+        var tool = CreateTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://example.com/page"),
@@ -466,7 +467,7 @@ public class WebFetchToolTests : IDisposable
         var config = new ToolConfig { WebFetch = new WebFetchConfig { RequireHttps = false } };
         var handler = new FakeHttpHandler("<html><body><p>OK</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(config, httpClient, _dir.Path);
+        var tool = CreateTool(config, httpClient, _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://example.com/page"),
@@ -485,7 +486,7 @@ public class WebFetchToolTests : IDisposable
     {
         var handler = new FakeHttpHandler("<html><body><p>Local</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", url),
@@ -500,7 +501,7 @@ public class WebFetchToolTests : IDisposable
     public async Task ExecuteAsync_rejects_http_localhost_when_not_in_allow_list()
     {
         var config = new ToolConfig { WebFetch = new WebFetchConfig { HttpAllowList = [] } };
-        var tool = new WebFetchTool(config, fetchDirectory: _dir.Path);
+        var tool = CreateTool(config, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://localhost:8080/"),
@@ -516,7 +517,7 @@ public class WebFetchToolTests : IDisposable
         var config = new ToolConfig { WebFetch = new WebFetchConfig { HttpAllowList = ["internal.corp"] } };
         var handler = new FakeHttpHandler("<html><body><p>Internal</p></body></html>", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(config, httpClient, _dir.Path);
+        var tool = CreateTool(config, httpClient, _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "http://internal.corp/api"),
@@ -534,7 +535,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(imageBytes, "image/png");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/photo.png"),
@@ -563,7 +564,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(pdfBytes, "application/pdf");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://arxiv.org/pdf/2603.25414"),
@@ -587,7 +588,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(bytes, "image/gif");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/animation.gif"),
@@ -605,7 +606,7 @@ public class WebFetchToolTests : IDisposable
 
         var handler = new FakeHttpHandler(bytes, "application/octet-stream");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/api/download"),
@@ -619,7 +620,7 @@ public class WebFetchToolTests : IDisposable
     [Fact]
     public async Task ExecuteAsync_rejects_ftp_url()
     {
-        var tool = new WebFetchTool(fetchDirectory: _dir.Path);
+        var tool = CreateTool(fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "ftp://files.example.com/doc.txt"),
@@ -689,7 +690,7 @@ public class WebFetchToolTests : IDisposable
     {
         var handler = new CountingHttpHandler("irrelevant", "text/html");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/test", "Format", "markdown"),
@@ -711,7 +712,7 @@ public class WebFetchToolTests : IDisposable
         Array.Fill(oversized, (byte)'a');
         var handler = new FakeHttpHandler(oversized, "text/plain");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/huge.txt"),
@@ -726,7 +727,7 @@ public class WebFetchToolTests : IDisposable
     {
         var handler = new FakeHttpHandler("small body content", "text/plain");
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path);
 
         var result = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/small.txt"),
@@ -750,7 +751,7 @@ public class WebFetchToolTests : IDisposable
             ("<html><head><title>First</title></head><body><p>First fetch content.</p></body></html>", "text/html"),
             ("<html><head><title>Second</title></head><body><p>Second fetch content.</p></body></html>", "text/html"));
         var httpClient = new HttpClient(handler);
-        var tool = new WebFetchTool(httpClient: httpClient, fetchDirectory: _dir.Path, timeProvider: frozenTime);
+        var tool = CreateTool(httpClient: httpClient, fetchDirectory: _dir.Path, timeProvider: frozenTime);
 
         var firstResult = await tool.ExecuteAsync(
             ToolInput.Create("Url", "https://example.com/same-page"),
@@ -824,6 +825,75 @@ public class WebFetchToolTests : IDisposable
             return Task.FromResult(response);
         }
     }
+
+    [Theory]
+    [InlineData(false, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(true, false, false)]
+    [InlineData(true, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, true)]
+    public async Task ReviewRegression_Fetch_destination_checks_links(bool sessionless, bool binary, bool linked)
+    {
+        var outside = Path.Combine(_dir.Path, "outside");
+        var output = Path.Combine(_dir.Path, "output");
+        Directory.CreateDirectory(outside);
+        if (linked)
+            Directory.CreateSymbolicLink(output, outside);
+        var storage = SessionStoragePaths.CreateLegacy(output, Path.Combine(_dir.Path, "logs"), "probe");
+        using var client = new HttpClient(new FakeHttpHandler("response marker", binary ? "application/pdf" : "text/plain"));
+        var tool = CreateTool(new ToolConfig(), client, output);
+        var context = sessionless
+            ? TestToolExecutionContext.CreateUnbound()
+            : TestToolExecutionContext.CreateBoundWithStorage("probe", storage,
+                new TestToolExecutionContextOptions { Audience = TrustAudience.Public });
+
+        var result = await tool.ExecuteAsync(ToolInput.Create("Url", "https://example.com/report"),
+            context, TestContext.Current.CancellationToken);
+
+        Assert.Empty(Directory.GetFiles(outside));
+        if (linked)
+        {
+            Assert.StartsWith("Error:", result);
+            Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+        }
+        else
+        {
+            Assert.DoesNotContain("Error:", result);
+            var saved = Assert.Single(Directory.GetFiles(output));
+            Assert.Contains("response marker", await File.ReadAllTextAsync(saved, TestContext.Current.CancellationToken));
+        }
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public async Task ReviewRegression_Fetch_rejects_protected_output(bool sessionless, bool binary)
+    {
+        var output = Path.Combine(_dir.Path, "protected-output");
+        var storage = SessionStoragePaths.CreateLegacy(output, Path.Combine(_dir.Path, "logs"), "probe");
+        using var client = new HttpClient(new FakeHttpHandler("response marker", binary ? "application/pdf" : "text/plain"));
+        var tool = CreateTool(httpClient: client, fetchDirectory: output, protectedPaths: new ToolPathPolicy([output]));
+        var context = sessionless ? TestToolExecutionContext.CreateUnbound()
+            : TestToolExecutionContext.CreateBoundWithStorage("probe", storage,
+                new TestToolExecutionContextOptions { Audience = TrustAudience.Public });
+
+        var result = await tool.ExecuteAsync(ToolInput.Create("Url", "https://example.com/report"),
+            context, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith("Error:", result);
+        Assert.Equal(ToolInvocationOutcomeCategory.AccessDenied, context.Receipt?.Category);
+        Assert.False(Directory.Exists(output));
+    }
+
+    private WebFetchTool CreateTool(ToolConfig? config = null, HttpClient? httpClient = null,
+        string? fetchDirectory = null, TimeProvider? timeProvider = null, ToolPathPolicy? protectedPaths = null)
+        => new(config ?? new ToolConfig(), new NetclawPaths(_dir.Path), protectedPaths ?? new ToolPathPolicy([]),
+            httpClient, fetchDirectory, timeProvider);
 
     private sealed class FakeHttpHandler : HttpMessageHandler
     {

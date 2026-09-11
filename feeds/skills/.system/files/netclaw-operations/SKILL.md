@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.71.0"
+  version: "2.71.1"
 ---
 
 # Netclaw Operations
@@ -119,6 +119,9 @@ Use a legacy child's summary and shared-workspace artifacts instead.
 Directory list and search require directory authority; an exact log grants none.
 Do not use shell to find session logs.
 Normal audience and operation policy applies to every session path.
+Attachment copies and fetched files must pass destination checks before Netclaw saves them.
+A permitted copy or fetch does not enable general file-write access.
+If a save fails, report the tool error; do not claim that the file exists.
 Netclaw does not automatically remove managed temporary files or worktrees.
 
 Use `shell_execute` to run Git with a destination below `worktree_dir`.
