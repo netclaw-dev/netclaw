@@ -74,16 +74,11 @@ public sealed partial class AttachFileTool : NetclawTool<AttachFileTool.Params>
         var attachPath = resolvedPath;
         if (!resolvedInCurrentSession)
         {
-            switch (ResolveCopyDestination(resolvedPath, sessionDir))
-            {
-                case PathAccessDecision.Denied denied:
-                    return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
-                case PathAccessDecision.Allowed allowed:
-                    attachPath = allowed.CanonicalPath;
-                    break;
-                default:
-                    throw new InvalidOperationException("Unexpected path decision.");
-            }
+            var destination = ResolveCopyDestination(resolvedPath, sessionDir);
+            if (destination is PathAccessDecision.Denied destinationDenied)
+                return Task.FromResult(context.PathAccessFailure(destinationDenied.Error, destinationDenied.Failure));
+
+            attachPath = destination.GetAllowedPath();
 
             // Another process can still replace a directory after the check. These checks are not an OS sandbox.
             Directory.CreateDirectory(Path.GetDirectoryName(attachPath)!);

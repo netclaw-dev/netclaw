@@ -121,8 +121,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
                 var saved = SaveBytesToFile(bytes, uri, fetchDir, extension);
                 if (saved is PathAccessDecision.Denied denied)
                     return context.PathAccessFailure(denied.Error, denied.Failure);
-                var filePath = saved is PathAccessDecision.Allowed allowed
-                    ? allowed.CanonicalPath : throw new InvalidOperationException("Unexpected destination decision.");
+                var filePath = saved.GetAllowedPath();
 
                 var binarySummary = FormatBinarySummary(uri.ToString(), filePath, bytes.Length, contentType);
                 return binaryTruncated ? binarySummary + TruncationNotice : binarySummary;
@@ -167,8 +166,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             var textSaved = SaveToFile(savedContent, uri, fetchDir, textExtension);
             if (textSaved is PathAccessDecision.Denied textDenied)
                 return context.PathAccessFailure(textDenied.Error, textDenied.Failure);
-            var textFilePath = textSaved is PathAccessDecision.Allowed textAllowed
-                ? textAllowed.CanonicalPath : throw new InvalidOperationException("Unexpected destination decision.");
+            var textFilePath = textSaved.GetAllowedPath();
             var lineCount = savedContent.Count(c => c == '\n') + 1;
 
             var summary = FormatSummary(uri.ToString(), title, textFilePath, savedContent.Length, lineCount, previewText);
