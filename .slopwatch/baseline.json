@@ -1,7 +1,7 @@
 {
   "version": 1,
   "createdAt": "2026-05-12T17:20:55.7365203+00:00",
-  "updatedAt": "2026-09-10T13:51:43.2738955+00:00",
+  "updatedAt": "2026-09-11T00:41:02.1660437+00:00",
   "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC. The BuiltInSkillSeedingTests entries are conditional xUnit platform gates. Supported systems execute the tests; unsupported systems report explicit skips.",
   "entries": [
     {
@@ -219,6 +219,15 @@
       "codeSnippet": "Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsLinux),\n        Skip = \"Cleanup failure requires Linux directory permission semantics\")",
       "message": "Test method 'Restore_keeps_the_committed_tree_when_backup_cleanup_fails' is disabled: Cleanup failure requires Linux directory permission semantics",
       "baselinedAt": "2026-09-10T13:51:43.273895+00:00"
+    },
+    {
+      "hash": "148eb09250d2e874",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Daemon.Tests/BuiltInSkillSeedingTests.cs",
+      "lineNumber": 180,
+      "codeSnippet": "Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),\n        Skip = \"This case uses native Windows junction semantics.\")",
+      "message": "Test method 'Restore_rejects_a_windows_reparse_point_for_the_managed_tree' is disabled: This case uses native Windows junction semantics.",
+      "baselinedAt": "2026-09-11T00:41:02.1659415+00:00"
     }
   ]
 }

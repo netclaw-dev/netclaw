@@ -6,6 +6,7 @@
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Security;
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Configuration;
@@ -48,6 +49,25 @@ public sealed class DaemonToolPathPolicyFactoryTests
         ];
 
         Assert.All(protectedPaths, path => Assert.True(policy.IsReadDenied(path), path));
+    }
+
+    [Theory]
+    [InlineData(ShellPlatform.Linux)]
+    [InlineData(ShellPlatform.MacOS)]
+    [InlineData(ShellPlatform.Windows)]
+    public void System_skills_are_readable_but_not_writable(ShellPlatform platform)
+    {
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
+        var environment = platform == ShellPlatform.Windows
+            ? ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+                PwshDialect.WindowsPowerShell51)
+            : ShellExecutionEnvironment.CreateBash(platform);
+        var policy = DaemonToolPathPolicyFactory.Create(paths, environment);
+        var skillPath = Path.Combine(paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md");
+
+        Assert.False(policy.IsReadDenied(skillPath));
+        Assert.True(policy.IsDenied(skillPath));
     }
 
     [Theory]

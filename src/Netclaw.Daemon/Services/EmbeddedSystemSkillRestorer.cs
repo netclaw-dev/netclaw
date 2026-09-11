@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Reflection;
+using System.Security;
 using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -17,13 +18,33 @@ internal static class EmbeddedSystemSkillRestorer
 {
     private const string ResourcePrefix = "Netclaw.SystemSkills";
     private const string ExecutablePathsResourceName = "Netclaw.SystemSkillExecutablePaths";
+    private const string StagingDirectoryPrefix = ".system.staging-";
+    private const string BackupDirectoryPrefix = ".system.backup-";
     private const UnixFileMode ReadOnlyFileMode = UnixFileMode.UserRead | UnixFileMode.UserWrite
                                                   | UnixFileMode.GroupRead | UnixFileMode.OtherRead;
     private const UnixFileMode ExecutableFileMode = ReadOnlyFileMode | UnixFileMode.UserExecute
                                                      | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute;
 
     internal static void Restore(NetclawPaths paths)
-        => Restore(paths, typeof(EmbeddedSystemSkillRestorer).Assembly);
+    {
+        ArgumentNullException.ThrowIfNull(paths);
+
+        try
+        {
+            Restore(paths, typeof(EmbeddedSystemSkillRestorer).Assembly);
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException or SecurityException)
+        {
+            throw new InvalidOperationException(
+                $"Netclaw could not restore system skills in '{paths.SystemSkillsDirectory}': {exception.Message} "
+                + "Confirm that Netclaw owns the skills directory. "
+                + "Confirm that it can write to the parent directory. "
+                + "Close programs that use this path. "
+                + "Remove any symbolic link or reparse point from the managed path. "
+                + "Restart the daemon.",
+                exception);
+        }
+    }
 
     internal static void Restore(NetclawPaths paths, Assembly assembly)
     {
@@ -43,8 +64,10 @@ internal static class EmbeddedSystemSkillRestorer
 
         var executablePaths = ReadExecutablePaths(assembly, resources);
 
-        var stagingDirectory = Path.Combine(skillsDirectory, $".system.staging-{Guid.NewGuid():N}");
-        var backupDirectory = Path.Combine(skillsDirectory, $".system.backup-{Guid.NewGuid():N}");
+        RemoveAbandonedSwapDirectories(skillsDirectory, StagingDirectoryPrefix);
+
+        var stagingDirectory = Path.Combine(skillsDirectory, $"{StagingDirectoryPrefix}{Guid.NewGuid():N}");
+        var backupDirectory = Path.Combine(skillsDirectory, $"{BackupDirectoryPrefix}{Guid.NewGuid():N}");
         var movedCurrentTree = false;
 
         try
@@ -71,8 +94,7 @@ internal static class EmbeddedSystemSkillRestorer
             DeleteDirectoryIfPresent(stagingDirectory);
         }
 
-        if (movedCurrentTree)
-            Directory.Delete(backupDirectory, recursive: true);
+        RemoveAbandonedSwapDirectories(skillsDirectory, BackupDirectoryPrefix);
     }
 
     private static void ValidateManagedDirectory(
@@ -85,7 +107,7 @@ internal static class EmbeddedSystemSkillRestorer
         if (!PathUtility.IsWithinRoot(systemDirectory, baseDirectory)
             || !string.Equals(systemDirectory, expectedSystemDirectory, StringComparison.Ordinal))
         {
-            throw new InvalidOperationException(
+            throw new IOException(
                 "The system skill directory must remain below the Netclaw home skills directory.");
         }
 
@@ -174,12 +196,36 @@ internal static class EmbeddedSystemSkillRestorer
             Directory.Delete(directory, recursive: true);
     }
 
+    private static void RemoveAbandonedSwapDirectories(string skillsDirectory, string prefix)
+    {
+        foreach (var directory in Directory.EnumerateDirectories(skillsDirectory, $"{prefix}*", SearchOption.TopDirectoryOnly))
+        {
+            var name = Path.GetFileName(directory);
+            if (!IsOwnedSwapDirectoryName(name, prefix))
+                continue;
+            if (File.GetAttributes(directory).HasFlag(FileAttributes.ReparsePoint))
+                throw new IOException($"The abandoned system skill directory cannot be a reparse point: {directory}.");
+
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static bool IsOwnedSwapDirectoryName(string name, string prefix)
+    {
+        var suffix = name.StartsWith(prefix, StringComparison.Ordinal)
+            ? name[prefix.Length..]
+            : string.Empty;
+
+        return suffix.Length == 32
+               && Guid.TryParseExact(suffix, "N", out _);
+    }
+
     private static void RejectSymbolicLink(string path)
     {
         if (Directory.Exists(path)
             && File.GetAttributes(path).HasFlag(FileAttributes.ReparsePoint))
         {
-            throw new InvalidOperationException($"The system skill directory cannot be a symbolic link: {path}.");
+            throw new IOException($"The system skill directory cannot be a symbolic link or reparse point: {path}.");
         }
     }
 

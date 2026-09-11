@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using System.Runtime.Versioning;
 using System.Text.Json;
 using Netclaw.Actors.Skills;
@@ -105,6 +106,46 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
     }
 
     [Fact]
+    public void Restore_removes_only_abandoned_swap_directories()
+    {
+        var paths = CreatePaths();
+        var abandonedStaging = Path.Combine(paths.SkillsDirectory, $".system.staging-{Guid.NewGuid():N}");
+        var abandonedBackup = Path.Combine(paths.SkillsDirectory, $".system.backup-{Guid.NewGuid():N}");
+        var similarDirectory = Path.Combine(paths.SkillsDirectory, ".system.backup-operator-data");
+        Directory.CreateDirectory(abandonedStaging);
+        Directory.CreateDirectory(abandonedBackup);
+        Directory.CreateDirectory(similarDirectory);
+        File.WriteAllText(Path.Combine(abandonedStaging, "partial.md"), "partial staging content");
+        File.WriteAllText(Path.Combine(abandonedBackup, "SKILL.md"), "old backup content");
+        File.WriteAllText(Path.Combine(similarDirectory, "operator.md"), "operator content");
+
+        EmbeddedSystemSkillRestorer.Restore(paths);
+
+        Assert.False(Directory.Exists(abandonedStaging));
+        Assert.False(Directory.Exists(abandonedBackup));
+        Assert.True(Directory.Exists(similarDirectory));
+    }
+
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "Symbolic link fixture requires POSIX filesystem support")]
+    public void Restore_rejects_an_abandoned_swap_symbolic_link()
+    {
+        var paths = CreatePaths();
+        var externalDirectory = Path.Combine(_directory.Path, "external-swap-target");
+        var sentinel = Path.Combine(externalDirectory, "sentinel.md");
+        Directory.CreateDirectory(externalDirectory);
+        File.WriteAllText(sentinel, "must remain outside the managed tree");
+        var abandonedLink = Path.Combine(paths.SkillsDirectory, $".system.staging-{Guid.NewGuid():N}");
+        Directory.CreateSymbolicLink(abandonedLink, externalDirectory);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => EmbeddedSystemSkillRestorer.Restore(paths));
+
+        Assert.Contains("reparse point", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.True(Directory.Exists(abandonedLink));
+        Assert.Equal("must remain outside the managed tree", File.ReadAllText(sentinel));
+    }
+
+    [Fact]
     public void Restore_populates_the_registry_search_index()
     {
         var paths = CreatePaths();
@@ -137,7 +178,25 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
 
         var exception = Assert.Throws<InvalidOperationException>(() => EmbeddedSystemSkillRestorer.Restore(paths));
 
-        Assert.Contains("symbolic link", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("symbolic link", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal("must remain outside the managed tree", File.ReadAllText(sentinel));
+    }
+
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),
+        Skip = "This case uses native Windows junction semantics.")]
+    public async Task Restore_rejects_a_windows_junction_for_the_managed_tree()
+    {
+        var paths = CreatePaths();
+        var externalDirectory = Path.Combine(_directory.Path, "external-system-skills");
+        var sentinel = Path.Combine(externalDirectory, "sentinel.md");
+        Directory.CreateDirectory(externalDirectory);
+        File.WriteAllText(sentinel, "must remain outside the managed tree");
+        Directory.Delete(paths.SystemSkillsDirectory);
+        await CreateWindowsJunctionAsync(paths.SystemSkillsDirectory, externalDirectory);
+
+        var exception = Assert.Throws<InvalidOperationException>(() => EmbeddedSystemSkillRestorer.Restore(paths));
+
+        Assert.Contains("reparse point", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Equal("must remain outside the managed tree", File.ReadAllText(sentinel));
     }
 
@@ -145,12 +204,18 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
     public void Restore_keeps_an_unmanaged_file_when_the_tree_swap_fails()
     {
         var paths = CreatePaths();
+        var abandonedBackup = Path.Combine(paths.SkillsDirectory, $".system.backup-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(abandonedBackup);
         Directory.Delete(paths.SystemSkillsDirectory);
         File.WriteAllText(paths.SystemSkillsDirectory, "unmanaged file");
 
-        Assert.Throws<IOException>(() => EmbeddedSystemSkillRestorer.Restore(paths));
+        var exception = Assert.Throws<InvalidOperationException>(() => EmbeddedSystemSkillRestorer.Restore(paths));
 
+        Assert.IsType<IOException>(exception.InnerException);
+        Assert.Contains(paths.SystemSkillsDirectory, exception.Message, StringComparison.Ordinal);
+        Assert.Contains("Confirm that", exception.Message, StringComparison.Ordinal);
         Assert.Equal("unmanaged file", File.ReadAllText(paths.SystemSkillsDirectory));
+        Assert.True(Directory.Exists(abandonedBackup));
     }
 
     [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsLinux),
@@ -168,7 +233,8 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         {
             var exception = Record.Exception(() => EmbeddedSystemSkillRestorer.Restore(paths));
 
-            Assert.IsType<UnauthorizedAccessException>(exception);
+            var restoreException = Assert.IsType<InvalidOperationException>(exception);
+            Assert.IsType<UnauthorizedAccessException>(restoreException.InnerException);
             Assert.True(File.Exists(Path.Combine(paths.SystemSkillsDirectory, "netclaw-memory", "SKILL.md")));
             Assert.False(File.Exists(Path.Combine(paths.SystemSkillsDirectory, "old-skill", "SKILL.md")));
         }
@@ -245,6 +311,29 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
         var paths = new NetclawPaths(Path.Combine(_directory.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
         return paths;
+    }
+
+    private static async Task CreateWindowsJunctionAsync(string link, string target)
+    {
+        var startInfo = new ProcessStartInfo("cmd.exe")
+        {
+            RedirectStandardError = true,
+            RedirectStandardOutput = true,
+            UseShellExecute = false
+        };
+        startInfo.ArgumentList.Add("/d");
+        startInfo.ArgumentList.Add("/c");
+        startInfo.ArgumentList.Add("mklink");
+        startInfo.ArgumentList.Add("/J");
+        startInfo.ArgumentList.Add(link);
+        startInfo.ArgumentList.Add(target);
+
+        using var process = Process.Start(startInfo);
+        Assert.NotNull(process);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+        var standardOutput = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        var standardError = await process.StandardError.ReadToEndAsync(TestContext.Current.CancellationToken);
+        Assert.True(process.ExitCode == 0, $"mklink failed: {standardOutput}{standardError}");
     }
 
     private static string FindSourceDirectory()

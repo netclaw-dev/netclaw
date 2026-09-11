@@ -37,6 +37,10 @@ Register additional skill directories (e.g. `~/.claude/skills/`):
 | `netclaw skill source disable <name>` | Disable without removing |
 
 The daemon restores its system skills from its binary before its first scan.
+If this restore fails, confirm that Netclaw owns the skills directory and can
+write to its parent. If the error reports a reparse point, remove it from the
+`.system` path. Then restart the daemon. Private server feeds remain independent
+skill sources.
 It rebuilds one complete inventory across system, native, managed-feed, and
 external sources after syncs and supported mutations. Native skills take
 precedence over managed feeds, which take precedence over external sources.
