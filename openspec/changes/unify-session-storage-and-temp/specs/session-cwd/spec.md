@@ -56,6 +56,14 @@ For Team and Personal turns whose `WorkingContext.ProjectDirectory` is declared 
 - **AND** the model receives no contradictory branch or tracking state
 
 
+#### Scenario: Invalid public Git snapshot does not interrupt a turn
+
+- **GIVEN** a caller constructs or deserializes a Git snapshot with contradictory head fields
+- **WHEN** the context renderer processes the snapshot
+- **THEN** it emits the existing unavailable status with a reason
+- **AND** it emits no branch or commit details and does not modify the snapshot
+- **AND** the session can continue its turn
+
 ### Requirement: Existing session context announces managed paths
 
 The system SHALL preserve the existing `[session]` context block and its

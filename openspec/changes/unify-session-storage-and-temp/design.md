@@ -885,7 +885,7 @@ These changes retain the [engineering glossary](../../../docs/spec/GLOSSARY.md) 
 | Contract | Producer and consumer | Lifetime and compatibility |
 |---|---|---|
 | Path result | `PathAccessPolicy` produces `Allowed` or `Denied`; file tools and shell policy consume the cases | Call-local; errors and public tool text retain their shapes |
-| Tool receipt | Tool completion creates `Succeeded`, `Correction`, or `OtherOutcome`; actors update context from the matching case | Call-local and actor-local; `ToolExecutionCompleted` excludes serialization verification; no persistence format changes |
+| Tool receipt | Tool completion creates `Succeeded`, `Correction`, or `OtherOutcome`; actors update context from the matching case | Call-local and actor-local; `ToolExecutionCompleted` carries receipts in local actor messages only; receipts have no persistence or wire representation |
 | Child result | The child actor returns `SubAgentResult`; the spawner adds typed locations; `SpawnAgentTool` consumes the enriched case | Actor-local; public `SpawnAsync` maps back to the unchanged `SubAgentResult` shape |
 | Git head | The inspector parses head state; the context renderer consumes detached or attached state | Call-local snapshots; the public flat snapshot retains its JSON members through an explicit map |
 
@@ -909,3 +909,17 @@ Detached state cannot carry branch or upstream metadata. Divergence requires an 
 Malformed Git status becomes the existing `Unavailable` inspection through the existing `FormatException` path.
 The public snapshot remains a boundary shape; its independent fields are not a closed internal state.
 No compiler-exhaustiveness claim applies to these C# hierarchies. Consumers retain explicit unexpected-case checks.
+
+## Git snapshot review correction
+
+The public Git snapshot retains its flat JSON fields. Other callers can construct it without the Git parser.
+`ToContextBlock` validates those fields through an explicit method before it writes Git context.
+If validation fails, it emits the existing `status: unavailable` form with a reason.
+It does not emit partial branch or commit details and does not change the snapshot.
+The normal Git inspector still rejects invalid status text before it returns a snapshot.
+
+```text
+public snapshot -> validate head fields
+  valid -> emit branch, commit, and repository counts
+  invalid -> emit unavailable status and reason -> continue the session
+```

@@ -45,7 +45,7 @@ public sealed class ResultBoundaryTests
             ["ChangedFiles"] = new JsonArray("a.txt")
         };
         var loaded = oldShape.Deserialize<GitWorkingContextSnapshot>()!;
-        var mapped = loaded.HeadState.ApplyTo(loaded);
+        var mapped = loaded.GetHeadState().ApplyTo(loaded);
         Assert.True(JsonNode.DeepEquals(oldShape, JsonSerializer.SerializeToNode(mapped)));
         var block = new WorkingContextSnapshot
         {
@@ -55,9 +55,35 @@ public sealed class ResultBoundaryTests
         Assert.Contains($"branch: {(detached ? "(detached)" : branch)}\n  head: {head ?? "(unborn)"}", block);
         Assert.Equal(upstream is not null, block.Contains("upstream:", StringComparison.Ordinal));
         if (detached)
-            Assert.IsType<GitHeadState.DetachedHead>(mapped.HeadState);
+            Assert.IsType<GitHeadState.DetachedHead>(mapped.GetHeadState());
         else
-            Assert.IsType<GitHeadState.AttachedHead>(mapped.HeadState);
+            Assert.IsType<GitHeadState.AttachedHead>(mapped.GetHeadState());
+    }
+
+    [Theory]
+    [InlineData(true, "main", "abc123", 0)]
+    [InlineData(false, "main", "abc123", 2)]
+    [InlineData(true, null, null, 0)]
+    public void ReviewRegression_Invalid_public_git_snapshot_reports_unavailable(
+        bool detached, string? branch, string? head, int ahead)
+    {
+        var json = JsonSerializer.Serialize(new GitWorkingContextSnapshot
+        {
+            Worktree = "/repo", CommonDirectory = "/repo/.git",
+            Detached = detached, Branch = branch, Head = head, Ahead = ahead
+        });
+        var snapshot = JsonSerializer.Deserialize<GitWorkingContextSnapshot>(json)!;
+        var block = new WorkingContextSnapshot
+        {
+            WorkingContext = WorkingContext.Empty,
+            Git = new GitWorkingContextInspection.Available(snapshot)
+        }.ToContextBlock();
+
+        Assert.Contains("status: unavailable", block);
+        Assert.Contains("reason:", block);
+        Assert.DoesNotContain("branch:", block);
+        Assert.DoesNotContain("head:", block);
+        Assert.Equal(json, JsonSerializer.Serialize(snapshot));
     }
 
     [Theory]
@@ -82,6 +108,7 @@ public sealed class ResultBoundaryTests
             "cancelled" => new ChildRunCompletion.Cancelled(SubAgentOutcomeReason.CancelledByParent),
             _ => throw new ArgumentException("Unexpected test outcome.", nameof(outcome))
         };
+        Assert.Throws<ArgumentNullException>(() => new EnrichedChildRunResult.OtherRun(null!));
         var actorResponse = new SubAgentResult { Completion = completion, Output = "result", AgentName = new AgentName("helper") };
         var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(
             Path.GetFullPath(Path.Combine(Path.GetTempPath(), "child-result-fixture"))));

@@ -352,7 +352,8 @@ public sealed class SubAgentSpawner
                 ChildRunCompletion.Completed or ChildRunCompletion.Partial =>
                     new EnrichedChildRunResult.SuccessfulRun(response,
                         new EnrichedChildRunResult.RunLocations(childStorage.LogPath, childStorage.ArtifactDirectory)),
-                _ => new EnrichedChildRunResult.OtherRun(response)
+                ChildRunCompletion.Failed or ChildRunCompletion.Cancelled => new EnrichedChildRunResult.OtherRun(response),
+                _ => throw new InvalidOperationException("Unexpected child run completion.")
             };
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -549,7 +550,10 @@ public sealed class SubAgentSpawner
 internal abstract class EnrichedChildRunResult
 {
     private EnrichedChildRunResult(SubAgentResult response)
-        => Response = response with { LogPath = null, ArtifactDirectory = null };
+    {
+        ArgumentNullException.ThrowIfNull(response);
+        Response = response with { LogPath = null, ArtifactDirectory = null };
+    }
 
     // Preserve the public response at the adapter boundary. Locations exist only on SuccessfulRun.
     internal SubAgentResult Response { get; }

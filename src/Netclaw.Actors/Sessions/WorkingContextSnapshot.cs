@@ -27,7 +27,7 @@ public sealed record GitWorkingContextSnapshot
     public int Untracked { get; init; }
     public ImmutableHashSet<string> ChangedFiles { get; init; } = [];
 
-    internal GitHeadState HeadState => GitHeadState.Create(Detached, Branch, Head, Upstream, Ahead, Behind);
+    internal GitHeadState GetHeadState() => GitHeadState.Create(Detached, Branch, Head, Upstream, Ahead, Behind);
 }
 
 internal abstract class GitHeadState
@@ -149,10 +149,24 @@ public sealed record WorkingContextSnapshot
         switch (Git)
         {
             case GitWorkingContextInspection.Available { Snapshot: var git }:
+                GitHeadState headState;
+                try
+                {
+                    headState = git.GetHeadState();
+                }
+                catch (FormatException ex)
+                {
+                    // Public snapshots can come from callers other than the Git parser.
+                    // Report invalid metadata instead of interrupting the actor's next turn.
+                    sb.Append("\ngit:")
+                        .Append("\n  status: unavailable")
+                        .Append("\n  reason: ").Append(ex.Message);
+                    break;
+                }
                 sb.Append("\ngit:")
                     .Append("\n  worktree: ").Append(git.Worktree)
                     .Append("\n  common_dir: ").Append(git.CommonDirectory);
-                switch (git.HeadState)
+                switch (headState)
                 {
                     case GitHeadState.DetachedHead detached:
                         sb.Append("\n  branch: (detached)").Append("\n  head: ").Append(detached.Head);

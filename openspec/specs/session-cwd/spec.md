@@ -381,6 +381,14 @@ echoing the authored path.
 - **AND** the project scope remains unchanged
 - **AND** project instructions are not loaded from that path
 
+#### Scenario: Invalid public Git snapshot does not interrupt a turn
+
+- **GIVEN** a caller constructs or deserializes a Git snapshot with contradictory head fields
+- **WHEN** the context renderer processes the snapshot
+- **THEN** it emits the existing unavailable status with a reason
+- **AND** it emits no branch or commit details and does not modify the snapshot
+- **AND** the session can continue its turn
+
 ### Requirement: Existing session context announces managed paths
 
 The system SHALL preserve the existing `[session]` context block and its
