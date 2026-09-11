@@ -66,6 +66,7 @@ LIGHT_SCENARIOS=(
   reminders
   pairing
   mcp-setup
+  skill-sync
   webhook-routes
 )
 FULL_SCENARIOS=("${LIGHT_SCENARIOS[@]}")

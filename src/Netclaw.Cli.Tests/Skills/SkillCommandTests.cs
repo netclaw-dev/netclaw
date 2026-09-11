@@ -129,6 +129,8 @@ public sealed class SkillCommandTests : IDisposable
         {
             Assert.Equal(HttpMethod.Post, request.Method);
             Assert.Equal("/api/skills/sync", request.RequestUri!.AbsolutePath);
+            Assert.Contains("Waiting for the daemon's skill sync pass", _output.ToString());
+            Assert.Contains("Ctrl+C", _output.ToString());
             return FakeHttpMessageHandler.JsonResponse(new
             {
                 passId = "pass-1",
@@ -210,6 +212,39 @@ public sealed class SkillCommandTests : IDisposable
 
         Assert.Equal(1, exit);
         Assert.Contains("Restart the daemon", _output.ToString());
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "cannot run the pass now (HTTP 503)")]
+    [InlineData(HttpStatusCode.InternalServerError, "returned HTTP 500")]
+    [InlineData(HttpStatusCode.Forbidden, "returned HTTP 403")]
+    public async Task Sync_distinguishes_an_http_failure_from_a_connection_failure(
+        HttpStatusCode status, string expected)
+    {
+        var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(status));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(expected, _output.ToString());
+        Assert.DoesNotContain("could not reach", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Sync_returns_nonzero_when_only_the_inventory_refresh_fails()
+    {
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            passId = "pass-inventory-failure",
+            sources = Array.Empty<object>(),
+            inventory = new { succeeded = false, error = "The skill inventory refresh failed." },
+        }));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Inventory: failed", _output.ToString());
+        Assert.Contains("The skill inventory refresh failed.", _output.ToString());
     }
 
     // ── Daemon-unavailable paths: report + exit 1, never a stack trace ──

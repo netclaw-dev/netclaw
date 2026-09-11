@@ -19,9 +19,6 @@ public static class SkillSyncResult
         public required List<SourceRow> Sources { get; init; }
 
         public required InventoryRow Inventory { get; init; }
-
-        public bool Succeeded => Sources.All(static source => source.FailedCount == 0 && source.RejectedCount == 0)
-            && Inventory.Succeeded;
     }
 
     /// <summary>Result data for one configured source.</summary>

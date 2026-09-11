@@ -16,6 +16,8 @@ using Netclaw.SkillClient;
 
 namespace Netclaw.Daemon.Services;
 
+internal sealed class SkillSyncUnavailableException(string message) : InvalidOperationException(message);
+
 /// <summary>
 /// Syncs skills from private skill-server instances at daemon startup and
 /// periodically thereafter using the Cloudflare Agent Skills RFC discovery
@@ -167,8 +169,11 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
                 await activePass.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
         }
-        catch (OperationCanceledException) when (lifetimeCancellation?.IsCancellationRequested == true
-            && !cancellationToken.IsCancellationRequested)
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning("Host shutdown timed out while an external skill sync pass was still active.");
+        }
+        catch (OperationCanceledException) when (lifetimeCancellation?.IsCancellationRequested == true)
         {
             _logger.LogDebug("Host shutdown canceled the active skill sync pass.");
         }
@@ -269,9 +274,9 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
         lock (_syncLock)
         {
             if (!_started)
-                throw new InvalidOperationException("The skill sync service has not started.");
+                throw new SkillSyncUnavailableException("The skill sync service has not started.");
             if (_stopped || _lifetimeCancellation is null)
-                throw new InvalidOperationException("The skill sync service has stopped.");
+                throw new SkillSyncUnavailableException("The skill sync service has stopped.");
 
             if (_activePass is null || _activePass.IsCompleted)
             {
@@ -294,12 +299,53 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
 
     private async Task<SkillSyncResult.Response> RunPassAsync(CancellationToken cancellationToken)
     {
-        var sources = new List<SkillSyncResult.SourceRow>();
-        foreach (var feed in _feedsConfig.Feeds.Where(static feed => feed.Enabled))
+        var passId = Guid.NewGuid().ToString("N");
+        _logger.LogInformation("External skill sync pass started. {PassId}", passId);
+        var outcome = "failed";
+        try
         {
+            var sources = new List<SkillSyncResult.SourceRow>();
+            foreach (var feed in _feedsConfig.Feeds.Where(static feed => feed.Enabled))
+            {
+                try
+                {
+                    sources.Add(await SyncFeedAsync(feed, cancellationToken));
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogWarning(ex,
+                        "Server feed sync failed for '{FeedName}' ({FeedUrl}) — using on-disk skills",
+                        feed.Name, feed.Url);
+                    sources.Add(new SkillSyncResult.SourceRow
+                    {
+                        Name = feed.Name,
+                        FailedCount = 1,
+                        Sidecar = "not-run",
+                        Error = "The source sync failed. Existing files remain in use.",
+                    });
+                }
+            }
+
             try
             {
-                sources.Add(await SyncFeedAsync(feed, cancellationToken));
+                var scan = RescanAndUpdateIndex();
+                var result = new SkillSyncResult.Response
+                {
+                    PassId = passId,
+                    Sources = sources,
+                    Inventory = new SkillSyncResult.InventoryRow
+                    {
+                        Succeeded = true,
+                        AcceptedCount = scan.AcceptedSkills.Count,
+                        RejectedCount = scan.Issues.Count,
+                    },
+                };
+                outcome = "completed";
+                return result;
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -308,51 +354,29 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogWarning(ex,
-                    "Server feed sync failed for '{FeedName}' ({FeedUrl}) — using on-disk skills",
-                    feed.Name, feed.Url);
-                sources.Add(new SkillSyncResult.SourceRow
+                    "Skill inventory publication after server feed sync failed");
+                var result = new SkillSyncResult.Response
                 {
-                    Name = feed.Name,
-                    FailedCount = 1,
-                    Sidecar = "not-run",
-                    Error = "The source sync failed. Existing files remain in use.",
-                });
+                    PassId = passId,
+                    Sources = sources,
+                    Inventory = new SkillSyncResult.InventoryRow
+                    {
+                        Succeeded = false,
+                        Error = "The skill inventory refresh failed.",
+                    },
+                };
+                outcome = "completed";
+                return result;
             }
-        }
-
-        try
-        {
-            var scan = RescanAndUpdateIndex();
-            return new SkillSyncResult.Response
-            {
-                PassId = Guid.NewGuid().ToString("N"),
-                Sources = sources,
-                Inventory = new SkillSyncResult.InventoryRow
-                {
-                    Succeeded = true,
-                    AcceptedCount = scan.AcceptedSkills.Count,
-                    RejectedCount = scan.Issues.Count,
-                },
-            };
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
+            outcome = "canceled";
             throw;
         }
-        catch (Exception ex)
+        finally
         {
-            _logger.LogWarning(ex,
-                "Skill inventory publication after server feed sync failed");
-            return new SkillSyncResult.Response
-            {
-                PassId = Guid.NewGuid().ToString("N"),
-                Sources = sources,
-                Inventory = new SkillSyncResult.InventoryRow
-                {
-                    Succeeded = false,
-                    Error = "The skill inventory refresh failed.",
-                },
-            };
+            _logger.LogInformation("External skill sync pass {Outcome}. {PassId}", outcome, passId);
         }
     }
 
@@ -549,13 +573,14 @@ internal sealed class ServerFeedSkillSyncService : BackgroundService
             // only reached with a confirmed, non-empty index, so a transient outage
             // or empty response never triggers a skill prune.
             var serverSkillNames = index.Skills.Select(e => e.Name).ToList();
-            var removedSkillCount = syncState.Skills.Keys.Count(name =>
-                !serverSkillNames.Contains(name, StringComparer.Ordinal));
-            if (SkillSyncHelpers.PruneRemovedSkills(feedDir, serverSkillNames, syncState, _logger))
+            var pruneResult = SkillSyncHelpers.PruneRemovedSkills(feedDir, serverSkillNames, syncState, _logger);
+            if (pruneResult.Changed)
             {
                 updated = true;
-                changedCount += removedSkillCount;
+                changedCount += pruneResult.RemovedCount;
             }
+
+            failedCount += pruneResult.FailedCount;
         }
 
         if (updated)

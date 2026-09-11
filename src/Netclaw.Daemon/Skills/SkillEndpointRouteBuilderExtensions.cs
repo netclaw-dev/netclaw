@@ -39,7 +39,7 @@ public static class SkillEndpointRouteBuilderExtensions
                 {
                     return TypedResults.Ok(await syncService.SyncAsync(cancellationToken));
                 }
-                catch (InvalidOperationException ex)
+                catch (SkillSyncUnavailableException ex)
                 {
                     return TypedResults.Problem(
                         statusCode: StatusCodes.Status503ServiceUnavailable,

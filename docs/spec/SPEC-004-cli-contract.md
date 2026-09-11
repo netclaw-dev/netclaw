@@ -122,8 +122,11 @@ CLI -> print the result -> exit 0 or 1
 ```
 
 The client has no fixed HTTP timeout for this operation. Existing source timeouts still apply.
+The CLI prints a wait notice before it sends the request. The notice explains Ctrl+C.
 Ctrl+C cancels the CLI wait. It does not cancel the shared pass.
 Daemon shutdown closes admission and cancels that pass. A joined HTTP request then receives HTTP 503.
+If the host shutdown budget expires, the service logs a warning and returns control to the host.
+The pass retains its lifetime token until it completes, even after that timeout.
 An interval of zero disables periodic checks. Startup and manual checks remain available.
 
 | Result | Command behavior |
@@ -134,12 +137,19 @@ An interval of zero disables periodic checks. Startup and manual checks remain a
 | An advertised sidecar page is missing or malformed | Report failure; retain existing managed agents |
 | The final inventory refresh fails | Exit 1, even if all downloads succeed |
 | The daemon predates the endpoint | Exit 1; request a daemon restart |
+| The daemon returns HTTP 503 | Exit 1; report that the daemon cannot run the pass now |
+| The daemon returns another HTTP error | Exit 1; report the status code, distinct from a connection failure |
 
 The response includes one pass ID, per-source counts, sidecar status, and the final inventory result.
+The service assigns the pass ID before source work and includes it in its start and completion logs.
+The response contains no derived overall success field. The CLI computes its exit code from the source and inventory results.
 Overlapping callers receive the same pass ID. Source errors in this response do not include credentials or remote response bodies.
 Inventory rejection counts can include pre-existing source conflicts. They do not make a completed inventory refresh fail.
 This command does not add a transaction across feed files, the registry, and the prompt index.
 It preserves the existing per-skill replacement and prune rules.
+For a prune, the changed count includes each obsolete skill once if its receipt or owned directory is removed.
+A missing directory does not prevent receipt removal. An orphan directory can count without a receipt.
+A directory deletion failure increments the failure count. The result can report both a removed receipt and a failed directory deletion.
 
 For example, a healthy feed can update while another feed returns HTTP 500. The command reports both results and exits 1.
 A rejected skill retains its prior bytes and receipt. Other accepted skills from that feed can still update.

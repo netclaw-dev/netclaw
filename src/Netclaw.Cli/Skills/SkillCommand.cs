@@ -185,6 +185,7 @@ internal static class SkillCommand
             SkillSyncResult.Response? result;
             try
             {
+                output.WriteLine("Waiting for the daemon's skill sync pass. Press Ctrl+C to stop this wait.");
                 result = await daemonApi.SyncSkillsAsync(cancellation.Token);
             }
             finally
@@ -216,12 +217,25 @@ internal static class SkillCommand
                 : "Inventory: failed");
             if (!string.IsNullOrWhiteSpace(result.Inventory.Error))
                 output.WriteLine($"  Error: {result.Inventory.Error}");
-            return result.Succeeded ? 0 : 1;
+            return result.Inventory.Succeeded
+                && result.Sources.All(static source => source.FailedCount == 0 && source.RejectedCount == 0)
+                ? 0 : 1;
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
             output.WriteLine($"Skill sync unavailable: the daemon at {daemonApi.Endpoint} does not serve /api/skills/sync yet.");
             output.WriteLine("Restart the daemon so it matches this CLI version.");
+            return 1;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.ServiceUnavailable)
+        {
+            output.WriteLine($"Skill sync unavailable: the daemon at {daemonApi.Endpoint} cannot run the pass now (HTTP 503).");
+            output.WriteLine("Check the daemon status and retry after it starts.");
+            return 1;
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode is not null)
+        {
+            output.WriteLine($"Skill sync failed: the daemon at {daemonApi.Endpoint} returned HTTP {(int)ex.StatusCode}.");
             return 1;
         }
         catch (HttpRequestException ex)

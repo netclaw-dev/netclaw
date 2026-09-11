@@ -50,3 +50,8 @@ No restart is needed for supported mutations.
 `netclaw skill sync` uses the daemon's configured sources. It cannot add a
 source or write configuration. The command waits for the shared daemon pass.
 If its wait is canceled, the daemon can still finish that pass.
+The CLI prints a wait notice before it sends the request. Ctrl+C stops only the CLI wait.
+HTTP 503 means the daemon cannot run the pass now. Check its status before a retry.
+Use the reported pass ID to find the same pass in the daemon logs.
+The changed count includes obsolete receipts and orphan skill directories that the daemon removes.
+Each removed skill counts once. A directory deletion failure also appears in the failure count.

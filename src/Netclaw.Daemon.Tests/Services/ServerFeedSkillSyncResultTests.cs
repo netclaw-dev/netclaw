@@ -62,7 +62,6 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         Assert.Equal(1, source.RejectedCount);
         Assert.Equal(0, source.FailedCount);
         Assert.Equal("absent", source.Sidecar);
-        Assert.False(result.Succeeded);
         Assert.True(result.Inventory.Succeeded);
         Assert.Equal(oldContent, File.ReadAllText(oldPath));
         Assert.NotNull(_registry.GetByName("healthy"));
@@ -70,6 +69,32 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
             File.ReadAllText(_paths.ServerFeedSyncStatePath("team")))!;
         Assert.Equal("1.0.0", state.Skills["blocked"].Version);
         Assert.Equal("2.0.0", state.Skills["healthy"].Version);
+    }
+
+    [Fact]
+    public async Task Prune_counts_owned_orphans_and_missing_receipts_in_the_source_result()
+    {
+        var orphanDir = Path.Join(_paths.ServerFeedDirectory("team"), "orphan");
+        Directory.CreateDirectory(orphanDir);
+        File.WriteAllText(Path.Join(orphanDir, "SKILL.md"), SkillMarkdown("orphan", "Old body."));
+        SkillSyncHelpers.WriteSyncState(_paths.ServerFeedSyncStatePath("team"), new SkillSyncState
+        {
+            Skills = { ["missing"] = new SyncedSkillState { Version = "1.0.0", Sha256 = "old" } },
+        });
+
+        var handler = new FakeHttpMessageHandler();
+        AddSkills(handler, ("healthy", "Accepted body."));
+        using var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
+        var result = await RunAsync(service);
+
+        var source = Assert.Single(result.Sources);
+        Assert.Equal(3, source.ChangedCount);
+        Assert.Equal(0, source.FailedCount);
+        Assert.False(Directory.Exists(orphanDir));
+        var state = JsonSerializer.Deserialize<SkillSyncState>(
+            File.ReadAllText(_paths.ServerFeedSyncStatePath("team")))!;
+        Assert.Equal(["healthy"], state.Skills.Keys.OrderBy(name => name));
+        Assert.NotNull(_registry.GetByName("healthy"));
     }
 
     [Theory]
@@ -102,7 +127,6 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         Assert.Equal("failed", source.Sidecar);
         Assert.Equal(1, source.FailedCount);
         Assert.Equal(1, source.ChangedCount);
-        Assert.False(result.Succeeded);
         Assert.Equal("Existing managed agent.", File.ReadAllText(agentPath));
         Assert.Equal(stateBefore, File.ReadAllBytes(_paths.ServerFeedAgentSyncStatePath("team")));
         Assert.NotNull(_registry.GetByName("healthy"));
@@ -126,7 +150,6 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         Assert.Equal(0, Assert.Single(result.Sources).FailedCount);
         Assert.False(result.Inventory.Succeeded);
         Assert.Equal("The skill inventory refresh failed.", result.Inventory.Error);
-        Assert.False(result.Succeeded);
         Assert.True(File.Exists(Path.Join(_paths.ServerFeedDirectory("team"), "healthy", "SKILL.md")));
     }
 

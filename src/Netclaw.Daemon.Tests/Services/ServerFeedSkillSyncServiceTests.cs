@@ -4,10 +4,12 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.IO.Compression;
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Skills;
@@ -64,6 +66,30 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task SyncAsync_logs_one_correlated_start_and_completion_for_joined_callers()
+    {
+        var logger = new CapturingLogger();
+        var handler = new ControlledFeedHandler(holdIndex: true);
+        var service = CreateControlledService(handler, syncIntervalMinutes: 0, logger);
+        await service.StartAsync(TestContext.Current.CancellationToken);
+        await handler.FirstIndexRequest.Task;
+
+        var first = service.SyncAsync(TestContext.Current.CancellationToken);
+        var second = service.SyncAsync(TestContext.Current.CancellationToken);
+        handler.ReleaseIndex();
+
+        var results = await Task.WhenAll(first, second);
+        var passId = results[0].PassId;
+        Assert.Equal(passId, results[1].PassId);
+        Assert.Equal(1, logger.Entries.Count(entry => entry.Message.StartsWith("External skill sync pass started.", StringComparison.Ordinal)));
+        Assert.Equal(1, logger.Entries.Count(entry => entry.Message.StartsWith("External skill sync pass completed.", StringComparison.Ordinal)));
+        Assert.All(
+            logger.Entries.Where(entry => entry.Message.StartsWith("External skill sync pass", StringComparison.Ordinal)),
+            entry => Assert.Equal(passId, entry.Fields["PassId"]));
+        await service.StopAsync(TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task SyncAsync_canceled_wait_does_not_cancel_the_shared_pass()
     {
         var handler = new ControlledFeedHandler(holdIndex: true);
@@ -90,14 +116,14 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         var handler = new ControlledFeedHandler(holdIndex: false);
         var service = CreateControlledService(handler, syncIntervalMinutes: 0);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<SkillSyncUnavailableException>(
             () => service.SyncAsync(TestContext.Current.CancellationToken));
 
         await service.StartAsync(TestContext.Current.CancellationToken);
         await service.SyncAsync(TestContext.Current.CancellationToken);
         await service.StopAsync(TestContext.Current.CancellationToken);
 
-        await Assert.ThrowsAsync<InvalidOperationException>(
+        await Assert.ThrowsAsync<SkillSyncUnavailableException>(
             () => service.SyncAsync(TestContext.Current.CancellationToken));
     }
 
@@ -145,7 +171,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             await scanner.Exited.Task.WaitAsync(ct);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manual);
             await service.ExecuteTask!.WaitAsync(ct);
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.SyncAsync(ct));
+            await Assert.ThrowsAsync<SkillSyncUnavailableException>(() => service.SyncAsync(ct));
             Assert.False(File.Exists(_paths.ServerFeedSyncStatePath("team")));
             Assert.Empty(_skillRegistry.GetAll());
         }
@@ -156,11 +182,12 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task StopAsync_timeout_keeps_pass_token_valid_until_scanner_exits()
+    public async Task StopAsync_shutdown_timeout_logs_and_keeps_pass_token_valid_until_scanner_exits()
     {
         var ct = TestContext.Current.CancellationToken;
         var scanner = new LifetimeScanner(blockOnScan: 1, observeCancellation: false);
-        using var service = CreateLifecycleService(scanner, new FakeTimeProvider(), intervalMinutes: 0);
+        var logger = new CapturingLogger();
+        using var service = CreateLifecycleService(scanner, new FakeTimeProvider(), intervalMinutes: 0, logger);
         await service.StartAsync(ct);
         await scanner.Blocked.Task.WaitAsync(ct);
         var manual = service.SyncAsync(ct);
@@ -170,18 +197,22 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         {
             var stop = service.StopAsync(stopBudget.Token);
             stopBudget.Cancel();
-            await Assert.ThrowsAnyAsync<OperationCanceledException>(() => stop);
+            await stop;
 
             Assert.False(manual.IsCompleted);
+            Assert.Contains(logger.Messages, message => message == "Host shutdown timed out while an external skill sync pass was still active.");
             // The fake delays cancellation acknowledgment. Its token must remain valid until it exits.
             Assert.True(scanner.LifetimeToken.WaitHandle.WaitOne(0));
             service.Dispose();
             Assert.True(scanner.LifetimeToken.WaitHandle.WaitOne(0));
-            await Assert.ThrowsAsync<InvalidOperationException>(() => service.SyncAsync(ct));
+            await Assert.ThrowsAsync<SkillSyncUnavailableException>(() => service.SyncAsync(ct));
 
             scanner.Release();
             await scanner.Exited.Task.WaitAsync(ct);
             await Assert.ThrowsAnyAsync<OperationCanceledException>(() => manual);
+            var canceledPass = Assert.Single(logger.Entries, entry => entry.Fields.TryGetValue("Outcome", out var outcome)
+                && Equals(outcome, "canceled"));
+            Assert.NotNull(canceledPass.Fields["PassId"]);
             Assert.False(File.Exists(_paths.ServerFeedSyncStatePath("team")));
             Assert.Empty(_skillRegistry.GetAll());
         }
@@ -252,7 +283,6 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         var failed = Assert.Single(result.Sources, source => source.Name == "failed");
         Assert.Equal(1, failed.FailedCount);
         Assert.Equal("not-run", failed.Sidecar);
-        Assert.False(result.Succeeded);
         await service.StopAsync(TestContext.Current.CancellationToken);
     }
 
@@ -661,6 +691,23 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         ControlledFeedHandler handler,
         int syncIntervalMinutes,
         bool enabled = true)
+        => CreateControlledService(
+            handler,
+            syncIntervalMinutes,
+            enabled,
+            NullLogger<ServerFeedSkillSyncService>.Instance);
+
+    private ServerFeedSkillSyncService CreateControlledService(
+        ControlledFeedHandler handler,
+        int syncIntervalMinutes,
+        ILogger<ServerFeedSkillSyncService> logger)
+        => CreateControlledService(handler, syncIntervalMinutes, true, logger);
+
+    private ServerFeedSkillSyncService CreateControlledService(
+        ControlledFeedHandler handler,
+        int syncIntervalMinutes,
+        bool enabled,
+        ILogger<ServerFeedSkillSyncService> logger)
     {
         var feeds = new SkillFeedsConfig
         {
@@ -676,7 +723,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             _skillIndexPublisher,
             new FakeTimeProvider(),
             new NoOpSkillContentScanner(),
-            NullLogger<ServerFeedSkillSyncService>.Instance,
+            logger,
             [],
             feed => new SkillServerClient(new HttpClient(handler)
             {
@@ -720,6 +767,26 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             }
             """,
             "application/json");
+    }
+
+    private sealed class CapturingLogger : ILogger<ServerFeedSkillSyncService>
+    {
+        public ConcurrentQueue<LogEntry> Entries { get; } = new();
+        public IEnumerable<string> Messages => Entries.Select(entry => entry.Message);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            var fields = state is IEnumerable<KeyValuePair<string, object?>> values
+                ? values.ToDictionary(value => value.Key, value => value.Value)
+                : new Dictionary<string, object?>();
+            Entries.Enqueue(new LogEntry(formatter(state, exception), fields));
+        }
+
+        public sealed record LogEntry(string Message, IReadOnlyDictionary<string, object?> Fields);
     }
 
     private sealed class ControlledFeedHandler : HttpMessageHandler
@@ -813,13 +880,38 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         LifetimeScanner scanner,
         TimeProvider timeProvider,
         int intervalMinutes)
+        => CreateLifecycleService(
+            scanner,
+            timeProvider,
+            intervalMinutes,
+            NullLogger<ServerFeedSkillSyncService>.Instance);
+
+    private ServerFeedSkillSyncService CreateLifecycleService(
+        LifetimeScanner scanner,
+        TimeProvider timeProvider,
+        int intervalMinutes,
+        ILogger<ServerFeedSkillSyncService> logger)
     {
         var feeds = new SkillFeedsConfig
         {
             SyncIntervalMinutes = intervalMinutes,
             Feeds = [new SkillFeedSource { Name = "team", Url = BaseUrl, TimeoutSeconds = 30 }],
         };
-        return CreateService(feeds, new LifecycleFeedHandler(), scanner, timeProvider);
+        var handler = new LifecycleFeedHandler();
+        return new ServerFeedSkillSyncService(
+            feeds,
+            _paths,
+            _skillRegistry,
+            _skillIndexPublisher,
+            timeProvider,
+            scanner,
+            logger,
+            [],
+            feed => new SkillServerClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri(feed.Url),
+            }),
+            TimeSpan.Zero);
     }
 
     private sealed class LifetimeScanner(int blockOnScan, bool observeCancellation) : ISkillContentScanner
