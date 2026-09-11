@@ -306,8 +306,10 @@ echo "    SMOKE_LLM_ENDPOINT=${SMOKE_LLM_ENDPOINT}"
 
 # ── 3) Ensure vhs ────────────────────────────────────────────────────────────
 
-echo "==> Ensuring vhs is installed..."
-bash "${SMOKE_SCRIPTS}/install-vhs.sh"
+if (( ${#tapes[@]} > 0 || shots_mode == 1 )); then
+  echo "==> Ensuring vhs is installed..."
+  bash "${SMOKE_SCRIPTS}/install-vhs.sh"
+fi
 
 # ── 4) Run tapes + scenarios ─────────────────────────────────────────────────
 
