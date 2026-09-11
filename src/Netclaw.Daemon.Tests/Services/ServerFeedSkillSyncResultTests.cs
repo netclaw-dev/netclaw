@@ -72,6 +72,22 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
     }
 
     [Fact]
+    public async Task Source_exception_returns_a_safe_failure_row_and_still_refreshes_inventory()
+    {
+        var handler = new FakeHttpMessageHandler(_ => throw new InvalidOperationException("Private fixture error."));
+        using var service = CreateService(handler, new NoOpSkillContentScanner(), static (_, _) => true);
+
+        var result = await RunAsync(service);
+
+        var source = Assert.Single(result.Sources);
+        Assert.Equal(1, source.FailedCount);
+        Assert.Equal("not-run", source.Sidecar);
+        Assert.Equal("The source sync failed. Existing files remain in use.", source.Error);
+        Assert.DoesNotContain("Private fixture error", JsonSerializer.Serialize(result), StringComparison.Ordinal);
+        Assert.True(result.Inventory.Succeeded);
+    }
+
+    [Fact]
     public async Task Prune_counts_owned_orphans_and_missing_receipts_in_the_source_result()
     {
         var orphanDir = Path.Join(_paths.ServerFeedDirectory("team"), "orphan");
