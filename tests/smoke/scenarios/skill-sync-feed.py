@@ -99,7 +99,10 @@ def main() -> None:
         raise SystemExit("usage: skill-sync-feed.py <phase-file>")
 
     server = FeedServer(pathlib.Path(sys.argv[1]))
-    print(f"http://127.0.0.1:{server.server_port}", flush=True)
+    print(
+        f"[skill-feed:listening] http://127.0.0.1:{server.server_port}",
+        flush=True,
+    )
     server.serve_forever()
 
 

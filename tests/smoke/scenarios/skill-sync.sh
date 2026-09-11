@@ -11,7 +11,6 @@ command -v python3 >/dev/null 2>&1 || die "python3 is required for skill-sync.sh
 
 FEED_PHASE_FILE="${NETCLAW_HOME}/skill-feed-phase"
 FEED_LOG_FILE="${NETCLAW_HOME}/skill-feed.log"
-FEED_READY_FIFO="${NETCLAW_HOME}/skill-feed-ready"
 NETCLAW_JSON="${NETCLAW_HOME}/config/netclaw.json"
 EXPECTED_CONFIG="${NETCLAW_HOME}/skill-sync.expected.json"
 RESOURCE_FILE="${NETCLAW_HOME}/skills/.server-feeds/smoke-feed/smoke-feed-skill/references/proof.txt"
@@ -23,22 +22,22 @@ cleanup() {
     kill "$FEED_PID" 2>/dev/null || true
     wait "$FEED_PID" 2>/dev/null || true
   fi
-  rm -f "$FEED_READY_FIFO"
 }
 trap cleanup EXIT
 
 printf 'A\n' >"$FEED_PHASE_FILE"
-mkfifo "$FEED_READY_FIFO"
-# Open both ends before process start so neither FIFO open can block.
-exec 9<>"$FEED_READY_FIFO"
 python3 "${SCRIPT_DIR}/skill-sync-feed.py" "$FEED_PHASE_FILE" \
-  >"$FEED_READY_FIFO" 2>"$FEED_LOG_FILE" &
+  >"$FEED_LOG_FILE" 2>&1 &
 FEED_PID=$!
-if ! read -r -t 15 FEED_URL <&9; then
-  die "the local skill feed did not publish its URL"
-fi
-exec 9>&-
-rm -f "$FEED_READY_FIFO"
+for _ in $(seq 1 100); do
+  FEED_URL="$(sed -n 's/^\[skill-feed:listening\] //p' "$FEED_LOG_FILE" | head -1)"
+  [[ -n "$FEED_URL" ]] && break
+  if ! kill -0 "$FEED_PID" 2>/dev/null; then
+    die "the local skill feed exited before it published its URL"
+  fi
+  sleep 0.1
+done
+[[ -n "${FEED_URL:-}" ]] || die "the local skill feed did not publish its URL"
 run_timed 15 curl --retry 100 --retry-delay 0 --retry-max-time 10 \
   -fsS "${FEED_URL}/health" >/dev/null || die "the local skill feed did not become ready"
 
