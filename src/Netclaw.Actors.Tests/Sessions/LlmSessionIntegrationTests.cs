@@ -851,8 +851,10 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.DoesNotContain("browser_chrome_devtools__navigate_page", _fakeChatClient.ReceivedToolNames[0]);
     }
 
-    [Fact]
-    public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution(bool violatesTextOnly)
     {
         var diagnostics = CreateTestProbe();
         Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
@@ -864,6 +866,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 new Dictionary<string, object?> { ["query"] = "browser" })
         ];
         _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeChatClient.IgnoreToolAvailability = violatesTextOnly;
         _fakeToolExecutor.Results["search_tools"] = "same result";
 
         var sessionId = new SessionId("channel-cycle/exact-stop");
@@ -893,9 +896,19 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
                 cancellationToken: TestContext.Current.CancellationToken));
         }
 
-        await subscriber.ExpectMsgAsync<TextOutput>(
-            TimeSpan.FromSeconds(5),
-            cancellationToken: TestContext.Current.CancellationToken);
+        if (violatesTextOnly)
+        {
+            var error = await subscriber.ExpectMsgAsync<ErrorOutput>(
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+            Assert.Contains("required text only", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("used all available tool iterations", error.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            await subscriber.ExpectMsgAsync<TextOutput>(
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        }
         await subscriber.ExpectMsgAsync<TurnCompleted>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);

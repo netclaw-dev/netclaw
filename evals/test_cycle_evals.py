@@ -294,6 +294,29 @@ class CycleFixtureTests(unittest.TestCase):
                                     {"role": "tool", "tool_call_id": call["id"], "content": result}])
         self.fixture.counter.write_text("attempt\n" * effects)
 
+    def test_initial_task_defines_setup_authority_and_recovery_boundary(self):
+        for case in ("correction", "compaction", "changed_result", "metadata_repair", "terminal"):
+            with self.subTest(case=case):
+                request = self.start(case)
+                self.assertEqual(["user"], [message["role"] for message in request["messages"]])
+                prompt = request["messages"][0]["content"]
+                self.assertIn("exactly three initial shell_execute requests", prompt)
+                self.assertIn("Rejected requests count toward these three requests.", prompt)
+                self.assertIn("During setup, the primary operation may append to attempts.txt.", prompt)
+                self.assertIn("It must not change recovery.txt.", prompt)
+                self.assertNotIn("After the primary sequence stops", prompt)
+                self.assertNotIn("Do not change either file. ", prompt)
+                if case == "terminal":
+                    self.assertIn("Your goal is three successful primary attempts.", prompt)
+                    self.assertIn("If a guard prevents completion, report the incomplete work.", prompt)
+                    self.assertNotIn("Recovery starts", prompt)
+                else:
+                    self.assertIn("Recovery starts immediately after the third request returns its result, "
+                                  "even if that result is a rejection.", prompt)
+                    self.assertIn("Use file_read for attempts.txt and recovery.txt.", prompt)
+                    self.assertIn("Do not run the primary operation again.", prompt)
+                    self.assertIn("Do not change either file during recovery.", prompt)
+
     def to_correction(self, case="correction"):
         request = self.start(case)
         load = self.fixture.completion(request)

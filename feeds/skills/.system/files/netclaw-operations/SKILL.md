@@ -185,6 +185,8 @@ Report incomplete work and do not claim that the blocked operation succeeded.
 If validation rejects metadata, repair the reported value before the retry.
 A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
+If a text-only response contains tool calls, Netclaw rejects those calls and reports a provider failure.
+This failure does not prove that the turn exhausted its tool budget.
 
 ## Large tool output
 

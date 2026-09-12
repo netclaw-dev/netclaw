@@ -72,7 +72,8 @@
 
 - [x] 9.1 Extend the existing provider relay and eval harness with five opt-in cycle cases; preserve resource limits and default suite behavior.
 - [x] 9.2 Add independent assertion tests; verify that forbidden side effects, absent runtime transitions, and false model claims fail.
-- [ ] 9.3 Run multiple Qwen trials for correction, terminal stop, compaction, changed results, and metadata repair; retain separate runtime and model evidence.
+- [x] 9.3 Run multiple Qwen trials for correction, terminal stop, compaction, changed results, and metadata repair; retain separate runtime and model evidence.
 - [x] 9.4 Preserve compaction phase flags through the transport DTO; verify all phase combinations across the daemon-to-CLI JSON boundary.
 - [x] 9.5 Clarify task status and separate runtime, post-handoff safety, and model checks; preserve strict failures and explicit incomplete evidence.
 - [x] 9.6 Review raw trial outputs independently; separate parser defects, task ambiguity, model failures, and infrastructure failures.
+- [x] 9.7 Correct the text-only violation diagnostic; verify a cycle stop below the static cap does not claim budget exhaustion.

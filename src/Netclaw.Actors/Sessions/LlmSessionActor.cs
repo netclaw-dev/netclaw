@@ -116,9 +116,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
     private readonly TurnStateTracker _turnState = new();
 
-    private const string ToolBudgetExhaustedMessage =
-        "I used all available tool iterations for this turn and couldn't produce a final summary. "
-        + "You can ask me to summarize what was done, or rephrase your request.";
+    private const string TextOnlyResponseViolationMessage =
+        "Netclaw rejected tool calls from a response that required text only. "
+        + "No call from that response executed.";
 
     // Delivery retry handler (eligibility tracking, retry counting, nudge builders)
     private readonly DeliveryRetryHandler _deliveryRetry = new();
@@ -772,7 +772,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _turnState.ToolCallCount,
                 _config.MaxToolIterationsPerTurn);
             FailCurrentTurn(
-                ToolBudgetExhaustedMessage,
+                TextOnlyResponseViolationMessage,
                 new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
                 ErrorCategory.ProviderFailure);
             return;
