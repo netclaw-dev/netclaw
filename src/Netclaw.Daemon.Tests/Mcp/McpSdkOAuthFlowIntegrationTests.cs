@@ -88,6 +88,23 @@ public sealed class McpSdkOAuthFlowIntegrationTests
     }
 
     [Fact]
+    public async Task ManagerExplicitAuthorization_RequestsJsonFromNegotiatedTokenEndpoint()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var server = await FakeOAuthMcpServer.StartAsync(
+            ct,
+            negotiateTokenResponseWithAccept: true);
+        using var directory = new DisposableTempDir();
+        await using var harness = CreateManagerHarness(server, directory.Path);
+
+        await CompleteManagerAuthorizationAsync(server, harness, ct);
+
+        var tokenRequest = Assert.Single(server.TokenRequests);
+        Assert.True(tokenRequest.AcceptsJson);
+        Assert.Equal(McpConnectionState.Connected, harness.Manager.GetServerStatuses()[harness.ServerName].State);
+    }
+
+    [Fact]
     public async Task ExplicitAuthorizationGivesTheOperatorTimeToFinishInTheBrowser()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -968,14 +985,16 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             bool requireOAuth = true,
             string? acceptedBearer = null,
             bool rejectDcrWithoutBody = false,
-            string? dcrRejectionBody = null)
+            string? dcrRejectionBody = null,
+            bool negotiateTokenResponseWithAccept = false)
         {
             var origin = new Uri("https://oauth-mcp.test");
             var state = new FakeOAuthMcpServerState(
                 origin,
                 requireOAuth,
                 rejectDcrWithoutBody,
-                dcrRejectionBody);
+                dcrRejectionBody,
+                negotiateTokenResponseWithAccept);
             if (acceptedBearer is not null)
                 state.AcceptBearer(acceptedBearer);
             var builder = WebApplication.CreateBuilder();
@@ -1117,12 +1136,14 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             Uri origin,
             bool requireOAuth,
             bool rejectDcrWithoutBody,
-            string? dcrRejectionBody)
+            string? dcrRejectionBody,
+            bool negotiateTokenResponseWithAccept)
         {
             Origin = origin;
             RequireOAuth = requireOAuth;
             RejectDcrWithoutBody = rejectDcrWithoutBody;
             DcrRejectionBody = dcrRejectionBody;
+            NegotiateTokenResponseWithAccept = negotiateTokenResponseWithAccept;
             McpEndpoint = new Uri(origin, "/mcp");
             ProtectedResourceMetadataEndpoint = new Uri(origin, "/.well-known/oauth-protected-resource/mcp");
             AuthorizationEndpoint = new Uri(origin, "/oauth/authorize");
@@ -1137,6 +1158,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         private bool RejectDcrWithoutBody { get; }
 
         private string? DcrRejectionBody { get; }
+
+        private bool NegotiateTokenResponseWithAccept { get; }
 
         public Uri McpEndpoint { get; }
 
@@ -1302,6 +1325,9 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             if (!string.Equals(clientSecret, client.ClientSecret, StringComparison.Ordinal))
                 return Results.BadRequest("Invalid client_secret.");
 
+            var acceptsJson = context.Request.Headers.Accept.ToString()
+                .Contains("application/json", StringComparison.OrdinalIgnoreCase);
+
             var redirectUri = form["redirect_uri"].ToString();
             var codeVerifier = form["code_verifier"].ToString();
             var pkceVerified = string.Equals(
@@ -1321,7 +1347,8 @@ public sealed class McpSdkOAuthFlowIntegrationTests
                 Resource: form["resource"].ToString(),
                 PkceVerified: pkceVerified,
                 IssuedAccessToken: issuedAccessToken,
-                IssuedRefreshToken: issuedRefreshToken);
+                IssuedRefreshToken: issuedRefreshToken,
+                AcceptsJson: acceptsJson);
             _tokenRequests.Enqueue(observation);
 
             if (!string.Equals(clientId, authorizationCode.ClientId, StringComparison.Ordinal)
@@ -1337,6 +1364,14 @@ public sealed class McpSdkOAuthFlowIntegrationTests
 
             _acceptedAccessTokens[issuedAccessToken] = 0;
             _refreshTokens[issuedRefreshToken] = clientId;
+            if (NegotiateTokenResponseWithAccept && !acceptsJson)
+            {
+                return Results.Text(
+                    $"access_token={issuedAccessToken}&refresh_token={issuedRefreshToken}" +
+                    $"&token_type=Bearer&expires_in=3600&scope={Uri.EscapeDataString(authorizationCode.Scope ?? string.Empty)}",
+                    "application/x-www-form-urlencoded");
+            }
+
             return Results.Json(new
             {
                 access_token = issuedAccessToken,
@@ -1515,5 +1550,6 @@ public sealed class McpSdkOAuthFlowIntegrationTests
         string Resource,
         bool PkceVerified,
         string IssuedAccessToken,
-        string IssuedRefreshToken);
+        string IssuedRefreshToken,
+        bool AcceptsJson);
 }

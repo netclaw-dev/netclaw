@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.74.3"
+  version: "2.74.4"
 ---
 
 # Netclaw Operations
@@ -234,6 +234,10 @@ presents the authorization URL, brokers the browser callback, and durably stores
 active credentials. Do not fetch metadata or token endpoints by hand, build PKCE
 requests, or create or repair `mcp-oauth-metadata.json`; legacy metadata files
 are ignored.
+
+Netclaw requests JSON token responses from providers that negotiate the response
+format, including GitHub. This request keeps the response compatible with the
+MCP SDK token decoder.
 
 Netclaw registers rather than letting the SDK do it because the SDK hard-codes
 `token_endpoint_auth_method: "client_secret_post"` and ignores what the
