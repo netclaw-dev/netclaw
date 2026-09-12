@@ -9,6 +9,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord;
 using Netclaw.Channels.Mattermost;
+using Netclaw.Channels.Telegram;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Configuration;
@@ -354,6 +355,9 @@ internal sealed class SendChannelMessageTool(IChannelRegistry registry) : IChann
             ChannelType.Discord => (addressKind == ChannelAddressKind.Destination || addressKind == ChannelAddressKind.DirectMessage)
                                    && IsDiscordSnowflake(stableId),
             ChannelType.Mattermost => IsMattermostId(stableId),
+            ChannelType.Telegram => (addressKind == ChannelAddressKind.Destination
+                                     || addressKind == ChannelAddressKind.DirectMessage)
+                                    && TelegramAddressResolver.IsTelegramId(stableId),
             _ => false
         };
 

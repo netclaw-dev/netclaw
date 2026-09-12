@@ -17,4 +17,5 @@ internal static class WizardStepIds
     public const string Slack = "slack";
     public const string Discord = "discord";
     public const string Mattermost = "mattermost";
+    public const string Telegram = "telegram";
 }
