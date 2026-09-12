@@ -6,7 +6,7 @@
 - [x] 1.4 Add fixed-seed property checks for at least 10,000 sequences; verify canonicalization, reset, result-change, and six-entry-bound properties pass twice with equal output.
 - [ ] 1.5 Run a private extractor against the known incident and representative long successful sessions; verify the third repeated action blocks and no confirmed false execution block exists.
 - [ ] 1.6 Inspect the extractor output for private data; verify it contains aggregate counts and ordinals only, then keep all laboratory and replay files untracked.
-- [ ] 1.7 Run both synthetic direct-model probe paths for multiple trials; verify the model changes action or reaches a truthful text-only stop.
+- [ ] 1.7 Run both synthetic model probe paths through the existing eval harness for multiple trials; verify action recovery or a truthful text-only stop.
 
 ## 2. Adjacent Contract Repairs
 
@@ -67,3 +67,9 @@
 - [x] 8.2 Reset state at all genuine buffered user-input boundaries; verify overflow replay alone preserves the guard and old budget decisions do not stop new input.
 - [x] 8.3 Remove session context and actor paths from detector diagnostics; verify complete parent and child events contain only aggregate detector data.
 - [ ] 8.4 Push the fixes, check CI, and obtain an independent re-review; keep runtime acceptance gates distinct from code verification.
+
+## 9. Tool Cycle Eval Cases
+
+- [x] 9.1 Extend the existing provider relay and eval harness with five opt-in cycle cases; preserve resource limits and default suite behavior.
+- [x] 9.2 Add independent assertion tests; verify that forbidden side effects, absent runtime transitions, and false model claims fail.
+- [ ] 9.3 Run multiple Qwen trials for correction, terminal stop, compaction, changed results, and metadata repair; retain separate runtime and model evidence.

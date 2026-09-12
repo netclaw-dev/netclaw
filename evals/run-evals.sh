@@ -25,7 +25,7 @@
 #   Container + runtime:
 #     NETCLAW_IMAGE              Image ref (default: ghcr.io/netclaw-dev/netclaw:dev — built locally)
 #     NETCLAW_EVAL_PORT          Host-side port for the eval daemon (default 5299)
-#     NETCLAW_EVAL_CONTEXT_WINDOW  Override model context window (future compaction evals)
+#     NETCLAW_EVAL_CONTEXT_WINDOW  Override Models:Main:ContextWindow
 #
 #   Build:
 #     NETCLAW_EVAL_NO_BUILD      Set to 1 to skip `dotnet publish` + `docker build`
@@ -212,6 +212,10 @@ cleanup_eval_env() {
     # Container is launched with --rm, so `docker stop` also removes it.
     if [[ -n "${EVAL_CONTAINER_NAME:-}" ]]; then
         docker stop "$EVAL_CONTAINER_NAME" >/dev/null 2>&1 || true
+    fi
+    if [[ -n "${CYCLE_FIXTURE_PID_SAVED:-}" ]]; then
+        kill "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
+        wait "$CYCLE_FIXTURE_PID_SAVED" 2>/dev/null || true
     fi
     # TMPDIR_EVAL only holds host-owned per-prompt stdout/stderr captures, so a
     # plain rm always succeeds — no force_rmrf fallback needed.
@@ -579,7 +583,7 @@ start_eval_daemon() {
     fi
 
     if [[ -n "$EVAL_CONTEXT_WINDOW" ]]; then
-        docker_args+=(-e "NETCLAW_Models__Main__ContextWindowTokens=$EVAL_CONTEXT_WINDOW")
+        docker_args+=(-e "NETCLAW_Models__Main__ContextWindow=$EVAL_CONTEXT_WINDOW")
     fi
 
     docker_args+=("$NETCLAW_IMAGE")
@@ -1212,12 +1216,16 @@ stdout_json_headless_log_path() {
 }
 
 stdout_json_session_actor_log_path() {
-    local session_id session_segment log_path
+    local session_id sql_id log_path
     session_id=$(jq -r '.sessionId // empty' "$STDOUT_FILE")
     [[ -n "$session_id" ]] || return 1
 
-    session_segment="${session_id//\//_}"
-    log_path="$EVAL_HOME/data/sessions/$session_segment/logs/session.log"
+    # Use the catalog path. The session ID no longer defines the storage directory.
+    sql_id="${session_id//\'/\'\'}"
+    log_path=$(sqlite3 -readonly "$EVAL_HOME/data/netclaw.db" \
+        "SELECT log_path FROM sessions WHERE persistence_id = 'session-$sql_id';") || return 1
+    [[ "$log_path" == /home/netclaw/.netclaw/* ]] || return 1
+    log_path="$EVAL_HOME/data/${log_path#/home/netclaw/.netclaw/}"
     [[ -f "$log_path" ]] || return 1
     printf '%s\n' "$log_path"
 }
@@ -2671,6 +2679,7 @@ run_case() {
 
         local rendered_prompt="$prompt"
         rendered_prompt="${rendered_prompt//\{\{MANAGED_WORKTREE_BRANCH\}\}/${MANAGED_WORKTREE_BRANCH:-}}"
+        rendered_prompt="${rendered_prompt//\{\{CYCLE_PROMPT\}\}/${CYCLE_PROMPT:-}}"
         run_prompt "$rendered_prompt" "$output_format"
 
         local passed=0
@@ -3162,6 +3171,12 @@ main() {
 
     NETCLAW_VER=$("$NETCLAW_BIN" --version 2>/dev/null | head -1 || echo "unknown")
 
+    local cycle_cases=false
+    if [[ "$FILTER_CASE" == tool_cycle_* || "${FILTER_CATEGORY,,}" == "tool cycles" ]]; then
+        source "$REPO_ROOT/evals/cycle_evals.sh"
+        start_cycle_fixture
+        cycle_cases=true
+    fi
     start_eval_daemon
     init_db
     seed_eval_memories
@@ -3182,7 +3197,11 @@ main() {
     echo "Started:   $STARTED_AT"
     echo "Daemon log: $DAEMON_LOG"
 
-    run_all
+    if [[ "$cycle_cases" == true ]]; then
+        run_cycle_cases
+    else
+        run_all
+    fi
 
     finalize_db
 

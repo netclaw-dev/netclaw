@@ -284,11 +284,24 @@ missed_blocks=<count>
 first_known_loop_blocked_before_execution=<true|false>
 ```
 
-A separate disposable console will probe the target model with synthetic tools.
-One path will allow another tool after correction. One path will force text only.
+The existing eval harness will probe the target model through its provider relay.
+The relay will create repeat requests with fresh call IDs. The real daemon will
+execute tools and own each correction or terminal stop.
 
-The model probe will measure correction quality. It will not decide detector
-correctness.
+One path will allow another tool after correction. One path will force text only.
+The relay will pass control to the target model only after the daemon intervenes.
+An external counter will verify that the third side effect does not occur.
+
+A third case will force normal compaction through synthetic provider token usage.
+It will require a real compaction completion between the first two executions.
+Two controls will verify that changed results and valid metadata repairs permit work.
+
+These opt-in cases will reuse `evals/run-evals.sh`, its isolated daemon, and its
+result archive. See [the eval recipe](../../../evals/README.md#tool-cycle-cases).
+They will preserve production resource limits and use synthetic data only.
+
+The model probe will measure correction quality in the parent actor. It will not
+replace deterministic detector tests, child actor tests, private replay, or observe-only evidence.
 
 Alternative: start with actor integration tests. They add infrastructure noise
 before the pure comparison contract is stable.

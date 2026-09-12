@@ -121,6 +121,62 @@ This means `memory_checkpoint_enqueue` is the case to watch for automatic memory
 formation regressions, while `memory_identity_preference_routing` and
 `memory_explicit_store` cover user-facing routing behavior.
 
+### Tool Cycle Cases
+
+The cycle cases use the existing harness and provider relay. They require an
+OpenAI-compatible endpoint with a `/v1` API base. The default suite excludes them.
+Select the category or one `tool_cycle_*` case explicitly.
+The cases require Docker, Bash, Python 3, jq, and sqlite3.
+
+```bash
+NETCLAW_EVAL_PROVIDER_TYPE=openai-compatible \
+NETCLAW_EVAL_PROVIDER_ENDPOINT=http://your-model-server:8000/v1 \
+NETCLAW_EVAL_MODEL_ID=your-model \
+NETCLAW_EVAL_CATEGORY='Tool cycles' \
+NETCLAW_EVAL_RUNS=5 \
+NETCLAW_EVAL_TIMEOUT=180 \
+  ./evals/run-evals.sh
+```
+
+| Case | Required evidence |
+|------|-------------------|
+| `tool_cycle_correction` | The third request receives a runtime correction. The model uses `file_read` to complete an alternative. |
+| `tool_cycle_terminal` | The repeated blocked request causes a text-only call. The model reports incomplete work and two completed executions. |
+| `tool_cycle_compaction` | Normal compaction completes between executions one and two. The third request receives a correction. The model completes an alternative. |
+| `tool_cycle_changed_result` | The same command returns a different result each time. All three executions complete. |
+| `tool_cycle_metadata_repair` | Two requests lack required metadata. The corrected request executes once without a cycle correction. |
+
+The relay scripts only the initial tool requests. Each request has a fresh call ID.
+The real daemon executes tools and emits the intervention. The target model then
+controls the response and any alternative tool use. The fixture never supplies a
+successful final answer.
+
+Each trial uses synthetic files in the isolated workspace. A separate counter
+checks actual side effects. Strict assertions require paired runtime results,
+the expected tool exposure, a real alternative result, and an accurate JSON report.
+Every trial must pass. The category fixes the pass threshold at 100 percent.
+
+The compaction case reports synthetic token usage above the normal threshold.
+The real daemon must complete compaction and reduce history before the second
+execution. The isolated config retains one recent tool result and disables title
+requests. Production config and resource limits do not change.
+
+The relay permits at most eight main model requests and eight compaction requests
+per trial. The common prompt timeout also applies. The relay accepts a plain API
+key through the existing environment variable. It does not accept encrypted keys.
+
+The common archive includes a synthetic relay snapshot and an assertion report.
+These cases cover the parent actor. They do not replace child actor tests,
+private incident replay, or observe-only acceptance evidence.
+
+Run the assertion tests without a model:
+
+```bash
+python3 -m unittest discover -s evals -p 'test_*evals.py' -v
+bash -n evals/run-evals.sh
+bash -n evals/cycle_evals.sh
+```
+
 ## Environment Variables
 
 ### Eval target (required)
@@ -142,7 +198,7 @@ the missing values. In non-interactive contexts it fails loudly.
 |----------|---------|-------------|
 | `NETCLAW_EVAL_FALLBACK_MODEL_ID` | `NETCLAW_EVAL_MODEL_ID` | Fallback model id |
 | `NETCLAW_EVAL_COMPACTION_MODEL_ID` | `NETCLAW_EVAL_MODEL_ID` | Compaction model id |
-| `NETCLAW_EVAL_CONTEXT_WINDOW` | — | Override `Models:Main:ContextWindowTokens` — useful for triggering compaction in future eval cases |
+| `NETCLAW_EVAL_CONTEXT_WINDOW` | — | Override `Models:Main:ContextWindow`. Cycle cases use 65536 by default. |
 | `NETCLAW_EVAL_DISABLE_THINKING` | `false` | Disable provider reasoning for a focused tool-use eval. |
 
 ### Container + runtime (optional)

@@ -228,11 +228,15 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v7
-      - name: Check background eval assertions and fixture protocol
+      - name: Install eval assertion dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq sqlite3
+      - name: Check eval assertions and fixture protocol
         run: |
           bash -n evals/run-evals.sh
           bash -n evals/run-background-evals.sh
+          bash -n evals/cycle_evals.sh
           python3 -m unittest discover -s evals -p test_background_evals.py -v
+          python3 -m unittest discover -s evals -p test_cycle_evals.py -v
 
   semver-conformance:
     name: SemVer Conformance
