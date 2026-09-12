@@ -269,6 +269,17 @@ public sealed class HeadlessChannel : IChannel
                 Log(log, $"USAGE: in={msg.InputTokens} out={msg.OutputTokens} total={msg.TotalTokens} cached={msg.CachedInputTokens} reasoning={msg.ReasoningTokens} context_window={msg.ContextWindowTokens} prompt_ms={msg.PromptMs} predicted_tok_s={msg.PredictedPerSecond}");
                 break;
 
+            case ErrorOutput { IsProtocolDiagnostic: true } msg:
+                // The client could not read a daemon wire message (unknown
+                // output type). This is not a turn result, so it must never
+                // reach stdout — json mode stdout carries only the envelope.
+                // It still must not go silent: stderr, the session log, and
+                // the structured logger all see it.
+                _logger.LogWarning("Daemon protocol diagnostic: {Message}", msg.Message);
+                Console.Error.WriteLine($"[diagnostic] {msg.Message}");
+                Log(log, $"DIAGNOSTIC: {msg.Message}");
+                break;
+
             case ErrorOutput msg:
                 Console.Error.WriteLine($"[error] {msg.Message}");
                 Log(log, $"ERROR: {msg.Message}");

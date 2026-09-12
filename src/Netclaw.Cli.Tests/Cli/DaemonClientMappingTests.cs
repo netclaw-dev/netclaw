@@ -92,6 +92,43 @@ public sealed class DaemonClientMappingTests
     }
 
     [Fact]
+    public void FromDto_unknown_type_flags_a_protocol_diagnostic_not_a_session_error()
+    {
+        // A daemon and CLI on different builds can disagree on the output
+        // type set (for example a newer daemon that streams "tool_activity").
+        // The mapper must mark this a client read failure, not session
+        // output, so a channel adapter never reports it as a turn error.
+        var dto = new SessionOutputDto
+        {
+            Type = "tool_activity",
+            SessionId = "signalr/test",
+            TimestampMs = 123
+        };
+
+        var output = DaemonClient.FromDto(dto);
+
+        var error = Assert.IsType<ErrorOutput>(output);
+        Assert.True(error.IsProtocolDiagnostic);
+    }
+
+    [Fact]
+    public void FromDto_daemon_error_output_is_not_a_protocol_diagnostic()
+    {
+        var dto = new SessionOutputDto
+        {
+            Type = "error",
+            SessionId = "signalr/test",
+            TimestampMs = 123,
+            ErrorMessage = "The provider returned a 500."
+        };
+
+        var output = DaemonClient.FromDto(dto);
+
+        var error = Assert.IsType<ErrorOutput>(output);
+        Assert.False(error.IsProtocolDiagnostic);
+    }
+
+    [Fact]
     public void FromDto_maps_session_joined_with_recent_messages()
     {
         var dto = new SessionOutputDto

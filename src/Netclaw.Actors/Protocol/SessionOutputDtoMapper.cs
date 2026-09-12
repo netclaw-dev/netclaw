@@ -351,11 +351,15 @@ public static class SessionOutputDtoMapper
                 IsMessy = dto.InteractionIsMessy ?? false,
                 Options = dto.InteractionOptions ?? []
             },
+            // The client build does not know dto.Type. This is a protocol
+            // read failure, not a session error — flag it so a channel
+            // adapter keeps it off any machine-readable result envelope.
             _ => new ErrorOutput
             {
                 SessionId = sessionId,
                 TimestampMs = dto.TimestampMs,
-                Message = $"Unknown output type from daemon: {dto.Type}"
+                Message = $"Unknown output type from daemon: {dto.Type}",
+                IsProtocolDiagnostic = true
             }
             };
     }
