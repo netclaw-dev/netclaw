@@ -52,6 +52,13 @@ public sealed class SessionConfigDefaultsTests
     }
 
     [Fact]
+    public void Timeout_resume_retry_budget_defaults_to_2()
+    {
+        var tuning = new SessionTuning();
+        Assert.Equal(2, tuning.TimeoutResumeRetryBudget);
+    }
+
+    [Fact]
     public void BindFromConfiguration_supports_legacy_root_level_tuning_keys()
     {
         var config = new ConfigurationBuilder()
@@ -86,5 +93,27 @@ public sealed class SessionConfigDefaultsTests
         var bound = SessionConfig.BindFromConfiguration(config.GetSection("Session"));
 
         Assert.Equal(0.8, bound.Tuning.CompactionThreshold);
+    }
+
+    /// <summary>
+    /// Cross-Boundary Contract Rule round-trip: the config-file shape a user would
+    /// write (validated against netclaw-config.v1.schema.json — see
+    /// ConfigSchemaDoctorCheckTests.ReturnsPass_WhenSessionTuningTimeoutResumeRetryBudgetSet)
+    /// must bind to the exact runtime value LlmSessionActor.TryResumeAfterTimeout
+    /// reads via SessionConfig.Tuning.TimeoutResumeRetryBudget.
+    /// </summary>
+    [Fact]
+    public void BindFromConfiguration_binds_TimeoutResumeRetryBudget()
+    {
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Session:Tuning:TimeoutResumeRetryBudget"] = "5"
+            })
+            .Build();
+
+        var bound = SessionConfig.BindFromConfiguration(config.GetSection("Session"));
+
+        Assert.Equal(5, bound.Tuning.TimeoutResumeRetryBudget);
     }
 }

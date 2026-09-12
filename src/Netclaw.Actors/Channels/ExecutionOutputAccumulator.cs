@@ -36,6 +36,16 @@ public sealed class ExecutionOutputAccumulator
     private readonly ToolName _notificationToolName;
     private readonly Action<string, string, bool>? _onNotifyTracked;
     private readonly StringBuilder _buffer = new();
+
+    // Length of _buffer already committed by an earlier call's TextOutput this
+    // turn. TextStreamDiscarded truncates back to this point instead of clearing
+    // the whole buffer, so a later call's discard cannot erase an earlier
+    // COMPLETED call's text (see the TextStreamDiscarded case below).
+    private int _committedLength;
+
+    // Whether the CURRENT (not-yet-completed) call has streamed a delta. Reset
+    // at every call boundary — a TextOutput (call completed) or a
+    // TextStreamDiscarded (call died) — so it never leaks across calls.
     private bool _sawTextDelta;
     private bool _notifyAttempted;
     private bool _notifyFailed;
@@ -104,9 +114,32 @@ public sealed class ExecutionOutputAccumulator
                 _sawTextDelta = true;
                 return OutputAction.Continue;
 
+            case TextStreamDiscarded:
+                // A timed-out call was discarded. The actor re-issues it. Truncate
+                // back to the last committed call boundary so only the dead call's
+                // own, not-yet-committed text is removed — text from an earlier
+                // call that already completed this turn (committed at its own
+                // TextOutput below) survives. See SessionProtocol.TextStreamDiscarded.
+                _buffer.Remove(_committedLength, _buffer.Length - _committedLength);
+                _sawTextDelta = false;
+                return OutputAction.Continue;
+
             case TextOutput text:
+                // TextOutput marks one LLM call's text as complete, whether that
+                // call ended in tool calls (a preamble) or the final answer. Commit
+                // everything accumulated for it so a LATER call's discard can never
+                // erase it. Some notices (approval-expired etc.) reuse TextOutput to
+                // reach the channel while an earlier call still streams.
+                // IsCallBoundary is false for those. They must not move the
+                // commit marker or clear the live call's delta flag (see
+                // SessionProtocol.TextOutput.IsCallBoundary).
                 if (!_sawTextDelta)
                     _buffer.Append(text.Text);
+                if (text.IsCallBoundary)
+                {
+                    _committedLength = _buffer.Length;
+                    _sawTextDelta = false;
+                }
                 return OutputAction.Continue;
 
             case ToolResultOutput toolResult:
