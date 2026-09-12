@@ -44,8 +44,9 @@ internal sealed class PairingActor : ReceiveActor
             {
                 Generate(command);
             }
-            catch
+            catch (Exception ex)
             {
+                _log.Error(ex, "Pairing code generation failed unexpectedly.");
                 Sender.Tell(new Status.Failure(new InvalidOperationException("The pairing code request failed unexpectedly.")));
                 throw;
             }
@@ -135,9 +136,10 @@ internal sealed class PairingActor : ReceiveActor
             _log.Warning("Pairing exchange failed: {FailureType}.", ex.GetType().Name);
             Sender.Tell(new Status.Failure(ex));
         }
-        catch
+        catch (Exception ex)
         {
             // Supervision restarts the actor but does not complete an HTTP caller's Ask.
+            _log.Error(ex, "Pairing exchange failed unexpectedly.");
             Sender.Tell(new Status.Failure(new InvalidOperationException("The pairing exchange failed unexpectedly.")));
             throw;
         }

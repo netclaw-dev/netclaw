@@ -11,9 +11,11 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 using Netclaw.Daemon.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -44,11 +46,13 @@ public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output
             InspectAndHardenRegistryTempFile);
         services.AddSingleton<TimeProvider>(_time);
         services.AddSingleton(_registry);
+        Directory.CreateDirectory(_paths.LogsDirectory);
+        services.AddSingleton<ILoggerProvider>(_ => new RollingFileLoggerProvider(_paths.DaemonLogPath, _time));
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
-        builder.WithPairingActor();
+        builder.WithNetclawActorLogging(LogLevel.Error).WithPairingActor();
     }
 
     protected override async Task AfterAllAsync()
@@ -142,6 +146,11 @@ public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output
 
         var retry = await GenerateCodeAsync(actor, ct);
         Assert.Equal(Start.AddMinutes(5), retry.ExpiresAt);
+        await AssertDaemonFailureLogAsync(
+            "Pairing code generation failed unexpectedly.",
+            new ApplicationException("Secret clock failure."),
+            [retry.FormattedCode],
+            ct);
     }
 
     [Fact]
@@ -521,8 +530,9 @@ public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output
         string failureKind)
     {
         var ct = TestContext.Current.CancellationToken;
+        var storeFailure = CreateUnexpectedFailure(failureKind);
         var actor = CreateControlledActor(
-            (_, _) => Task.FromException(CreateUnexpectedFailure(failureKind)));
+            (_, _) => Task.FromException(storeFailure));
         var code = await GenerateCodeAsync(actor, ct);
 
         actor.Tell(new PairingActor.ExchangeCode(code.FormattedCode, "laptop", ct), TestActor);
@@ -541,6 +551,33 @@ public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output
         Assert.Null(pending.ExpiresAt);
         var next = await GenerateCodeAsync(actor, ct);
         Assert.Equal(Start.AddMinutes(5), next.ExpiresAt);
+        await AssertDaemonFailureLogAsync(
+            "Pairing exchange failed unexpectedly.",
+            storeFailure,
+            [code.FormattedCode, next.FormattedCode, "laptop"],
+            ct);
+    }
+
+    private async Task AssertDaemonFailureLogAsync(
+        string message,
+        Exception exception,
+        IReadOnlyList<string> excludedValues,
+        CancellationToken cancellationToken)
+    {
+        await AwaitAssertAsync(async () =>
+        {
+            var path = Assert.Single(Directory.GetFiles(_paths.LogsDirectory, "daemon-*.log"));
+            await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+            using var reader = new StreamReader(stream);
+            var log = await reader.ReadToEndAsync(cancellationToken);
+
+            // Require exception details on this entry, not only on the separate supervision entry.
+            Assert.Contains($"{message}\nCause: {exception.GetType().FullName}: {exception.Message}", log.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+            Assert.Contains("[ERR]", log, StringComparison.Ordinal);
+            Assert.Contains("at Netclaw.Daemon.Security.PairingActor", log, StringComparison.Ordinal);
+            foreach (var value in excludedValues)
+                Assert.DoesNotContain(value, log, StringComparison.Ordinal);
+        }, RemainingOrDefault, cancellationToken: cancellationToken);
     }
 
     private IActorRef CreateControlledActor(

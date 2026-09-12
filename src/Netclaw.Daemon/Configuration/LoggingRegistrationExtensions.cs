@@ -15,6 +15,22 @@ namespace Netclaw.Daemon.Configuration;
 /// <summary>Registers the daemon's console and partitioned file logging providers.</summary>
 public static class LoggingRegistrationExtensions
 {
+    internal static AkkaConfigurationBuilder WithNetclawActorLogging(
+        this AkkaConfigurationBuilder builder, LogLevel level)
+        => builder.ConfigureLoggers(setup =>
+        {
+            setup.ClearLoggers();
+            setup.AddLoggerFactory();
+            setup.LogLevel = level switch
+            {
+                LogLevel.Trace or LogLevel.Debug => Akka.Event.LogLevel.DebugLevel,
+                LogLevel.Information => Akka.Event.LogLevel.InfoLevel,
+                LogLevel.Warning => Akka.Event.LogLevel.WarningLevel,
+                LogLevel.Error or LogLevel.Critical or LogLevel.None => Akka.Event.LogLevel.ErrorLevel,
+                _ => Akka.Event.LogLevel.WarningLevel
+            };
+        });
+
     /// <summary>Configures Netclaw logging and returns the effective minimum level.</summary>
     /// <param name="builder">The daemon application builder.</param>
     /// <param name="paths">Optional explicit Netclaw paths.</param>

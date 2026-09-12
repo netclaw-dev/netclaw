@@ -53,7 +53,6 @@ using Netclaw.Embeddings;
 using Netclaw.Search;
 using Netclaw.Tools;
 using Netclaw.Security;
-using static Microsoft.Extensions.Logging.LogLevel;
 
 // Handled first, before any directory creation, lock-file acquisition, or host startup:
 // `netclawd --version`/`-v` must print the version and exit rather than booting a real
@@ -1072,12 +1071,7 @@ static void ConfigureDaemonServices(
             DaemonShutdownConfiguration.BuildCoordinatedShutdownHocon(DaemonConfig.GracefulShutdownBudget),
             HoconAddMode.Prepend);
 
-        akkaBuilder = akkaBuilder.ConfigureLoggers(setup =>
-        {
-            setup.ClearLoggers();
-            setup.AddLoggerFactory();
-            setup.LogLevel = ToAkkaLogLevel(daemonLogLevel);
-        });
+        akkaBuilder = akkaBuilder.WithNetclawActorLogging(daemonLogLevel);
 
         var connectionString = $"Data Source={sqlitePath}";
         akkaBuilder = akkaBuilder.WithSqlPersistence(
@@ -1231,18 +1225,6 @@ static ISearchBackend? CreateSearchBackend(SearchConfig config)
             throw new ArgumentOutOfRangeException(nameof(config.Backend), config.Backend,
                 $"Unknown search backend: {config.Backend}");
     }
-}
-
-static Akka.Event.LogLevel ToAkkaLogLevel(LogLevel logLevel)
-{
-    return logLevel switch
-    {
-        Trace or Debug => Akka.Event.LogLevel.DebugLevel,
-        Information => Akka.Event.LogLevel.InfoLevel,
-        Warning => Akka.Event.LogLevel.WarningLevel,
-        Error or Critical or None => Akka.Event.LogLevel.ErrorLevel,
-        _ => Akka.Event.LogLevel.WarningLevel
-    };
 }
 
 public partial class Program;
