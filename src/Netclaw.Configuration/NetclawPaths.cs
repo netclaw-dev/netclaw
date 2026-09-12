@@ -48,8 +48,11 @@ public sealed class NetclawPaths
     public string ManagedGitSkillDirectory(string sourceName)
         => Path.Combine(ManagedGitSkillsDirectory, sourceName);
 
-    public string ManagedGitSkillCommitDirectory(string sourceName, string commit)
-        => Path.Combine(ManagedGitSkillDirectory(sourceName), "commits", commit);
+    public string ManagedGitSkillCommitDirectory(
+        string sourceName,
+        string sourceFingerprint,
+        string commit)
+        => Path.Combine(ManagedGitSkillDirectory(sourceName), sourceFingerprint, "commits", commit);
 
     public string ServerFeedDirectory(string feedName)
         => Path.Combine(ServerFeedsDirectory, feedName);
