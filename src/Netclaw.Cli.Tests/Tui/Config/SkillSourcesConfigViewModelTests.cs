@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Configuration;
+using System.Text.Json;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -64,6 +65,49 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
 
         var remoteRow = vm.InventoryRows.Single(static row => row.SourceKind == SkillSourceKind.RemoteSkillServer);
         Assert.DoesNotContain("advertised", remoteRow.Detail, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Toggle_feed_preserves_managed_Git_plugins()
+    {
+        File.WriteAllText(
+            _paths.NetclawConfigPath,
+            """
+            {"configVersion":1,"SkillFeeds":{"Feeds":[{"Name":"custom-feed","Url":"https://feed.example.test","Enabled":true}],"Plugins":[{"Name":"dotnet-skills","Repository":"owner/repository","Format":"codex","Subdirectory":"packages/plugin","ReferenceKind":"Branch","Reference":"main","Enabled":true,"TimeoutSeconds":90}]}}
+            """);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        vm.CommitToggleEnabled(new SkillSourceActionTarget(SkillSourceKind.RemoteSkillServer, "custom-feed"));
+
+        using var document = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var section = document.RootElement.GetProperty("SkillFeeds");
+        Assert.False(section.GetProperty("Feeds")[0].GetProperty("Enabled").GetBoolean());
+        var plugin = Assert.Single(section.GetProperty("Plugins").EnumerateArray());
+        Assert.Equal("owner/repository", plugin.GetProperty("Repository").GetString());
+        Assert.Equal("packages/plugin", plugin.GetProperty("Subdirectory").GetString());
+        Assert.Equal("Branch", plugin.GetProperty("ReferenceKind").GetString());
+        Assert.Equal(90, plugin.GetProperty("TimeoutSeconds").GetInt32());
+    }
+
+    [Fact]
+    public void Remove_last_feed_preserves_managed_Git_plugins()
+    {
+        File.WriteAllText(
+            _paths.NetclawConfigPath,
+            """
+            {"configVersion":1,"SkillFeeds":{"Feeds":[{"Name":"custom-feed","Url":"https://feed.example.test","Enabled":true}],"Plugins":[{"Name":"dotnet-skills","Repository":"owner/repository","Format":"codex","ReferenceKind":"Commit","Reference":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Enabled":false,"TimeoutSeconds":60}]}}
+            """);
+        using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
+
+        vm.CommitRemoveSource(new SkillSourceActionTarget(SkillSourceKind.RemoteSkillServer, "custom-feed"));
+
+        using var document = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var section = document.RootElement.GetProperty("SkillFeeds");
+        Assert.Empty(section.GetProperty("Feeds").EnumerateArray());
+        var plugin = Assert.Single(section.GetProperty("Plugins").EnumerateArray());
+        Assert.Equal("dotnet-skills", plugin.GetProperty("Name").GetString());
+        Assert.Equal("Commit", plugin.GetProperty("ReferenceKind").GetString());
+        Assert.False(plugin.GetProperty("Enabled").GetBoolean());
     }
 
     [Fact]
