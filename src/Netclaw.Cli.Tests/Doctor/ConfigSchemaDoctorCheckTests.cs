@@ -100,6 +100,34 @@ public sealed class ConfigSchemaDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsPass_WhenMcpOAuthClientSecretMatchesSchemaV1()
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "McpServers": {
+                "github": {
+                  "Transport": "http",
+                  "Url": "https://api.githubcopilot.com/mcp/",
+                  "OAuthClientId": "configured-client",
+                  "OAuthClientSecret": "ENC:encrypted-client-secret"
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
     public async Task ReturnsError_WhenConfigAttemptsToSelectPersistence()
     {
         var basePath = CreateTempBasePath();

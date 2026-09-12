@@ -38,6 +38,7 @@ internal sealed class McpOAuthTokenCache : ITokenCache
         McpOAuthClientIdentity identity,
         McpOAuthTokenSet? credentials,
         int baseRevision,
+        bool profileOwnsClientIdentity,
         bool explicitAuthorization)
     {
         _store = store;
@@ -46,6 +47,7 @@ internal sealed class McpOAuthTokenCache : ITokenCache
         Identity = identity;
         Credentials = credentials;
         BaseRevision = baseRevision;
+        ProfileOwnsClientIdentity = profileOwnsClientIdentity;
         ExplicitAuthorization = explicitAuthorization;
     }
 
@@ -58,6 +60,8 @@ internal sealed class McpOAuthTokenCache : ITokenCache
     internal McpOAuthTokenSet? Credentials { get; set; }
 
     internal int BaseRevision { get; set; }
+
+    internal bool ProfileOwnsClientIdentity { get; }
 
     internal bool ExplicitAuthorization { get; }
 
@@ -126,7 +130,29 @@ internal sealed class McpOAuthCredentialStore
         string resourceIdentity,
         string? configuredClientId,
         bool explicitAuthorization)
+        => CreateTokenCache(
+            serverName,
+            resourceIdentity,
+            configuredClientId,
+            configuredClientSecret: null,
+            explicitAuthorization: explicitAuthorization);
+
+    public McpOAuthTokenCache CreateTokenCache(
+        McpServerName serverName,
+        string resourceIdentity,
+        string? configuredClientId,
+        string? configuredClientSecret,
+        bool explicitAuthorization)
     {
+        if (configuredClientSecret is not null && string.IsNullOrWhiteSpace(configuredClientSecret))
+            throw new ArgumentException(
+                "An MCP OAuth client secret must have a non-empty value.",
+                nameof(configuredClientSecret));
+        if (configuredClientSecret is not null && string.IsNullOrWhiteSpace(configuredClientId))
+            throw new ArgumentException(
+                "An MCP OAuth client secret requires a configured client ID.",
+                nameof(configuredClientSecret));
+
         var canonicalResource = CanonicalizeResource(resourceIdentity);
         var state = GetState(serverName);
         lock (state.Sync)
@@ -139,7 +165,7 @@ internal sealed class McpOAuthCredentialStore
             McpOAuthClientIdentity identity;
             if (!string.IsNullOrWhiteSpace(configuredClientId))
             {
-                identity = new McpOAuthClientIdentity(configuredClientId, null, false);
+                identity = new McpOAuthClientIdentity(configuredClientId, configuredClientSecret, false);
             }
             else if (active is { ClientId: not null })
             {
@@ -165,6 +191,7 @@ internal sealed class McpOAuthCredentialStore
                 identity,
                 explicitAuthorization ? null : active,
                 state.Revision,
+                !string.IsNullOrWhiteSpace(configuredClientId),
                 explicitAuthorization);
         }
     }
@@ -329,7 +356,12 @@ internal sealed class McpOAuthCredentialStore
                     "Active OAuth credentials changed while the replacement connection initialized.");
             }
 
-            var replacement = CreateReplacement(tokens, cache.Credentials, cache.Identity, cache.CanonicalResource);
+            var replacement = CreateReplacement(
+                tokens,
+                cache.Credentials,
+                cache.Identity,
+                cache.CanonicalResource,
+                cache.ProfileOwnsClientIdentity);
             if (cache.Published || !cache.ExplicitAuthorization)
             {
                 Persist(cache.ServerName, replacement, cancellationToken);
@@ -369,7 +401,8 @@ internal sealed class McpOAuthCredentialStore
         TokenContainer tokens,
         McpOAuthTokenSet? retainedFrom,
         McpOAuthClientIdentity identity,
-        string canonicalResource)
+        string canonicalResource,
+        bool profileOwnsClientIdentity)
     {
         var obtainedAt = tokens.ObtainedAt == default ? _timeProvider.GetUtcNow() : tokens.ObtainedAt;
 
@@ -382,9 +415,12 @@ internal sealed class McpOAuthCredentialStore
         // new interactive authorization (the "null authorization result" loop observed on
         // the Atlassian MCP nightly runs).
         var clientId = identity.ClientId ?? tokens.ClientId;
-        var clientSecret = identity.ClientSecret ?? tokens.ClientSecret;
-        var dynamicRegistration = identity.DynamicClientRegistration
-            || identity.ClientId is null && !string.IsNullOrWhiteSpace(tokens.ClientId);
+        var clientSecret = profileOwnsClientIdentity
+            ? null
+            : identity.ClientSecret ?? tokens.ClientSecret;
+        var dynamicRegistration = !profileOwnsClientIdentity
+            && (identity.DynamicClientRegistration
+                || identity.ClientId is null && !string.IsNullOrWhiteSpace(tokens.ClientId));
 
         var replacement = new McpOAuthTokenSet
         {

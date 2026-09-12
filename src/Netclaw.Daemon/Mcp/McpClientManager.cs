@@ -1252,6 +1252,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 name,
                 entry.Url!,
                 entry.OAuthClientId,
+                entry.OAuthClientSecret?.Value,
                 authorizationFlow is not null);
         }
 
@@ -1416,8 +1417,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return new ClientOAuthOptions
         {
             RedirectUri = BuildRedirectUri(),
-            ClientId = entry.OAuthClientId ?? identity.ClientId,
-            ClientSecret = entry.OAuthClientId is null ? identity.ClientSecret : null,
+            ClientId = identity.ClientId,
+            ClientSecret = identity.ClientSecret,
             Scopes = ParseScopes(entry.OAuthScope),
             TokenCache = cache,
 

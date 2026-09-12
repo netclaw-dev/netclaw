@@ -105,6 +105,66 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal("Bearer tok-123", loaded["myapi"].Headers?["Authorization"].Value);
     }
 
+    [Fact]
+    public async Task Add_WithOAuthClientSecret_WritesOnlyEncryptedSecretAndReloadsIt()
+    {
+        const string clientSecret = "confidential-client-secret";
+        var args = new[]
+        {
+            "mcp", "add", "--transport", "http",
+            "--client-id", "confidential-client",
+            "--client-secret", clientSecret,
+            "github", "https://api.githubcopilot.com/mcp/",
+        };
+
+        var exitCode = await McpCommand.RunAsync(args, _paths, output: _output);
+
+        Assert.Equal(0, exitCode);
+        var config = ReadConfigFile(_paths.NetclawConfigPath);
+        var configEntry = config.RootElement.GetProperty("McpServers").GetProperty("github");
+        Assert.Equal("confidential-client", configEntry.GetProperty("OAuthClientId").GetString());
+        Assert.False(configEntry.TryGetProperty("OAuthClientSecret", out _));
+
+        var secrets = ReadConfigFile(_paths.SecretsPath);
+        var encrypted = secrets.RootElement
+            .GetProperty("McpServers")
+            .GetProperty("github")
+            .GetProperty("OAuthClientSecret")
+            .GetString();
+        Assert.StartsWith("ENC:", encrypted);
+        Assert.DoesNotContain(clientSecret, File.ReadAllText(_paths.SecretsPath), StringComparison.Ordinal);
+
+        var loaded = McpCommand.LoadMcpServers(_paths);
+        Assert.Equal(clientSecret, loaded["github"].OAuthClientSecret?.Value);
+        Assert.DoesNotContain("OAuthClientSecret", JsonSerializer.Serialize(loaded["github"]), StringComparison.Ordinal);
+        Assert.DoesNotContain(clientSecret, _output.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Add_WithOAuthClientSecretWithoutClientId_RejectsBeforePersistence()
+    {
+        var configBefore = File.Exists(_paths.NetclawConfigPath)
+            ? File.ReadAllText(_paths.NetclawConfigPath)
+            : null;
+        var secretsBefore = File.Exists(_paths.SecretsPath)
+            ? File.ReadAllText(_paths.SecretsPath)
+            : null;
+
+        var exitCode = await McpCommand.RunAsync(
+            [
+                "mcp", "add", "--transport", "http",
+                "--client-secret", "orphan-secret",
+                "github", "https://api.githubcopilot.com/mcp/",
+            ],
+            _paths,
+            output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Equal(configBefore, File.Exists(_paths.NetclawConfigPath) ? File.ReadAllText(_paths.NetclawConfigPath) : null);
+        Assert.Equal(secretsBefore, File.Exists(_paths.SecretsPath) ? File.ReadAllText(_paths.SecretsPath) : null);
+        Assert.DoesNotContain("orphan-secret", _output.ToString(), StringComparison.Ordinal);
+    }
+
     // ── Fail-closed defaults for new MCP servers ──
 
     [Fact]

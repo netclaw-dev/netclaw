@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.74.3"
+  version: "2.74.5"
 ---
 
 # Netclaw Operations
@@ -235,6 +235,10 @@ active credentials. Do not fetch metadata or token endpoints by hand, build PKCE
 requests, or create or repair `mcp-oauth-metadata.json`; legacy metadata files
 are ignored.
 
+Netclaw requests JSON token responses from providers that negotiate the response
+format, including GitHub. This request keeps the response compatible with the
+MCP SDK token decoder.
+
 Netclaw registers rather than letting the SDK do it because the SDK hard-codes
 `token_endpoint_auth_method: "client_secret_post"` and ignores what the
 authorization server advertises, which fails against servers that accept public
@@ -262,6 +266,19 @@ The SDK redirect URI is
 `http://127.0.0.1:{Daemon.Port}/api/mcp/oauth/callback`. If the provider requires
 a pre-registered redirect URI, use the configured `Daemon.Port`, not a fixed
 default port.
+
+Some providers require a pre-registered confidential client.
+Caution: command arguments can appear in process inspection and shell history.
+Run the next command only on a trusted host.
+
+```bash
+netclaw mcp add --transport http --client-id <id> --client-secret <secret> <name> <url>
+```
+
+Netclaw stores the secret in encrypted configuration.
+Do not put the secret in `netclaw.json`.
+A client ID without a secret remains valid for public clients.
+The configured identity stays authoritative during token exchange, refresh, and daemon restart.
 
 A configured `Authorization` header takes precedence over SDK OAuth. Netclaw
 sends that header unchanged, does not start SDK OAuth after a challenge, and

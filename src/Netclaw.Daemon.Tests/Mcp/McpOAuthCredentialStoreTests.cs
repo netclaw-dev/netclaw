@@ -57,6 +57,56 @@ public sealed class McpOAuthCredentialStoreTests : IDisposable
     }
 
     [Fact]
+    public async Task ConfiguredSecretFeedsSdkCacheWithoutBecomingTokenRecordAuthority()
+    {
+        var paths = Paths();
+        var store = CreateStore(paths);
+        var candidate = store.CreateTokenCache(
+            ServerName,
+            Resource,
+            "configured-client",
+            "first-configured-secret",
+            true);
+
+        await candidate.StoreTokensAsync(Tokens("authorized", "refresh-token"), CancellationToken.None);
+        store.Publish(candidate, CancellationToken.None);
+
+        Assert.Null(store.GetActiveForTests(ServerName)?.ClientSecret);
+        Assert.Equal(
+            "first-configured-secret",
+            (await candidate.GetTokensAsync(CancellationToken.None))?.ClientSecret);
+
+        var restarted = CreateStore(paths).CreateTokenCache(
+            ServerName,
+            Resource,
+            "configured-client",
+            "replacement-configured-secret",
+            false);
+        Assert.Equal(
+            "replacement-configured-secret",
+            (await restarted.GetTokensAsync(CancellationToken.None))?.ClientSecret);
+    }
+
+    [Fact]
+    public void ConfiguredSecretRequiresAClientIdAndNonEmptyValue()
+    {
+        var store = CreateStore();
+
+        Assert.Throws<ArgumentException>(() => store.CreateTokenCache(
+            ServerName,
+            Resource,
+            configuredClientId: null,
+            configuredClientSecret: "orphan-secret",
+            explicitAuthorization: false));
+        Assert.Throws<ArgumentException>(() => store.CreateTokenCache(
+            ServerName,
+            Resource,
+            configuredClientId: "configured-client",
+            configuredClientSecret: " ",
+            explicitAuthorization: false));
+    }
+
+    [Fact]
     public async Task CommitFailureLeavesActiveStateUntouched()
     {
         var paths = Paths();

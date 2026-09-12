@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### MCP reliability
+
+- **OAuth token exchanges request JSON responses.** This keeps GitHub-compatible token endpoints aligned with the MCP SDK decoder ([#2141](https://github.com/netclaw-dev/netclaw/issues/2141)).
+- **MCP OAuth supports confidential clients.** `netclaw mcp add` stores an optional client secret in encrypted configuration. Token exchange and refresh use the configured identity ([#2141](https://github.com/netclaw-dev/netclaw/issues/2141)).
+
 ## 0.27.0-beta.3 (2026-09-12)
 
 Follow-up beta to 0.27.0-beta.2. Sessions now live in one versioned storage envelope with a managed temporary directory per process, system skills ship inside the daemon binary, and shell authorization completes in one place. Slack Socket Mode no longer drops silently, and `netclaw skill sync` runs an external source pass on demand.

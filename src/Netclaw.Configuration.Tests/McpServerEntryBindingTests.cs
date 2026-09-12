@@ -91,6 +91,31 @@ public sealed class McpServerEntryBindingTests : IDisposable
     }
 
     [Fact]
+    public void OAuthClientSecret_bound_from_configuration_decrypts_ENC_value()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        var protector = SecretsProtection.CreateProtector(paths);
+        SensitiveStringTypeConverter.Protector = protector;
+
+        var encrypted = protector.Protect("configured-client-secret");
+        var config = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["McpServers:github:Transport"] = "http",
+                ["McpServers:github:Url"] = "https://api.githubcopilot.com/mcp/",
+                ["McpServers:github:OAuthClientId"] = "configured-client",
+                ["McpServers:github:OAuthClientSecret"] = encrypted,
+            })
+            .Build();
+
+        var bound = config.GetSection("McpServers")
+            .Get<Dictionary<string, McpServerEntry>>() ?? [];
+
+        Assert.Equal("configured-client-secret", bound["github"].OAuthClientSecret?.Value);
+    }
+
+    [Fact]
     public void Headers_bound_from_plaintext_values_pass_through_unchanged()
     {
         // Some test fixtures and migration paths may write plaintext Headers
