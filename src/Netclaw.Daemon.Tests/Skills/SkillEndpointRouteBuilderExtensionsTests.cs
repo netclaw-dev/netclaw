@@ -10,6 +10,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -50,6 +51,11 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         ServerFeedSkillSyncService? syncService = null,
         ILogger<ServerFeedSkillSyncActor>? actorLogger = null)
     {
+        paths.EnsureDirectoriesExist();
+        await new SchemaMigrator(
+                paths,
+                Microsoft.Extensions.Logging.Abstractions.NullLogger<SchemaMigrator>.Instance)
+            .MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
 
@@ -58,7 +64,14 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         builder.Services.AddLogging();
         builder.Services.AddSingleton(registry);
         builder.Services.AddSingleton(paths);
-        builder.Services.AddSingleton(new SkillFeedsConfig { SyncIntervalMinutes = 0 });
+        var feeds = new SkillFeedsConfig { SyncIntervalMinutes = 0 };
+        builder.Services.AddSingleton(feeds);
+        builder.Services.AddSingleton(TimeProvider.System);
+        builder.Services.AddSingleton<IGitSkillPluginAcquirer, UnusedPluginAcquirer>();
+        builder.Services.AddSingleton<ManagedPluginStateStore>();
+        builder.Services.AddSingleton<GitSkillPluginConfigStore>();
+        builder.Services.AddSingleton<GitSkillPluginManagementService>();
+        builder.Services.AddSingleton<DaemonRestartSignal>();
         var runner = syncService ?? CreateSyncService(registry, paths);
         builder.Services.AddSingleton(runner);
         builder.Services.AddSingleton<IServerFeedSkillSyncRunner>(runner);
@@ -108,6 +121,99 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var response = await app.GetTestClient().PostAsync("/api/skills/sync", null, TestContext.Current.CancellationToken);
 
         Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Theory]
+    [InlineData("GET", "/api/plugins")]
+    [InlineData("POST", "/api/plugins")]
+    [InlineData("PATCH", "/api/plugins/fixture")]
+    [InlineData("DELETE", "/api/plugins/fixture")]
+    public async Task Plugin_routes_require_authorization(string method, string path)
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: false, new SkillRegistry(), paths);
+        using var request = new HttpRequestMessage(new HttpMethod(method), path)
+        {
+            Content = JsonContent.Create(new { }),
+        };
+
+        var response = await app.GetTestClient().SendAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Plugin_install_route_persists_a_valid_commit_source_before_sync()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
+        var request = new ManagedPluginApi.InstallRequest
+        {
+            Repository = "owner/repository",
+            SourceId = "fixture",
+            ReferenceKind = ManagedPluginApi.InstallReferenceKind.Commit,
+            Reference = "13e26d39ed01d97ea592235d041304d289f4ba07",
+        };
+
+        var response = await app.GetTestClient().PostAsJsonAsync(
+            "/api/plugins",
+            request,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<ManagedPluginApi.InstallResponse>(
+            ReadOptions,
+            TestContext.Current.CancellationToken);
+        Assert.NotNull(result);
+        Assert.Equal(ManagedPluginApi.PluginStatus.NotInstalled, result.Plugin.Status);
+        Assert.Equal("fixture", result.Plugin.SourceId);
+        Assert.Null(result.Plugin.ManifestName);
+        using var config = JsonDocument.Parse(await File.ReadAllTextAsync(
+            paths.NetclawConfigPath,
+            TestContext.Current.CancellationToken));
+        Assert.Equal(
+            "fixture",
+            config.RootElement.GetProperty("SkillFeeds").GetProperty("Plugins")[0].GetProperty("Id").GetString());
+    }
+
+    [Fact]
+    public async Task Old_nested_plugin_route_is_not_available()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
+
+        var response = await app.GetTestClient().GetAsync(
+            "/api/skills/plugins",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task Plugin_conflict_returns_an_actionable_problem_detail()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
+        var request = new ManagedPluginApi.InstallRequest
+        {
+            Repository = "owner/repository",
+            SourceId = "fixture",
+            ReferenceKind = ManagedPluginApi.InstallReferenceKind.Commit,
+            Reference = "13e26d39ed01d97ea592235d041304d289f4ba07",
+        };
+        var client = app.GetTestClient();
+        await client.PostAsJsonAsync("/api/plugins", request, TestContext.Current.CancellationToken);
+
+        var response = await client.PostAsJsonAsync(
+            "/api/plugins",
+            request,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(problem);
+        Assert.Equal("Plugin 'fixture' already exists.", problem.Detail);
     }
 
     [Fact]
@@ -203,7 +309,30 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
             skillFilePath,
             "---\nname: demo-file\ndescription: A file-backed skill.\n---\n\nDemo guidance.\n",
             ct);
-        registry.ReplaceAll([fileSkill]);
+
+        var pluginDirectory = Path.Combine(
+            paths.ManagedGitSkillsDirectory,
+            "demo-plugin",
+            "fingerprint",
+            "commits",
+            "commit",
+            "demo-external");
+        var pluginSkill = new SkillEntry(
+            "demo-external",
+            "Demo External",
+            "An external file skill.",
+            new FileSkillSource(Path.Combine(pluginDirectory, "SKILL.md"), pluginDirectory),
+            Category: null);
+        Directory.CreateDirectory(pluginDirectory);
+        await File.WriteAllTextAsync(
+            Path.Combine(pluginDirectory, "SKILL.md"),
+            "---\nname: demo-external\ndescription: An external file skill.\n---\n\nExternal guidance.\n",
+            ct);
+        registry.ReplaceAll([fileSkill, pluginSkill]);
+        var classified = SkillInventory.From(registry.GetAll(), paths);
+        Assert.Equal(
+            "external",
+            Assert.Single(classified.Skills, skill => skill.Name == "demo-external").Source);
 
         // A dynamic MCP prompt skill — exists only in memory, never on disk.
         var mcpSkill = new SkillEntry(
@@ -251,6 +380,7 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
         var file = Assert.Single(inventory.Skills, s => s.Name == "demo-file");
         Assert.Equal("native", file.Source);
         Assert.Null(file.ServerName);
+
     }
 
     private static ServerFeedSkillSyncService CreateSyncService(SkillRegistry registry, NetclawPaths paths)
@@ -375,5 +505,25 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
                     BothJoined.TrySetResult();
             }
         }
+    }
+
+    private sealed class UnusedPluginAcquirer : IGitSkillPluginAcquirer
+    {
+        public Task<string> ResolveDefaultBranchAsync(string repository, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<string> ResolveCommitAsync(ManagedPluginSource source, CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<ManagedPluginCandidate> AcquireAsync(
+            ManagedPluginSource source,
+            CancellationToken cancellationToken)
+            => throw new NotSupportedException();
+
+        public Task<ManagedPluginCandidate> AcquireAsync(
+            ManagedPluginSource source,
+            string commit,
+            CancellationToken cancellationToken)
+            => throw new NotSupportedException();
     }
 }
