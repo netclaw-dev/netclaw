@@ -17,13 +17,20 @@ public sealed class GitSkillPluginStateStoreTests : IDisposable
     private const string Commit = "13e26d39ed01d97ea592235d041304d289f4ba07";
     private const string LaterCommit = "23e26d39ed01d97ea592235d041304d289f4ba08";
     private readonly DisposableTempDir _temp = new();
+    private readonly NetclawPaths _paths;
 
-    public void Dispose() => _temp.Dispose();
+    public GitSkillPluginStateStoreTests() => _paths = new NetclawPaths(_temp.Path);
+
+    public void Dispose()
+    {
+        SqliteTestPools.Clear(_paths);
+        _temp.Dispose();
+    }
 
     [Fact]
     public async Task Migration_and_store_preserve_receipts_and_scope_rejections_by_fingerprint()
     {
-        var paths = new NetclawPaths(_temp.Path);
+        var paths = _paths;
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 11, 12, 0, 0, TimeSpan.Zero));
         var migrator = new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance);
         await migrator.MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
@@ -51,7 +58,7 @@ public sealed class GitSkillPluginStateStoreTests : IDisposable
     [Fact]
     public async Task Last_observed_commit_changes_without_replacing_the_installed_commit()
     {
-        var paths = new NetclawPaths(_temp.Path);
+        var paths = _paths;
         var time = new FakeTimeProvider(new DateTimeOffset(2026, 9, 11, 12, 0, 0, TimeSpan.Zero));
         await new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance)
             .MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
@@ -77,7 +84,7 @@ public sealed class GitSkillPluginStateStoreTests : IDisposable
     [Fact]
     public async Task RemoveSourcesExcept_removes_rejection_only_sources()
     {
-        var paths = new NetclawPaths(_temp.Path);
+        var paths = _paths;
         await new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance)
             .MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
         var store = new GitSkillPluginStateStore(paths, TimeProvider.System);
@@ -96,7 +103,7 @@ public sealed class GitSkillPluginStateStoreTests : IDisposable
     [Fact]
     public async Task SaveRejection_sanitizes_and_limits_the_durable_reason()
     {
-        var paths = new NetclawPaths(_temp.Path);
+        var paths = _paths;
         await new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance)
             .MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
         var store = new GitSkillPluginStateStore(paths, TimeProvider.System);
@@ -118,7 +125,7 @@ public sealed class GitSkillPluginStateStoreTests : IDisposable
     [Fact]
     public async Task SaveRejection_preserves_a_later_security_classification()
     {
-        var paths = new NetclawPaths(_temp.Path);
+        var paths = _paths;
         await new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance)
             .MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
         var store = new GitSkillPluginStateStore(paths, TimeProvider.System);
@@ -142,7 +149,7 @@ public sealed class GitSkillPluginStateStoreTests : IDisposable
     [Fact]
     public async Task Security_alert_claim_succeeds_once_and_rejects_nonsecurity_records()
     {
-        var paths = new NetclawPaths(_temp.Path);
+        var paths = _paths;
         await new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance)
             .MigrateAsync(paths.SqliteDbPath, TestContext.Current.CancellationToken);
         var store = new GitSkillPluginStateStore(paths, TimeProvider.System);
