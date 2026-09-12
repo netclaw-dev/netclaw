@@ -42,6 +42,15 @@ public sealed class NetclawPaths
     // ── Server feed skills (from private skill-server instances) ──
     public string ServerFeedsDirectory => Path.Combine(SkillsDirectory, ".server-feeds");
 
+    // Managed plugin commits remain immutable while the registry can reference them.
+    public string ManagedGitSkillsDirectory => Path.Combine(SkillsDirectory, ".git-plugins");
+
+    public string ManagedGitSkillDirectory(string sourceName)
+        => Path.Combine(ManagedGitSkillsDirectory, sourceName);
+
+    public string ManagedGitSkillCommitDirectory(string sourceName, string commit)
+        => Path.Combine(ManagedGitSkillDirectory(sourceName), "commits", commit);
+
     public string ServerFeedDirectory(string feedName)
         => Path.Combine(ServerFeedsDirectory, feedName);
 
@@ -185,6 +194,7 @@ public sealed class NetclawPaths
         yield return SkillsDirectory;
         yield return SystemSkillsDirectory;
         yield return ServerFeedsDirectory;
+        yield return ManagedGitSkillsDirectory;
         yield return ProjectsDirectory;
         yield return ClientDirectory;
         yield return EnvironmentDirectory;
