@@ -83,6 +83,13 @@ public sealed class GitSkillPluginSourceValidatorTests
     [InlineData("./plugin/")]
     [InlineData("/plugin")]
     [InlineData("plugin/../other")]
+    [InlineData("plugin/file:stream")]
+    [InlineData("plugin/CON.md")]
+    [InlineData("plugin/CON .md")]
+    [InlineData("plugin/COM¹.md")]
+    [InlineData("plugin/LPT³.md")]
+    [InlineData("plugin/trailing.")]
+    [InlineData("plugin/trailing ")]
     public void Source_validation_rejects_a_noncanonical_subdirectory(string subdirectory)
     {
         var source = Source();
