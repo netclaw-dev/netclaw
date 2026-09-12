@@ -313,11 +313,18 @@ internal static class ToolCycleSignatureFactory
     {
         var prepared = calls.Select(call =>
         {
+            var rejection = executor.ValidateToolCall(call);
             var (_, cleaned) = executor.PrepareToolCall(call);
+            // Only valid metadata is irrelevant to execution identity. A repair
+            // must differ from a rejected call, even after a cycle correction.
+            var arguments = rejection is null ? cleaned.Arguments : call.Arguments;
             return new PreparedToolCycleCall(
                 call.CallId,
                 cleaned.Name,
-                HashCanonicalArguments(cleaned.Arguments));
+                HashFields([
+                    rejection is null ? "accepted" : "rejected",
+                    rejection?.DenyReason ?? string.Empty,
+                    HashCanonicalArguments(arguments)]));
         }).ToArray();
 
         var action = new ToolActionSignature(HashFields(

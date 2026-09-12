@@ -839,7 +839,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
         if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
         {
-            _log.Warning(
+            Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
                 "Subagent tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
                 cycleDecision.Kind,
                 cycleDecision.Period,

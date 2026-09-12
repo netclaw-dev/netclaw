@@ -18,6 +18,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
 using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
 using Xunit;
@@ -853,6 +854,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     [Fact]
     public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution()
     {
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
         _fakeChatClient.ToolCallsOnFirstCall =
         [
             new FunctionCallContent(
@@ -902,6 +905,17 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Contains("repeated action-and-outcome cycle", results[2].Result, StringComparison.Ordinal);
         Assert.Equal(2, _fakeToolExecutor.CallCount);
         Assert.Equal(5, _fakeChatClient.CallCount);
+        for (var i = 0; i < 2; i++)
+        {
+            var diagnostic = await diagnostics.FishForMessageAsync<Warning>(
+                warning => warning.Message.ToString()!.StartsWith("Tool cycle decision", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(typeof(TurnStateTracker), diagnostic.LogClass);
+            Assert.DoesNotContain(sessionId.Value, diagnostic.LogSource, StringComparison.Ordinal);
+            Assert.Equal($"TurnStateTracker (akka://{Sys.Name})", diagnostic.LogSource);
+            var properties = Assert.IsAssignableFrom<LogMessage>(diagnostic.Message).GetProperties();
+            Assert.Equal(["DecisionKind", "Period", "Repetitions"], properties.Keys.Order(StringComparer.Ordinal));
+        }
     }
 
     [Fact]

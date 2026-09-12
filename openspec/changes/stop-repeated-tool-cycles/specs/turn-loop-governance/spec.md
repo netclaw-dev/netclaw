@@ -9,8 +9,13 @@ Each requested tool batch SHALL have one deterministic action signature.
 Each completed batch SHALL have one deterministic iteration signature.
 
 The action signature SHALL use the canonical tool name and the arguments sent
-to execution. Netclaw SHALL remove its metadata before it computes the
+to execution. Netclaw SHALL remove valid metadata before it computes the
 signature. It SHALL exclude provider call identifiers.
+
+The factory SHALL use the executor's existing argument validation before
+comparison. Each call identity SHALL distinguish an accepted input from a
+rejected input. A rejected input SHALL retain its original arguments, including
+invalid metadata. This check SHALL NOT authorize or execute the call.
 
 Netclaw SHALL sort JSON object properties by ordinal name. It SHALL preserve
 array order, identifiers, paths, cursors, user values, and duplicate batch
@@ -22,9 +27,22 @@ model. Netclaw SHALL NOT infer a category from a text prefix.
 
 #### Scenario: Metadata and object order do not change an action
 
-- **GIVEN** two calls differ only by Netclaw metadata and JSON object property order
+- **GIVEN** two accepted calls differ only by valid Netclaw metadata and JSON object property order
 - **WHEN** Netclaw computes their action signatures
 - **THEN** the signatures are equal
+
+#### Scenario: A metadata repair changes a rejected action
+
+- **GIVEN** two calls failed because their rationale was absent or their timeout was invalid
+- **WHEN** the model repairs that metadata
+- **THEN** the repaired call differs from the rejected action
+- **AND** the normal policy path can process it, including after a cycle correction
+
+#### Scenario: Identical rejected inputs remain detectable
+
+- **GIVEN** a call has invalid metadata
+- **WHEN** the model repeats the exact rejected input and receives the same result twice
+- **THEN** the detector blocks the next identical rejected input
 
 #### Scenario: An identifier or array order changes an action
 
@@ -133,11 +151,19 @@ work. It SHALL prohibit a success claim for the blocked operation.
 Netclaw SHALL keep cycle state actor-local and non-durable. A new user message
 SHALL clear the completed history and the last blocked action.
 
+The parent actor SHALL retain the origin of each buffered message. It SHALL
+reset the turn state when it consumes new user input at any buffer drain.
+An overflow replay alone SHALL NOT reset the turn state. A replay together
+with new user input SHALL reset it. An old batch's budget decision SHALL NOT
+force the new user turn into text-only mode.
+
 Normal compaction and empty-response retries SHALL preserve cycle and text-only
 stop state. Recovery SHALL start with empty cycle state.
 
 Diagnostics SHALL include only the cycle period, repetition count, and
 decision. They SHALL exclude arguments, results, session data, and hashes.
+The exclusion SHALL apply to event properties and the diagnostic source, not
+only to the message text. The source SHALL be constant across sessions.
 
 #### Scenario: Compaction preserves an active cycle
 

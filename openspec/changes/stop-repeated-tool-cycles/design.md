@@ -80,7 +80,9 @@ remain actor-local and will never enter a log, event, snapshot, or exception.
 The action input will contain these values:
 
 - The registry's canonical tool name.
-- The arguments after the existing metadata removal step.
+- Each call's validation state and stable rejection reason, if any.
+- Accepted arguments after the existing metadata removal step.
+- Original arguments, including invalid metadata, when validation rejects a call.
 - Each duplicate call in the batch.
 
 The canonical JSON writer will apply these rules:
@@ -90,6 +92,11 @@ The canonical JSON writer will apply these rules:
 - Preserve numbers, strings, booleans, nulls, paths, cursors, and identifiers.
 - Treat an absent argument object and an empty argument object consistently.
 - Exclude the provider call identifier.
+
+The factory will call the existing `ValidateToolCall` seam. It will not move
+`InterpretToolCall` or execution out of the tool pipeline. This preserves the
+pipeline's failure protocol. Valid rationale changes remain equivalent; a
+missing rationale and its valid repair do not.
 
 The factory will sort batch members by the tool name and argument hash. Equal
 actions will use the outcome category and result hash as stable tie breakers.
@@ -198,6 +205,14 @@ resets the tracker. Empty-response retries and normal compaction will reuse it.
 
 The existing reset for tool activity will stop clearing this state. A forced
 call will retain a closed reason for accurate parent and child results.
+
+The parent buffer will retain whether a message is new input or an overflow
+replay. One drain helper will consume that origin at all four drain paths.
+New input resets the tracker after the old batch completes. Replay alone
+preserves it. A reset also discards the old batch's budget decision.
+
+Detector diagnostics will use a constant type source without actor or session
+context. Tests will inspect the complete event, including its source and properties.
 
 Alternative: pass `forceNoTools: true` at selected call sites. This repeats the
 policy and can miss another retry path.

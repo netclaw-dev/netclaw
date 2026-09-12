@@ -76,7 +76,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
-    private readonly List<SendUserMessage> _buffer = [];
+    private readonly List<(SendUserMessage Message, bool IsReplay)> _buffer = [];
     // In-flight reminder/background-job dedup (transient; rebuilt from journal on recovery).
     private readonly InFlightTurnDedup _inFlightDedup = new();
     private readonly SessionSubscriberManager _subscribers = new();
@@ -504,7 +504,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
-            _buffer.Add(cmd);
+            _buffer.Add((cmd, false));
             TryReplyAck();
         });
 
@@ -999,12 +999,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
                 _buffer.Count, _turnState.ToolIterationCount);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-            _buffer.Clear();
+            if (DrainBufferedUserMessages())
+                budgetStatus = ToolBudgetStatus.Ok.Instance;
         }
 
         switch (budgetStatus)
@@ -1156,7 +1152,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _log.Info("Buffering user message (compaction in progress)");
-            _buffer.Add(cmd);
+            _buffer.Add((cmd, false));
             TryReplyAck();
         });
 
@@ -1366,12 +1362,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (SessionState.IsSystemNudge(candidate))
                 continue;
 
-            _buffer.Insert(0, new SendUserMessage
+            _buffer.Insert(0, (new SendUserMessage
             {
                 SessionId = _sessionId,
                 Content = candidate.Content ?? string.Empty,
                 MediaReferences = candidate.MediaReferences
-            });
+            }, true));
             _state = _state with { History = _state.History.GetRange(0, i) };
             return;
         }
@@ -1403,12 +1399,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (hadBufferedMessages)
         {
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-            _buffer.Clear();
+            DrainBufferedUserMessages();
         }
 
         if (resumeToolLoop || hadBufferedMessages)
@@ -1840,7 +1831,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
         if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
         {
-            _log.Warning(
+            Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
                 "Tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
                 cycleDecision.Kind,
                 cycleDecision.Period,
@@ -2186,14 +2177,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_buffer.Count > 0)
         {
             TurnLog().Info("turn_buffer_drain count={BufferCount}", _buffer.Count);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-
-            _buffer.Clear();
-            _recallManager.ResetForNewTurn(); // New user input — resolve recall fresh
+            DrainBufferedUserMessages();
             FireLlmCall();
             // Already in Processing — no transition needed, just fired a new LLM call
             return;
@@ -2201,6 +2185,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         ClearApprovalTurnState();
         TransitionTo(SessionPhase.Ready);
+    }
+
+    private bool DrainBufferedUserMessages()
+    {
+        var startsNewTurn = _buffer.Any(static buffered => !buffered.IsReplay);
+        if (startsNewTurn)
+        {
+            // A replay resumes the same turn. New input starts a fresh guard
+            // window only after the prior batch or response completes.
+            _turnState.ResetForNewTurn();
+            _recallManager.ResetForNewTurn();
+        }
+
+        foreach (var (message, _) in _buffer)
+        {
+            var refs = message.MediaReferences.Count > 0 ? message.MediaReferences : null;
+            _state = _state.AddUserMessage(message.Content, refs);
+        }
+
+        _buffer.Clear();
+        return startsNewTurn;
     }
 
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
@@ -2393,7 +2398,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!includeBuffered)
             return false;
 
-        return _buffer.Any(buffered => buffered.Source?.ReminderId == id);
+        return _buffer.Any(buffered => buffered.Message.Source?.ReminderId == id);
     }
 
     private bool IsBackgroundJobDedupHit(BackgroundJobId? bgJobId, bool includeBuffered)
@@ -2410,7 +2415,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!includeBuffered)
             return false;
 
-        return _buffer.Any(buffered => buffered.Source?.BackgroundJobId == id);
+        return _buffer.Any(buffered => buffered.Message.Source?.BackgroundJobId == id);
     }
 
     private bool ShouldCompact()
@@ -2569,7 +2574,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         foreach (var buffered in _buffer)
         {
-            Self.Tell(buffered);
+            Self.Tell(buffered.Message);
         }
         _buffer.Clear();
         CancelAndDisposeLlmCts();
@@ -4793,12 +4798,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
                 _buffer.Count, _turnState.ToolIterationCount);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-            _buffer.Clear();
+            if (DrainBufferedUserMessages())
+                budgetStatus = ToolBudgetStatus.Ok.Instance;
         }
 
         switch (budgetStatus)

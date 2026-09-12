@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Event;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
@@ -1683,6 +1684,8 @@ public class SubAgentActorTests : TestKit
     [Fact]
     public async Task Exact_tool_cycle_gets_one_correction_then_stops()
     {
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
         var executionCount = 0;
         var fakeTool = new FakeNetclawTool(
             "mutate_state",
@@ -1736,6 +1739,17 @@ public class SubAgentActorTests : TestKit
         Assert.Equal(2, toolResults.Count(static text => text == "loop result"));
         Assert.Single(toolResults, static text =>
             text.Contains("repeated action-and-outcome cycle", StringComparison.Ordinal));
+        for (var i = 0; i < 2; i++)
+        {
+            var diagnostic = await diagnostics.FishForMessageAsync<Warning>(
+                warning => warning.Message.ToString()!.StartsWith("Subagent tool cycle decision", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(typeof(Netclaw.Actors.Sessions.Handlers.TurnStateTracker), diagnostic.LogClass);
+            Assert.Equal($"TurnStateTracker (akka://{Sys.Name})", diagnostic.LogSource);
+            Assert.DoesNotContain(agent.Path.Name, diagnostic.LogSource, StringComparison.Ordinal);
+            var properties = Assert.IsAssignableFrom<LogMessage>(diagnostic.Message).GetProperties();
+            Assert.Equal(["DecisionKind", "Period", "Repetitions"], properties.Keys.Order(StringComparer.Ordinal));
+        }
     }
 
     [Fact]

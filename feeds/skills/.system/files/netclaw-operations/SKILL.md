@@ -182,6 +182,9 @@ Choose a different action or finish the task from the available evidence.
 Do not repeat the blocked batch.
 Netclaw disables tools for the turn if the same blocked batch appears again.
 Report incomplete work and do not claim that the blocked operation succeeded.
+If validation rejects metadata, repair the reported value before the retry.
+A valid metadata repair is not the same rejected action. A new user message
+starts a fresh cycle window; compaction alone does not.
 
 ## Large tool output
 

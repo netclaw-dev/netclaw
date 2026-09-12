@@ -60,3 +60,10 @@
 - [ ] 7.5 Run `openspec validate stop-repeated-tool-cycles --type change --strict` and `/opsx-verify`; verify implementation, specifications, and tasks agree.
 - [x] 7.6 Inspect the complete diff and generated artifacts; verify no private transcript, raw payload, hash, operational endpoint, or personal identifier is tracked.
 - [ ] 7.7 Sync and archive the change only after all tasks pass; verify the main specifications contain the final cycle contract and no static limit requirement.
+
+## 8. Review Corrections
+
+- [x] 8.1 Preserve per-call validation state and rejected metadata in cycle identity; verify valid repairs execute and identical rejected inputs still block.
+- [x] 8.2 Reset state at all genuine buffered user-input boundaries; verify overflow replay alone preserves the guard and old budget decisions do not stop new input.
+- [x] 8.3 Remove session context and actor paths from detector diagnostics; verify complete parent and child events contain only aggregate detector data.
+- [ ] 8.4 Push the fixes, check CI, and obtain an independent re-review; keep runtime acceptance gates distinct from code verification.
