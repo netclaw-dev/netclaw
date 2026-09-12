@@ -54,6 +54,15 @@ public sealed class GitSkillPluginSource
 public static class GitSkillPluginSourceValidator
 {
     public const int MaximumSourceCount = 20;
+    private static readonly char[] WindowsInvalidPathCharacters = ['<', '>', ':', '"', '|', '?', '*'];
+    private static readonly HashSet<string> WindowsReservedPathNames = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "COM¹", "COM²", "COM³",
+        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+        "LPT¹", "LPT²", "LPT³",
+    };
 
     public static bool TryValidateSources(IReadOnlyList<GitSkillPluginSource> sources, out string error)
     {
@@ -228,14 +237,27 @@ public static class GitSkillPluginSourceValidator
         candidate = candidate.Trim('/');
         var segments = candidate.Split('/');
         if (Path.IsPathRooted(value) || candidate.Length > 512 || candidate.Length == 0
-            || segments.Any(static segment => segment.Length is 0 or > 255 || segment is "." or "..")
-            || candidate.Any(char.IsControl))
+            || segments.Any(static segment => !IsPortablePathSegment(segment)))
         {
             error = "The repository subdirectory must be a safe relative path within the path limits.";
             return false;
         }
         path = string.Join('/', segments);
         return true;
+    }
+
+    private static bool IsPortablePathSegment(string segment)
+    {
+        if (segment.Length is 0 or > 255 || segment is "." or ".."
+            || segment.EndsWith(' ') || segment.EndsWith('.')
+            || segment.Any(char.IsControl)
+            || segment.IndexOfAny(WindowsInvalidPathCharacters) >= 0)
+        {
+            return false;
+        }
+
+        var stem = segment.Split('.', 2)[0].TrimEnd(' ', '.');
+        return !WindowsReservedPathNames.Contains(stem);
     }
 
     public static string Fingerprint(GitSkillPluginSource source)
