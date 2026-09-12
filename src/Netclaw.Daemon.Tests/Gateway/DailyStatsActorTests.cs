@@ -1,10 +1,9 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DailyStatsActorTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
@@ -73,9 +72,7 @@ public sealed class DailyStatsActorTests : IDisposable
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
-        SqliteConnection.ClearAllPools();
+        SqliteTestPools.Clear(_paths);
         _dir.Dispose();
     }
-
-
 }

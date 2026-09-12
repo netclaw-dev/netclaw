@@ -64,6 +64,9 @@ internal sealed class SignalRDaemonHubTransport : IDaemonHubTransport
         _connection.Closed += OnConnectionClosed;
     }
 
+    internal static SignalRDaemonHubTransport FromConnection(HubConnection connection)
+        => new(connection);
+
     public static SignalRDaemonHubTransport Create(
         string hubUrl,
         Func<Task<string?>>? accessTokenProvider,

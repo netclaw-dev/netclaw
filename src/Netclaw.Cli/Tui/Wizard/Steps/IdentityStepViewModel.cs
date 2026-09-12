@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="IdentityStepViewModel.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -264,7 +264,7 @@ public sealed class IdentityStepViewModel : IWizardStepViewModel, ISectionEditor
             - Cross-reference multiple sources when possible.
             - Always cite your sources with URLs.
             - Use file_read to inspect local reference material when needed.
-            - Use attach_file when the parent session needs to deliver an existing file.
+            - Return each authorized file path that the parent session should deliver.
             - Be thorough but concise — focus on facts and actionable information.
             - Use markdown formatting for structure (headers, lists, code blocks).
             - If a search returns no useful results, say so rather than guessing.

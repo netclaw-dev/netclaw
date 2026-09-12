@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="WebFetchTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -11,6 +11,8 @@ using HtmlAgilityPack;
 using Netclaw.Configuration;
 using Netclaw.Media;
 using Netclaw.Tools;
+using Netclaw.Security;
+using static Netclaw.Actors.Tools.PathAccessPolicy;
 
 namespace Netclaw.Actors.Tools;
 
@@ -19,11 +21,13 @@ namespace Netclaw.Actors.Tools;
 /// For HTML: default format preserves structure; text mode extracts plain text.
 /// For binary content (images, PDFs, etc.): saves raw bytes with correct extension.
 /// For other text content: saves as-is with the URL's file extension preserved.
-/// Returns a summary with the file path so the agent can use file_read,
-/// grep, or attach_file to work with the content.
+/// Returns a summary with the file path so the agent can inspect or deliver
+/// the saved content through an available tool.
 /// </summary>
 [NetclawTool("web_fetch",
-    "Fetch a URL and save its content to a local file. HTML: format='raw' (default) preserves structure, format='text' extracts plain text. Binary (images, PDFs): saves raw bytes with correct extension. Returns file path with preview. Use file_read to examine content or attach_file to send binary files to the user.",
+    "Use for retrieving a known external page or URL. Save content to a local file without shell. " +
+    "HTML raw mode preserves structure; text mode extracts text. Binary content keeps its correct extension. " +
+    "Returns a file path with preview. Use file_read to examine content. Use an available file-delivery tool, or return the saved path to the caller.",
     Grant = "web")]
 public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 {
@@ -40,6 +44,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
     ];
 
+    private readonly PathAccessPolicy _pathAccessPolicy;
     private readonly WebFetchConfig _webFetchConfig;
     private readonly HttpClient _httpClient;
     private readonly string _fetchDirectory;
@@ -51,20 +56,19 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         [property: Description("Output format: 'raw' (default) preserves HTML structure (links, images, tables); 'text' extracts plain text only")]
         string? Format = null);
 
-    public WebFetchTool(ToolConfig config, HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
+    public WebFetchTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy protectedPaths,
+        HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
+        : this(config, new PathAccessPolicy(config, paths, protectedPaths), httpClient, fetchDirectory, timeProvider) { }
+
+    internal WebFetchTool(ToolConfig config, PathAccessPolicy pathAccessPolicy,
+        HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
     {
+        _pathAccessPolicy = pathAccessPolicy;
         _webFetchConfig = config.WebFetch;
         _httpClient = httpClient ?? new HttpClient();
-        _fetchDirectory = fetchDirectory
-            ?? Path.Combine(Path.GetTempPath(), "netclaw-fetch");
+        _fetchDirectory = fetchDirectory ?? Path.Combine(Path.GetTempPath(), "netclaw-fetch");
         _timeProvider = timeProvider ?? TimeProvider.System;
     }
-
-    /// <summary>
-    /// Test convenience constructor — uses default config.
-    /// </summary>
-    public WebFetchTool(HttpClient? httpClient = null, string? fetchDirectory = null, TimeProvider? timeProvider = null)
-        : this(new ToolConfig(), httpClient, fetchDirectory, timeProvider) { }
 
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
@@ -114,7 +118,10 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 
                 var extension = GetExtensionFromUrl(uri)
                     ?? GetFallbackExtension(contentType, isBinary: true);
-                var filePath = SaveBytesToFile(bytes, uri, fetchDir, extension);
+                var saved = SaveBytesToFile(bytes, uri, fetchDir, extension);
+                if (saved is PathAccessDecision.Denied denied)
+                    return context.PathAccessFailure(denied.Error, denied.Failure);
+                var filePath = saved.GetAllowedPath();
 
                 var binarySummary = FormatBinarySummary(uri.ToString(), filePath, bytes.Length, contentType);
                 return binaryTruncated ? binarySummary + TruncationNotice : binarySummary;
@@ -156,7 +163,10 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
             if (string.IsNullOrWhiteSpace(savedContent))
                 return $"Fetched {args.Url} but the page contained no extractable content.";
 
-            var textFilePath = SaveToFile(savedContent, uri, fetchDir, textExtension);
+            var textSaved = SaveToFile(savedContent, uri, fetchDir, textExtension);
+            if (textSaved is PathAccessDecision.Denied textDenied)
+                return context.PathAccessFailure(textDenied.Error, textDenied.Failure);
+            var textFilePath = textSaved.GetAllowedPath();
             var lineCount = savedContent.Count(c => c == '\n') + 1;
 
             var summary = FormatSummary(uri.ToString(), title, textFilePath, savedContent.Length, lineCount, previewText);
@@ -262,24 +272,39 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
 
     private string BuildFilePath(Uri uri, string directory, string extension)
     {
-        Directory.CreateDirectory(directory);
         var sanitized = SanitizeForFilename(uri);
-        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeSeconds()}{extension}";
+
+        // The timestamp is for a human to read and sort, not for uniqueness.
+        // Two fetches of the same URL within one second gave the same
+        // filename, and File.WriteAllBytes/WriteAllText overwrote the first
+        // fetch with no warning. The guid segment gives real uniqueness;
+        // millisecond precision keeps same-second fetches in fetch order
+        // when the directory is sorted by name.
+        var uniqueSuffix = Guid.NewGuid().ToString("N")[..8];
+        var filename = $"{sanitized}-{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}-{uniqueSuffix}{extension}";
         return Path.Combine(directory, filename);
     }
 
-    private string SaveBytesToFile(byte[] content, Uri uri, string directory, string extension)
+    private PathAccessDecision SaveBytesToFile(byte[] content, Uri uri, string directory, string extension)
     {
-        var filePath = BuildFilePath(uri, directory, extension);
+        var decision = _pathAccessPolicy.EvaluateGeneratedDestination(BuildFilePath(uri, directory, extension), directory);
+        if (decision is not PathAccessDecision.Allowed allowed)
+            return decision;
+        var filePath = allowed.CanonicalPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         File.WriteAllBytes(filePath, content);
-        return filePath;
+        return decision;
     }
 
-    private string SaveToFile(string content, Uri uri, string directory, string extension)
+    private PathAccessDecision SaveToFile(string content, Uri uri, string directory, string extension)
     {
-        var filePath = BuildFilePath(uri, directory, extension);
+        var decision = _pathAccessPolicy.EvaluateGeneratedDestination(BuildFilePath(uri, directory, extension), directory);
+        if (decision is not PathAccessDecision.Allowed allowed)
+            return decision;
+        var filePath = allowed.CanonicalPath;
+        Directory.CreateDirectory(Path.GetDirectoryName(filePath)!);
         File.WriteAllText(filePath, content, Encoding.UTF8);
-        return filePath;
+        return decision;
     }
 
     private static string FormatSummary(
@@ -315,7 +340,7 @@ public sealed partial class WebFetchTool : NetclawTool<WebFetchTool.Params>
         sb.AppendLine($"Saved to: {filePath} ({byteCount:N0} bytes)");
         sb.AppendLine($"Content-Type: {contentType}");
         sb.AppendLine();
-        sb.AppendLine("This is a binary file. Use attach_file to send it to the user, or file_read if the format supports text extraction.");
+        sb.AppendLine("This is a binary file. Use file_read if the format supports text extraction. Use an available file-delivery tool, or return the saved path to the caller.");
         return sb.ToString().TrimEnd();
     }
 

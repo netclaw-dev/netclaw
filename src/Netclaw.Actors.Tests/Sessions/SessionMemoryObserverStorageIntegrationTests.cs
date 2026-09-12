@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SessionMemoryObserverStorageIntegrationTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -60,7 +60,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         try
         {
             var curationActor = Sys.ActorOf(
-                MemoryCurationActor.CreateProps(store, new SessionId("test-session")),
+                MemoryCurationActor.CreateProps(store, new SessionId("test-session"), new MemoryCurationConfig()),
                 "curation-create");
 
             var probe = CreateTestProbe("curation-create-probe");
@@ -106,7 +106,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         try
         {
             var curationActor = Sys.ActorOf(
-                MemoryCurationActor.CreateProps(store, new SessionId("test-session")),
+                MemoryCurationActor.CreateProps(store, new SessionId("test-session"), new MemoryCurationConfig()),
                 "curation-batch");
 
             var probe = CreateTestProbe("curation-batch-probe");
@@ -163,7 +163,7 @@ public sealed class SessionMemoryObserverStorageIntegrationTests : TestKit
         try
         {
             var curationActor = Sys.ActorOf(
-                MemoryCurationActor.CreateProps(store, new SessionId("test-session")),
+                MemoryCurationActor.CreateProps(store, new SessionId("test-session"), new MemoryCurationConfig()),
                 "curation-empty");
 
             var probe = CreateTestProbe("curation-empty-probe");

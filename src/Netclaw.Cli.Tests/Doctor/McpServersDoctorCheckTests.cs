@@ -1,14 +1,13 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="McpServersDoctorCheckTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Net;
-using System.Net.Sockets;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Doctor;
+using Netclaw.Cli.Mcp;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -67,7 +66,13 @@ public sealed class McpServersDoctorCheckTests : IDisposable
             }
         });
 
-        var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => throw new HttpRequestException("daemon offline")));
+        var check = new McpServersDoctorCheck(
+            _paths,
+            CreateDaemonApi(_ => throw new HttpRequestException("daemon offline")),
+            (_, _, _) => Task.FromResult(new McpProbeResult(
+                McpProbeStatus.Unreachable,
+                0,
+                "connection failed")));
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         // Single enabled server that can't connect → Error
@@ -195,7 +200,48 @@ public sealed class McpServersDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("auth failed", result.Message);
-        Assert.Contains("netclaw mcp auth", result.Remediation);
+        // The daemon already chose the remedy for this server. Doctor repeats that status
+        // line and points at it, instead of naming a second remedy of its own.
+        Assert.Contains("netclaw mcp auth", result.Message);
+        Assert.Contains("status line", result.Remediation);
+    }
+
+    [Fact]
+    public async Task DaemonReportedAuthFailureWithoutOAuth_RepeatsTheCredentialRemedy()
+    {
+        WriteConfig(new
+        {
+            configVersion = 1,
+            McpServers = new
+            {
+                shortio = new
+                {
+                    Transport = "http",
+                    Url = "https://mcp.example.com",
+                    Enabled = true,
+                }
+            }
+        });
+
+        var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            shortio = new
+            {
+                state = "AuthFailed",
+                toolCount = 0,
+                error = "Authentication rejected by server (401 Unauthorized). Check configured credentials or headers."
+            }
+        })));
+
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        // The daemon runs no OAuth flow for this server, so its status names the operator's
+        // own credential. Doctor must not add `netclaw mcp auth` on top of that.
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("auth failed", result.Message);
+        Assert.Contains("credentials or headers", result.Message);
+        Assert.DoesNotContain("netclaw mcp auth", result.Remediation);
+        Assert.DoesNotContain("netclaw mcp auth", result.Message);
     }
 
     [Fact]
@@ -234,8 +280,6 @@ public sealed class McpServersDoctorCheckTests : IDisposable
     [Fact]
     public async Task OfflineOAuthProbe_DoesNotClaimAuthFailure()
     {
-        using var server = new UnauthorizedHttpServer();
-
         WriteConfig(new
         {
             configVersion = 1,
@@ -244,14 +288,20 @@ public sealed class McpServersDoctorCheckTests : IDisposable
                 notion = new
                 {
                     Transport = "http",
-                    Url = server.Url,
+                    Url = "https://mcp.example.com",
                     Enabled = true,
                     OAuthClientId = "client-id"
                 }
             }
         });
 
-        var check = new McpServersDoctorCheck(_paths, CreateDaemonApi(_ => throw new HttpRequestException("daemon offline")));
+        var check = new McpServersDoctorCheck(
+            _paths,
+            CreateDaemonApi(_ => throw new HttpRequestException("daemon offline")),
+            (_, _, _) => Task.FromResult(new McpProbeResult(
+                McpProbeStatus.AwaitingAuth,
+                0,
+                null)));
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
         Assert.Equal(DoctorSeverity.Warning, result.Severity);
@@ -274,64 +324,4 @@ public sealed class McpServersDoctorCheckTests : IDisposable
         return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);
     }
 
-    private sealed class UnauthorizedHttpServer : IDisposable
-    {
-        private readonly HttpListener _listener = new();
-        private readonly Task _serverTask;
-
-        public UnauthorizedHttpServer()
-        {
-            var port = GetFreePort();
-            Url = $"http://127.0.0.1:{port}/mcp";
-            _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
-            _listener.Start();
-            _serverTask = Task.Run(ServeAsync);
-        }
-
-        public string Url { get; }
-
-        public void Dispose()
-        {
-            _listener.Close();
-
-            var task = _serverTask;
-            if (task.IsFaulted)
-            {
-                var exception = task.Exception?.GetBaseException();
-                if (exception is not HttpListenerException and not ObjectDisposedException)
-                    throw exception ?? task.Exception!;
-            }
-        }
-
-        private async Task ServeAsync()
-        {
-            while (_listener.IsListening)
-            {
-                HttpListenerContext context;
-                try
-                {
-                    context = await _listener.GetContextAsync();
-                }
-                catch (HttpListenerException)
-                {
-                    break;
-                }
-                catch (ObjectDisposedException)
-                {
-                    break;
-                }
-
-                context.Response.StatusCode = (int)HttpStatusCode.Unauthorized;
-                context.Response.Headers["WWW-Authenticate"] = "Bearer";
-                context.Response.Close();
-            }
-        }
-
-        private static int GetFreePort()
-        {
-            using var listener = new TcpListener(IPAddress.Loopback, 0);
-            listener.Start();
-            return ((IPEndPoint)listener.LocalEndpoint).Port;
-        }
-    }
 }

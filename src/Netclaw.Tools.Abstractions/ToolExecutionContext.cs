@@ -19,6 +19,111 @@ public sealed record ModelInputFileInfo(string FilePath, string FileName, MimeTy
 /// </summary>
 public sealed record FileAttachmentInfo(string FilePath, string FileName, MimeType MimeType);
 
+internal enum ToolInvocationOutcomeCategory
+{
+    Success,
+    InvalidInput,
+    AccessDenied,
+    NotFound,
+    TransientFailure,
+    RecoverableCorrection
+}
+
+internal enum ToolRemediationCode
+{
+    SetWorkingDirectory,
+    UseManagedTemporaryDirectory,
+    ProvideUniqueOldString,
+    UseNativeTool
+}
+
+internal enum ToolFileActivityKind
+{
+    Read,
+    Changed
+}
+
+internal sealed record ToolFileActivity
+{
+    public ToolFileActivity(string canonicalPath, ToolFileActivityKind kind)
+    {
+        if (!Enum.IsDefined(kind))
+            throw new ArgumentOutOfRangeException(nameof(kind));
+        if (!ToolInvocationReceipt.IsCanonicalAbsolutePath(canonicalPath))
+            throw new ArgumentException("File activity requires a canonical absolute path.", nameof(canonicalPath));
+
+        CanonicalPath = canonicalPath;
+        Kind = kind;
+    }
+
+    public string CanonicalPath { get; }
+    public ToolFileActivityKind Kind { get; }
+}
+
+internal abstract class ToolInvocationReceipt
+{
+    private ToolInvocationReceipt(ToolInvocationOutcomeCategory category) => Category = category;
+
+    public ToolInvocationOutcomeCategory Category { get; }
+
+    internal sealed class Succeeded : ToolInvocationReceipt
+    {
+        public Succeeded(IReadOnlyList<ToolFileActivity> fileActivity, string? declaredProjectDirectory)
+            : base(ToolInvocationOutcomeCategory.Success)
+        {
+            if (declaredProjectDirectory is not null && !IsCanonicalAbsolutePath(declaredProjectDirectory))
+                throw new ArgumentException("Declared project directory requires a canonical absolute path.", nameof(declaredProjectDirectory));
+            FileActivity = Array.AsReadOnly(fileActivity.ToArray());
+            DeclaredProjectDirectory = declaredProjectDirectory;
+        }
+
+        public IReadOnlyList<ToolFileActivity> FileActivity { get; }
+        public string? DeclaredProjectDirectory { get; }
+    }
+
+    internal sealed class Correction : ToolInvocationReceipt
+    {
+        public Correction(ToolRemediationCode remediationCode) : base(ToolInvocationOutcomeCategory.RecoverableCorrection)
+        {
+            if (!Enum.IsDefined(remediationCode))
+                throw new ArgumentOutOfRangeException(nameof(remediationCode));
+            RemediationCode = remediationCode;
+        }
+
+        public ToolRemediationCode RemediationCode { get; }
+    }
+
+    internal sealed class OtherOutcome : ToolInvocationReceipt
+    {
+        public OtherOutcome(ToolInvocationOutcomeCategory category) : base(category)
+        {
+            if (!Enum.IsDefined(category))
+                throw new ArgumentOutOfRangeException(nameof(category));
+            if (category is ToolInvocationOutcomeCategory.Success or ToolInvocationOutcomeCategory.RecoverableCorrection)
+                throw new ArgumentException("This outcome requires its dedicated receipt case.", nameof(category));
+        }
+    }
+
+    internal static bool IsCanonicalAbsolutePath(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)
+            || path.Any(char.IsControl)
+            || !Path.IsPathFullyQualified(path))
+        {
+            return false;
+        }
+
+        try
+        {
+            return string.Equals(path, Path.GetFullPath(path), StringComparison.Ordinal);
+        }
+        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        {
+            return false;
+        }
+    }
+}
+
 /// <summary>
 /// Machine-readable working-context handoff from an ephemeral subagent run.
 /// Confirmed changes have first-party tool provenance; observed changes are
@@ -186,17 +291,26 @@ public abstract record ToolSessionScope
 
     public sealed record Bound : ToolSessionScope
     {
-        public Bound(string sessionId, string? sessionDirectory)
+        /// <summary>Creates a session scope with one complete resolved storage layout.</summary>
+        /// <param name="sessionId">The session identifier.</param>
+        /// <param name="storage">The resolved storage layout.</param>
+        public Bound(string sessionId, SessionStoragePaths storage)
         {
             if (string.IsNullOrWhiteSpace(sessionId))
                 throw new ArgumentException("Session id is required for a bound tool run.", nameof(sessionId));
 
             SessionId = sessionId;
-            SessionDirectory = sessionDirectory;
+            Storage = storage ?? throw new ArgumentNullException(nameof(storage));
         }
 
+        /// <summary>Gets the session identifier.</summary>
         public string SessionId { get; }
-        public string? SessionDirectory { get; }
+
+        /// <summary>Gets the complete resolved storage layout.</summary>
+        public SessionStoragePaths Storage { get; }
+
+        /// <summary>Gets the session workspace from <see cref="Storage"/>.</summary>
+        public string SessionDirectory => Storage.SessionDirectory.Value;
     }
 }
 
@@ -240,6 +354,7 @@ public sealed class ToolExecutionOutputs
     private readonly Action<SubAgentNotificationInfo>? _subAgentActivitySink;
     private List<FileAttachmentInfo>? _fileAttachments;
     private List<ModelInputFileInfo>? _modelInputFiles;
+    private ToolInvocationReceipt? _receipt;
 
     public ToolExecutionOutputs()
     {
@@ -257,6 +372,8 @@ public sealed class ToolExecutionOutputs
     public IReadOnlyList<ModelInputFileInfo> ModelInputFiles
         => _modelInputFiles?.AsReadOnly() ?? (IReadOnlyList<ModelInputFileInfo>)[];
 
+    internal ToolInvocationReceipt? Receipt => Volatile.Read(ref _receipt);
+
     public void AddFileAttachment(string filePath, string fileName, MimeType mimeType)
     {
         _fileAttachments ??= [];
@@ -272,8 +389,40 @@ public sealed class ToolExecutionOutputs
     public void ReportSubAgentActivity(SubAgentNotificationInfo notification)
         => _subAgentActivitySink?.Invoke(notification);
 
+    internal bool TryComplete(ToolInvocationReceipt receipt)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        return Interlocked.CompareExchange(ref _receipt, receipt, null) is null;
+    }
+
     public ToolExecutionOutputs Fork()
         => _subAgentActivitySink is null ? new ToolExecutionOutputs() : new ToolExecutionOutputs(_subAgentActivitySink);
+}
+
+/// <summary>
+/// Identifies the managed directory and the platform temporary root for one correction.
+/// </summary>
+internal readonly record struct ManagedTemporaryCorrectionTarget
+{
+    /// <summary>Creates one correction target from the suggested and original directories.</summary>
+    /// <param name="managedTemporaryDirectory">The replacement directory that Netclaw suggested.</param>
+    /// <param name="platformTemporaryRoot">The original platform temporary root.</param>
+    internal ManagedTemporaryCorrectionTarget(
+        string managedTemporaryDirectory,
+        string platformTemporaryRoot)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(managedTemporaryDirectory);
+        ArgumentException.ThrowIfNullOrWhiteSpace(platformTemporaryRoot);
+
+        ManagedTemporaryDirectory = managedTemporaryDirectory;
+        PlatformTemporaryRoot = platformTemporaryRoot;
+    }
+
+    /// <summary>Gets the replacement directory that Netclaw suggested.</summary>
+    internal string ManagedTemporaryDirectory { get; }
+
+    /// <summary>Gets the original platform temporary root.</summary>
+    internal string PlatformTemporaryRoot { get; }
 }
 
 /// <summary>
@@ -286,11 +435,19 @@ public sealed class ToolApprovalAttempt
         Array.Empty<string>().ToFrozenSet(StringComparer.OrdinalIgnoreCase);
     private IReadOnlySet<string>? _oneTimeApprovedPatterns;
 
+    public ToolApprovalAttempt()
+    {
+        AuthorizationAttemptId = AuthorizationAttemptId.New();
+    }
+
+    internal AuthorizationAttemptId AuthorizationAttemptId { get; private set; }
+
     public string? Cwd { get; private set; }
     public string? OneTimeApprovedToolName { get; private set; }
     public IReadOnlySet<string> OneTimeApprovedPatterns => _oneTimeApprovedPatterns ?? EmptyPatterns;
     public string? AppliedDecision { get; private set; }
     public string? AppliedPattern { get; private set; }
+    internal ManagedTemporaryCorrectionTarget? ManagedTemporaryRetry { get; private set; }
 
     public void SetCwd(string? cwd) => Cwd = cwd;
 
@@ -317,6 +474,18 @@ public sealed class ToolApprovalAttempt
         AppliedDecision = null;
         AppliedPattern = null;
     }
+
+    internal void MarkManagedTemporaryRetry(ManagedTemporaryCorrectionTarget retry)
+        => ManagedTemporaryRetry = retry;
+
+    internal void RestoreAuthorizationAttemptId(AuthorizationAttemptId authorizationAttemptId)
+    {
+        if (string.IsNullOrEmpty(authorizationAttemptId.Value))
+            throw new ArgumentException("Authorization attempt id is required.", nameof(authorizationAttemptId));
+
+        AuthorizationAttemptId = authorizationAttemptId;
+    }
+
 }
 
 /// <summary>
@@ -351,7 +520,7 @@ public sealed class ToolInvocationContext
         if (runScope.Session is ToolSessionScope.Bound bound)
         {
             SessionId = bound.SessionId;
-            SessionDirectory = bound.SessionDirectory;
+            SessionStorage = bound.Storage;
         }
     }
 
@@ -423,16 +592,18 @@ public sealed class ToolInvocationContext
     public string? SessionId { get; }
 
     /// <summary>
-    /// Session-scoped temp directory for tools that write files to disk.
-    /// Created lazily on first access.
+    /// Session workspace used as the default base for relative tool paths.
     /// </summary>
-    public string? SessionDirectory { get; }
+    public string? SessionDirectory => SessionStorage?.SessionDirectory.Value;
+
+    /// <summary>Gets the complete resolved storage layout for a bound session.</summary>
+    public SessionStoragePaths? SessionStorage { get; }
 
     /// <summary>
     /// The session <i>content</i> inline budget
     /// (<c>SessionTuning.MaxInlineToolResultChars</c>), surfaced here so
     /// <c>DispatchingToolExecutor</c> can bound a tool result and spill the
-    /// overflow to <c>{SessionDirectory}/tool-calls/{callId}.log</c>. The dispatcher
+    /// overflow inside the current session for opaque call-id continuation. The dispatcher
     /// uses a tool's own <c>InlineOutputBudgetChars</c> override when set (verbose
     /// tools), else this content budget. Zero when unset (the dispatcher falls back
     /// to its built-in content default).
@@ -475,8 +646,8 @@ public sealed class ToolInvocationContext
     /// <c>WorkingDirectory</c> argument when the agent provided one;</item>
     /// <item><see cref="ProjectDirectory"/> — the session's declared project
     /// root, populated from <c>WorkingContext.ProjectDirectory</c>;</item>
-    /// <item><see cref="SessionDirectory"/> — the per-session scratch
-    /// directory under <c>~/.netclaw/sessions/&lt;id&gt;/</c>;</item>
+    /// <item><see cref="SessionDirectory"/> — the session workspace and
+    /// relative-path fallback;</item>
     /// <item><see cref="InheritedCwd"/> — a sub-agent's snapshot of the
     /// parent's resolved cwd, used when the child has no
     /// <see cref="ProjectDirectory"/> or <see cref="SessionDirectory"/> of
@@ -485,8 +656,8 @@ public sealed class ToolInvocationContext
     /// Returns <c>null</c> only when none of the four is available, which is
     /// the contract for tools that are not directory-anchored. Shell tools
     /// SHALL never inherit the daemon process's cwd — that defeats the
-    /// approval policy's safe-space invariant because the daemon's cwd is
-    /// unrelated to what the agent is "working on."
+    /// approval policy's path-containment invariant because the daemon's cwd
+    /// is unrelated to what the agent is "working on."
     /// </summary>
     public string? ResolveShellCwd(string? explicitArg)
     {
@@ -531,6 +702,11 @@ public sealed class ToolInvocationContext
     internal void AddModelInputFile(string filePath, string fileName, MimeType mimeType)
         => Outputs.AddModelInputFile(filePath, fileName, mimeType);
 
+    internal ToolInvocationReceipt? Receipt => Outputs.Receipt;
+
+    internal bool TryComplete(ToolInvocationReceipt receipt)
+        => Outputs.TryComplete(receipt);
+
 }
 
 /// <summary>
@@ -570,11 +746,14 @@ public sealed class ToolExecutionContext
     public string? ChannelType => Invocation.ChannelType;
     public string? SessionId => Invocation.SessionId;
     public string? SessionDirectory => Invocation.SessionDirectory;
+    public SessionStoragePaths? SessionStorage => Invocation.SessionStorage;
     public int MaxInlineToolResultChars => Invocation.MaxInlineToolResultChars;
     public string? ProjectDirectory => Invocation.ProjectDirectory;
     public ModelModality ModelInputModalities => Invocation.ModelInputModalities;
 
     internal IReadOnlyList<FileAttachmentInfo> FileAttachments => Invocation.FileAttachments;
+
+    internal ToolInvocationReceipt? Receipt => Outputs.Receipt;
 
     internal void AddModelInputFile(string filePath, string fileName, string mimeType)
         => Invocation.AddModelInputFile(filePath, fileName, mimeType);

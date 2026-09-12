@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 
 namespace Netclaw.Actors.Sessions;
@@ -23,7 +25,7 @@ public sealed record ContextAssemblyInput(
     string? SessionPromptOverlay,
     string? TurnRestartNotice,
     SessionId SessionId,
-    string SessionsBasePath,
+    SessionStoragePaths Storage,
     bool FileReadGranted,
     AutomaticRecallResult? ActiveRecall,
     string WorkingContextBlock,
@@ -115,7 +117,7 @@ public static class SessionMessageAssembler
 
     public static List<AiChatMessage> Assemble(ContextAssemblyInput input)
     {
-        var sessionDir = SessionDirectoryHelper.GetSessionDirectory(input.SessionId, input.SessionsBasePath);
+        var sessionDir = input.Storage.SessionDirectory.Value;
         var messages = ChatMessageConverter.ToAiMessages(
             input.State.History,
             sessionDir,
@@ -187,8 +189,7 @@ public static class SessionMessageAssembler
         }
         else
         {
-            var sessionBlock = $"[session]\nid: {input.SessionId.Value}" + $"\nsession_dir: {sessionDir}";
-            parts.Add(sessionBlock);
+            parts.Add(SessionContextFormatter.Format(input.Storage, input.SessionId.Value));
         }
 
         if (input.FileReadGranted)
@@ -235,7 +236,7 @@ public static class SessionMessageAssembler
         }
 
         // Working context is suppressed for Public audience to avoid leaking
-        // internal operational state (project paths, scratch notes, etc.).
+        // internal operational state (project paths, temporary notes, etc.).
         if (!string.IsNullOrWhiteSpace(input.WorkingContextBlock) && input.Audience != TrustAudience.Public)
             parts.Add(input.WorkingContextBlock);
 

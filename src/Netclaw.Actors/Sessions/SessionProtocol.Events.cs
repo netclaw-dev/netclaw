@@ -132,6 +132,8 @@ public static partial class SessionProtocol
 
         public string CallId { get; init; } = string.Empty;
 
+        public string? AuthorizationAttemptId { get; init; }
+
         public string ToolName { get; init; } = string.Empty;
 
         public IReadOnlyList<string> Patterns { get; init; } = Array.Empty<string>();
@@ -161,6 +163,10 @@ public static partial class SessionProtocol
         public IReadOnlyList<ApprovalCandidate> Candidates { get; init; } =
             Array.Empty<ApprovalCandidate>();
 
+        public string? SessionScratchDirectory { get; init; }
+
+        public string? ManagedTemporaryDirectory { get; init; }
+
         public TurnContextRecord? TurnContext { get; init; }
 
         public long RequestedAtMs { get; init; }
@@ -173,6 +179,8 @@ public static partial class SessionProtocol
         public SessionId SessionId { get; init; }
 
         public string CallId { get; init; } = string.Empty;
+
+        public string? AuthorizationAttemptId { get; init; }
 
         public string Decision { get; init; } = string.Empty;
 

@@ -25,6 +25,12 @@ internal sealed record ObservedApproval(
     bool? IsMessy,
     IReadOnlyList<string> ApprovalMatches);
 
+internal sealed record ShellApprovalHarnessScope(
+    string ProjectDirectory,
+    string SessionDirectory,
+    string InvocationSessionId,
+    IReadOnlyList<string> OneTimeApprovalKeys);
+
 internal sealed class ShellApprovalHarness : IAsyncDisposable
 {
     private const string InvocationSessionId = "signalr/approval-matrix";
@@ -60,10 +66,27 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     public CountingApprovalService ApprovalService { get; }
 
-    public static async Task<ShellApprovalHarness> CreateAsync(
+    public static Task<ShellApprovalHarness> CreateAsync(
         ShellApprovalCase testCase,
         ActorSystem actorSystem,
         CancellationToken ct)
+        => CreateAsync(
+            testCase.Id,
+            testCase.Invocation,
+            testCase.Approvals,
+            actorSystem,
+            ct);
+
+    internal static async Task<ShellApprovalHarness> CreateAsync(
+        string caseId,
+        ShellApprovalInvocation invocation,
+        ApprovalState approvals,
+        ActorSystem actorSystem,
+        CancellationToken ct,
+        TimeProvider? timeProvider = null,
+        ShellApprovalHarnessScope? scope = null,
+        SafeVerbList? safeVerbs = null,
+        IReadOnlyList<string>? deniedPaths = null)
     {
         var rootDirectory = Path.Combine(
             CanonicalTemporaryDirectory(),
@@ -71,80 +94,104 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             Guid.NewGuid().ToString("N"));
         var projectDirectory = Path.Combine(rootDirectory, "project");
         var sessionDirectory = Path.Combine(rootDirectory, "session");
-        var externalDirectory = Path.Combine(rootDirectory, "external");
+        var externalDirectory = Path.Combine(rootDirectory, "workspaces", "external");
         Directory.CreateDirectory(projectDirectory);
         Directory.CreateDirectory(sessionDirectory);
         Directory.CreateDirectory(externalDirectory);
 
-        var environment = testCase.Invocation.CreateEnvironment();
-        var approvalProjectDirectory = projectDirectory;
-        var approvalSessionDirectory = sessionDirectory;
+        var environment = invocation.CreateEnvironment();
+        var approvalProjectDirectory = scope?.ProjectDirectory ?? projectDirectory;
+        var approvalSessionDirectory = scope?.SessionDirectory ?? sessionDirectory;
         var approvalExternalDirectory = externalDirectory;
-        if (environment.PathStyle == ShellPathStyle.Windows)
+        if (environment.PathStyle == ShellPathStyle.Windows && scope is null)
         {
             var windowsRoot = $"C:/netclaw-approval-matrix/{Guid.NewGuid():N}";
             approvalProjectDirectory = $"{windowsRoot}/project";
             approvalSessionDirectory = $"{windowsRoot}/session";
-            approvalExternalDirectory = $"{windowsRoot}/external";
+            approvalExternalDirectory = $"{windowsRoot}/workspaces/external";
         }
 
-        var store = new ToolApprovalStore(Path.Combine(rootDirectory, "tool-approvals.json"));
+        var approvalShell = environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        var store = new ToolApprovalStore(
+            Path.Combine(rootDirectory, "tool-approvals.json"),
+            timeProvider,
+            migrationContext: new ApprovalStoreMigrationContext(approvalShell),
+            lockTimeout: TimeSpan.Zero);
         var approvalActor = CreateApprovalActor(actorSystem, store);
         var approvalService = CreateApprovalService(approvalActor);
 
-        var persistentSeeds = testCase.Approvals.Seeds
+        var persistentSeeds = approvals.Seeds
             .Where(seed => seed.Source == ApprovalSeedSource.Persistent)
             .ToList();
-        foreach (var seed in persistentSeeds)
+        // Seed all persistent grants in ONE Ask per audience instead of one Ask
+        // per grant. The actor's RecordStructuredToolApproval handler persists a
+        // whole grant list in a single locked, atomic write (ToolApprovalStore.AddApprovals
+        // -> one SaveLocked), so the resulting store state is equivalent to N sequential seed
+        // messages (the only divergence is per-entry CreatedAt stamping under a real clock,
+        // which is unobservable here: fixture tests run on a frozen FakeTimeProvider and no
+        // harness test asserts seed timestamps). It removes N-1 synchronous WriteThrough +
+        // Flush(flushToDisk: true) file
+        // rewrites from the test's critical path: the Ask deadline is a hard 5s wall clock,
+        // and under full-suite parallel load on Windows CI (Defender scanning each new
+        // tool-approvals.json in a fresh %TEMP% tree) per-write latency of the heaviest case
+        // (D10, 5 seeds) occasionally exceeded it. Grouping by audience preserves the
+        // per-seed audience semantics for every harness caller.
+        foreach (var audienceGroup in persistentSeeds.GroupBy(seed => seed.Audience))
         {
-            await approvalService.RecordApprovalAsync(
+            await approvalService.RecordApprovalCandidatesAsync(
                 (ToolApprovalSessionId)"seed/persistent",
-                seed.Audience,
+                audienceGroup.Key,
                 new ToolName(ShellTool.ToolName),
-                [seed.Pattern],
+                audienceGroup
+                    .Select(seed => CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
+                        seed.Directory,
+                        approvalProjectDirectory,
+                        approvalSessionDirectory,
+                        approvalExternalDirectory)))
+                    .ToList(),
                 persistent: true,
-                ResolveDirectory(
-                    seed.Directory,
-                    approvalProjectDirectory,
-                    approvalSessionDirectory,
-                    approvalExternalDirectory),
                 ct);
         }
 
         if (persistentSeeds.Count > 0)
         {
-            await approvalActor.GracefulStop(TimeSpan.FromSeconds(5));
+            // The stop waits for a persistence flush and the actor teardown.
+            // The budget bounds a multi-hop shutdown under a starved CI
+            // scheduler. It does not measure correctness. Every shell-approval
+            // test goes through this shared harness, so a short budget makes a
+            // whole suite flake at once.
+            await approvalActor.GracefulStop(TimeSpan.FromSeconds(15));
             approvalActor = CreateApprovalActor(actorSystem, store);
             approvalService = CreateApprovalService(approvalActor);
         }
 
-        foreach (var seed in testCase.Approvals.Seeds.Where(seed => seed.Source == ApprovalSeedSource.Session))
+        foreach (var seed in approvals.Seeds.Where(seed => seed.Source == ApprovalSeedSource.Session))
         {
-            await approvalService.RecordApprovalAsync(
-                (ToolApprovalSessionId)ResolveSession(seed.Session),
+            await approvalService.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)ResolveSession(
+                    seed.Session,
+                    scope?.InvocationSessionId ?? InvocationSessionId),
                 seed.Audience,
                 new ToolName(ShellTool.ToolName),
-                [seed.Pattern],
+                [CreateGrant(seed.Pattern, approvalShell, directory: null)],
                 persistent: false,
-                cwd: null,
                 ct);
         }
 
         var countingApprovalService = new CountingApprovalService(approvalService);
         var config = CreateConfig();
         var commandPolicy = new ShellCommandPolicy(environment);
-        var deniedPaths = environment.Platform == ShellPlatform.Windows
-            ? new[] { @"C:\protected\config" }
-            : [];
-        var pathPolicy = new ToolPathPolicy(environment, deniedPaths);
+        var effectiveDeniedPaths = deniedPaths ?? (environment.Platform == ShellPlatform.Windows
+            ? [@"C:\protected\config"]
+            : []);
+        var pathPolicy = new ToolPathPolicy(environment, effectiveDeniedPaths);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            pathPolicy,
-            commandPolicy);
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var policy = new ToolAccessPolicy(
+            new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces")),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -153,32 +200,35 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 UsedStrictFallback: false),
             shellCommandPolicy: commandPolicy,
             toolPathPolicy: pathPolicy,
-            shellTrustZonePolicy: new ShellTrustZonePolicy(
-                config,
-                new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),
-            safeVerbs: SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows));
+            safeVerbs: safeVerbs ?? SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows));
         var executor = new DispatchingToolExecutor(registry, policy, countingApprovalService);
 
         var workingDirectory = ResolveDirectory(
-            testCase.Invocation.WorkingDirectory,
+            invocation.WorkingDirectory,
             approvalProjectDirectory,
             approvalSessionDirectory,
             approvalExternalDirectory);
         var arguments = workingDirectory is null
-            ? ToolInput.Create("Command", testCase.Invocation.Command)
+            ? ToolInput.Create("Command", invocation.Command)
             : ToolInput.Create(
-                "Command", testCase.Invocation.Command,
+                "Command", invocation.Command,
                 "WorkingDirectory", workingDirectory);
-        var toolCall = new FunctionCallContent(testCase.Id, ShellTool.ToolName, arguments);
+        var toolCall = new FunctionCallContent(caseId, ShellTool.ToolName, arguments);
         var context = TestToolExecutionContext.CreateBound(
-            InvocationSessionId,
+            scope?.InvocationSessionId ?? InvocationSessionId,
             approvalSessionDirectory,
             new TestToolExecutionContextOptions
             {
-                Audience = testCase.Invocation.Audience,
+                Audience = invocation.Audience,
                 ProjectDirectory = approvalProjectDirectory,
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(testCase.Invocation.Interactive)
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(invocation.Interactive)
             });
+        if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
+        {
+            context.Approval.SeedOneTimeApproval(
+                ShellTool.ToolName,
+                oneTimeApprovalKeys);
+        }
 
         return new ShellApprovalHarness(
             rootDirectory,
@@ -189,6 +239,22 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             context,
             executor,
             countingApprovalService);
+    }
+
+    private static ToolApprovalGrant CreateGrant(
+        string pattern,
+        ApprovalShell shell,
+        string? directory)
+    {
+        var tokens = Array.AsReadOnly(
+            pattern.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+        return new ToolApprovalGrant(
+            new ApprovalCandidate(pattern, Directory: null)
+            {
+                Shell = shell,
+                VerbTokens = tokens,
+            },
+            directory);
     }
 
     public async Task<ObservedApproval> EvaluateAsync(CancellationToken ct)
@@ -233,9 +299,19 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         File.CreateSymbolicLink(Path.Combine(_projectDirectory, relativePath), externalFile);
     }
 
+    public void CreateProjectFileSymlink(string linkPath, string targetPath)
+    {
+        File.WriteAllText(Path.Combine(_projectDirectory, targetPath), "synthetic test data");
+        File.CreateSymbolicLink(
+            Path.Combine(_projectDirectory, linkPath),
+            Path.Combine(_projectDirectory, targetPath));
+    }
+
     public async ValueTask DisposeAsync()
     {
-        await _approvalActor.GracefulStop(TimeSpan.FromSeconds(5));
+        // Same reason as the seed-phase stop above: the budget bounds a
+        // multi-hop teardown under a starved CI scheduler, not correctness.
+        await _approvalActor.GracefulStop(TimeSpan.FromSeconds(15));
         if (Directory.Exists(_rootDirectory))
             Directory.Delete(_rootDirectory, recursive: true);
     }
@@ -272,12 +348,14 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             $"approval-matrix-{Guid.NewGuid():N}");
 
     private static AkkaToolApprovalService CreateApprovalService(IActorRef actor)
-        => new(new StubRequiredActor(actor));
+        => new(new StubRequiredActor(actor), TestShellEnvironment.Current);
 
-    private static string ResolveSession(ApprovalSessionShape session)
+    private static string ResolveSession(
+        ApprovalSessionShape session,
+        string invocationSessionId)
         => session switch
         {
-            ApprovalSessionShape.Invocation => InvocationSessionId,
+            ApprovalSessionShape.Invocation => invocationSessionId,
             ApprovalSessionShape.Other => OtherSessionId,
             _ => throw new ArgumentOutOfRangeException(nameof(session), session, "Unknown approval session shape.")
         };
@@ -305,7 +383,10 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     }
 }
 
-internal sealed class CountingApprovalService(IToolApprovalService inner) : IToolApprovalService
+internal sealed class CountingApprovalService(IToolApprovalService inner) :
+    IToolApprovalService,
+    IStructuredToolApprovalService,
+    IShellApprovalMatchService
 {
     private int _checkCount;
 
@@ -321,6 +402,16 @@ internal sealed class CountingApprovalService(IToolApprovalService inner) : IToo
     {
         Interlocked.Increment(ref _checkCount);
         return await inner.CheckApprovalAsync(sessionId, audience, toolName, candidates, cwd, ct);
+    }
+
+    public async Task<ShellApprovalMatchResult> MatchShellCandidatesAsync(
+        ShellApprovalMatchRequest request,
+        CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _checkCount);
+        return await ((IShellApprovalMatchService)inner).MatchShellCandidatesAsync(
+            request,
+            cancellationToken);
     }
 
     public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
@@ -341,6 +432,21 @@ internal sealed class CountingApprovalService(IToolApprovalService inner) : IToo
         string? cwd,
         CancellationToken ct = default)
         => inner.RecordApprovalAsync(sessionId, audience, toolName, patterns, persistent, cwd, ct);
+
+    public Task RecordApprovalCandidatesAsync(
+        ToolApprovalSessionId sessionId,
+        TrustAudience audience,
+        ToolName toolName,
+        IReadOnlyList<ToolApprovalGrant> grants,
+        bool persistent,
+        CancellationToken ct = default)
+        => ((IStructuredToolApprovalService)inner).RecordApprovalCandidatesAsync(
+            sessionId,
+            audience,
+            toolName,
+            grants,
+            persistent,
+            ct);
 }
 
 public sealed class ShellApprovalMatrixFixture : IAsyncLifetime

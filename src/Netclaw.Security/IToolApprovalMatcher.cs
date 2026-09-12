@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 
 namespace Netclaw.Security;
 
@@ -19,7 +20,30 @@ namespace Netclaw.Security;
 /// One shell clause can produce multiple candidates when it accesses multiple
 /// authorization scopes.
 /// </summary>
-public sealed record ApprovalCandidate(string Verb, string? Directory);
+public sealed record ApprovalCandidate(string Verb, string? Directory)
+{
+    /// <summary>The immutable parser-owned canonical verb tokens.</summary>
+    public IReadOnlyList<string>? VerbTokens { get; init; }
+
+    /// <summary>The native shell grammar that produced the candidate.</summary>
+    public ApprovalShell? Shell { get; init; }
+
+    // Policy uses this parser reference before actor dispatch. The immutable
+    // projection removes it from approval and persistence candidates.
+    internal CommandOccurrence? SourceOccurrence { get; init; }
+
+    /// <summary>
+    /// Retains the released candidate identity contract. Parser metadata does
+    /// not change occurrence identity.
+    /// </summary>
+    public bool Equals(ApprovalCandidate? other) =>
+        other is not null &&
+        string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
+        string.Equals(Directory, other.Directory, StringComparison.Ordinal);
+
+    /// <inheritdoc />
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory);
+}
 
 /// <summary>
 /// Tool-specific pattern extraction and matching for the approval system.
@@ -214,69 +238,112 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         // The prompt groups a pipe as one approval unit. Authorization still
         // checks each clause so an unsafe tail cannot hide behind a safe head.
-        var seen = new HashSet<(string, string?)>();
         var candidates = new List<ApprovalCandidate>();
 
         foreach (var occurrence in result.Commands)
         {
-            var clause = occurrence.Clause;
-            // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds
-            // lowercase-leading value tokens into the verb chain (`git tag
-            // v0.4.2`, `git show aa211dcb`, `git checkout feature2`), while
-            // digit-leading ones (`0.4.2`) stop the walk and land in Args
-            // (verb stays `git tag`). Both are call-specific values, not
-            // approvable intent, so strip them off the chain before gating —
-            // otherwise `git tag v0.4.2` would miss a `git tag` grant that
-            // `git tag 0.4.2` matches. Mirrors the value-termination in
-            // ReconstructClauseText so the gate candidate and the persisted
-            // pattern normalize identically.
-            if (clause.Verb.IsDynamic)
-                continue;
-
-            var parsedVerb = clause.Verb.CanonicalVerb
-                ?? string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens));
-            var verb = ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
-            if (string.IsNullOrEmpty(verb))
-                continue;
-
-            var isSideEffectVerb = ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
-            var directories = ResolveCommandDirectories(
+            var occurrenceCandidates = ExtractCandidatesForOccurrence(
                 occurrence,
-                isSideEffectVerb,
                 workingDirectory,
-                Environment.PathStyle);
-            if (directories is null)
+                resolveUnknownPathsFromEffectiveValues: false);
+            if (occurrenceCandidates is null)
                 return [];
 
-            foreach (var directory in directories)
-            {
-                var key = (verb.ToLowerInvariant(), directory);
-                if (seen.Add(key))
-                    candidates.Add(new ApprovalCandidate(verb, directory));
-            }
+            candidates.AddRange(occurrenceCandidates);
         }
 
         return candidates;
     }
 
+    internal IReadOnlyList<ApprovalCandidate>? ExtractCandidatesForOccurrence(
+        CommandOccurrence occurrence,
+        string? workingDirectory,
+        bool resolveUnknownPathsFromEffectiveValues,
+        Func<string, bool>? isAllowedHostPath = null)
+    {
+        ArgumentNullException.ThrowIfNull(occurrence);
+
+        var clause = occurrence.Clause;
+        // ShellSyntaxTree's greedy verb walk (SPEC §6.1) folds
+        // lowercase-leading value tokens into the verb chain (`git tag
+        // v0.4.2`, `git show aa211dcb`, `git checkout feature2`), while
+        // digit-leading ones (`0.4.2`) stop the walk and land in Args
+        // (verb stays `git tag`). Both are call-specific values, not
+        // approvable intent, so strip them off the chain before gating.
+        if (clause.Verb.IsDynamic)
+            return null;
+
+        var parsedVerb = clause.Verb.CanonicalVerb
+            ?? string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens));
+        var verb = ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
+        if (string.IsNullOrEmpty(verb))
+            return null;
+
+        var isSideEffectVerb = ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
+        var directories = ResolveCommandDirectories(
+            occurrence,
+            verb,
+            isSideEffectVerb,
+            workingDirectory,
+            Environment.PathStyle,
+            resolveUnknownPathsFromEffectiveValues,
+            isAllowedHostPath);
+        if (directories is null)
+            return null;
+
+        var shell = Environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        return directories
+            .Select(directory => new ApprovalCandidate(verb, directory)
+            {
+                VerbTokens = GetCanonicalVerbTokens(clause),
+                Shell = shell,
+                SourceOccurrence = occurrence,
+            })
+            .ToArray();
+    }
+
+    private static IReadOnlyList<string>? GetCanonicalVerbTokens(
+        ShellSyntaxTree.Clause clause)
+    {
+        var tokens = clause.Verb.Tokens.ToArray();
+        if (tokens.Length == 0)
+        {
+            return null;
+        }
+
+        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
+        {
+            tokens[0] = canonicalVerb;
+        }
+
+        return Array.AsReadOnly(tokens);
+    }
+
     private static IReadOnlyList<string?>? ResolveCommandDirectories(
         ShellSyntaxTree.CommandOccurrence occurrence,
+        string verb,
         bool isSideEffectVerb,
         string? workingDirectory,
-        ShellPathStyle pathStyle)
+        ShellPathStyle pathStyle,
+        bool resolveUnknownPathsFromEffectiveValues,
+        Func<string, bool>? isAllowedHostPath)
     {
         var clause = occurrence.Clause;
         var directories = new List<string?>();
         var cwdAttribution = clause.Args.FirstOrDefault(static arg => arg.IsCwdAttribution);
-        var clauseWorkingDirectory = ExactValue(occurrence.WorkingDirectory)
-            ?? cwdAttribution?.Resolved
-            ?? (cwdAttribution is null ? workingDirectory : null);
+        var clauseWorkingDirectory = resolveUnknownPathsFromEffectiveValues
+            ? workingDirectory
+            : ExactValue(occurrence.WorkingDirectory)
+              ?? cwdAttribution?.Resolved
+              ?? (cwdAttribution is null ? workingDirectory : null);
 
         // Each parser path is an authorization scope. A grant must cover all
         // scopes, or a later external path could hide behind an earlier local
         // path. The resolved value also handles native forms such as @file.
-        // ShellSyntaxTree 0.3.0-alpha still has the #1795 classification.
-        // Remove this guard after a later v0.3 prerelease contains the parser correction.
+        // ShellSyntaxTree 0.3.0 still has the #1795 classification.
+        // Remove this guard after a later release contains the parser correction.
         if (!isSideEffectVerb)
         {
             foreach (var arg in clause.Args)
@@ -298,18 +365,42 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     continue;
                 }
 
-                // A parser path without a canonical value cannot use the broader
-                // cwd grant. Return no candidates so the command fails closed.
-                if (string.IsNullOrWhiteSpace(arg.Resolved))
+                var resolvedPaths = ResolveArgumentPaths(
+                    occurrence,
+                    arg,
+                    clauseWorkingDirectory,
+                    pathStyle,
+                    resolveUnknownPathsFromEffectiveValues);
+                if (resolvedPaths is null)
                     return null;
 
-                directories.Add(ShellTokenizer.ApplyFileParentRule(arg.Resolved, pathStyle));
+                directories.AddRange(resolvedPaths.Select(resolved =>
+                    ResolveAuthorizationScope(verb, arg, resolved, pathStyle)));
+            }
+
+            foreach (var argument in occurrence.Arguments)
+            {
+                if (argument.Argument.IsPath)
+                    continue;
+
+                var authoredDirectories = ResolveAuthoredFileSystemDirectories(
+                    argument.AuthoredFileSystemValue,
+                    clauseWorkingDirectory,
+                    pathStyle,
+                    isAllowedHostPath);
+                if (authoredDirectories is null)
+                    return null;
+
+                directories.AddRange(authoredDirectories);
             }
         }
 
         foreach (var redirect in occurrence.Redirects)
         {
-            var redirectDirectories = ResolveRedirectDirectories(redirect, pathStyle);
+            var redirectDirectories = ResolveRedirectDirectories(
+                redirect,
+                pathStyle,
+                isAllowedHostPath);
             if (redirectDirectories is null)
                 return null;
 
@@ -349,6 +440,162 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return directories.Distinct(StringComparer.Ordinal).ToList();
     }
 
+    private static IReadOnlyList<string>? ResolveArgumentPaths(
+        CommandOccurrence occurrence,
+        Arg argument,
+        string? workingDirectory,
+        ShellPathStyle pathStyle,
+        bool resolveUnknownPathsFromEffectiveValues)
+    {
+        if (!string.IsNullOrWhiteSpace(argument.Resolved))
+            return argument.Resolved.Any(char.IsControl)
+                ? null
+                : [argument.Resolved];
+
+        if (!resolveUnknownPathsFromEffectiveValues)
+            return null;
+
+        var analyzed = occurrence.Arguments.FirstOrDefault(candidate =>
+            ReferenceEquals(candidate.Argument, argument));
+        IReadOnlyList<string> values = analyzed?.Value switch
+        {
+            ShellValueDomain.Exact exact => [exact.Value],
+            ShellValueDomain.FiniteSet finite => finite.Values,
+            _ => []
+        };
+        if (values.Count == 0)
+            return null;
+
+        var resolved = new List<string>(values.Count);
+        foreach (var value in values)
+        {
+            if (value.Any(char.IsControl))
+                return null;
+
+            var path = ShellTokenizer.NormalizePathToken(
+                value,
+                workingDirectory,
+                pathStyle);
+            if (string.IsNullOrWhiteSpace(path)
+                || path.Any(char.IsControl))
+                return null;
+
+            resolved.Add(path);
+        }
+
+        return resolved;
+    }
+
+    private static IReadOnlyList<string>? ResolveAuthoredFileSystemDirectories(
+        ShellValueDomain domain,
+        string? workingDirectory,
+        ShellPathStyle pathStyle,
+        Func<string, bool>? isAllowedHostPath)
+    {
+        if (domain is ShellValueDomain.Unknown)
+            return [];
+
+        IReadOnlyList<string> paths;
+        switch (domain)
+        {
+            case ShellValueDomain.Exact exact:
+                paths = [exact.Value];
+                break;
+            case ShellValueDomain.FiniteSet finite:
+                paths = finite.Values;
+                break;
+            default:
+                return null;
+        }
+
+        var directories = new List<string>(paths.Count);
+        foreach (var path in paths)
+        {
+            if (string.IsNullOrWhiteSpace(path)
+                || !IsRootedForPathStyle(path, pathStyle)
+                || ShellPathRules.UsesHostPathStyle(pathStyle)
+                && HasUnsafeHostPath(path)
+                && isAllowedHostPath?.Invoke(path) != true)
+            {
+                return null;
+            }
+
+            directories.Add(path);
+        }
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory)
+            && IsRootedForPathStyle(workingDirectory, pathStyle)
+            && directories.All(path => IsWithinRootForPathStyle(
+                path,
+                workingDirectory,
+                pathStyle)))
+        {
+            return [workingDirectory];
+        }
+
+        return directories;
+    }
+
+    private static bool IsWithinRootForPathStyle(
+        string path,
+        string root,
+        ShellPathStyle pathStyle)
+    {
+        // Parser values can describe Windows paths on a POSIX test host.
+        // Host Path APIs cannot make this grammar-specific comparison.
+        var comparison = pathStyle == ShellPathStyle.Windows
+            ? StringComparison.OrdinalIgnoreCase
+            : StringComparison.Ordinal;
+        if (string.Equals(path, root, comparison))
+            return true;
+        if (!path.StartsWith(root, comparison))
+            return false;
+        if (root.EndsWith("/", StringComparison.Ordinal)
+            || pathStyle == ShellPathStyle.Windows
+            && root.EndsWith("\\", StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        return path.Length > root.Length
+               && (path[root.Length] == '/'
+                   || pathStyle == ShellPathStyle.Windows
+                   && path[root.Length] == '\\');
+    }
+
+    private static string? ResolveAuthorizationScope(
+        string verb,
+        ShellSyntaxTree.Arg arg,
+        string resolved,
+        ShellPathStyle pathStyle)
+    {
+        var raw = arg.Raw.Trim();
+        if (raw.Length >= 2 && raw[0] is '\'' or '"' && raw[^1] == raw[0])
+            raw = raw[1..^1];
+
+        var hasDirectorySyntax = raw is "." or ".."
+            || raw.EndsWith("/", StringComparison.Ordinal)
+            || pathStyle == ShellPathStyle.Windows
+                && raw.EndsWith("\\", StringComparison.Ordinal);
+
+        var hasDirectoryOperand = verb.Equals("find", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("cd", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("chdir", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("pushd", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("popd", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("Set-Location", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("Push-Location", StringComparison.OrdinalIgnoreCase)
+            || verb.Equals("Pop-Location", StringComparison.OrdinalIgnoreCase);
+
+        // A dotted basename can name either a file or a directory. Navigation
+        // and traversal commands need the exact scope, not the file-parent
+        // heuristic. The safe-space policy still rejects external and
+        // symlinked paths.
+        return hasDirectorySyntax || hasDirectoryOperand
+            ? resolved
+            : ShellTokenizer.ApplyFileParentRule(resolved, pathStyle);
+    }
+
     private static string? ResolveGlobCoveringDirectory(
         ShellSyntaxTree.Arg arg,
         string? workingDirectory,
@@ -385,12 +632,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             : staticPrefix.LastIndexOf('/');
         var coveringPath = CoveringPath(staticPrefix, separator, pathStyle);
 
-        var coveringDirectory = ShellTokenizer.NormalizePathToken(
-            coveringPath,
-            workingDirectory,
-            pathStyle);
-        if (coveringDirectory is null
-            || ContainsSymlinkEntry(coveringDirectory))
+        if (!ShellPathRules.TryResolve(
+                coveringPath,
+                workingDirectory,
+                pathStyle,
+                out var coveringDirectory)
+            || ShellPathRules.UsesHostPathStyle(pathStyle)
+            && ContainsUnsafeSymlinkEntry(coveringDirectory))
         {
             return null;
         }
@@ -419,20 +667,35 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return staticPrefix[..separator];
     }
 
-    private static bool ContainsSymlinkEntry(string directory)
+    private static bool ContainsUnsafeSymlinkEntry(string directory)
     {
         if (!Directory.Exists(directory))
             return false;
 
         try
         {
+            var normalizedDirectory = PathUtility.Normalize(directory);
             foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
             {
                 // Netclaw does not reproduce Bash glob rules here. Unicode,
                 // brackets, and escapes differ from .NET wildcard rules.
-                // Any symlink makes the leaf expansion unsafe to persist.
-                if (PathUtility.ContainsSymlinkSegment(directory, entry))
+                // Every link must resolve inside the fixed glob root.
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) == 0)
+                    continue;
+
+                FileSystemInfo link = (attributes & FileAttributes.Directory) != 0
+                    ? new DirectoryInfo(entry)
+                    : new FileInfo(entry);
+                var target = link.ResolveLinkTarget(returnFinalTarget: true);
+                if (target is null
+                    || !target.Exists
+                    || !PathUtility.TryNormalize(target.FullName, out var normalizedTarget)
+                    || !PathUtility.IsNormalizedWithinRoot(normalizedTarget, normalizedDirectory)
+                    || PathUtility.ContainsSymlinkSegment(normalizedDirectory, normalizedTarget))
+                {
                     return true;
+                }
             }
 
             return false;
@@ -456,8 +719,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (!arg.IsPath)
             return false;
 
-        // ShellSyntaxTree 0.3.0-alpha still has the #1795 classification.
-        // Remove this guard after a later v0.3 prerelease contains the parser correction.
+        // ShellSyntaxTree 0.3.0 still has the #1795 classification.
+        // Remove this guard after a later release contains the parser correction.
         if (arg.Raw.Length > 0 && arg.Raw.All(char.IsAsciiDigit)
             && ShouldDropNumericToken(arg, workingDirectory))
         {
@@ -467,7 +730,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var containsSeparator = pathStyle == ShellPathStyle.Windows
             ? arg.Raw.IndexOfAny(['/', '\\']) >= 0
             : arg.Raw.Contains('/', StringComparison.Ordinal);
-        if (ShellTokenizer.IsPathToken(arg.Raw) || !containsSeparator)
+        if (ShellTokenizer.IsPathToken(arg.Raw, pathStyle) || !containsSeparator)
             return true;
 
         // An internal slash can also name a ref such as feature/x. Native
@@ -541,7 +804,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static IReadOnlyList<string>? ResolveRedirectDirectories(
         ShellSyntaxTree.RedirectAnalysis redirect,
-        ShellPathStyle pathStyle)
+        ShellPathStyle pathStyle,
+        Func<string, bool>? isAllowedHostPath)
     {
         if (!redirect.IsComplete)
             return null;
@@ -564,7 +828,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             var coveringDirectory = pattern.CoveringDirectory;
             return string.IsNullOrWhiteSpace(coveringDirectory)
-                || ContainsSymlinkEntry(coveringDirectory)
+                || ContainsUnsafeSymlinkEntry(coveringDirectory)
                 ? null
                 : [coveringDirectory];
         }
@@ -586,7 +850,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (string.IsNullOrWhiteSpace(target))
                 return null;
 
-            if (UsesHostPathStyle(pathStyle) && HasUnsafeHostPath(target))
+            if (ShellPathRules.UsesHostPathStyle(pathStyle)
+                && HasUnsafeHostPath(target)
+                && isAllowedHostPath?.Invoke(target) != true)
                 return null;
 
             // The resolved POSIX null device creates no reusable filesystem
@@ -643,11 +909,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                                           && path[1] is '/' or '\\'),
             _ => false
         };
-
-    private static bool UsesHostPathStyle(ShellPathStyle pathStyle)
-        => pathStyle == ShellPathStyle.Windows
-            ? OperatingSystem.IsWindows()
-            : !OperatingSystem.IsWindows();
 
     private static bool HasUnsafeHostPath(string target)
     {
@@ -961,7 +1222,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 continue;
 
             if (!ApprovalPatternMatching.MatchesShellApproval(
-                    candidate.Verb, candidate.Directory, cwd, approvedEntries))
+                    candidate, cwd, approvedEntries))
                 return false;
         }
 
@@ -994,9 +1255,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (analysis.Commands.Any(command =>
                 ResolveCommandDirectories(
                     command,
+                    NormalizedVerb(command),
                     IsSideEffectCommand(command),
                     workingDirectory,
-                    Environment.PathStyle) is null))
+                    Environment.PathStyle,
+                    resolveUnknownPathsFromEffectiveValues: false,
+                    isAllowedHostPath: null) is null))
         {
             return true;
         }
@@ -1052,12 +1316,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     private static bool IsSideEffectCommand(ShellSyntaxTree.CommandOccurrence occurrence)
+        => ShellTokenizer.SingleTokenSideEffectVerbs.Contains(NormalizedVerb(occurrence));
+
+    private static string NormalizedVerb(ShellSyntaxTree.CommandOccurrence occurrence)
     {
         var clause = occurrence.Clause;
         var parsedVerb = clause.Verb.CanonicalVerb
             ?? string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens));
-        var verb = ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
-        return ShellTokenizer.SingleTokenSideEffectVerbs.Contains(verb);
+        return ShellTokenizer.ApplyVerbShortCircuit(parsedVerb);
     }
 
     public string FormatForDisplay(ToolName toolName, IDictionary<string, object?>? arguments)

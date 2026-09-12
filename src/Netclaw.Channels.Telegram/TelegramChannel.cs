@@ -9,6 +9,7 @@ using Akka.Pattern;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -27,7 +28,7 @@ public sealed class TelegramChannel : IChannel
     private readonly IContentScanner _contentScanner;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
-    private readonly NetclawPaths _paths;
+    private readonly ISessionStorageResolver _storageResolver;
     private readonly IChannelRegistry _channelRegistry;
     private IActorRef? _gateway;
     private volatile bool _connected;
@@ -44,7 +45,7 @@ public sealed class TelegramChannel : IChannel
         IContentScanner contentScanner,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
-        NetclawPaths paths,
+        ISessionStorageResolver storageResolver,
         IChannelRegistry channelRegistry)
     {
         _pipeline = pipeline;
@@ -57,7 +58,7 @@ public sealed class TelegramChannel : IChannel
         _contentScanner = contentScanner;
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
-        _paths = paths;
+        _storageResolver = storageResolver;
         _channelRegistry = channelRegistry;
     }
 
@@ -96,7 +97,7 @@ public sealed class TelegramChannel : IChannel
                     _contentScanner,
                     _audienceProfiles,
                     _modelCapabilities,
-                    _paths,
+                    _storageResolver,
                     _channelRegistry)),
                 "telegram-gateway");
 

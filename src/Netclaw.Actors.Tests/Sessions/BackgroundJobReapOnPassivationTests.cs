@@ -276,6 +276,17 @@ public sealed class BackgroundJobReapOnPassivationTests : LlmSessionTestBase
 
     private sealed class PermissiveToolExecutor : IToolExecutor
     {
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromResult(new ShellProcessLaunch(
+                ToolArgumentHelper.GetString(toolCall.Arguments, "Command")!,
+                context.ResolveShellCwd(ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"))
+                    ?? throw new InvalidOperationException("The test launch requires a working directory."),
+                context.Invocation,
+                new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
+                new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),
+                static _ => Task.CompletedTask));
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => Task.CompletedTask;
 

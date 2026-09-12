@@ -51,8 +51,10 @@ public sealed class ConfigEditorCoverageAuditTests : IDisposable
             ["channels"] = new(
                 nameof(ChannelsConfigViewModelTests),
                 StructuralValidationCoverage.Required(
-                    new ValidationConceptTest("auth", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_slack_token_before_probe)),
-                    new ValidationConceptTest("uri", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_mattermost_url_before_probe)),
+                    // Both concepts are rows of one theory: the slack-token row covers
+                    // "auth" and the mattermost-url row covers "uri".
+                    new ValidationConceptTest("auth", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_field_before_probe)),
+                    new ValidationConceptTest("uri", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Save_blocks_invalid_field_before_probe)),
                     new ValidationConceptTest("local-reference", nameof(ChannelsConfigViewModelTests), nameof(ChannelsConfigViewModelTests.Add_channel_that_does_not_resolve_is_dropped_with_a_warning))),
                 DynamicValidationCoverage.Required(
                     nameof(ChannelsConfigViewModelTests),

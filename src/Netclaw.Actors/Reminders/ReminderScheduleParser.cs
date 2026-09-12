@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderScheduleParser.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -78,7 +78,9 @@ public static partial class ReminderScheduleParser
                 if (!CronScheduleHelper.TryParse(scheduleValue))
                 {
                     return (null,
-                        $"Invalid cron expression '{scheduleValue}'. Use standard 5-field format (minute hour day month weekday).");
+                        $"Invalid cron expression '{scheduleValue}'. Use standard 5-field format (minute hour day month weekday), " +
+                        "optionally preceded by 'CRON_TZ=<IANA-time-zone-id>' (no spaces in the zone id, e.g. 'Europe/Brussels') " +
+                        "to evaluate the schedule in a specific time zone.");
                 }
 
                 return (new ReminderSchedule

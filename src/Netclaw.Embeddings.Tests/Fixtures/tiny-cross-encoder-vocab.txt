@@ -1,0 +1,13 @@
+[PAD]
+[UNK]
+[CLS]
+[SEP]
+the
+cat
+sat
+on
+mat
+filler
+relevant
+answer
+irrelevant

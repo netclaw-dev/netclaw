@@ -42,6 +42,20 @@ internal sealed class McpOAuthClientRegistrar(
     private const string SdkDefaultAuthMethod = "client_secret_post";
 
     /// <summary>
+    /// Home page presented to operators on the authorization server's consent screen.
+    /// RFC 7591 §2 <c>client_uri</c>.
+    /// </summary>
+    private const string ClientUri = "https://netclaw.dev";
+
+    /// <summary>
+    /// Netclaw logo presented on the authorization server's consent screen.
+    /// RFC 7591 §2 <c>logo_uri</c>. Served as a raw asset from the public brand
+    /// repo (square PNG icon) so any authorization server can fetch it without
+    /// a Netclaw deployment running, and PNG keeps SVG-picky servers happy.
+    /// </summary>
+    private const string LogoUri = "https://raw.githubusercontent.com/netclaw-dev/netclaw-brand/dev/logo/netclaw-icon-purple.png";
+
+    /// <summary>
     /// Registers a client for <paramref name="endpoint"/> and returns its identity.
     /// Returns <c>null</c> when the server advertises no OAuth protected-resource
     /// metadata, which is how an unauthenticated MCP server is recognized.
@@ -76,6 +90,8 @@ internal sealed class McpOAuthClientRegistrar(
         var request = new Dictionary<string, object>
         {
             ["client_name"] = "netclaw",
+            ["client_uri"] = ClientUri,
+            ["logo_uri"] = LogoUri,
             ["redirect_uris"] = new[] { redirectUri.ToString() },
             ["grant_types"] = new[] { "authorization_code", "refresh_token" },
             ["response_types"] = new[] { "code" },

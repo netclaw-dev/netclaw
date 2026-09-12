@@ -105,6 +105,11 @@ Top-level domains:
 8. `Telemetry & Alerting`
 9. `Security & Access`
 
+The daemon restores its system skills from the installed binary. The `Skill Sources`
+domain configures user and private server sources. It does not configure system skill updates.
+Operators can use `netclaw skill sync` to run the configured external source
+sync pass. The command does not add sources or write configuration.
+
 Command ownership stays explicit:
 
 1. `netclaw init` owns bootstrap and identity re-entry

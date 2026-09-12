@@ -25,6 +25,11 @@ namespace Netclaw.Actors.Tests.SubAgents;
 
 public sealed class SubAgentSpawnerTests : TestKit
 {
+    private static readonly string ParentSessionDirectory = Path.GetFullPath(
+        Path.Combine(Path.GetTempPath(), "netclaw", "sessions", "parent"));
+    private static readonly string TestProjectDirectory = Path.GetFullPath(
+        Path.Combine(Path.GetTempPath(), "netclaw", "repos", "foo"));
+
     public SubAgentSpawnerTests(ITestOutputHelper output) : base(output: output) { }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -44,7 +49,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var spawner = new SubAgentSpawner(
             new SingleClientProvider(new FakeChatClient()),
             toolRegistry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 new ToolConfig(),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
@@ -62,10 +67,10 @@ public sealed class SubAgentSpawnerTests : TestKit
             NullLogger<SubAgentSpawner>.Instance);
 
         var childProbe = CreateTestProbe("subagent-child");
-        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", ParentSessionDirectory, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
-            ProjectDirectory = "/home/user/repos/foo",
+            ProjectDirectory = TestProjectDirectory,
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
         });
 
@@ -87,9 +92,9 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var run = await childProbe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
         var bound = Assert.IsType<ToolSessionScope.Bound>(run.Scope.Authority.Session);
-        Assert.Equal("/tmp/netclaw/sessions/parent", bound.SessionDirectory);
-        Assert.Equal("/home/user/repos/foo", run.Scope.Authority.ProjectDirectory);
-        Assert.Equal("/home/user/repos/foo", run.Scope.Authority.InheritedCwd);
+        Assert.Equal(ParentSessionDirectory, bound.SessionDirectory);
+        Assert.Equal(TestProjectDirectory, run.Scope.Authority.ProjectDirectory);
+        Assert.Equal(TestProjectDirectory, run.Scope.Authority.InheritedCwd);
         Assert.Same(environment, run.Scope.InitialWorkingSnapshot.ShellEnvironment);
 
         childProbe.Reply(new SubAgentResult
@@ -111,15 +116,16 @@ public sealed class SubAgentSpawnerTests : TestKit
     {
         var childProbe = CreateTestProbe($"non-interactive-{channelType}-child");
         var spawner = CreateSpawner();
-        var context = new ToolExecutionContext(new ToolRunScope
-        {
-            Session = new ToolSessionScope.Bound("automation/subagent-parent", "/tmp/netclaw/sessions/parent"),
-            Audience = TrustAudience.Personal,
-            InlineOutputBudget = InlineOutputBudget.Default,
-            ChannelType = channelType.ToWireValue(),
-            InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
-            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
-        }, ToolExecutionTimeout.Default);
+        var context = TestToolExecutionContext.CreateBound(
+            "automation/subagent-parent",
+            Path.GetTempPath(),
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ChannelType = channelType.ToWireValue(),
+                InteractiveApproval = new InteractiveApprovalCapability.Unavailable(),
+                SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
+            });
 
         var spawnTask = spawner.SpawnAsync(
             CreateProfile(),
@@ -142,15 +148,16 @@ public sealed class SubAgentSpawnerTests : TestKit
         var childProbe = CreateTestProbe("interactive-approval-child");
         var approvalBridge = new RecordingParentApprovalBridge(ParentApprovalDecision.ApprovedOnce);
         var spawner = CreateSpawner();
-        var context = new ToolExecutionContext(new ToolRunScope
-        {
-            Session = new ToolSessionScope.Bound("interactive/subagent-parent", "/tmp/netclaw/sessions/parent"),
-            Audience = TrustAudience.Personal,
-            InlineOutputBudget = InlineOutputBudget.Default,
-            ChannelType = ChannelType.Tui.ToWireValue(),
-            InteractiveApproval = new InteractiveApprovalCapability.Available(approvalBridge),
-            SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
-        }, ToolExecutionTimeout.Default);
+        var context = TestToolExecutionContext.CreateBound(
+            "interactive/subagent-parent",
+            Path.GetTempPath(),
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                ChannelType = ChannelType.Tui.ToWireValue(),
+                InteractiveApproval = new InteractiveApprovalCapability.Available(approvalBridge),
+                SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref)
+            });
 
         var spawnTask = spawner.SpawnAsync(
             CreateProfile(),
@@ -178,7 +185,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var spawner = new SubAgentSpawner(
             new SingleClientProvider(new FakeChatClient()),
             toolRegistry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 new ToolConfig(),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
@@ -196,7 +203,7 @@ public sealed class SubAgentSpawnerTests : TestKit
 
         var notifications = new List<SubAgentNotificationInfo>();
         var childProbe = CreateTestProbe("subagent-tool-metadata-child");
-        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", ParentSessionDirectory, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             SpawnChildActor = (_, _, _) => Task.FromResult<object>(childProbe.Ref),
@@ -256,7 +263,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         ]);
         var spawner = CreateSpawner(new SequenceWorkingContextSnapshotProvider(snapshots));
         var childProbe = CreateTestProbe("working-context-child");
-        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", ParentSessionDirectory, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ProjectDirectory = projectDirectory,
@@ -297,7 +304,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var notifications = new List<SubAgentNotificationInfo>();
         var context = TestToolExecutionContext.CreateBound(
             "console/subagent-parent",
-            "/tmp/netclaw/sessions/parent",
+            ParentSessionDirectory,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
@@ -331,7 +338,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var childSpawned = false;
         var context = TestToolExecutionContext.CreateBound(
             "console/subagent-parent",
-            "/tmp/netclaw/sessions/parent",
+            ParentSessionDirectory,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
@@ -364,7 +371,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var childSpawned = false;
         var context = TestToolExecutionContext.CreateBound(
             "console/subagent-parent",
-            "/tmp/netclaw/sessions/parent",
+            ParentSessionDirectory,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
@@ -400,7 +407,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         ])));
         var context = TestToolExecutionContext.CreateBound(
             "console/subagent-parent",
-            "/tmp/netclaw/sessions/parent",
+            ParentSessionDirectory,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
@@ -436,7 +443,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var spawner = CreateSpawner(new CancelOnSecondWorkingContextSnapshotProvider(cancellation));
         var context = TestToolExecutionContext.CreateBound(
             "console/subagent-parent",
-            "/tmp/netclaw/sessions/parent",
+            ParentSessionDirectory,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
@@ -473,7 +480,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var spawner = CreateSpawner(new FatalOnSecondWorkingContextSnapshotProvider());
         var context = TestToolExecutionContext.CreateBound(
             "console/subagent-parent",
-            "/tmp/netclaw/sessions/parent",
+            ParentSessionDirectory,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
@@ -522,7 +529,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         var spawner = new SubAgentSpawner(
             new SingleClientProvider(chatClient),
             toolRegistry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 new ToolConfig(),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,
@@ -539,7 +546,7 @@ public sealed class SubAgentSpawnerTests : TestKit
             NullLogger<SubAgentSpawner>.Instance,
             sessionMetrics: metrics);
 
-        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", "/tmp/netclaw/sessions/parent", new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("console/subagent-parent", ParentSessionDirectory, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             SpawnChildActor = (props, name, _) => Task.FromResult<object>(Sys.ActorOf((Props)props, name)),
@@ -567,6 +574,87 @@ public sealed class SubAgentSpawnerTests : TestKit
         Assert.Equal((175L, 60L), call);
     }
 
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public async Task AuthorityRegression_Child_spawner_retains_team_file_authority(bool legacy, bool partial)
+    {
+        using var directory = new DisposableTempDir();
+        var paths = new NetclawPaths(directory.Path);
+        paths.EnsureDirectoriesExist();
+        var parentRoot = Path.Combine(paths.SessionsDirectory, "parent");
+        var storage = legacy
+            ? SessionStoragePaths.CreateLegacy(parentRoot, paths.SessionLogsDirectory, "parent")
+            : SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(parentRoot));
+        Directory.CreateDirectory(storage.SessionDirectory.Value);
+        Directory.CreateDirectory(Path.GetDirectoryName(storage.LogPath.Value)!);
+        await File.WriteAllTextAsync(storage.LogPath.Value, "parent-marker", TestContext.Current.CancellationToken);
+        var sibling = Path.Combine(paths.SessionsDirectory, "foreign", "hidden.txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(sibling)!);
+        await File.WriteAllTextAsync(sibling, "foreign-marker", TestContext.Current.CancellationToken);
+        var config = new ToolConfig();
+        var protectedPaths = new ToolPathPolicy([]);
+        var pathPolicy = new PathAccessPolicy(config, paths, protectedPaths);
+        var read = new FileReadTool(config, pathPolicy);
+        var registry = new ToolRegistry();
+        registry.Register(read);
+        var spawner = new SubAgentSpawner(
+            new SingleClientProvider(new FakeChatClient()), registry,
+            new ToolAccessPolicy(paths, config,
+                new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal, ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+                new ShellCommandPolicy(), protectedPaths),
+            approvalService: null,
+            new StaticSystemPromptProvider("Read the supplied file."),
+            new WorkingContextSnapshotProvider(new GitWorkingContextInspector(TimeProvider.System), NullLogger<WorkingContextSnapshotProvider>.Instance),
+            NullLogger<SubAgentSpawner>.Instance);
+        var probe = CreateTestProbe("authority-child");
+        var parent = TestToolExecutionContext.CreateBoundWithStorage("slack/parent", storage, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Team,
+            Boundary = TrustBoundary.Team,
+            ChannelType = "slack",
+            SpawnChildActor = (_, _, _) => Task.FromResult<object>(probe.Ref)
+        });
+        var profile = new SubAgentProfile
+        {
+            Name = "reader", Description = "Read a file", SystemPrompt = "Read the supplied file.",
+            ToolNames = ["file_read"], Visibility = SubAgentVisibility.UserFacing
+        };
+        var spawn = spawner.SpawnAsync(profile, "Read the supplied file.", runtimeContext: null, parent.Invocation, TestContext.Current.CancellationToken);
+        var run = await probe.ExpectMsgAsync<RunSubAgent>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(parent.Audience, run.Scope.Authority.Audience);
+        Assert.Equal(parent.Boundary, run.Scope.Authority.Boundary);
+        var childStorage = Assert.IsType<ToolSessionScope.Bound>(run.Scope.Authority.Session).Storage;
+        Assert.Equal(storage.SessionDirectory, childStorage.SessionDirectory);
+        Assert.Equal(storage.Binding, childStorage.Binding);
+        foreach (var (target, allowed) in new[] { (storage.LogPath.Value, !legacy), (sibling, false), (childStorage.LogPath.Value, true) })
+        {
+            var child = new ToolExecutionContext(run.Scope.Authority, ToolExecutionTimeout.Default);
+            var result = await read.ExecuteAsync(ToolInput.Create("Path", target), child, TestContext.Current.CancellationToken);
+            Assert.Equal(allowed ? ToolInvocationOutcomeCategory.Success : ToolInvocationOutcomeCategory.AccessDenied, child.Receipt?.Category);
+            Assert.DoesNotContain("foreign-marker", result);
+        }
+        Directory.CreateDirectory(childStorage.ArtifactDirectory.Value);
+        var artifact = Path.Combine(childStorage.ArtifactDirectory.Value, "result.txt");
+        await File.WriteAllTextAsync(artifact, "child-artifact", TestContext.Current.CancellationToken);
+        probe.Reply(new SubAgentResult
+        {
+            Completion = partial
+                ? new ChildRunCompletion.Partial(SubAgentOutcomeReason.ToolIterationBudgetExhausted, WorkingContextDelta.Empty)
+                : new ChildRunCompletion.Completed(WorkingContextDelta.Empty),
+            Output = "child-summary", AgentName = new AgentName("reader")
+        });
+        var completed = await spawn;
+        Assert.True(completed.Success);
+        Assert.Equal("child-summary", completed.Output);
+        Assert.Equal(childStorage.LogPath.Value, completed.LogPath);
+        Assert.Equal(childStorage.ArtifactDirectory.Value, completed.ArtifactDirectory);
+        var resultText = await read.ExecuteAsync(ToolInput.Create("Path", artifact), parent, TestContext.Current.CancellationToken);
+        Assert.Contains("child-artifact", resultText);
+    }
+
     private static SubAgentSpawner CreateSpawner()
         => CreateSpawner(new WorkingContextSnapshotProvider(
             new GitWorkingContextInspector(TimeProvider.System),
@@ -580,7 +668,7 @@ public sealed class SubAgentSpawnerTests : TestKit
         return new SubAgentSpawner(
             new SingleClientProvider(new FakeChatClient()),
             toolRegistry,
-            new ToolAccessPolicy(
+            new ToolAccessPolicy(new NetclawPaths(),
                 new ToolConfig(),
                 new EffectivePolicyDefaults(
                     DeploymentPosture.Personal,

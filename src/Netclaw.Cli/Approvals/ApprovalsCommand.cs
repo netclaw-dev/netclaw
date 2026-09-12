@@ -4,8 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
-using Netclaw.Cli.Json;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Cli.Approvals;
@@ -22,7 +22,11 @@ internal static class ApprovalsCommand
 
     private sealed record RevokeOptions(string? Pattern, TrustAudience? Audience, string? Tool, bool RevokeAll);
 
-    private sealed record TrustVerbOptions(string Verb, TrustAudience Audience, string Tool);
+    private sealed record TrustVerbOptions(
+        string Verb,
+        TrustAudience Audience,
+        string Tool,
+        ApprovalShell? Shell);
 
     public const string DefaultTrustVerbTool = "shell_execute";
 
@@ -30,35 +34,56 @@ internal static class ApprovalsCommand
         string[] args,
         NetclawPaths paths,
         TextWriter? output = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        TextWriter? diagnostics = null)
     {
         var writer = output ?? Console.Out;
+        var diagnosticWriter = diagnostics ?? Console.Error;
         var clock = timeProvider ?? TimeProvider.System;
         var subcommand = args.Length > 1 ? args[1] : "help";
 
         return subcommand switch
         {
-            "list" => Task.FromResult(RunList(args, paths, writer, clock)),
-            "revoke" => Task.FromResult(RunRevoke(args, paths, writer, clock)),
-            "trust-verb" => Task.FromResult(RunTrustVerb(args, paths, writer, clock)),
-            "help" or "-h" or "--help" => Task.FromResult(WriteHelp(writer)),
-            _ => Task.FromResult(WriteHelp(writer)),
+            "list" => Task.FromResult(RunList(args, paths, writer, diagnosticWriter, clock)),
+            "revoke" => Task.FromResult(RunRevoke(args, paths, writer, diagnosticWriter, clock)),
+            "trust-verb" => Task.FromResult(RunTrustVerb(args, paths, writer, diagnosticWriter, clock)),
+            "help" or "-h" or "--help" => Task.FromResult(WriteHelp(paths, writer, clock)),
+            _ => Task.FromResult(WriteHelp(paths, writer, clock)),
         };
     }
 
-    private static int RunList(string[] args, NetclawPaths paths, TextWriter writer, TimeProvider clock)
+    private static int RunList(
+        string[] args,
+        NetclawPaths paths,
+        TextWriter writer,
+        TextWriter diagnostics,
+        TimeProvider clock)
     {
         if (TryParseListFlags(args, writer) is not { } opts)
             return 1;
 
-        var store = new ToolApprovalStore(paths.ToolApprovalsPath, clock);
-        WarnIfQuarantined(store, writer);
+        var store = CreateStore(paths, clock);
+        var load = store.TryLoad();
+        if (load is ApprovalStoreLoadResult.Unavailable unavailable)
+        {
+            WriteStoreError(unavailable.Failure, store, writer);
+            return 1;
+        }
 
-        var view = BuildView(store.Snapshot(), opts.Audience, opts.Tool);
+        ReportMigrationOmissions(store, diagnostics);
+        if (!opts.EmitJson)
+        {
+            WarnIfRecoveryAvailable(store, writer);
+        }
+
+        var data = ((ApprovalStoreLoadResult.Ready)load).Data;
+        var view = BuildView(data.Audiences, opts.Audience, opts.Tool);
 
         if (opts.EmitJson)
         {
-            writer.WriteLine(JsonSerializer.Serialize(view, JsonDefaults.IndentedOmitNull));
+            writer.WriteLine(JsonSerializer.Serialize(
+                view.ToWire(),
+                ApprovalsListJsonContext.Default.ApprovalsListWire));
             return 0;
         }
 
@@ -87,7 +112,12 @@ internal static class ApprovalsCommand
         return 0;
     }
 
-    private static int RunRevoke(string[] args, NetclawPaths paths, TextWriter writer, TimeProvider clock)
+    private static int RunRevoke(
+        string[] args,
+        NetclawPaths paths,
+        TextWriter writer,
+        TextWriter diagnostics,
+        TimeProvider clock)
     {
         if (TryParseRevokeFlags(args, writer) is not { } opts)
             return 1;
@@ -99,8 +129,16 @@ internal static class ApprovalsCommand
             return 1;
         }
 
-        var store = new ToolApprovalStore(paths.ToolApprovalsPath, clock);
-        WarnIfQuarantined(store, writer);
+        var store = CreateStore(paths, clock);
+        var load = store.TryLoad();
+        if (load is ApprovalStoreLoadResult.Unavailable unavailable)
+        {
+            WriteStoreError(unavailable.Failure, store, writer);
+            return 1;
+        }
+
+        ReportMigrationOmissions(store, diagnostics);
+        WarnIfRecoveryAvailable(store, writer);
 
         if (opts.RevokeAll)
             return RunRevokeAll(opts, store, writer);
@@ -112,20 +150,9 @@ internal static class ApprovalsCommand
             return 1;
         }
 
-        // Could not parse — the CLI is the deliberate scriptable path, so
-        // we reject unrecognized inputs loudly rather than silently treat a
-        // bare verb as a global wildcard.
-        if (!ApprovalEntry.TryParseScope(opts.Pattern, out var lookup, out var parseError))
-        {
-            writer.WriteLine($"Error: {parseError}");
-            writer.WriteLine("Could not parse revoke pattern '" + opts.Pattern + "'.");
-            writer.WriteLine("Patterns must use the form '<verb> in <directory>' or '<verb> anywhere',");
-            writer.WriteLine("matching the labels emitted by 'netclaw approvals list'.");
-            return 1;
-        }
-
-        var snapshot = store.Snapshot();
-        var removedAny = false;
+        var snapshot = ((ApprovalStoreLoadResult.Ready)load).Data.Audiences;
+        var exactTargets = new List<(TrustAudience Audience, string AudienceKey, string ToolName, ApprovalEntry Entry)>();
+        var legacyTargets = new List<(TrustAudience Audience, string AudienceKey, string ToolName, ApprovalEntry Entry)>();
 
         foreach (var (audienceKey, tools) in snapshot)
         {
@@ -134,16 +161,48 @@ internal static class ApprovalsCommand
             if (opts.Audience is { } target && audience != target)
                 continue;
 
-            foreach (var (toolName, _) in tools)
+            foreach (var (toolName, entries) in tools)
             {
                 if (opts.Tool is not null && !ToolFlagMatches(opts.Tool, toolName))
                     continue;
 
-                if (store.RemoveApproval(audience, toolName, lookup))
+                foreach (var entry in entries)
                 {
-                    writer.WriteLine($"Removed '{lookup.FormatScope()}' from {audienceKey} / {toolName}.");
-                    removedAny = true;
+                    var candidateTarget = (audience, audienceKey, toolName, entry);
+                    if (ScopeLabelEquals(entry, entry.FormatScope(), opts.Pattern))
+                    {
+                        exactTargets.Add(candidateTarget);
+                    }
+                    else if (ScopeLabelEquals(entry, FormatLegacyScope(entry), opts.Pattern))
+                    {
+                        legacyTargets.Add(candidateTarget);
+                    }
                 }
+            }
+        }
+
+        var targets = exactTargets.Count > 0 ? exactTargets : legacyTargets;
+        if (exactTargets.Count == 0 && legacyTargets.Count > 1)
+        {
+            writer.WriteLine("Error: The old approval scope matches more than one typed phrase.");
+            writer.WriteLine("Use the typed label from 'netclaw approvals list'.");
+            return 1;
+        }
+
+        var removedAny = false;
+        foreach (var target in targets)
+        {
+            var removal = store.TryRemoveApproval(target.Audience, target.ToolName, target.Entry);
+            if (removal is ApprovalStoreChangeResult.Unavailable removeFailure)
+            {
+                WriteStoreError(removeFailure.Failure, store, writer);
+                return 1;
+            }
+
+            if (((ApprovalStoreChangeResult.Completed)removal).ChangeCount > 0)
+            {
+                writer.WriteLine($"Removed '{target.Entry.FormatScope()}' from {target.AudienceKey} / {target.ToolName}.");
+                removedAny = true;
             }
         }
 
@@ -156,37 +215,78 @@ internal static class ApprovalsCommand
         return 0;
     }
 
-    private static int RunTrustVerb(string[] args, NetclawPaths paths, TextWriter writer, TimeProvider clock)
+    private static string FormatLegacyScope(ApprovalEntry entry) =>
+        entry.Directory is null
+            ? $"{entry.Verb} anywhere"
+            : $"{entry.Verb} in {entry.Directory}";
+
+    private static bool ScopeLabelEquals(ApprovalEntry entry, string label, string supplied) =>
+        entry.Shell is { } shell
+            ? ToolApprovalEntryComparer.Equals(label, supplied, shell)
+            : string.Equals(label, supplied, StringComparison.Ordinal);
+
+    private static int RunTrustVerb(
+        string[] args,
+        NetclawPaths paths,
+        TextWriter writer,
+        TextWriter diagnostics,
+        TimeProvider clock)
     {
         if (TryParseTrustVerbFlags(args, writer) is not { } opts)
             return 1;
 
-        // Reject shapes the user might confuse with the scope-label syntax
-        // accepted by `revoke <pattern>`. Accepting "git anywhere" or
-        // "git in /repo" here would silently persist a verb token containing
-        // a space — the gate would never match a real candidate, and the
-        // user would see no error.
-        if (opts.Verb.Contains(" anywhere", StringComparison.Ordinal)
-            || opts.Verb.Contains(" in ", StringComparison.Ordinal)
-            || opts.Verb.StartsWith('-'))
-        {
-            writer.WriteLine($"Error: '{opts.Verb}' is not a verb. Pass just the executable name (e.g. 'git push').");
-            writer.WriteLine("For scope labels (e.g. 'git push anywhere') use 'netclaw approvals revoke' or edit");
-            writer.WriteLine("the persisted tool-approvals.json directly.");
-            return 1;
-        }
-
-        var store = new ToolApprovalStore(paths.ToolApprovalsPath, clock);
-        WarnIfQuarantined(store, writer);
-
-        var entry = new ApprovalEntry(opts.Verb) { Directory = null };
-        var audienceWire = opts.Audience.ToWireValue();
         // Persist under the canonical name so runtime lookups (which
         // query canonical) find the grant. If the operator passed the
         // LLM-facing alias, reverse-resolve it here.
         var canonicalTool = LlmFacingToolName.TryReverseSanitizedToCanonical(opts.Tool) ?? opts.Tool;
+        ApprovalEntry entry;
+        if (string.Equals(canonicalTool, DefaultTrustVerbTool, StringComparison.Ordinal))
+        {
+            var shell = opts.Shell ?? NativeShell;
+            if (!ShellApprovalGrantParser.TryCreateTokenPrefix(
+                    shell,
+                    opts.Verb,
+                    out var shellEntry,
+                    out var parseError))
+            {
+                writer.WriteLine($"Error: {parseError}");
+                return 1;
+            }
 
-        if (store.AddApproval(opts.Audience, canonicalTool, entry))
+            entry = shellEntry;
+        }
+        else
+        {
+            if (opts.Shell is not null)
+            {
+                writer.WriteLine("Error: --shell is valid only for shell_execute.");
+                return 1;
+            }
+
+            try
+            {
+                entry = ApprovalEntry.CreateNonShell(opts.Verb);
+            }
+            catch (ArgumentException)
+            {
+                writer.WriteLine("Error: The verb must be nonempty and canonical.");
+                return 1;
+            }
+        }
+
+        var store = CreateStore(paths, clock);
+        var change = store.TryAddApproval(opts.Audience, canonicalTool, entry);
+        if (change is ApprovalStoreChangeResult.Unavailable unavailable)
+        {
+            WriteStoreError(unavailable.Failure, store, writer);
+            return 1;
+        }
+
+        ReportMigrationOmissions(store, diagnostics);
+        WarnIfRecoveryAvailable(store, writer);
+        var audienceWire = opts.Audience.ToWireValue();
+
+        if (((ApprovalStoreChangeResult.Completed)change).ChangeCount > 0)
             writer.WriteLine($"Trusted '{entry.FormatScope()}' for {audienceWire} / {canonicalTool}.");
         else
             writer.WriteLine($"No changes: '{entry.FormatScope()}' is already trusted for {audienceWire} / {canonicalTool}.");
@@ -199,9 +299,22 @@ internal static class ApprovalsCommand
         string? verb = null;
         TrustAudience? audience = null;
         string? tool = null;
+        ApprovalShell? shell = null;
 
         for (var i = 2; i < args.Length; i++)
         {
+            if (args[i] == "--shell")
+            {
+                if (i + 1 >= args.Length || !TryParseShell(args[++i], out var parsedShell))
+                {
+                    writer.WriteLine("Error: --shell requires bash or powershell.");
+                    return null;
+                }
+
+                shell = parsedShell;
+                continue;
+            }
+
             switch (TryConsumeSharedFlag(args, ref i, writer, ref audience, ref tool))
             {
                 case FlagOutcome.Consumed: continue;
@@ -225,17 +338,18 @@ internal static class ApprovalsCommand
 
         if (string.IsNullOrWhiteSpace(verb))
         {
-            writer.WriteLine("Usage: netclaw approvals trust-verb <verb> [--audience personal|team|public] [--tool <name>]");
+            writer.WriteLine("Usage: netclaw approvals trust-verb <phrase> [--audience personal|team|public] [--tool <name>]");
             writer.WriteLine();
-            writer.WriteLine("Adds a global-wildcard '(verb, null)' approval entry — the verb runs in any cwd");
-            writer.WriteLine("without prompting. Used to pre-approve verbs for unattended/scheduled tasks.");
+            writer.WriteLine("Adds a global-wildcard approval. Shell phrases use typed canonical token prefixes;");
+            writer.WriteLine("other tools use exact phrases. Use it for unattended or scheduled tasks.");
             return null;
         }
 
         return new TrustVerbOptions(
-            Verb: verb!.Trim(),
+            Verb: verb!,
             Audience: audience ?? TrustAudience.Personal,
-            Tool: string.IsNullOrWhiteSpace(tool) ? DefaultTrustVerbTool : tool);
+            Tool: string.IsNullOrWhiteSpace(tool) ? DefaultTrustVerbTool : tool,
+            Shell: shell);
     }
 
     /// <summary>
@@ -266,7 +380,16 @@ internal static class ApprovalsCommand
         // tools) pass through unchanged.
         var canonicalTool = LlmFacingToolName.TryReverseSanitizedToCanonical(opts.Tool!) ?? opts.Tool!;
         foreach (var audience in audiences)
-            totalRemoved += store.RemoveAllForTool(audience, canonicalTool);
+        {
+            var change = store.TryRemoveAllForTool(audience, canonicalTool);
+            if (change is ApprovalStoreChangeResult.Unavailable unavailable)
+            {
+                WriteStoreError(unavailable.Failure, store, writer);
+                return 1;
+            }
+
+            totalRemoved += ((ApprovalStoreChangeResult.Completed)change).ChangeCount;
+        }
 
         if (totalRemoved == 0)
         {
@@ -278,7 +401,7 @@ internal static class ApprovalsCommand
         return 0;
     }
 
-    private static int WriteHelp(TextWriter writer)
+    private static int WriteHelp(NetclawPaths paths, TextWriter writer, TimeProvider clock)
     {
         writer.WriteLine("Usage: netclaw approvals [<subcommand>] [<args>]");
         writer.WriteLine();
@@ -286,24 +409,26 @@ internal static class ApprovalsCommand
         writer.WriteLine("  (none) | tui      Launch the interactive approvals TUI.");
         writer.WriteLine("  list              List persistent approvals from tool-approvals.json.");
         writer.WriteLine("                    Flags: --audience <personal|team|public>, --tool <name>, --json");
-        writer.WriteLine("  revoke <pattern>  Remove an approval entry by its user-visible form:");
-        writer.WriteLine("                      '<verb> in <directory>'  — folder-scoped grant");
-        writer.WriteLine("                      '<verb> anywhere'         — global wildcard");
+        writer.WriteLine("  revoke <pattern>  Remove an approval entry by the exact label from list.");
+        writer.WriteLine("                    Shell labels include shell, match kind, phrase, and scope;");
+        writer.WriteLine("                    non-shell labels use '<verb> in <directory>' or '<verb> anywhere'.");
         writer.WriteLine("                    Flags: --audience <personal|team|public>, --tool <name>");
         writer.WriteLine("  revoke --tool <name> --all");
         writer.WriteLine("                    Remove every approval entry for a tool.");
         writer.WriteLine("                    Flags: --audience <personal|team|public>");
-        writer.WriteLine("  trust-verb <verb> Add a global-wildcard '(verb, null)' approval — the verb runs");
-        writer.WriteLine("                    in any cwd without prompting. Use to pre-approve verbs for");
-        writer.WriteLine("                    unattended or scheduled invocations.");
+        writer.WriteLine("  trust-verb <phrase>");
+        writer.WriteLine("                    Add one static canonical phrase as a global wildcard.");
+        writer.WriteLine("                    Shell phrases become typed token prefixes; other tools stay exact.");
         writer.WriteLine("                    Flags: --audience <personal|team|public> (default personal)");
         writer.WriteLine("                           --tool <name>                       (default shell_execute)");
+        writer.WriteLine("                           --shell <bash|powershell>           (shell_execute only)");
         writer.WriteLine("  help              Show this message.");
         writer.WriteLine();
         writer.WriteLine("Exit codes: 0 success, 1 user error or no match.");
         writer.WriteLine();
         writer.WriteLine("The daemon does not require a restart after these mutations; the next approval");
         writer.WriteLine("check re-reads the file.");
+        WarnIfRecoveryAvailable(CreateStore(paths, clock), writer);
         return 0;
     }
 
@@ -419,7 +544,9 @@ internal static class ApprovalsCommand
     }
 
     private static ApprovalsListView BuildView(
-        IReadOnlyDictionary<string, IReadOnlyDictionary<string, IReadOnlyList<ApprovalEntry>>> snapshot,
+        IReadOnlyDictionary<
+            string,
+            IReadOnlyDictionary<string, IReadOnlyList<ApprovalEntry>>> snapshot,
         TrustAudience? audienceFilter,
         string? toolFilter)
     {
@@ -453,23 +580,61 @@ internal static class ApprovalsCommand
         return view;
     }
 
-    private static void WarnIfQuarantined(ToolApprovalStore store, TextWriter writer)
+    private static ToolApprovalStore CreateStore(NetclawPaths paths, TimeProvider clock) =>
+        new(
+            paths.ToolApprovalsPath,
+            clock,
+            new ApprovalStoreMigrationContext(NativeShell));
+
+    private static ApprovalShell NativeShell => OperatingSystem.IsWindows()
+        ? ApprovalShell.PowerShell
+        : ApprovalShell.Bash;
+
+    private static bool TryParseShell(string value, out ApprovalShell shell)
     {
-        // Two quarantine paths exist after the v2 cutover:
-        //   - .v1.bak  : legacy v1 file detected and moved aside on upgrade
-        //   - .invalid : malformed (unparseable) file moved aside as fail-closed
-        // Operators see different remediation guidance for each.
+        switch (value.ToLowerInvariant())
+        {
+            case "bash":
+                shell = ApprovalShell.Bash;
+                return true;
+            case "powershell":
+                shell = ApprovalShell.PowerShell;
+                return true;
+            default:
+                shell = default;
+                return false;
+        }
+    }
+
+    private static void WriteStoreError(
+        ApprovalStoreFailure failure,
+        ToolApprovalStore store,
+        TextWriter writer)
+    {
+        writer.WriteLine($"Error: The approval store is unavailable ({failure}).");
+        WarnIfRecoveryAvailable(store, writer);
+    }
+
+    private static void WarnIfRecoveryAvailable(ToolApprovalStore store, TextWriter writer)
+    {
         if (File.Exists(store.V1QuarantinePath))
         {
-            writer.WriteLine($"Note: Your previous approvals were quarantined to '{store.V1QuarantinePath}' during the v2 schema upgrade.");
-            writer.WriteLine("      Inspect or restore manually if needed; the daemon started with an empty v2 store.");
+            writer.WriteLine($"Note: A version-1 store is preserved at '{store.V1QuarantinePath}'.");
         }
 
-        if (File.Exists(store.MalformedQuarantinePath))
+        if (File.Exists(store.V2BackupPath))
         {
-            writer.WriteLine($"Warning: A malformed approvals file was quarantined to '{store.MalformedQuarantinePath}'.");
-            writer.WriteLine("         The active file was reset to empty after a parse failure.");
-            writer.WriteLine("         Inspect the .invalid copy before restoring grants.");
+            writer.WriteLine($"Recovery: A version-2 backup exists at '{store.V2BackupPath}'.");
+            writer.WriteLine("Stop the daemon, replace the active approval file with that backup, and start the current daemon.");
+        }
+    }
+
+    private static void ReportMigrationOmissions(ToolApprovalStore store, TextWriter diagnostics)
+    {
+        if (store.LastMigrationOmittedEntryCount > 0)
+        {
+            diagnostics.WriteLine(
+                $"Approval store version-2 conversion omitted {store.LastMigrationOmittedEntryCount} unrepresentable entries.");
         }
     }
 }

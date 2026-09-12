@@ -58,11 +58,19 @@ public sealed class BackgroundJobManagerActorKey;
 /// <summary>
 /// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
 /// session log dispatcher. The dispatcher owns one <c>SessionLogActor</c>
-/// child per sanitized session id and is the single writer per session log
-/// file. MEL diagnostic providers and <c>LlmSessionActor</c> route audit
+/// child per resolved log path and is the single writer for that file. MEL
+/// diagnostic providers and <c>LlmSessionActor</c> route audit
 /// and diagnostic lines through it.
 /// </summary>
 public sealed class SessionLogDispatcherActorKey;
+
+/// <summary>
+/// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the
+/// webhook route actor. The actor is the single mutation authority for
+/// webhook route files; the <c>set_webhook</c> and <c>delete_webhook</c> tools
+/// and the <c>/api/webhooks</c> resource resolve it to ask for a mutation.
+/// </summary>
+public sealed class WebhookRouteActorKey;
 
 /// <summary>
 /// Marker type for <see cref="Akka.Hosting.IActorRegistry"/> lookup of the

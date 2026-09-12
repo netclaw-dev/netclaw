@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DeviceRegistryTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -85,7 +85,7 @@ public sealed class DeviceRegistryTests : IDisposable
 
         await _registry.AddAsync(original, TestContext.Current.CancellationToken);
 
-        var ex = await Assert.ThrowsAsync<InvalidOperationException>(
+        var ex = await Assert.ThrowsAsync<DeviceNameConflictException>(
             () => _registry.AddAsync(duplicate, TestContext.Current.CancellationToken));
 
         Assert.Contains("already exists", ex.Message);

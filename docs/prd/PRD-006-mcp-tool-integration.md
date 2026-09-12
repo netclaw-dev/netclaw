@@ -5,7 +5,7 @@
 - State: Draft for execution (revised)
 - Owner: Netclaw engineering
 - Date: 2026-02-21
-- Revised: 2026-08-07 (MCP prompts as dynamic Netclaw skills)
+- Revised: 2026-08-10 (MCP tool and prompt catalog notifications)
 - Depends on: `PRD-001`, `PRD-002`, `PRD-004`
 
 ## Goal
@@ -22,6 +22,7 @@ learning.
 3. MCP connectivity and failures are visible in diagnostics.
 4. Memorizer provides durable cross-session knowledge that outlives compaction.
 5. MCP prompt workflows are discoverable through the existing skill system.
+6. Supported servers can publish tool and prompt catalog changes without a poll delay.
 
 ## Two-Tier Memory Architecture
 
@@ -138,13 +139,34 @@ remote request. It SHALL preserve prompt roles and source attribution.
 A failed prompt discovery or refresh SHALL keep the last good generation.
 The existing catalog poll SHALL include prompt descriptors.
 
+### MCP-012 Tool and Prompt Catalog Notifications
+
+Netclaw SHALL listen for tool and prompt list changes on each published MCP
+client generation. For MCP revision 2026-07-28, it SHALL use one
+`subscriptions/listen` request and enable only the acknowledged event types.
+
+For older revisions, Netclaw SHALL accept direct list-change notifications only
+when the matching server capability declares `listChanged` support.
+
+A notification SHALL refresh the complete tool and prompt candidate before
+publication. A successful changed candidate SHALL publish one immutable
+generation. A failed refresh SHALL keep the last good generation.
+
+Repeated notifications SHALL create at most one active refresh and one queued
+follow-up refresh. A reconnect SHALL replace the prior notification lease.
+The existing poll SHALL remain the repair path for missed events and unsupported
+servers.
+
+Notification compatibility and failures SHALL appear in safe structured logs.
+This requirement does not add status API, CLI, or TUI fields.
+
 ## Non-Goals (MVP)
 
 - Dynamic marketplace discovery of MCP servers
 - Unmanaged auto-install of remote tool bundles
 - Multi-tenant tool permission partitioning
-- Proactive MCP catalog subscriptions
 - MCP resource discovery and read operations
+- MCP resource change notifications and subscriptions
 - MCP prompt completion API support
 - First-party client autocomplete for prompt skills
 
@@ -172,6 +194,10 @@ The existing catalog poll SHALL include prompt descriptors.
 13. `skill_load` renders an MCP prompt with validated arguments and source
     attribution.
 14. A denied server contributes no prompt skills to that audience.
+15. A modern server notification refreshes tools and prompts without a poll delay.
+16. An older server with `listChanged` support refreshes through direct notifications.
+17. A missed or unsupported notification is repaired by the existing catalog poll.
+18. A failed notification refresh keeps the last good tool and prompt generation.
 
 ## Cross-References
 

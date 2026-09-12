@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="RecordingSessionPipeline.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -24,6 +24,7 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     private readonly TaskCompletionSource<SessionPipelineOptions> _created = new(
         TaskCreationOptions.RunContinuationsAsynchronously);
     private SessionPipelineOptions? _capturedOptions;
+    private SharedKillSwitch? _killSwitch;
 
     /// <summary>
     /// Creates a recording pipeline.
@@ -59,16 +60,45 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
     public ConcurrentQueue<ChannelInput> CapturedInputs { get; } = new();
     public Func<IWithSessionId, CancellationToken, Task<ISessionResponse>>? ResponseFactory { get; set; }
 
+    /// <summary>
+    /// Number of <see cref="CreateAsync"/> calls. A supervised actor restart
+    /// re-creates the pipeline, so tests observe a restart as a second call.
+    /// </summary>
+    public int CreateCount => Volatile.Read(ref _createCount);
+    private int _createCount;
+
+    /// <summary>
+    /// When set, <see cref="SendFeedbackAsync"/> throws this exception and
+    /// does not record the feedback. This models a dead session feedback pipe.
+    /// </summary>
+    public Exception? FeedbackException { get; set; }
+
+    /// <summary>
+    /// Completes the output stream of the most recent <see cref="CreateAsync"/>
+    /// call. The binding actor observes the completion as
+    /// <c>OutputStreamTerminated</c> and answers it with a pipeline
+    /// reinitialize, so a test drives the reinitialize path without a
+    /// channel-private message type.
+    /// </summary>
+    public void TerminateOutputStream()
+    {
+        var killSwitch = Volatile.Read(ref _killSwitch)
+            ?? throw new InvalidOperationException("The pipeline is not created yet.");
+        killSwitch.Shutdown();
+    }
+
     public Task<MaterializedSession> CreateAsync(
         SessionId sessionId,
         SessionPipelineOptions options,
         IMaterializer? materializer = null,
         CancellationToken cancellationToken = default)
     {
+        Interlocked.Increment(ref _createCount);
         Volatile.Write(ref _capturedOptions, options);
         _created.TrySetResult(options);
 
         var killSwitch = KillSwitches.Shared($"recording-{sessionId.Value}");
+        Volatile.Write(ref _killSwitch, killSwitch);
         var outputs = _outputFactory(sessionId).ToList();
 
         Source<SessionOutput, NotUsed> output;
@@ -131,6 +161,8 @@ public sealed class RecordingSessionPipeline : ISessionPipeline
 
     public Task SendFeedbackAsync(IWithSessionId feedback, CancellationToken ct = default)
     {
+        if (FeedbackException is { } feedbackException)
+            throw feedbackException;
         lock (_feedbackLock) _recordedFeedback.Add(feedback);
         return Task.CompletedTask;
     }

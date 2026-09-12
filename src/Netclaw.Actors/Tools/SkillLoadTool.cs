@@ -79,16 +79,25 @@ public sealed partial class SkillLoadTool : NetclawTool<SkillLoadTool.Params>
 
         if (skill is null)
         {
-            // Remote prompt visibility depends on the session audience. The model
-            // already receives the filtered prompt index, so this fallback lists
-            // only file skills and cannot reveal a denied MCP server or prompt.
-            var available = _skillRegistry.GetAll()
+            // The fallback still lists only FILE skills by name: MCP prompt visibility
+            // is audience-filtered, and enumerating names here could reveal an MCP server
+            // or prompt the session is denied. But it must NOT imply MCP prompts are
+            // unavailable — a lookup miss on a file skill is not "no such capability".
+            // The pointer at the [skills] index is UNCONDITIONAL on purpose: gating it on
+            // the registry would leak whether any MCP prompts exist to a session whose
+            // audience is denied all of them, and the session's own index is already the
+            // audience-correct source of truth.
+            var fileSkills = _skillRegistry.GetAll()
                 .Where(static candidate => candidate.Source is FileSkillSource)
                 .Select(static candidate => candidate.Name)
                 .ToList();
-            return available.Count > 0
-                ? $"Skill '{name}' not found. Available skills: {string.Join(", ", available)}"
-                : $"Skill '{name}' not found. No skills are currently registered.";
+
+            var message = fileSkills.Count > 0
+                ? $"Skill '{name}' not found. Available file skills: {string.Join(", ", fileSkills)}."
+                : $"Skill '{name}' not found. No file skills are currently registered.";
+            return message
+                + " If your [skills] index lists MCP prompt skills (mcp__<server>__<prompt>), "
+                + "load them by that exact name.";
         }
 
         if (skill.Source is McpPromptSkillSource promptSource)

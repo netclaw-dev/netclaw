@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -12,7 +11,6 @@ using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -99,33 +97,11 @@ public sealed class SearchConfigEditorPageTests : IDisposable
 
     private (VirtualTerminal Terminal, TerminaApplication App, SearchConfigEditorViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input, IHttpClientFactory? httpClientFactory = null)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        SearchConfigEditorViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/search", builder =>
-        {
-            builder.RegisterRoute<SearchConfigEditorPage, SearchConfigEditorViewModel>(
-                "/search",
-                _ => new SearchConfigEditorPage(),
-                _ =>
-                {
-                    capturedVm = new SearchConfigEditorViewModel(_paths, httpClientFactory);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<SearchConfigEditorPage, SearchConfigEditorViewModel>(
+            "/search",
+            () => new SearchConfigEditorPage(),
+            () => new SearchConfigEditorViewModel(_paths, httpClientFactory),
+            out input);
 
     private sealed class StubHttpClientFactory(Func<HttpRequestMessage, HttpResponseMessage> handler) : IHttpClientFactory
     {

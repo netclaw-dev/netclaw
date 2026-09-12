@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DiscordGatewayContractTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -48,7 +48,7 @@ public sealed class DiscordGatewayContractTests(ITestOutputHelper output)
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
-            Paths: TestDiscordGatewayDeps.NewTestPaths(),
+                        StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
             PromptInjectionDetector: SafePromptInjectionDetector.Instance,
             SessionPropsFactory: (sid, chId, replyId, threadId, rootId, d) =>
                 Props.Create(() => new ForwardActor(TestActor)));

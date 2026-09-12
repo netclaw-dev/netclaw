@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.AspNetCore.SignalR;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -23,6 +24,7 @@ using Netclaw.Cli.Json;
 using Netclaw.Cli.Doctor;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Mattermost;
+using Netclaw.Cli.Memory;
 using Netclaw.Cli.Reminder;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Model;
@@ -76,7 +78,11 @@ static async Task RunAsync(string[] args)
             WriteGeneralHelp();
             return;
         case CliParseKind.Version:
-            Console.WriteLine($"netclaw {BuildInfo.Version} (commit {BuildInfo.CommitHash}, built {BuildInfo.BuildTimestamp})");
+            // FullVersion (not Version) — Version is the numeric AssemblyVersion prefix and
+            // silently drops any prerelease suffix, so a beta build (e.g. "0.25.0-alpha.onnx.2")
+            // printed as plain "0.25.0" here, indistinguishable from a stable release
+            // (alpha.onnx.2 production canary finding).
+            Console.WriteLine($"netclaw {BuildInfo.FullVersion} (commit {BuildInfo.CommitHash}, built {BuildInfo.BuildTimestamp})");
             return;
         case CliParseKind.Unknown:
             Console.Error.WriteLine($"netclaw: '{parseResult.Mode}' is not a netclaw command. See 'netclaw --help'.");
@@ -127,8 +133,7 @@ static async Task RunAsync(string[] args)
             }
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
+        var builder = CreateQuietHostBuilder(args);
         if (mode is "doctor")
         {
             builder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
@@ -137,10 +142,6 @@ static async Task RunAsync(string[] args)
             builder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
             builder.Services.AddDoctorChecks();
         }
-
-        // Suppress framework console logging
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         if (mode is "init")
         {
@@ -353,11 +354,7 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        var builder = CreateQuietHostBuilder(args);
 
         using var host = builder.Build();
         using var scope = host.Services.CreateScope();
@@ -461,11 +458,7 @@ static async Task RunAsync(string[] args)
             return;
         }
 
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        var builder = CreateQuietHostBuilder(args);
 
         if (statsTui)
         {
@@ -496,6 +489,15 @@ static async Task RunAsync(string[] args)
         var subcommand = args.Length > 1 ? args[1] : "help";
         if (IsHelpToken(subcommand))
             subcommand = "help";
+
+        // See DaemonCommandDispatch remarks: `pair`/`devices` guard their own trailing --help
+        // below; the remaining lifecycle verbs previously executed for real on a trailing help
+        // token (canary finding). Fail toward help, not execution.
+        if (DaemonCommandDispatch.ShouldShowHelpInsteadOfExecuting(subcommand, args))
+        {
+            WriteDaemonHelp();
+            return;
+        }
 
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
@@ -538,46 +540,52 @@ static async Task RunAsync(string[] args)
                     return;
                 }
 
-                var pairBuilder = Host.CreateApplicationBuilder(args);
-                ConfigureConfigServices(pairBuilder.Services, pairBuilder.Configuration);
-                pairBuilder.Logging.ClearProviders();
-                pairBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+                var pairBuilder = CreateQuietHostBuilder(args);
 
                 using var pairHost = pairBuilder.Build();
                 var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
-                var pairHubUrl = $"{pairApi.Endpoint}/hub/session";
-                var pairPaths = pairHost.Services.GetRequiredService<NetclawPaths>();
-                var pairExposureMode = DaemonClientFactory.ResolveExposureMode(pairPaths);
-                var pairTokenFactory = DaemonClientFactory.CreateAccessTokenProvider(pairApi.Endpoint, pairPaths, pairExposureMode);
-
-                await using var pairConn = new HubConnectionBuilder()
-                    .ConfigureAccessToken(pairHubUrl, pairTokenFactory)
-                    .Build();
+                var proofProtector = pairHost.Services.GetRequiredService<LocalControlPairingProofProtector>();
+                var timeProvider = pairHost.Services.GetRequiredService<TimeProvider>();
 
                 try
                 {
-                    await pairConn.StartAsync();
-                }
-                catch (Exception ex)
-                {
-                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.Endpoint}: {ex.Message}");
-                    Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
-                    Environment.ExitCode = 1;
-                    return;
-                }
+                    var proof = proofProtector.CreateProof(timeProvider.GetUtcNow());
+                    var response = await pairApi.RequestPairingCodeAsync(proof);
+                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    {
+                        Console.Error.WriteLine("error: The daemon does not support local-control pairing.");
+                        Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
 
-                try
-                {
-                    var pairingResult = await pairConn.InvokeAsync<PairingCodeResultDto>("GeneratePairingCode");
+                    if (response.StatusCode == System.Net.HttpStatusCode.BadRequest
+                        && response.Error == "unsupported_protocol_version")
+                    {
+                        Console.Error.WriteLine("error: The daemon does not support this local-control proof version.");
+                        Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
+
+                    if (response.Result is null)
+                    {
+                        Console.Error.WriteLine($"error: The daemon rejected the pairing request: {response.Error ?? response.StatusCode.ToString()}");
+                        Environment.ExitCode = 1;
+                        return;
+                    }
+
+                    var pairingResult = response.Result;
                     Console.WriteLine($"Pairing code:  {pairingResult.FormattedCode}");
                     Console.WriteLine($"Expires at:    {pairingResult.ExpiresAt.ToLocalTime():HH:mm:ss} (local time)");
                     Console.WriteLine();
                     Console.WriteLine("On the remote device, run:");
                     Console.WriteLine($"  netclaw pair {pairApi.Endpoint}");
                 }
-                catch (HubException ex)
+                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
                 {
-                    Console.Error.WriteLine($"error: {ex.Message}");
+                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.LocalControlEndpoint}: {ex.Message}");
+                    Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
                     Environment.ExitCode = 1;
                 }
 
@@ -593,10 +601,7 @@ static async Task RunAsync(string[] args)
                     return;
                 }
 
-                var devBuilder = Host.CreateApplicationBuilder(args);
-                ConfigureConfigServices(devBuilder.Services, devBuilder.Configuration);
-                devBuilder.Logging.ClearProviders();
-                devBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
+                var devBuilder = CreateQuietHostBuilder(args);
 
                 using var devHost = devBuilder.Build();
                 var devApi = devHost.Services.GetRequiredService<DaemonApi>();
@@ -675,10 +680,7 @@ static async Task RunAsync(string[] args)
         if ((mcpSubcommand is "tools" or "permissions") && args.Length <= 2)
         {
             // Bare `netclaw mcp tools` or `netclaw mcp permissions` → TUI mode
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddSingleton<McpToolPermissionsNavigationState>();
             builder.Services.AddSingleton<TuiNavigation>();
 
@@ -699,10 +701,7 @@ static async Task RunAsync(string[] args)
         if (mcpSubcommand is "auth" or "list" or "tools" or "permissions")
         {
             // auth/list/tools/permissions need the daemon — spin up DI to get DaemonApi
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
             using var mcpHost = builder.Build();
             var mcpPaths = mcpHost.Services.GetRequiredService<NetclawPaths>();
             var mcpDaemonApi = mcpHost.Services.GetRequiredService<DaemonApi>();
@@ -728,12 +727,9 @@ static async Task RunAsync(string[] args)
         // Bare invocation → TUI; subcommands → plain CLI
         if (args.Length == 1)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddProviderDescriptors();
             builder.Services.AddProviderOAuthServices();
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-provider-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -762,11 +758,8 @@ static async Task RunAsync(string[] args)
         // Bare invocation → TUI; subcommands → plain CLI
         if (args.Length == 1)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddProviderDescriptors();
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-model-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -795,11 +788,8 @@ static async Task RunAsync(string[] args)
         var isTuiInvocation = args.Length == 1 || (args.Length > 1 && args[1] is "tui");
         if (isTuiInvocation)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
+            var builder = CreateQuietHostBuilder(args);
             builder.Services.AddSingleton(paths);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-approvals-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -824,10 +814,7 @@ static async Task RunAsync(string[] args)
     {
         if (args.Length > 1 && args[1] is "ui" or "tui")
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
 
             var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-reminder-trace.log");
             builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -847,16 +834,17 @@ static async Task RunAsync(string[] args)
         var reminderSub = args.Length > 1 ? args[1] : "help";
         if (reminderSub is "help" or "-h" or "--help" or "validate" || args.Length == 1)
         {
-            Environment.ExitCode = await ReminderCommand.RunAsync(args, daemonApi: null);
+            Environment.ExitCode = await ReminderCommand.RunAsync(args, null, Console.Out, Console.Error);
         }
         else
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
             using var host = builder.Build();
-            Environment.ExitCode = await ReminderCommand.RunAsync(args, host.Services.GetRequiredService<DaemonApi>());
+            Environment.ExitCode = await ReminderCommand.RunAsync(
+                args,
+                host.Services.GetRequiredService<DaemonApi>(),
+                Console.Out,
+                Console.Error);
         }
         return;
     }
@@ -864,19 +852,90 @@ static async Task RunAsync(string[] args)
     // ── Skill management ──
     if (mode is "skill")
     {
+        var skillSubcommand = args.Length > 1 ? args[1] : "list";
+        if (skillSubcommand is "list" or "sync")
+        {
+            // `skill list` is served by the daemon's live registry — the only view
+            // that includes dynamic MCP prompt skills. It requires the daemon; when
+            // the daemon is unavailable, SkillCommand reports that and exits non-zero
+            // (no disk fallback). Building the DI host parses local config
+            // (netclaw.json, secrets.json); a corrupt file must produce a readable
+            // error, not a stack trace — the old disk-scan list never read those
+            // files, so this path must not make them a new way to crash.
+            try
+            {
+                var builder = CreateQuietHostBuilder(args);
+                using var skillHost = builder.Build();
+                var skillPaths = skillHost.Services.GetRequiredService<NetclawPaths>();
+                skillPaths.EnsureDirectoriesExist();
+                var skillDaemonApi = skillHost.Services.GetRequiredService<DaemonApi>();
+                Environment.ExitCode = await SkillCommand.RunAsync(args, skillPaths, skillDaemonApi);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
+            {
+                Console.Error.WriteLine($"skill {skillSubcommand}: could not load local configuration: {ex.Message}");
+                Console.Error.WriteLine("Fix the file it names (under ~/.netclaw/config) and retry.");
+                Environment.ExitCode = 1;
+            }
+
+            return;
+        }
+
+        // All other skill subcommands are offline filesystem operations — no daemon needed.
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
-        // All skill subcommands are offline — no daemon needed
         Environment.ExitCode = await SkillCommand.RunAsync(args, paths);
+        return;
+    }
+
+    // ── Memory management (memory-core-redesign Slice 2) ──
+    if (mode is "memory")
+    {
+        var paths = new NetclawPaths();
+        paths.EnsureDirectoriesExist();
+        // All memory subcommands are offline — direct SQLite/model-file access, no daemon needed
+        Environment.ExitCode = await MemoryCommand.RunAsync(args, paths, BuildCliConfig(), Console.Out, Console.Error);
         return;
     }
 
     // ── Webhook management ──
     if (mode is "webhooks")
     {
+        var webhooksSubcommand = args.Length > 1 ? args[1] : "list";
+
+        // `set` and `delete` mutate routes, which only the daemon does — they need
+        // the DaemonApi client. Building the DI host parses local config
+        // (netclaw.json, secrets.json); a corrupt file must produce a readable
+        // error, not a stack trace. Every other subcommand reads route files,
+        // which stay canonical, so it needs no daemon.
+        if (webhooksSubcommand is "set" or "delete")
+        {
+            try
+            {
+                var builder = CreateQuietHostBuilder(args);
+                using var webhooksHost = builder.Build();
+                var webhooksPaths = webhooksHost.Services.GetRequiredService<NetclawPaths>();
+                webhooksPaths.EnsureDirectoriesExist();
+                Environment.ExitCode = await WebhooksCommand.RunAsync(
+                    args,
+                    webhooksPaths,
+                    Console.Out,
+                    webhooksHost.Services.GetRequiredService<DaemonApi>(),
+                    Console.Error);
+            }
+            catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
+            {
+                Console.Error.WriteLine($"webhooks {webhooksSubcommand}: could not load local configuration: {ex.Message}");
+                Console.Error.WriteLine("Fix the file it names (under ~/.netclaw/config) and retry.");
+                Environment.ExitCode = 1;
+            }
+
+            return;
+        }
+
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
-        Environment.ExitCode = await WebhooksCommand.RunAsync(args, paths);
+        Environment.ExitCode = await WebhooksCommand.RunAsync(args, paths, Console.Out, null, Console.Error);
         return;
     }
 
@@ -918,15 +977,19 @@ static async Task RunAsync(string[] args)
     // ── Self-update ──
     if (mode is "update")
     {
-        var builder = Host.CreateApplicationBuilder(args);
-        ConfigureConfigServices(builder.Services, builder.Configuration);
-        builder.Logging.ClearProviders();
-        builder.Logging.SetMinimumLevel(LogLevel.Warning);
+        var builder = CreateQuietHostBuilder(args);
 
         using var host = builder.Build();
         var paths = host.Services.GetRequiredService<NetclawPaths>();
         var daemonConfig = host.Services.GetRequiredService<DaemonConfig>();
-        Environment.ExitCode = await UpdateCommand.RunAsync(args, paths, daemonConfig.DisableSelfUpdate, daemonConfig.UpdateChannel);
+        Environment.ExitCode = await UpdateCommand.RunAsync(
+            args,
+            paths,
+            daemonConfig.DisableSelfUpdate,
+            daemonConfig.UpdateChannel,
+            Console.In,
+            Console.Out,
+            Console.Error);
         return;
     }
 
@@ -954,10 +1017,7 @@ static async Task RunAsync(string[] args)
 
         if (onceMode)
         {
-            var builder = Host.CreateApplicationBuilder(args);
-            ConfigureConfigServices(builder.Services, builder.Configuration);
-            builder.Logging.ClearProviders();
-            builder.Logging.SetMinimumLevel(LogLevel.Warning);
+            var builder = CreateQuietHostBuilder(args);
 
             using var host = builder.Build();
             using var scope = host.Services.CreateScope();
@@ -1131,10 +1191,10 @@ static void WriteCrashLog(Exception ex)
 // identical editor (simplify-netclaw-init).
 static async Task RunConfigEditorAsync(string[] args)
 {
-    var builder = Host.CreateApplicationBuilder(args);
-    // ConfigureConfigServices registers NetclawPaths (same paths the caller already
-    // ensured on disk), so no separate paths registration is needed here.
-    ConfigureConfigServices(builder.Services, builder.Configuration);
+    // CreateQuietHostBuilder's ConfigureConfigServices call registers NetclawPaths (same
+    // paths the caller already ensured on disk), so no separate paths registration is
+    // needed here.
+    var builder = CreateQuietHostBuilder(args);
     builder.Services.AddSingleton(new ConfigDashboardNavigationState());
     // Marks this as the embedded config host so the routed Provider/Model managers navigate back
     // to the dashboard (rather than exiting) when backed out — the standalone hosts omit it.
@@ -1153,8 +1213,6 @@ static async Task RunConfigEditorAsync(string[] args)
         .AddSectionEditor<SecurityPostureStepViewModel>()
         .AddSectionEditor<FeatureSelectionStepViewModel>()
         .AddSectionEditor<ExposureModeStepViewModel>();
-    builder.Logging.ClearProviders();
-    builder.Logging.SetMinimumLevel(LogLevel.Warning);
 
     var traceFile = Path.Combine(Path.GetTempPath(), "netclaw-config-trace.log");
     builder.Services.AddTerminaFileTracing(traceFile, TerminaTraceCategory.All, TerminaTraceLevel.Trace);
@@ -1188,15 +1246,12 @@ static async Task RunConfigEditorAsync(string[] args)
     if (navigationState.PendingAction == ConfigDashboardAction.RunDoctor)
     {
         var doctorArgs = new[] { "doctor" };
-        var doctorBuilder = Host.CreateApplicationBuilder(doctorArgs);
-        ConfigureConfigServices(doctorBuilder.Services, doctorBuilder.Configuration);
+        var doctorBuilder = CreateQuietHostBuilder(doctorArgs);
         doctorBuilder.Services.AddHttpClient<ISlackProbe, SlackProbe>();
         doctorBuilder.Services.AddHttpClient<IDiscordProbe, DiscordProbe>();
         doctorBuilder.Services.AddHttpClient<ITelegramProbe, TelegramProbe>();
         doctorBuilder.Services.AddHttpClient<IMattermostProbe, MattermostProbe>();
         doctorBuilder.Services.AddDoctorChecks();
-        doctorBuilder.Logging.ClearProviders();
-        doctorBuilder.Logging.SetMinimumLevel(LogLevel.Warning);
 
         using var doctorHost = doctorBuilder.Build();
         using var scope = doctorHost.Services.CreateScope();
@@ -1264,6 +1319,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  provider                 Manage LLM providers (TUI) or use subcommands");
     Console.WriteLine("  model                    Manage model assignments (TUI) or use subcommands");
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
+    Console.WriteLine("  memory                   Manage cross-session memory (embeddings backfill, offline)");
     Console.WriteLine("  skill                    Manage skills and skill sources");
     Console.WriteLine("  webhooks                 Manage inbound webhook routes");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
@@ -1944,6 +2000,20 @@ static void WriteDailyTable(List<DaemonStats.DailyRow> rows)
 // Shared configuration services (all modes)
 // ═══════════════════════════════════════════════════════════════════════
 
+// Builds a HostApplicationBuilder with the shared config chain wired up and framework
+// console logging suppressed to Warning — console output is reserved for CLI/TUI
+// output, not framework log noise. Callers add mode-specific registrations after
+// this returns; the WebApplicationBuilder-based chat/sessions/headless path builds
+// its own builder because it needs a listening HTTP host, not this simpler shape.
+static HostApplicationBuilder CreateQuietHostBuilder(string[] args)
+{
+    var builder = Host.CreateApplicationBuilder(args);
+    ConfigureConfigServices(builder.Services, builder.Configuration);
+    builder.Logging.ClearProviders();
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+    return builder;
+}
+
 static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfigurationManager configuration)
 {
     // Netclaw paths (creates ~/.netclaw/ structure)
@@ -1954,7 +2024,10 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
     // Initialize Data Protection for secrets encryption/decryption.
     // Must happen before config binding so SensitiveStringTypeConverter
     // can transparently decrypt ENC: values.
-    var protector = SecretsProtection.CreateProtector(paths);
+    var dataProtectionProvider = SecretsProtection.CreateDataProtectionProvider(paths);
+    services.AddSingleton<IDataProtectionProvider>(dataProtectionProvider);
+    services.AddSingleton<LocalControlPairingProofProtector>();
+    var protector = new DataProtectionSecretsProtector(dataProtectionProvider);
     services.AddSingleton<ISecretsProtector>(protector);
     SensitiveStringTypeConverter.Protector = protector;
 
@@ -1974,6 +2047,8 @@ static NetclawPaths ConfigureConfigServices(IServiceCollection services, IConfig
 
     // Shared daemon HTTP API client — single endpoint resolution for all commands
     services.AddHttpClient();
+    services.AddHttpClient(DaemonApi.LocalControlHttpClientName)
+        .ConfigurePrimaryHttpMessageHandler(DaemonApi.CreateLocalControlHttpHandler);
     services.AddSingleton<DaemonApi>();
 
     // Whether an external supervisor (e.g. the Docker entrypoint) owns the daemon lifecycle.

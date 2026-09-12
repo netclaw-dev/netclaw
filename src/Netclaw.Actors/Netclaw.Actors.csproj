@@ -26,6 +26,9 @@
     <PackageReference Include="Google.Protobuf" />
     <PackageReference Include="Grpc.Tools" PrivateAssets="All" />
     <PackageReference Include="YamlDotNet" />
+    <!-- SIMD cosine similarity for MemoryVectorIndex (memory-core-redesign D3). Pure managed,
+         no native component — does not pull OnnxRuntime or anything Netclaw.Embeddings owns. -->
+    <PackageReference Include="System.Numerics.Tensors" />
   </ItemGroup>
 
   <ItemGroup>

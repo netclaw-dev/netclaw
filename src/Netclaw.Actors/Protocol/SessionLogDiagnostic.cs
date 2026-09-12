@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -14,5 +15,11 @@ namespace Netclaw.Actors.Protocol;
 /// the line by message field rather than by ambient context (which would not flow
 /// across actor mailboxes) or by inferring intent from log metadata at the sink.
 /// </summary>
-public sealed record SessionLogDiagnostic(SessionId SessionId, string Line)
+/// <param name="SessionId">The owning parent session.</param>
+/// <param name="Line">The pre-formatted diagnostic line.</param>
+/// <param name="SubSessionId">The optional child run whose log receives the line.</param>
+public sealed record SessionLogDiagnostic(
+    SessionId SessionId,
+    string Line,
+    SubAgentScopeId? SubSessionId = null)
     : IWithSessionId, INoSerializationVerificationNeeded;

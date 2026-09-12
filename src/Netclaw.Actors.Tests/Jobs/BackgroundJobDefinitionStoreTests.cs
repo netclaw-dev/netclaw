@@ -6,6 +6,7 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Jobs;
 using Netclaw.Configuration;
 using Xunit;
@@ -76,6 +77,8 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         {
             Id = new BackgroundJobId(jobId),
             Command = "dotnet test",
+            ManagedTemporaryDirectory = Path.Combine(_basePath, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _basePath,
             SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
             Rationale = "Run the test suite.",
             Status = BackgroundJobStatus.Pending,
@@ -88,6 +91,8 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         // Re-open from a fresh store instance to exercise deserialization
         var freshStore = new BackgroundJobDefinitionStore(_paths);
         var loaded = freshStore.Get(new BackgroundJobId(jobId));
+        var documentPath = Path.Combine(_paths.JobsDirectory, $"{Uri.EscapeDataString(jobId)}.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(documentPath));
 
         Assert.NotNull(loaded);
         Assert.Equal(TrustAudience.Team, loaded!.Audience);
@@ -95,6 +100,11 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.Equal(jobId, loaded.Id.Value);
         Assert.Equal("dotnet test", loaded.Command);
         Assert.Equal("C0ABC/1712000000.000001", loaded.SessionId.Value);
+        Assert.Equal(_basePath, loaded.ManagedTemporaryAuthorityRoot);
+        Assert.Equal(
+            _basePath,
+            document.RootElement.GetProperty("managedTemporaryAuthorityRoot").GetString());
+        Assert.False(document.RootElement.TryGetProperty("managedTemporaryStorageRoot", out _));
     }
 
     /// <summary>
@@ -112,6 +122,8 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         {
             Id = jobId,
             Command = "dotnet test",
+            ManagedTemporaryDirectory = Path.Combine(_basePath, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _basePath,
             SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
             Rationale = "Run the test suite.",
             Status = BackgroundJobStatus.Completed,
@@ -153,12 +165,24 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
     [Fact]
     public void DeleteJobArtifacts_keeps_definition_when_output_cleanup_fails_then_retries()
     {
-        var store = new BackgroundJobDefinitionStore(_paths);
+        var rejectCleanup = true;
+        var store = new BackgroundJobDefinitionStore(
+            _paths,
+            NullLogger<BackgroundJobDefinitionStore>.Instance,
+            (path, recursive) =>
+            {
+                if (rejectCleanup)
+                    throw new IOException("simulated output cleanup failure");
+
+                Directory.Delete(path, recursive);
+            });
         var jobId = new BackgroundJobId("cleanup-retry-001");
         store.Save(new BackgroundJobDefinition
         {
             Id = jobId,
             Command = "dotnet test",
+            ManagedTemporaryDirectory = Path.Combine(_basePath, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _basePath,
             SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
             Rationale = "Run the test suite.",
             Status = BackgroundJobStatus.Completed,
@@ -168,18 +192,17 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
             OriginChannelType = Netclaw.Actors.Channels.ChannelType.Slack
         });
 
-        var outputLogPath = store.GetOutputLogPathOnly(jobId);
+        var outputLogPath = store.GetOutputLogPath(jobId);
         var outputDirectory = Path.GetDirectoryName(outputLogPath)!;
-        File.WriteAllText(outputDirectory, "path collision");
+        File.WriteAllText(outputLogPath, "build output");
 
         var error = Assert.Throws<IOException>(() => store.DeleteJobArtifacts(jobId));
 
-        Assert.Contains("is not a directory", error.Message);
+        Assert.Contains("simulated output cleanup failure", error.Message);
         Assert.NotNull(store.Get(jobId));
-        Assert.True(File.Exists(outputDirectory));
+        Assert.True(File.Exists(outputLogPath));
 
-        File.Delete(outputDirectory);
-        File.WriteAllText(store.GetOutputLogPath(jobId), "build output");
+        rejectCleanup = false;
 
         Assert.True(store.DeleteJobArtifacts(jobId));
         Assert.Null(store.Get(jobId));
@@ -233,6 +256,7 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
             {
               "id": "{{unsafeId}}",
               "command": "echo pwn",
+              "managedTemporaryDirectory": "/tmp/netclaw-tests/managed-temp",
               "sessionId": "C0TEST/1712000000.000001",
               "rationale": "test",
               "status": "Completed",
@@ -259,6 +283,8 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         {
             Id = victimId,
             Command = "dotnet test",
+            ManagedTemporaryDirectory = Path.Combine(_basePath, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _basePath,
             SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
             Rationale = "Run the test suite.",
             Status = BackgroundJobStatus.Completed,
@@ -302,6 +328,8 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         {
             Id = new BackgroundJobId("job-byte-eq"),
             Command = "dotnet test",
+            ManagedTemporaryDirectory = Path.Combine(_basePath, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _basePath,
             SessionId = new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"),
             Rationale = "Run the test suite.",
             Audience = TrustAudience.Team,
@@ -324,6 +352,35 @@ public sealed class BackgroundJobDefinitionStoreTests : IDisposable
         Assert.NotNull(loaded);
         Assert.Equal(new BackgroundJobId("job-byte-eq"), loaded!.Id);
         Assert.Equal(new Netclaw.Actors.Protocol.SessionId("C0ABC/1712000000.000001"), loaded.SessionId);
+    }
+
+    [Fact]
+    public void Definition_without_managed_temporary_fields_remains_readable()
+    {
+        const string jobId = "legacy-temp";
+        var path = Path.Combine(_paths.JobsDirectory, $"{jobId}.json");
+        File.WriteAllText(path,
+            """
+            {
+              "id": "legacy-temp",
+              "command": "dotnet test",
+              "sessionId": "C0ABC/1712000000.000001",
+              "rationale": "Run the test suite.",
+              "status": "Running",
+              "timeoutSeconds": 600,
+              "startedAtMs": 1,
+              "audience": "Team",
+              "boundary": "Team",
+              "originChannelType": "Slack"
+            }
+            """);
+
+        var definition = Assert.Single(new BackgroundJobDefinitionStore(_paths).List());
+
+        Assert.Equal(new BackgroundJobId(jobId), definition.Id);
+        Assert.Equal(BackgroundJobStatus.Running, definition.Status);
+        Assert.Null(definition.ManagedTemporaryDirectory);
+        Assert.Null(definition.ManagedTemporaryAuthorityRoot);
     }
 
     public void Dispose()

@@ -163,14 +163,14 @@ internal static class DiscordApprovalPromptBuilder
                 _ => "Resolved"
             }
             : selectedKey switch
-        {
-            ApprovalOptionKeys.ApproveAlways => "Saved: always here",
-            ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
-            ApprovalOptionKeys.ApproveSession => "Saved for this chat",
-            ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
-            ApprovalOptionKeys.Deny => "Denied",
-            _ => "Resolved"
-        };
+            {
+                ApprovalOptionKeys.ApproveAlways => "Saved: always here",
+                ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
+                ApprovalOptionKeys.ApproveSession => "Saved for this chat",
+                ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
+                ApprovalOptionKeys.Deny => "Denied",
+                _ => "Resolved"
+            };
 
     private static void AppendToolSummary(StringBuilder sb, ToolInteractionRequest request)
     {
@@ -261,10 +261,10 @@ internal static class DiscordApprovalPromptBuilder
         if (string.IsNullOrWhiteSpace(request.Cwd))
             return "(no working directory)";
 
-        return IsSessionScratchPath(request.Cwd) ? "this session" : request.Cwd;
+        return IsSessionOwnedPath(request.Cwd) ? "this session" : request.Cwd;
     }
 
-    private static bool IsSessionScratchPath(string cwd)
+    private static bool IsSessionOwnedPath(string cwd)
     {
         var normalized = cwd.Replace('\\', '/');
         return normalized.Contains("/.netclaw/sessions/", StringComparison.OrdinalIgnoreCase);

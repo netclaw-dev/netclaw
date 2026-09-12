@@ -199,8 +199,9 @@ public sealed record ReminderDefinition
     public bool Enabled { get; set; } = true;
 
     /// <summary>
-    /// Number of consecutive failed execution attempts for this reminder.
-    /// A successful attempt resets this value.
+    /// Number of consecutive failed attempts for this reminder, counting both
+    /// execution failures and scheduling failures (a failure to compute or install
+    /// the next occurrence). A successful execution resets this value.
     /// </summary>
     public int ConsecutiveFailures { get; set; }
 

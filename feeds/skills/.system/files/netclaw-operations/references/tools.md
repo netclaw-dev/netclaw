@@ -4,7 +4,13 @@
 ## Tool Discovery
 
 
-MCP tools are not loaded by default. Use `search_tools` to discover them:
+Deferred tools are not loaded by default. Load a known exact name directly:
+
+```
+load_tool(name: "notion/search")
+```
+
+Use `search_tools` when the exact name is unknown:
 
 ```
 search_tools(query: "servers")                  # list all MCP servers
@@ -12,7 +18,8 @@ search_tools(query: "all", server: "notion")    # browse a server's tools
 search_tools(query: "email")                    # keyword search
 ```
 
-After discovery, matched tools become callable for the session.
+After discovery, call `load_tool` with the selected exact name. Loading exposes
+the schema for the current actor. Normal authorization still runs at dispatch.
 
 ### MCP server state and concurrent callers
 
@@ -20,6 +27,17 @@ One configured MCP server is one daemon-owned client connection. Local STDIO
 servers therefore run as one process shared by every session authorized to use
 that server; a Slack thread or subagent does not receive a private MCP process.
 State held by the server is shared too.
+
+Netclaw listens for tool and prompt catalog changes when the server supports
+them. Modern servers use `subscriptions/listen`. Older servers can send direct
+list-change notifications when they declare `listChanged` support.
+
+Netclaw still polls each catalog. The poll repairs missed events and supports
+servers without notifications. A failed notification refresh keeps the last
+good catalog. Check the daemon logs for the selected compatibility mode,
+acknowledgement timeouts, unsupported methods, or an ended notification stream.
+
+Resource discovery and resource subscriptions are not part of this behavior.
 
 For Playwright, inspect the existing tabs before acting, create a new tab for
 your work, and close only tabs you created. Tabs help callers coordinate, but
@@ -32,8 +50,9 @@ Other categories (`web`, `file`, `shell`, `scheduling`) depend on ACL
 config. If a tool is missing, it may not be granted for this session.
 
 Built-in tool grants follow the audience and are monotonic (Public ⊆ Team ⊆
-Personal). **Public** sessions get read-only file tools only — `file_read`,
-`file_list`, `attach_file` — and no outbound web access. **Team** adds
+Personal). **Public parent sessions** get read-only file tools only — `file_read`,
+`file_list`, and file delivery — with no outbound web access. Subagents return
+authorized file paths to their parent instead of delivering files. **Team** adds
 `file_write`, `file_edit`, `web_search`, `web_fetch`, the scheduling tools,
 `skill_manage`, and `set_working_directory`. **Personal** gets everything.
 `shell_execute` is Personal-only — in a Team or Public session, use `file_list`
@@ -45,15 +64,14 @@ additionally cannot discover or load skills, subagents, memory tools,
 scheduling tools, or the `web_search` / `web_fetch` tools regardless of
 feature flags.
 
-### Adding MCP servers (fail-closed by default)
+### Add MCP servers
 
-`netclaw mcp add` writes new MCP servers with **zero granted tools** and
-per-audience approval defaults so freshly added servers are never silently
-exposed:
+`netclaw mcp add` writes an approval default for each audience.
+The command writes closed tool grants for the Team and Public audiences.
 
 | Audience | Grants | Approval default |
 |----------|--------|------------------|
-| Personal | `[]` (empty list — all tools denied until the operator opts in) | `Approval` |
+| Personal | Not used (`All` MCP server mode) | `Auto` |
 | Team     | `[]` | `Approval` |
 | Public   | `[]` | `Deny` |
 
@@ -63,14 +81,14 @@ per-server approval mode. Bare `netclaw mcp tools` is a read-only CLI view
 of the same state; both commands surface a discoverability hint toward the
 TUI.
 
-Escape hatch: `netclaw mcp add --grant-all` keeps the legacy "null grants
-= all tools pass" behavior for CI. Even with `--grant-all`, the per-audience
-approval defaults (Personal/Team=Approval, Public=Deny) are still written —
-you cannot turn off the approval prompts at `mcp add` time.
+The `--grant-all` option skips the closed grants for Team and Public.
+The option does not change the approval defaults.
 
 Inside the TUI (`netclaw mcp permissions`):
 
-- `Enter` toggles the highlighted tool's grant
+- `Enter` toggles the highlighted tool. In the `All` MCP server mode, the toggle sets
+  `Deny` (disabled) or clears it (inherit the server default). In `Allowlist`
+  mode, it adds or removes the tool from the grant list.
 - `A` toggles all tools on/off for the current audience
 - `E` enables/disables the whole server for the current audience
 - `M` cycles the **server default** approval mode (`Auto → Approval → Deny → Auto`)
@@ -82,18 +100,29 @@ Approval-mode resolution precedence (for MCP tools):
 
 1. Exact `ToolOverrides["{server}/{tool}"]` override
 2. `McpServerDefaults[{server}]` default
-3. Fail-closed fallback (Personal audience, shell/file-edit matcher family)
-4. Audience `DefaultMode`
+3. Audience `DefaultMode`
 
-Newly discovered tools on an existing server automatically inherit the
-server default; you do not need to re-run `permissions` after the server
-learns a new tool.
+A tool with an effective `Deny` mode does not appear in the model tool list.
 
-### Migrating existing MCP servers
+The MCP server mode controls tool grants:
+
+- `All` does not use `McpServerToolGrants`.
+- A new tool inherits the server approval default in the `All` mode.
+- `Allowlist` applies `McpServerToolGrants` when the server has an entry.
+- An absent server entry adds no per-tool filter.
+- Within the approval policy, an exact tool override wins over the server default.
+
+Use `--revoke` to write a `Deny` override in the `All` mode.
+Use `--grant` to remove a `Deny` override or enable a tool above a `Deny` default.
+
+### MCP servers in old configurations
 
 Servers added to `netclaw.json` before this behavior shipped stay untouched —
 their tool grants, `ApprovalPolicy.McpServerDefaults`, and `ToolOverrides`
 entries are not rewritten during an upgrade.
+
+An existing grant snapshot has no effect when its audience uses the `All` mode.
+The update does not remove or replace any exact tool override.
 
 `netclaw doctor` will emit a warning for each enabled MCP server that
 Personal can reach (`McpServersMode = All`) but has no

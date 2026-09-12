@@ -32,6 +32,11 @@ internal enum ToolAuthorizationOutcome
     RequiresApproval,
 
     /// <summary>
+    /// The current attempt must not execute because the agent must author a replacement call.
+    /// </summary>
+    RequiresAgentCorrection,
+
+    /// <summary>
     /// The current attempt cannot execute and must not prompt the user.
     /// </summary>
     /// <remarks>
@@ -61,14 +66,14 @@ internal enum ToolAllowReason
     BackgroundJobLifecycle,
 
     /// <summary>
-    /// The shell safe-verb policy allows every command candidate.
+    /// Reviewed-safe shell policy allows every command candidate.
     /// </summary>
     /// <remarks>
     /// The parser must produce a clean candidate set.
-    /// Each verb must occur in the safe-verb list.
-    /// Each effective directory must occur inside an applicable safe area.
+    /// Each phrase must occur in the reviewed list.
+    /// Shared path authorization must allow every effective directory and path.
     /// </remarks>
-    SafeVerbInTrustedScope,
+    ReviewedSafePolicy,
 
     /// <summary>
     /// Every parsed shell candidate belongs to the fixed approval-exempt set.
@@ -122,8 +127,8 @@ internal static class ToolAllowReasonExtensions
                 "The resolved approval policy allowed the tool automatically.",
             ToolAllowReason.BackgroundJobLifecycle =>
                 "The initial shell approval covered control of the session-owned background job.",
-            ToolAllowReason.SafeVerbInTrustedScope =>
-                "The shell safe-verb policy allowed every candidate inside a trusted scope.",
+            ToolAllowReason.ReviewedSafePolicy =>
+                "Reviewed-safe shell policy allowed every candidate after path authorization.",
             ToolAllowReason.ApprovalExemptShellCandidates =>
                 "Every parsed shell candidate was exempt from stored approval checks.",
             ToolAllowReason.StoredApproval =>
@@ -141,31 +146,48 @@ internal static class ToolAllowReasonExtensions
 /// The dispatcher returns this result before tool execution or a user prompt.
 /// The static factory methods enforce the fields that each outcome requires.
 /// </remarks>
-internal sealed record ToolAuthorizationDecision
+public sealed record ToolAuthorizationDecision
 {
     private ToolAuthorizationDecision(
         ToolAuthorizationOutcome outcome,
         ToolAllowReason? allowReason,
         string? denyReason,
+        string? denyMessage,
         ToolApprovalContext? approvalContext,
-        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+        ToolCorrectionCollection? agentCorrections,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches,
+        ShellPolicyDecisionTrace? shellPolicyTrace = null)
     {
         Outcome = outcome;
         AllowReason = allowReason;
         DenyReason = denyReason;
+        DenyMessage = denyMessage;
         ApprovalContext = approvalContext;
+        AgentCorrections = agentCorrections;
         ApprovalMatches = approvalMatches;
+        ShellPolicyTrace = shellPolicyTrace ?? ShellPolicyDecisionTrace.Empty;
     }
 
     /// <summary>
     /// Gets the action that the caller must take for this attempt.
     /// </summary>
-    public ToolAuthorizationOutcome Outcome { get; }
+    internal ToolAuthorizationOutcome Outcome { get; }
+
+    /// <summary>
+    /// Gets whether policy permits execution or permits an approval request.
+    /// </summary>
+    public bool Allowed => Outcome is ToolAuthorizationOutcome.Allowed
+        or ToolAuthorizationOutcome.RequiresApproval;
+
+    /// <summary>
+    /// Gets whether the caller must obtain approval before execution.
+    /// </summary>
+    public bool NeedsApproval => Outcome is ToolAuthorizationOutcome.RequiresApproval;
 
     /// <summary>
     /// Gets the allow rule when <see cref="Outcome"/> is <see cref="ToolAuthorizationOutcome.Allowed"/>.
     /// </summary>
-    public ToolAllowReason? AllowReason { get; }
+    internal ToolAllowReason? AllowReason { get; }
 
     /// <summary>
     /// Gets the stable deny reason when <see cref="Outcome"/> is <see cref="ToolAuthorizationOutcome.Denied"/>.
@@ -173,9 +195,27 @@ internal sealed record ToolAuthorizationDecision
     public string? DenyReason { get; }
 
     /// <summary>
+    /// Gets optional human-readable denial detail returned to the agent.
+    /// </summary>
+    internal string? DenyMessage { get; }
+
+    /// <summary>
     /// Gets the prompt data when <see cref="Outcome"/> is <see cref="ToolAuthorizationOutcome.RequiresApproval"/>.
     /// </summary>
     public ToolApprovalContext? ApprovalContext { get; }
+
+    /// <summary>
+    /// Gets the correction facts when <see cref="Outcome"/> requires correction.
+    /// </summary>
+    internal ToolCorrectionCollection? AgentCorrections { get; }
+
+    /// <summary>Gets one correction for callers that support only scalar advice.</summary>
+    internal ToolCorrection? AgentCorrection => AgentCorrections switch
+    {
+        null => null,
+        { Items.Count: 1 } corrections => corrections.Items[0],
+        _ => throw new InvalidOperationException("A scalar correction consumer received multiple corrections.")
+    };
 
     /// <summary>
     /// Gets the session or persistent grants that matched this attempt.
@@ -184,23 +224,26 @@ internal sealed record ToolAuthorizationDecision
     /// A prompt decision can contain partial matches for a compound command.
     /// An allowed stored-approval decision contains a match for each required candidate.
     /// A one-time decision can contain stored matches for part of a compound command.
+    /// A correction decision can retain matches found before the correction became final.
     /// Policy, safe-rule, approval-exempt, and deny decisions contain an empty list.
     /// </remarks>
-    public IReadOnlyList<ToolApprovalMatch> ApprovalMatches { get; }
+    internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches { get; }
+
+    internal ShellPolicyDecisionTrace ShellPolicyTrace { get; init; }
 
     /// <summary>
     /// Creates an allowed result without stored approval matches.
     /// </summary>
-    public static ToolAuthorizationDecision Allow(ToolAllowReason reason)
+    internal static ToolAuthorizationDecision Allow(ToolAllowReason reason)
     {
         ValidateAllowReason(reason);
-        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Allowed, reason, null, null, []);
+        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Allowed, reason, null, null, null, null, []);
     }
 
     /// <summary>
     /// Creates an allowed result with structured approval matches.
     /// </summary>
-    public static ToolAuthorizationDecision Allow(
+    internal static ToolAuthorizationDecision Allow(
         ToolAllowReason reason,
         IReadOnlyList<ToolApprovalMatch> approvalMatches)
     {
@@ -211,33 +254,51 @@ internal sealed record ToolAuthorizationDecision
             reason,
             null,
             null,
+            null,
+            null,
             [.. approvalMatches]);
     }
 
     /// <summary>
     /// Creates a hard-deny result.
     /// </summary>
-    public static ToolAuthorizationDecision Deny(string reason)
+    public static ToolAuthorizationDecision Deny(string reason, string? message = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(reason);
-        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Denied, null, reason, null, []);
+        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.Denied, null, reason, message, null, null, []);
     }
 
     /// <summary>
     /// Creates an approval-request result without existing approval matches.
     /// </summary>
     public static ToolAuthorizationDecision RequiresApproval(ToolApprovalContext context)
+        => RequiresApproval(context, correction: null);
+
+    /// <summary>
+    /// Creates an approval result with a correction to use only if existing authority does not match.
+    /// </summary>
+    internal static ToolAuthorizationDecision RequiresApproval(
+        ToolApprovalContext context,
+        ToolCorrection? correction)
     {
         ArgumentNullException.ThrowIfNull(context);
-        return new ToolAuthorizationDecision(ToolAuthorizationOutcome.RequiresApproval, null, null, context, []);
+        return new ToolAuthorizationDecision(
+            ToolAuthorizationOutcome.RequiresApproval,
+            null,
+            null,
+            null,
+            context,
+            ToCollection(correction),
+            []);
     }
 
     /// <summary>
     /// Creates an approval-request result with partial stored approval matches.
     /// </summary>
-    public static ToolAuthorizationDecision RequiresApproval(
+    internal static ToolAuthorizationDecision RequiresApproval(
         ToolApprovalContext context,
-        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+        IReadOnlyList<ToolApprovalMatch> approvalMatches,
+        ToolCorrection? correction = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(approvalMatches);
@@ -245,8 +306,69 @@ internal sealed record ToolAuthorizationDecision
             ToolAuthorizationOutcome.RequiresApproval,
             null,
             null,
+            null,
             context,
+            ToCollection(correction),
             [.. approvalMatches]);
+    }
+
+    /// <summary>
+    /// Creates a typed agent-correction result that grants no execution authority.
+    /// </summary>
+    internal static ToolAuthorizationDecision RequireAgentCorrection(ToolCorrection correction)
+        => RequireAgentCorrection(new ToolCorrectionCollection([correction]));
+
+    /// <summary>
+    /// Creates a typed agent-correction result with prior stored approval matches.
+    /// </summary>
+    internal static ToolAuthorizationDecision RequireAgentCorrection(
+        ToolCorrection correction,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+        => RequireAgentCorrection(new ToolCorrectionCollection([correction]), approvalMatches);
+
+    /// <summary>
+    /// Creates a typed agent-correction result that grants no execution authority.
+    /// </summary>
+    internal static ToolAuthorizationDecision RequireAgentCorrection(ToolCorrectionCollection corrections)
+        => RequireAgentCorrection(corrections, []);
+
+    /// <summary>
+    /// Creates a typed agent-correction result with prior stored approval matches.
+    /// </summary>
+    internal static ToolAuthorizationDecision RequireAgentCorrection(
+        ToolCorrectionCollection corrections,
+        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+    {
+        ArgumentNullException.ThrowIfNull(corrections);
+        ArgumentNullException.ThrowIfNull(approvalMatches);
+        return new ToolAuthorizationDecision(
+            ToolAuthorizationOutcome.RequiresAgentCorrection,
+            null,
+            null,
+            null,
+            null,
+            corrections,
+            [.. approvalMatches]);
+    }
+
+    internal ToolAuthorizationDecision WithShellPolicyTrace(ShellPolicyDecisionTrace trace)
+    {
+        ArgumentNullException.ThrowIfNull(trace);
+        return this with { ShellPolicyTrace = trace };
+    }
+
+    internal ToolAuthorizationDecision WithApprovalMatches(
+        IReadOnlyList<ToolApprovalMatch> approvalMatches)
+    {
+        ArgumentNullException.ThrowIfNull(approvalMatches);
+        return Outcome switch
+        {
+            ToolAuthorizationOutcome.RequiresApproval when ApprovalContext is { } context =>
+                RequiresApproval(context, approvalMatches, AgentCorrection),
+            ToolAuthorizationOutcome.Allowed when AllowReason is { } reason =>
+                Allow(reason, approvalMatches),
+            _ => this
+        };
     }
 
     private static void ValidateAllowReason(ToolAllowReason reason)
@@ -254,4 +376,19 @@ internal sealed record ToolAuthorizationDecision
         if (!Enum.IsDefined(reason))
             throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown tool allow reason.");
     }
+
+    private static ToolCorrectionCollection? ToCollection(ToolCorrection? correction)
+        => correction is null ? null : new ToolCorrectionCollection([correction]);
+}
+
+internal sealed class ToolCorrectionRequiredException : InvalidOperationException
+{
+    internal ToolCorrectionRequiredException(ToolCorrectionCollection corrections)
+        : base("Tool invocation requires agent correction.")
+    {
+        ArgumentNullException.ThrowIfNull(corrections);
+        Corrections = corrections;
+    }
+
+    internal ToolCorrectionCollection Corrections { get; }
 }

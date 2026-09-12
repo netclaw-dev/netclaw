@@ -8,7 +8,7 @@ using Netclaw.Configuration;
 namespace Netclaw.Security;
 
 /// <summary>
-/// Approval matching helpers that consume the v2 typed
+/// Approval match helpers that consume typed
 /// <see cref="ApprovalEntry"/> store. Shell approvals use
 /// <see cref="MatchesShellApproval"/> which evaluates the candidate's verb
 /// chain together with its cwd against each entry's <c>(verb, directory)</c>
@@ -45,8 +45,19 @@ public static class ApprovalPatternMatching
         string? candidateDirectory,
         string? cwd,
         IEnumerable<ApprovalEntry> approvedEntries)
+        => MatchesApprovalScope(
+            candidateDirectory,
+            cwd,
+            approvedEntries.Where(entry =>
+                ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb)));
+
+    private static bool MatchesApprovalScope(
+        string? candidateDirectory,
+        string? cwd,
+        IEnumerable<ApprovalEntry> approvedEntries,
+        ApprovalShell? shell = null)
     {
-        var effectiveDirectory = ResolveEffectiveDirectory(candidateDirectory, cwd);
+        var effectiveDirectory = ResolveEffectiveDirectory(candidateDirectory, cwd, shell);
 
         // Lazily computed once per call so the candidate's Path.GetFullPath
         // canonicalization isn't repeated for every folder-scoped entry
@@ -56,40 +67,216 @@ public static class ApprovalPatternMatching
 
         foreach (var entry in approvedEntries)
         {
-            if (!ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb))
-                continue;
-
-            // Global wildcard: matches any candidate by definition.
-            if (entry.Directory is null)
-                return true;
-
-            // Folder-scoped entry requires a concrete effective directory.
-            if (string.IsNullOrEmpty(effectiveDirectory))
-                continue;
-
-            try
+            if (EvaluateApprovalScope(
+                    effectiveDirectory,
+                    entry,
+                    shell,
+                    ref normalizedCandidate) == ShellApprovalScopeResult.Match)
             {
-                normalizedCandidate ??= PathUtility.Normalize(effectiveDirectory);
-
-                if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))
-                    continue;
-
-                if (PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory))
-                    continue;
-
                 return true;
-            }
-            catch (Exception ex) when (ex is ArgumentException or IOException)
-            {
-                continue;
             }
         }
 
         return false;
     }
 
+    private static ShellApprovalScopeResult EvaluateApprovalScope(
+        string? effectiveDirectory,
+        ApprovalEntry entry,
+        ApprovalShell? shell,
+        ref string? normalizedCandidate)
+    {
+        if (entry.Directory is null)
+            return ShellApprovalScopeResult.Match;
+
+        if (string.IsNullOrEmpty(effectiveDirectory))
+            return ShellApprovalScopeResult.MissingDirectory;
+
+        try
+        {
+            if (shell == ApprovalShell.PowerShell)
+            {
+                normalizedCandidate ??= NormalizeWindowsPath(effectiveDirectory, baseDirectory: null);
+                var normalizedRoot = NormalizeWindowsPath(entry.Directory, baseDirectory: null);
+                if (normalizedCandidate is null || normalizedRoot is null ||
+                    !IsWithinWindowsRoot(normalizedCandidate, normalizedRoot))
+                {
+                    return ShellApprovalScopeResult.OutsideDirectory;
+                }
+
+                return OperatingSystem.IsWindows() &&
+                       PathUtility.ContainsSymlinkSegment(normalizedRoot, normalizedCandidate)
+                    ? ShellApprovalScopeResult.Symlink
+                    : ShellApprovalScopeResult.Match;
+            }
+
+            normalizedCandidate ??= PathUtility.Normalize(effectiveDirectory);
+
+            if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))
+                return ShellApprovalScopeResult.OutsideDirectory;
+
+            return PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory)
+                ? ShellApprovalScopeResult.Symlink
+                : ShellApprovalScopeResult.Match;
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException)
+        {
+            return ShellApprovalScopeResult.OutsideDirectory;
+        }
+    }
+
     /// <summary>
-    /// Backwards-compatible overload retained for v2.0 callers that pass cwd
+    /// Matches one structured shell candidate against version-3 phrase forms.
+    /// </summary>
+    public static bool MatchesShellApproval(
+        ApprovalCandidate candidate,
+        string? cwd,
+        IEnumerable<ApprovalEntry> approvedEntries)
+    {
+        var phraseMatches = approvedEntries.Where(entry => PhraseMatches(candidate, entry));
+        return MatchesApprovalScope(
+            candidate.Directory,
+            cwd,
+            phraseMatches,
+            candidate.Shell);
+    }
+
+    internal static ShellApprovalEvaluation EvaluateShellApproval(
+        ApprovalCandidate candidate,
+        string? cwd,
+        IEnumerable<ApprovalEntry> approvedEntries,
+        int maximumNearMisses)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(maximumNearMisses);
+        var effectiveDirectory = ResolveEffectiveDirectory(
+            candidate.Directory,
+            cwd,
+            candidate.Shell);
+        string? normalizedCandidate = null;
+        List<ShellApprovalNearMiss>? nearMisses = null;
+
+        foreach (var entry in approvedEntries)
+        {
+            if (PhraseMatches(candidate, entry))
+            {
+                var scopeResult = EvaluateApprovalScope(
+                    effectiveDirectory,
+                    entry,
+                    candidate.Shell,
+                    ref normalizedCandidate);
+                if (scopeResult == ShellApprovalScopeResult.Match)
+                    return new ShellApprovalEvaluation(entry, []);
+
+                if ((nearMisses?.Count ?? 0) < maximumNearMisses)
+                {
+                    (nearMisses ??= []).Add(new ShellApprovalNearMiss(
+                        entry,
+                        ToNearMissReason(scopeResult)));
+                }
+
+                continue;
+            }
+
+            if ((nearMisses?.Count ?? 0) >= maximumNearMisses
+                || !TryGetPhraseNearMissReason(candidate, entry, out var reason))
+            {
+                continue;
+            }
+
+            (nearMisses ??= []).Add(new ShellApprovalNearMiss(entry, reason));
+        }
+
+        return new ShellApprovalEvaluation(
+            MatchedEntry: null,
+            nearMisses ?? (IReadOnlyList<ShellApprovalNearMiss>)[]);
+    }
+
+    private static bool TryGetPhraseNearMissReason(
+        ApprovalCandidate candidate,
+        ApprovalEntry entry,
+        out ShellApprovalNearMissReason reason)
+    {
+        reason = default;
+        if (candidate.VerbTokens is not { Count: > 0 }
+            || entry.VerbTokens is not { Count: > 0 }
+            || entry.Shell is null)
+        {
+            return false;
+        }
+
+        var sameExecutable = string.Equals(
+            candidate.VerbTokens[0],
+            entry.VerbTokens[0],
+            StringComparison.OrdinalIgnoreCase);
+        if (!sameExecutable)
+            return false;
+
+        if (candidate.Shell != entry.Shell)
+        {
+            reason = ShellApprovalNearMissReason.ShellMismatch;
+            return true;
+        }
+
+        reason = ShellApprovalNearMissReason.TokenMismatch;
+        return true;
+    }
+
+    private static ShellApprovalNearMissReason ToNearMissReason(ShellApprovalScopeResult result)
+        => result switch
+        {
+            ShellApprovalScopeResult.OutsideDirectory => ShellApprovalNearMissReason.OutsideDirectory,
+            ShellApprovalScopeResult.Symlink => ShellApprovalNearMissReason.Symlink,
+            ShellApprovalScopeResult.MissingDirectory => ShellApprovalNearMissReason.MissingDirectory,
+            _ => throw new ArgumentOutOfRangeException(nameof(result), result, "The scope result is not a near miss."),
+        };
+
+    private static bool PhraseMatches(ApprovalCandidate candidate, ApprovalEntry entry)
+    {
+        if (entry.Match is null)
+        {
+            return ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
+        }
+
+        if (entry.Shell is { } entryShell && candidate.Shell != entryShell)
+        {
+            return false;
+        }
+
+        if (entry.Match == ApprovalMatchKind.LegacyExact)
+        {
+            return ToolApprovalEntryComparer.Equals(
+                entry.Verb,
+                candidate.Verb,
+                entry.Shell!.Value);
+        }
+
+        if (entry.Match != ApprovalMatchKind.TokenPrefix ||
+            candidate.Shell is null ||
+            candidate.VerbTokens is null ||
+            entry.VerbTokens is null ||
+            candidate.VerbTokens.Any(static token =>
+                token.Length == 0 || token.Any(char.IsWhiteSpace)) ||
+            entry.VerbTokens.Count > candidate.VerbTokens.Count)
+        {
+            return false;
+        }
+
+        for (var index = 0; index < entry.VerbTokens.Count; index++)
+        {
+            if (!ToolApprovalEntryComparer.Equals(
+                    entry.VerbTokens[index],
+                    candidate.VerbTokens[index],
+                    entry.Shell!.Value))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Backwards-compatible overload for callers that pass cwd
     /// only. Equivalent to passing <c>null</c> for the candidate directory.
     /// </summary>
     public static bool MatchesShellApproval(
@@ -107,10 +294,20 @@ public static class ApprovalPatternMatching
     /// daemon's home expansion via <see cref="PathUtility.ExpandAndNormalize"/>
     /// at match time.
     /// </summary>
-    private static string? ResolveEffectiveDirectory(string? candidateDirectory, string? cwd)
+    private static string? ResolveEffectiveDirectory(
+        string? candidateDirectory,
+        string? cwd,
+        ApprovalShell? shell = null)
     {
         if (string.IsNullOrEmpty(candidateDirectory))
-            return cwd;
+        {
+            return shell == ApprovalShell.PowerShell
+                ? NormalizeWindowsPath(cwd, baseDirectory: null)
+                : cwd;
+        }
+
+        if (shell == ApprovalShell.PowerShell)
+            return NormalizeWindowsPath(candidateDirectory, cwd);
 
         if (Path.IsPathRooted(candidateDirectory))
             return candidateDirectory;
@@ -120,6 +317,89 @@ public static class ApprovalPatternMatching
         // so we end up with a canonicalized absolute path.
         var expanded = PathUtility.ExpandAndNormalize(candidateDirectory, cwd);
         return expanded ?? candidateDirectory;
+    }
+
+    private static string? NormalizeWindowsPath(string? path, string? baseDirectory)
+    {
+        if (string.IsNullOrEmpty(path))
+            return null;
+
+        var normalized = path.Replace('/', '\\');
+        if (!IsWindowsAbsolutePath(normalized))
+        {
+            var normalizedBase = NormalizeWindowsPath(baseDirectory, baseDirectory: null);
+            if (normalizedBase is null)
+                return null;
+
+            normalized = normalizedBase.TrimEnd('\\') + "\\" + normalized;
+        }
+
+        var rootLength = GetWindowsRootLength(normalized);
+        if (rootLength == 0)
+            return null;
+
+        var root = normalized[..rootLength];
+        var segments = new List<string>();
+        foreach (var segment in normalized[rootLength..].Split(
+                     '\\',
+                     StringSplitOptions.RemoveEmptyEntries))
+        {
+            if (segment == ".")
+                continue;
+
+            if (segment == "..")
+            {
+                if (segments.Count == 0)
+                    return null;
+
+                segments.RemoveAt(segments.Count - 1);
+                continue;
+            }
+
+            segments.Add(segment);
+        }
+
+        if (segments.Count == 0)
+            return root;
+
+        return root.EndsWith('\\')
+            ? root + string.Join('\\', segments)
+            : root + "\\" + string.Join('\\', segments);
+    }
+
+    private static bool IsWithinWindowsRoot(string candidate, string root)
+    {
+        if (string.Equals(candidate, root, StringComparison.OrdinalIgnoreCase))
+            return true;
+
+        var prefix = root.EndsWith('\\') ? root : root + "\\";
+        return candidate.StartsWith(prefix, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsWindowsAbsolutePath(string path)
+        => GetWindowsRootLength(path) > 0;
+
+    private static int GetWindowsRootLength(string path)
+    {
+        if (path.Length >= 3 &&
+            char.IsAsciiLetter(path[0]) &&
+            path[1] == ':' &&
+            path[2] == '\\')
+        {
+            return 3;
+        }
+
+        if (!path.StartsWith("\\\\", StringComparison.Ordinal))
+            return 0;
+
+        var serverEnd = path.IndexOf('\\', 2);
+        if (serverEnd <= 2)
+            return 0;
+
+        var shareEnd = path.IndexOf('\\', serverEnd + 1);
+        return shareEnd < 0
+            ? path.Length
+            : shareEnd + 1;
     }
 
     /// <summary>
@@ -307,3 +587,28 @@ public sealed record ApprovalNearMiss(
         _ => "unrecognized near-miss reason",
     };
 }
+
+internal enum ShellApprovalScopeResult
+{
+    Match = 0,
+    OutsideDirectory = 1,
+    Symlink = 2,
+    MissingDirectory = 3,
+}
+
+internal enum ShellApprovalNearMissReason
+{
+    OutsideDirectory = 0,
+    Symlink = 1,
+    MissingDirectory = 2,
+    TokenMismatch = 3,
+    ShellMismatch = 4,
+}
+
+internal sealed record ShellApprovalNearMiss(
+    ApprovalEntry Grant,
+    ShellApprovalNearMissReason Reason);
+
+internal sealed record ShellApprovalEvaluation(
+    ApprovalEntry? MatchedEntry,
+    IReadOnlyList<ShellApprovalNearMiss> NearMisses);

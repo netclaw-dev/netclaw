@@ -6,9 +6,13 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Tools;
+using Netclaw.Security;
+using Netclaw.Tools;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
@@ -23,6 +27,7 @@ public class BackgroundJobManagerActorTests : TestKit
 {
     private readonly DisposableTempDir _dir = new();
     private BackgroundJobDefinitionStore _store = null!;
+    private string? _rejectedOutputDirectory;
 
     public BackgroundJobManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
@@ -30,7 +35,10 @@ public class BackgroundJobManagerActorTests : TestKit
     {
         var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
-        _store = new BackgroundJobDefinitionStore(paths);
+        _store = new BackgroundJobDefinitionStore(
+            paths,
+            NullLogger<BackgroundJobDefinitionStore>.Instance,
+            DeleteOutputDirectory);
 
         builder.StartActors((system, registry, _) =>
         {
@@ -52,6 +60,24 @@ public class BackgroundJobManagerActorTests : TestKit
 
     private IActorRef GetManager() => ActorRegistry.For(Sys).Get<BackgroundJobManagerActorKey>();
 
+    private async Task<IActorRef> GetReadyManagerAsync()
+    {
+        var manager = GetManager();
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+        return manager;
+    }
+
+    private void DeleteOutputDirectory(string path, bool recursive)
+    {
+        if (string.Equals(path, Volatile.Read(ref _rejectedOutputDirectory), StringComparison.Ordinal))
+            throw new IOException("simulated output cleanup failure");
+
+        Directory.Delete(path, recursive);
+    }
+
     private async Task<BackgroundJobManagerHealthResponse> RunTerminalSweepAsync(IActorRef manager)
     {
         // Both messages use the same sender, so the health response is a strict
@@ -66,6 +92,8 @@ public class BackgroundJobManagerActorTests : TestKit
     {
         Id = new BackgroundJobId(jobId),
         Command = "echo hello",
+        ManagedTemporaryDirectory = Path.Combine(_dir.Path, "managed-temp"),
+        ManagedTemporaryAuthorityRoot = _dir.Path,
         SessionId = new SessionId("test/thread"),
         Rationale = "test run",
         Status = status,
@@ -77,16 +105,66 @@ public class BackgroundJobManagerActorTests : TestKit
         OriginChannelType = ChannelType.Tui
     };
 
-    private StartBackgroundJob MakeStartCommand(string command = "echo hello") => new()
+    private StartBackgroundJob MakeStartCommand(string command = "echo hello", string sessionId = "test/thread") => new()
     {
-        Command = command,
-        SessionId = new SessionId("test/thread"),
+        Launch = BackgroundShellLaunchFixture.Create(command, _dir.Path, sessionId, TestShellEnvironment.Current),
         Rationale = "test run",
-        Audience = TrustAudience.Personal,
-        Boundary = TrustBoundary.Personal,
         OriginChannelType = ChannelType.Tui,
         TimeoutSeconds = 60
     };
+
+    [Fact]
+    public async Task Queue_rechecks_authority_and_cancel_remains_available_during_authorization()
+    {
+        var manager = await GetReadyManagerAsync();
+        var blocked = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var requests = new List<StartBackgroundJob>();
+        var ids = new List<BackgroundJobId>();
+        for (var index = 0; index < BackgroundJobManagerActor.MaxConcurrentJobs; index++)
+        {
+            var request = MakeStartCommand("echo forbidden > must-not-start.txt");
+            var context = request.Launch.Context;
+            var launch = new ShellProcessLaunch(request.Command, request.WorkingDirectory, context,
+                new ShellCommandPolicy(TestShellEnvironment.Current),
+                new ToolPathPolicy(TestShellEnvironment.Current, []),
+                async cancellationToken =>
+                {
+                    entered.TrySetResult();
+                    await blocked.Task.WaitAsync(cancellationToken);
+                });
+            request = request with { Launch = launch };
+            requests.Add(request);
+            var accepted = await manager.Ask<BackgroundJobStarted>(request, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+            ids.Add(accepted.JobId);
+        }
+        await entered.Task.WaitAsync(TestContext.Current.CancellationToken);
+        var queued = MakeStartCommand("echo forbidden > revoked.txt");
+        var revoked = 0;
+        queued = queued with
+        {
+            Launch = new ShellProcessLaunch(queued.Command, queued.WorkingDirectory, queued.Launch.Context,
+                new ShellCommandPolicy(TestShellEnvironment.Current), new ToolPathPolicy(TestShellEnvironment.Current, []),
+                _ => Volatile.Read(ref revoked) == 1 ? Task.FromException(new ToolAccessDeniedException("grant_revoked")) : Task.CompletedTask)
+        };
+        var queuedId = (await manager.Ask<BackgroundJobStarted>(queued, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken)).JobId;
+        Assert.Equal(BackgroundJobStatus.Pending, _store.Get(queuedId)!.Status);
+        Volatile.Write(ref revoked, 1);
+
+        await manager.Ask<BackgroundJobCancelResponse>(new CancelBackgroundJob(
+            ids[0], requests[0].SessionId, requests[0].Audience, requests[0].Boundary),
+            TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(BackgroundJobStatus.Cancelled, _store.Get(ids[0])!.Status);
+            Assert.Equal(BackgroundJobStatus.Failed, _store.Get(queuedId)!.Status);
+            return Task.CompletedTask;
+        }, duration: TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.False(File.Exists(Path.Combine(_dir.Path, "must-not-start.txt")));
+        Assert.False(File.Exists(Path.Combine(_dir.Path, "revoked.txt")));
+        manager.Tell(new KillJobsForSession(requests[0].SessionId));
+    }
 
     [Fact]
     public async Task ConcurrencyLimit_QueuesOverflowJobs()
@@ -149,13 +227,13 @@ public class BackgroundJobManagerActorTests : TestKit
         var sessionB = new SessionId("reap/session-b");
 
         var jobA1 = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionA },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand, sessionA.Value),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         var jobA2 = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionA },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand, sessionA.Value),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         var jobB = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionB },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand, sessionB.Value),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         // Guard against environmental spawn failure (fork pressure under the
@@ -202,7 +280,7 @@ public class BackgroundJobManagerActorTests : TestKit
         ActorRegistry.For(Sys).Register<SignalRGatewayActorKey>(gatewayProbe.Ref);
 
         var started = await manager.Ask<BackgroundJobStarted>(
-            MakeStartCommand(TestShellEnvironment.LongRunningCommand) with { SessionId = sessionId },
+            MakeStartCommand(TestShellEnvironment.LongRunningCommand, sessionId.Value),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         await manager.Ask<SessionJobsReaped>(
@@ -263,6 +341,8 @@ public class BackgroundJobManagerActorTests : TestKit
         {
             Id = orphanId,
             Command = "jekyll serve",
+            ManagedTemporaryDirectory = Path.Combine(_dir.Path, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _dir.Path,
             SessionId = sessionId,
             Rationale = "dev server",
             Status = BackgroundJobStatus.Running,
@@ -312,6 +392,8 @@ public class BackgroundJobManagerActorTests : TestKit
         {
             Id = new BackgroundJobId("orphan-123"),
             Command = "sleep 999",
+            ManagedTemporaryDirectory = Path.Combine(_dir.Path, "managed-temp"),
+            ManagedTemporaryAuthorityRoot = _dir.Path,
             SessionId = new Netclaw.Actors.Protocol.SessionId("test/thread"),
             Rationale = "orphaned test",
             Status = BackgroundJobStatus.Running,
@@ -382,6 +464,57 @@ public class BackgroundJobManagerActorTests : TestKit
             && alert.Summary.Contains(jobId, StringComparison.Ordinal));
     }
 
+    [Fact]
+    public async Task StartupReconciliation_MarksOldJobWithoutManagedTemporaryFieldsAsLost()
+    {
+        await GetReadyManagerAsync();
+        var sessionId = new SessionId("legacy-temp/session");
+        var gatewayProbe = CreateTestProbe("legacy-temp-gateway");
+        ActorRegistry.For(Sys).Register<SignalRGatewayActorKey>(gatewayProbe.Ref, overwrite: true);
+
+        const string jobId = "legacy-temp-orphan";
+        var filePath = Path.Combine(_dir.Path, "jobs", $"{jobId}.json");
+        File.WriteAllText(filePath,
+            $$"""
+              {
+                "id": "{{jobId}}",
+                "command": "dotnet test",
+                "sessionId": "{{sessionId.Value}}",
+                "rationale": "legacy persisted job",
+                "status": "Running",
+                "timeoutSeconds": 600,
+                "startedAtMs": 1,
+                "audience": "Personal",
+                "boundary": "Personal",
+                "originChannelType": "Tui"
+              }
+              """);
+
+        var manager = Sys.ActorOf(
+            Props.Create(() => new BackgroundJobManagerActor(
+                _store,
+                TimeProvider.System,
+                TestShellEnvironment.Current)),
+            "legacy-temp-reconcile-manager");
+
+        await manager.Ask<BackgroundJobManagerHealthResponse>(
+            GetBackgroundJobManagerHealth.Instance,
+            TimeSpan.FromSeconds(30),
+            TestContext.Current.CancellationToken);
+
+        var reconciled = _store.Get(new BackgroundJobId(jobId));
+        Assert.NotNull(reconciled);
+        Assert.Equal(BackgroundJobStatus.Lost, reconciled!.Status);
+        Assert.Null(reconciled.ManagedTemporaryDirectory);
+        Assert.Null(reconciled.ManagedTemporaryAuthorityRoot);
+
+        var delivery = await gatewayProbe.ExpectMsgAsync<DeliverTrustedSessionTurn>(
+            TimeSpan.FromSeconds(10),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, delivery.SessionId);
+        Assert.Contains("was lost", delivery.Content, StringComparison.Ordinal);
+    }
+
     private sealed class RecordingNotificationSink : IOperationalNotificationSink
     {
         private readonly object _sync = new();
@@ -406,7 +539,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_DeletesJobPastRetentionWindow()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -422,7 +555,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_KeepsJobWithinRetentionWindow()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var recentMs = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
 
         _store.Save(MakeTerminalDefinition("sweep-recent", BackgroundJobStatus.Completed, recentMs));
@@ -435,7 +568,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_DoesNotTouchNonTerminalJobs()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -455,7 +588,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_DeletesOutputLogWithDefinition()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -477,7 +610,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_CleanupFailureDoesNotRestartManagerAndLaterSweepRetries()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))
@@ -487,10 +620,11 @@ public class BackgroundJobManagerActorTests : TestKit
         _store.Save(blocked);
         _store.Save(removable);
 
-        var blockedOutputPath = _store.GetOutputLogPathOnly(blocked.Id);
+        var blockedOutputPath = _store.GetOutputLogPath(blocked.Id);
         var blockedOutputDirectory = Path.GetDirectoryName(blockedOutputPath)!;
-        File.WriteAllText(blockedOutputDirectory, "path collision");
+        File.WriteAllText(blockedOutputPath, "failed output");
         File.WriteAllText(_store.GetOutputLogPath(removable.Id), "completed output");
+        Volatile.Write(ref _rejectedOutputDirectory, blockedOutputDirectory);
 
         var active = await manager.Ask<BackgroundJobStarted>(
             MakeStartCommand("sleep 60"),
@@ -505,15 +639,14 @@ public class BackgroundJobManagerActorTests : TestKit
             Assert.NotNull(_store.Get(blocked.Id));
             Assert.Null(_store.Get(removable.Id));
 
-            File.Delete(blockedOutputDirectory);
+            Volatile.Write(ref _rejectedOutputDirectory, null);
             await RunTerminalSweepAsync(manager);
 
             Assert.Null(_store.Get(blocked.Id));
         }
         finally
         {
-            if (File.Exists(blockedOutputDirectory))
-                File.Delete(blockedOutputDirectory);
+            Volatile.Write(ref _rejectedOutputDirectory, null);
 
             await manager.Ask<BackgroundJobCancelResponse>(
                 new CancelBackgroundJob(
@@ -529,7 +662,7 @@ public class BackgroundJobManagerActorTests : TestKit
     [Fact]
     public async Task TerminalSweep_KeepsTerminalJobWithMissingCompletionTime()
     {
-        var manager = GetManager();
+        var manager = await GetReadyManagerAsync();
         var pastWindowMs = TimeProvider.System.GetUtcNow()
             .Subtract(BackgroundJobManagerActor.TerminalJobRetentionWindow)
             .Subtract(TimeSpan.FromMinutes(1))

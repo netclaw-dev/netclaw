@@ -1,7 +1,8 @@
 # help.tape (screenshot) — capture the `netclaw --help` usage screen.
+# No terminal action follows the screenshot.
 #
 # Capture-only tape: it has NO post-tape assertion. The screenshots mode
-# in run-smoke.sh compares the emitted PNG byte-for-byte against the
+# in run-smoke.sh compares the final lossless PNG frame against the
 # committed baseline at tests/smoke/screenshots/help.approved.png.
 #
 # The usage screen is fully static (no version string, timestamp, spinner,
@@ -11,15 +12,9 @@
 
 Output "/tmp/tape-shot-help.gif"
 
-Type "netclaw --help"
+Type "netclaw --help; read -r"
 Enter
-# Anchor on the usage header, then sleep to let the full terminal output
-# finish rendering. `netclaw --help` writes multiple lines and VHS may not
-# have flushed all of them into the terminal buffer by the time Wait+Screen
-# matches the first visible line.
-Wait+Screen@10s /Usage:/
-Sleep 1s
-Screenshot "/tmp/shot-help.png"
-
-Type "exit"
-Enter
+# The read command keeps the shell from printing a prompt after the help text.
+# The final help line proves that the process wrote the complete static frame.
+Wait+Screen@10s /Docs & guides:/
+Sleep 250ms

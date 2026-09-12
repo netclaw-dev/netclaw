@@ -118,7 +118,8 @@ public sealed class SidecarSessionCorrelationTests : TestKit
             ExpiresAtMs: null);
 
         await MemoryCurationEvaluator.TryLlmEvaluationAsync(
-            captor, sessionId, operation, candidates: [], log: new AkkaCurationLog(NoLogger.Instance));
+            captor, sessionId, operation, candidates: [], log: new AkkaCurationLog(NoLogger.Instance),
+            curationConfig: new MemoryCurationConfig());
 
         AssertScopedTo(sessionId, captor);
     }

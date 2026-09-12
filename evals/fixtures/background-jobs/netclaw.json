@@ -1,0 +1,13 @@
+{
+  "configVersion": 1,
+  "Tools": {
+    "AudienceProfiles": {
+      "Personal": {
+        "ApprovalPolicy": {
+          "DefaultMode": "Auto",
+          "ToolOverrides": { "shell_execute": "Approval" }
+        }
+      }
+    }
+  }
+}

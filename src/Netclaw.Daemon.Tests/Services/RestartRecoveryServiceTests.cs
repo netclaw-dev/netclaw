@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="RestartRecoveryServiceTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -6,7 +6,6 @@
 using System.Collections.Concurrent;
 using Akka.Actor;
 using Akka.Hosting;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -38,7 +37,11 @@ public sealed class RestartRecoveryServiceTests : IDisposable
         var warmedSessions = new ConcurrentQueue<WarmSession>();
         var actor = _system.ActorOf(Props.Create(() => new WarmSessionActor(warmedSessions)));
         var manifestStore = new RestartManifestStore(_paths);
-        var catalog = new SessionCatalogService(_paths, TimeProvider.System, NullLogger<SessionCatalogService>.Instance);
+        var catalog = new SessionCatalogService(
+            _paths,
+            TimeProvider.System,
+            new TestSessionStorageResolver(_paths),
+            NullLogger<SessionCatalogService>.Instance);
         var sessionId = new SessionId("slack/C123/1710000000.000001");
 
         catalog.OnSessionActivated(sessionId, Netclaw.Actors.Channels.ChannelType.Slack);
@@ -72,7 +75,7 @@ public sealed class RestartRecoveryServiceTests : IDisposable
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
-        SqliteConnection.ClearAllPools();
+        SqliteTestPools.Clear(_paths);
         _dir.Dispose();
     }
 

@@ -8,15 +8,45 @@ using ShellSyntaxTree;
 
 namespace Netclaw.Security;
 
+internal readonly record struct CanonicalShellPath
+{
+    private CanonicalShellPath(string value, ShellPathStyle pathStyle)
+    {
+        Value = value;
+        PathStyle = pathStyle;
+    }
+
+    internal string Value { get; }
+
+    internal ShellPathStyle PathStyle { get; }
+
+    internal static bool TryCreate(
+        string? value,
+        ShellPathStyle pathStyle,
+        out CanonicalShellPath path)
+    {
+        path = default;
+        if (string.IsNullOrWhiteSpace(value)
+            || value.Any(char.IsControl))
+        {
+            return false;
+        }
+
+        if (!ShellPathRules.TryNormalize(value, pathStyle, out var normalized))
+            return false;
+
+        path = new CanonicalShellPath(normalized, pathStyle);
+        return true;
+    }
+}
+
 /// <summary>
 /// Evaluates whether a file path is denied for agent tool access.
 /// </summary>
 /// <remarks>
 /// Three independent deny surfaces: write (<see cref="IsDenied"/>), read
 /// (<see cref="IsReadDenied"/>), and shell indicators
-/// (<see cref="CommandReferencesDeniedPath"/>). Read denies the union of the
-/// read deny list and the shell indicator list, so file tools cannot reach the
-/// control plane that shell cannot reference. The shell indicator list is
+/// (<see cref="CommandReferencesDeniedPath"/>). The shell indicator list is
 /// scanned as raw substrings of the command text, so directory-scoped entries
 /// (e.g. the config dir) over-block commands whose text merely mentions them —
 /// that is the accepted trade-off for keeping the control plane unreachable.
@@ -149,13 +179,20 @@ public sealed class ToolPathPolicy
         => IsDeniedAgainst(path, _writeDeniedPaths);
 
     /// <summary>
-    /// Returns true if the given path is denied for read by policy. Covers the
-    /// credential-leaking surfaces (secrets, keys, webhooks) plus the shell
-    /// indicator list (config dir, sqlite DB, pid, lock, restart manifest), so
-    /// read tools cannot reach files that shell cannot even reference.
+    /// Returns true if the given path is denied for structured file reads.
+    /// Shell indicators remain independent because a structured read names one
+    /// exact operation and path.
     /// </summary>
     public bool IsReadDenied(string path)
-        => IsDeniedAgainst(path, _readDeniedPaths) || IsDeniedAgainst(path, _shellDeniedPaths);
+        => IsDeniedAgainst(path, _readDeniedPaths);
+
+    internal bool IsShellDeniedProjectedPath(
+        CanonicalShellPath path)
+        => path.PathStyle != Environment.PathStyle
+           || IsShellDenied(path.Value);
+
+    private bool IsShellDenied(string path)
+        => IsDeniedAgainst(path, _shellDeniedPaths);
 
     private static bool IsDeniedAgainst(string path, HashSet<string> deniedSet)
     {
@@ -215,6 +252,12 @@ public sealed class ToolPathPolicy
 
         var command = analysis.Source;
         var workingDirectory = analysis.WorkingDirectory;
+
+        if (!string.IsNullOrWhiteSpace(workingDirectory)
+            && IsDeniedAgainst(workingDirectory, _shellDeniedPaths))
+        {
+            return true;
+        }
 
         var tokens = ShellTokenizer.Tokenize(command).ToList();
         var slashCommand = command.Replace('\\', '/');
@@ -306,13 +349,16 @@ public sealed class ToolPathPolicy
 
             foreach (var effective in occurrence.Arguments)
             {
-                if (!effective.Element.IsPath)
+                if (effective.Element.IsPath
+                    && DomainReferencesDeniedPath(effective.Value))
                 {
-                    continue;
+                    return true;
                 }
 
-                if (DomainReferencesDeniedPath(effective.Value))
+                if (DomainReferencesDeniedPath(effective.AuthoredFileSystemValue))
+                {
                     return true;
+                }
             }
 
             foreach (var redirect in occurrence.Redirects)
@@ -389,7 +435,7 @@ public sealed class ToolPathPolicy
     // skips a failed resolution, while the deny-check call sites (IsDeniedAgainst,
     // CommandReferencesDeniedPath) fail closed. A blanket catch here would hide
     // that distinction and force every caller back to the same (wrong) answer.
-    private static bool TryResolveSymlinksInPath(string path, out string canonical)
+    internal static bool TryResolveSymlinksInPath(string path, out string canonical)
     {
         canonical = string.Empty;
         if (string.IsNullOrEmpty(path))

@@ -20,11 +20,21 @@ public sealed class ApprovalsCommandTests : IDisposable
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
     private readonly ToolApprovalStore _store;
 
+    public static TheoryData<string[], string> FlagWithoutValueCases { get; } = new()
+    {
+        { ["approvals", "list", "--audience"], "--audience requires a value" },
+        { ["approvals", "revoke", "git push", "--tool"], "--tool requires a value" }
+    };
+
     public ApprovalsCommandTests()
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
-        _store = new ToolApprovalStore(_paths.ToolApprovalsPath, _time);
+        _store = new ToolApprovalStore(
+            _paths.ToolApprovalsPath,
+            _time,
+            new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+            TimeSpan.Zero);
     }
 
     public void Dispose()
@@ -33,15 +43,23 @@ public sealed class ApprovalsCommandTests : IDisposable
         _dir.Dispose();
     }
 
-    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
-    private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
+    private static ApprovalEntry Verb(string verb) => ApprovalEntry.CreateTokenPrefix(
+        ApprovalShell.Bash,
+        verb.Split(' ', StringSplitOptions.RemoveEmptyEntries));
+    private static ApprovalEntry InDir(string verb, string dir) => ApprovalEntry.CreateTokenPrefix(
+        ApprovalShell.Bash,
+        verb.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+        dir);
 
     private void SeedDefault()
     {
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
         _store.AddApproval(TrustAudience.Personal, "shell_execute", InDir("grep", "/home/user/logs"));
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("npm install"));
-        _store.AddApproval(TrustAudience.Personal, "file_write", InDir("file_write", "/tmp/scratch"));
+        _store.AddApproval(
+            TrustAudience.Personal,
+            "file_write",
+            new ApprovalEntry("file_write") { Directory = Path.Combine(_dir.Path, "scratch") });
         _store.AddApproval(TrustAudience.Public, "shell_execute", Verb("ls"));
     }
 
@@ -66,8 +84,8 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Contains("personal / shell_execute", text);
         Assert.Contains("personal / file_write", text);
         Assert.Contains("public / shell_execute", text);
-        Assert.Contains("git push anywhere", text);
-        Assert.Contains("grep in /home/user/logs", text);
+        Assert.Contains("Bash token-prefix \"git push\" anywhere", text);
+        Assert.Contains("Bash token-prefix \"grep\" in /home/user/logs", text);
     }
 
     [Fact]
@@ -80,17 +98,21 @@ public sealed class ApprovalsCommandTests : IDisposable
         using var doc = JsonDocument.Parse(_output.ToString());
         var audiences = doc.RootElement.GetProperty("audiences");
         var personalShell = audiences.GetProperty("personal").GetProperty("shell_execute");
-        var verbs = personalShell.EnumerateArray().Select(e => e.GetProperty("verb").GetString()).ToList();
-        Assert.Contains("git push", verbs);
-        Assert.Contains("grep", verbs);
-        Assert.Contains("npm install", verbs);
+        var phrases = personalShell.EnumerateArray()
+            .Select(e => string.Join(" ", e.GetProperty("verbTokens").EnumerateArray().Select(t => t.GetString())))
+            .ToList();
+        Assert.Contains("git push", phrases);
+        Assert.Contains("grep", phrases);
+        Assert.Contains("npm install", phrases);
 
         // The grep entry should carry its directory; "git push" should not.
-        var grep = personalShell.EnumerateArray().Single(e => e.GetProperty("verb").GetString() == "grep");
+        var grep = personalShell.EnumerateArray().Single(e =>
+            e.GetProperty("verbTokens")[0].GetString() == "grep");
         Assert.Equal("/home/user/logs", grep.GetProperty("directory").GetString());
 
-        var gitPush = personalShell.EnumerateArray().Single(e => e.GetProperty("verb").GetString() == "git push");
-        Assert.False(gitPush.TryGetProperty("directory", out _));
+        var gitPush = personalShell.EnumerateArray().Single(e =>
+            e.GetProperty("verbTokens")[0].GetString() == "git");
+        Assert.Equal(JsonValueKind.Null, gitPush.GetProperty("directory").ValueKind);
     }
 
     [Fact]
@@ -154,9 +176,41 @@ public sealed class ApprovalsCommandTests : IDisposable
             new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero),
             createdAt.GetDateTimeOffset());
 
-        // An entry written before timestamp tracking omits the field.
+        // An entry written before timestamp tracking has an explicit null.
         var legacy = entries.EnumerateArray().Single(e => e.GetProperty("verb").GetString() == "npm install");
-        Assert.False(legacy.TryGetProperty("createdAt", out _));
+        Assert.Equal(JsonValueKind.Null, legacy.GetProperty("createdAt").ValueKind);
+    }
+
+    [Fact]
+    public async Task List_reports_one_bounded_version_two_omission_off_stdout()
+    {
+        File.WriteAllText(_paths.ToolApprovalsPath, """
+            {
+              "version": 2,
+              "audiences": {
+                "personal": {
+                  "shell_execute": [
+                    { "verb": " git push", "directory": null },
+                    { "verb": "git status", "directory": null }
+                  ]
+                }
+              }
+            }
+            """);
+        using var diagnostics = new StringWriter();
+
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "list", "--json"],
+            _paths,
+            _output,
+            _time,
+            diagnostics);
+
+        Assert.Equal(0, exit);
+        using var _ = JsonDocument.Parse(_output.ToString());
+        Assert.Equal(
+            "Approval store version-2 conversion omitted 1 unrepresentable entries.",
+            diagnostics.ToString().Trim());
     }
 
     [Fact]
@@ -186,7 +240,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Equal(0, exit);
         var remaining = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
         Assert.DoesNotContain(remaining, e => e.Verb == "git push" && e.Directory is null);
-        Assert.Contains("Removed 'git push anywhere'", _output.ToString());
+        Assert.Contains("Removed 'Bash token-prefix \"git push\" anywhere'", _output.ToString());
     }
 
     [Fact]
@@ -264,26 +318,14 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Contains("Unknown audience 'foo'", _output.ToString());
     }
 
-    [Fact]
-    public async Task Audience_flag_without_value_exits_one_with_specific_message()
+    [Theory]
+    [MemberData(nameof(FlagWithoutValueCases))]
+    public async Task Flag_without_value_exits_one_with_specific_message(string[] args, string expectedMessage)
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "list", "--audience"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(args, _paths, _output);
 
         Assert.Equal(1, exit);
-        Assert.Contains("--audience requires a value", _output.ToString());
-    }
-
-    [Fact]
-    public async Task Tool_flag_without_value_exits_one_with_specific_message()
-    {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git push", "--tool"],
-            _paths, _output);
-
-        Assert.Equal(1, exit);
-        Assert.Contains("--tool requires a value", _output.ToString());
+        Assert.Contains(expectedMessage, _output.ToString());
     }
 
     [Fact]
@@ -296,9 +338,8 @@ public sealed class ApprovalsCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Revoke_unscoped_removes_match_across_audiences()
+    public async Task Revoke_old_unscoped_form_rejects_cross_audience_ambiguity()
     {
-        // Same global wildcard stored under two audiences; unscoped revoke should hit both.
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("ls"));
         _store.AddApproval(TrustAudience.Public, "shell_execute", Verb("ls"));
 
@@ -306,9 +347,10 @@ public sealed class ApprovalsCommandTests : IDisposable
             ["approvals", "revoke", "ls anywhere"],
             _paths, _output);
 
-        Assert.Equal(0, exit);
-        Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
-        Assert.Empty(_store.GetApprovedEntries(TrustAudience.Public, "shell_execute"));
+        Assert.Equal(1, exit);
+        Assert.Contains("matches more than one typed phrase", _output.ToString());
+        Assert.Single(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Single(_store.GetApprovedEntries(TrustAudience.Public, "shell_execute"));
     }
 
     // ── Folder-scoped revoke ──
@@ -343,7 +385,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Revoke_unrecognized_pattern_exits_one_with_clear_message()
+    public async Task Revoke_unrecognized_pattern_exits_one_without_a_change()
     {
         // No "anywhere" suffix and no " in " separator — not a valid revoke pattern.
         var exit = await ApprovalsCommand.RunAsync(
@@ -351,9 +393,7 @@ public sealed class ApprovalsCommandTests : IDisposable
             _paths, _output);
 
         Assert.Equal(1, exit);
-        var output = _output.ToString();
-        Assert.Contains("Could not parse revoke pattern", output);
-        Assert.Contains("'<verb> in <directory>' or '<verb> anywhere'", output);
+        Assert.Contains("No matching approval found", _output.ToString());
     }
 
     // ── trust-verb ──
@@ -370,7 +410,11 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Single(entries);
         Assert.Equal("freshdesk", entries[0].Verb);
         Assert.Null(entries[0].Directory);
-        Assert.Contains("Trusted 'freshdesk anywhere'", _output.ToString());
+        var expectedShell = OperatingSystem.IsWindows()
+            ? ApprovalShell.PowerShell
+            : ApprovalShell.Bash;
+        Assert.Equal(expectedShell, entries[0].Shell);
+        Assert.Contains($"Trusted '{expectedShell} token-prefix \"freshdesk\" anywhere'", _output.ToString());
     }
 
     [Fact]
@@ -399,6 +443,229 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Equal(0, exit);
         Assert.Single(_store.GetApprovedEntries(TrustAudience.Team, "shell_execute"));
         Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+    }
+
+    [Fact]
+    public async Task TrustVerb_shell_selector_creates_requested_phrase_type()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "Get-Content", "--shell", "powershell"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(ApprovalShell.PowerShell, entry.Shell);
+        Assert.Equal(ApprovalMatchKind.TokenPrefix, entry.Match);
+        Assert.Equal(["Get-Content"], entry.VerbTokens);
+    }
+
+    [Fact]
+    public async Task TrustVerb_abstract_PowerShell_prefers_PowerShell7_canonical_tokens()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "curl", "--shell", "powershell"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(ApprovalShell.PowerShell, entry.Shell);
+        Assert.Equal(["curl"], entry.VerbTokens);
+    }
+
+    [Fact]
+    public async Task TrustVerb_abstract_PowerShell_uses_legacy_fallback_when_preferred_parse_fails()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "gerr", "--shell", "powershell"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(ApprovalShell.PowerShell, entry.Shell);
+        Assert.Equal(["gerr"], entry.VerbTokens);
+    }
+
+    [Theory]
+    [InlineData("tool in mode", "tool|in|mode")]
+    [InlineData("status anywhere", "status|anywhere")]
+    public async Task TrustVerb_allows_static_PowerShell_tokens_that_resemble_scope_labels(
+        string phrase,
+        string expectedTokens)
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", phrase, "--shell", "powershell"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+        Assert.Equal(expectedTokens.Split('|'), entry.VerbTokens);
+    }
+
+    [Theory]
+    [InlineData("git push --force")]
+    [InlineData("MODE=safe git push")]
+    [InlineData("git push >out")]
+    [InlineData("git status; rm file")]
+    [InlineData("git  push")]
+    [InlineData(" git push")]
+    [InlineData("git push ")]
+    public async Task TrustVerb_rejects_shell_effects_without_file_change(string phrase)
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", phrase, "--shell", "bash"],
+            _paths,
+            _output);
+
+        Assert.Equal(1, exit);
+        Assert.False(File.Exists(_paths.ToolApprovalsPath));
+    }
+
+    [Fact]
+    public async Task TrustVerb_keeps_non_shell_tool_exact()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "create-page", "--tool", "notion/create-page"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "notion/create-page"));
+        Assert.Null(entry.Shell);
+        Assert.Null(entry.Match);
+        Assert.Equal("create-page", entry.Verb);
+    }
+
+    [Theory]
+    [InlineData("tool in mode")]
+    [InlineData("status anywhere")]
+    [InlineData("-private-operation")]
+    public async Task TrustVerb_keeps_arbitrary_non_shell_phrase_exact(string phrase)
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", phrase, "--tool", "custom/tool"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        var entry = Assert.Single(
+            _store.GetApprovedEntries(TrustAudience.Personal, "custom/tool"));
+        Assert.Equal(phrase, entry.Verb);
+        Assert.Null(entry.Shell);
+    }
+
+    [Fact]
+    public async Task TrustVerb_rejects_shell_selector_for_non_shell_tool()
+    {
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "trust-verb", "create-page", "--tool", "notion/create-page", "--shell", "bash"],
+            _paths,
+            _output);
+
+        Assert.Equal(1, exit);
+        Assert.False(File.Exists(_paths.ToolApprovalsPath));
+    }
+
+    [Fact]
+    public async Task Revoke_old_scope_rejects_ambiguous_typed_phrases()
+    {
+        _store.AddApproval(
+            TrustAudience.Personal,
+            "shell_execute",
+            ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"]));
+        _store.AddApproval(
+            TrustAudience.Personal,
+            "shell_execute",
+            ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "git push"));
+
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "revoke", "git push anywhere"],
+            _paths,
+            _output);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("matches more than one typed phrase", _output.ToString());
+        Assert.Equal(2, _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute").Count);
+    }
+
+    [Fact]
+    public async Task Revoke_typed_label_preserves_significant_directory_space()
+    {
+        var entry = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            ["git", "status"],
+            "/work/repo ");
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", entry);
+
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "revoke", entry.FormatScope()],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+    }
+
+    [Fact]
+    public async Task Revoke_PowerShell_label_uses_PowerShell_case_rules()
+    {
+        var entry = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.PowerShell,
+            ["Get-Content"],
+            @"C:\Work\Repo");
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", entry);
+
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "revoke", "powershell token-prefix \"get-content\" in c:\\work\\repo"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+    }
+
+    [Fact]
+    public async Task Revoke_old_label_matches_verb_that_contains_in()
+    {
+        var entry = ApprovalEntry.CreateLegacyExact(
+            ApprovalShell.Bash,
+            "tool in mode",
+            "/work/repo");
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", entry);
+
+        var exit = await ApprovalsCommand.RunAsync(
+            ["approvals", "revoke", "tool in mode in /work/repo"],
+            _paths,
+            _output);
+
+        Assert.Equal(0, exit);
+        Assert.Empty(_store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+    }
+
+    [Theory]
+    [InlineData("list")]
+    [InlineData("trust-verb")]
+    public async Task Approval_command_fails_closed_for_invalid_store(string operation)
+    {
+        const string Invalid = "{\"version\":3,\"audiences\":{\"personal\":null}}";
+        File.WriteAllText(_paths.ToolApprovalsPath, Invalid);
+        var args = operation == "list"
+            ? new[] { "approvals", "list" }
+            : ["approvals", "trust-verb", "git push", "--shell", "bash"];
+
+        var exit = await ApprovalsCommand.RunAsync(args, _paths, _output);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("approval store is unavailable", _output.ToString());
+        Assert.Equal(Invalid, File.ReadAllText(_paths.ToolApprovalsPath));
     }
 
     [Fact]
@@ -485,6 +752,6 @@ public sealed class ApprovalsCommandTests : IDisposable
 
         var output = _output.ToString();
         Assert.Contains("trust-verb", output);
-        Assert.Contains("global-wildcard", output);
+        Assert.Contains("typed token prefixes", output);
     }
 }

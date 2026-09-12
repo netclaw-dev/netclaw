@@ -236,7 +236,18 @@ public sealed class InitExistingInstallViewModel : ReactiveViewModel
 
             if (_scope == ResetScopeKind.Full)
             {
-                _deleteDirectory(_paths.BasePath);
+                // Purge everything under BasePath except bin/ — the installed binaries
+                // live there and deleting them would brick the CLI mid-reset.
+                foreach (var entry in Directory.GetDirectories(_paths.BasePath))
+                {
+                    if (string.Equals(entry, _paths.BinDirectory, StringComparison.OrdinalIgnoreCase))
+                        continue;
+
+                    _deleteDirectory(entry);
+                }
+
+                foreach (var file in Directory.GetFiles(_paths.BasePath))
+                    File.Delete(file);
             }
             else
             {

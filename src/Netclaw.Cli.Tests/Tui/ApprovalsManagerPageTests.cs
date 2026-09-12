@@ -3,13 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -33,7 +31,11 @@ public sealed class ApprovalsManagerPageTests : IDisposable
     {
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
-        _store = new ToolApprovalStore(_paths.ToolApprovalsPath, _time);
+        _store = new ToolApprovalStore(
+            _paths.ToolApprovalsPath,
+            _time,
+            new ApprovalStoreMigrationContext(ApprovalShell.Bash),
+            TimeSpan.Zero);
     }
 
     public void Dispose() => _dir.Dispose();
@@ -53,14 +55,50 @@ public sealed class ApprovalsManagerPageTests : IDisposable
             $"Expected empty-state message. Screen:\n{terminal}");
     }
 
-    private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
-    private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
+    [Fact]
+    public void Refresh_reports_one_bounded_version_two_omission()
+    {
+        File.WriteAllText(_paths.ToolApprovalsPath, """
+            {
+              "version": 2,
+              "audiences": {
+                "personal": {
+                  "shell_execute": [
+                    { "verb": " git push", "directory": null },
+                    { "verb": "git status", "directory": null }
+                  ]
+                }
+              }
+            }
+            """);
+        var viewModel = new ApprovalsManagerViewModel(_paths, _time);
+
+        viewModel.Refresh();
+        var firstMessage = viewModel.StatusMessage.Value;
+        viewModel.StatusMessage.Value = "ready";
+        viewModel.Refresh();
+
+        Assert.Equal(
+            "Approval store version-2 conversion omitted 1 unrepresentable entries.",
+            firstMessage);
+        Assert.Equal("ready", viewModel.StatusMessage.Value);
+    }
+
+    private static ApprovalEntry Verb(string verb) => ApprovalEntry.CreateTokenPrefix(
+        ApprovalShell.Bash,
+        verb.Split(' ', StringSplitOptions.RemoveEmptyEntries));
 
     [Fact]
     public async Task SeededEntries_RenderedInList()
     {
+        var scratchDirectory = Path.Combine(
+            Assert.IsType<string>(Path.GetPathRoot(_dir.Path)),
+            "scratch");
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git push"));
-        _store.AddApproval(TrustAudience.Personal, "file_write", InDir("file_write", "/tmp/scratch"));
+        _store.AddApproval(
+            TrustAudience.Personal,
+            "file_write",
+            new ApprovalEntry("file_write") { Directory = scratchDirectory });
         _store.AddApproval(TrustAudience.Public, "shell_execute", Verb("ls"));
 
         var (terminal, app, _) = CreateHeadlessApp(out var input);
@@ -71,12 +109,12 @@ public sealed class ApprovalsManagerPageTests : IDisposable
 
         Assert.True(terminal.Contains("personal"),
             $"Expected audience 'personal'. Screen:\n{terminal}");
-        Assert.True(terminal.Contains("git push anywhere"),
-            $"Expected entry 'git push anywhere'. Screen:\n{terminal}");
-        Assert.True(terminal.Contains("/tmp/scratch"),
-            $"Expected directory '/tmp/scratch'. Screen:\n{terminal}");
-        Assert.True(terminal.Contains("ls anywhere"),
-            $"Expected entry 'ls anywhere' (public audience). Screen:\n{terminal}");
+        Assert.True(terminal.Contains("Bash token-prefix \"git push\" anywhere"),
+            $"Expected typed git push entry. Screen:\n{terminal}");
+        Assert.True(terminal.Contains(scratchDirectory),
+            $"Expected directory '{scratchDirectory}'. Screen:\n{terminal}");
+        Assert.True(terminal.Contains("Bash token-prefix \"ls\" anywhere"),
+            $"Expected typed ls entry (public audience). Screen:\n{terminal}");
     }
 
     [Fact]
@@ -213,31 +251,9 @@ public sealed class ApprovalsManagerPageTests : IDisposable
 
     private (VirtualTerminal Terminal, TerminaApplication App, ApprovalsManagerViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        ApprovalsManagerViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/approvals", builder =>
-        {
-            builder.RegisterRoute<ApprovalsManagerPage, ApprovalsManagerViewModel>(
-                "/approvals",
-                _ => new ApprovalsManagerPage(),
-                _ =>
-                {
-                    capturedVm = new ApprovalsManagerViewModel(_paths, _time);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<ApprovalsManagerPage, ApprovalsManagerViewModel>(
+            "/approvals",
+            () => new ApprovalsManagerPage(),
+            () => new ApprovalsManagerViewModel(_paths, _time),
+            out input);
 }

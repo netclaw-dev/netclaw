@@ -7,6 +7,8 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading.RateLimiting;
+using Akka.Actor;
+using Akka.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.HttpOverrides;
@@ -16,6 +18,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -30,18 +33,41 @@ namespace Netclaw.Daemon.Tests.Security;
 /// </summary>
 public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposable
 {
+    private static readonly TimeSpan ActorTestTimeout = TimeSpan.FromSeconds(10);
+
+    public static TheoryData<ExposureMode, bool> RemoteCredentialModes
+    {
+        get
+        {
+            var rows = new TheoryData<ExposureMode, bool>();
+            foreach (var mode in Enum.GetValues<ExposureMode>())
+            {
+                rows.Add(mode, false);
+                rows.Add(mode, true);
+            }
+
+            return rows;
+        }
+    }
+
     private readonly DisposableTempDir _dir = new();
     private readonly FakeTimeProvider _time;
     private readonly DeviceRegistry _registry;
-    private readonly PairingCodeService _pairingCodeService;
     private readonly PairingExchangeGuard _exchangeGuard;
+    private readonly LocalControlPairingProofProtector _proofProtector;
+    private readonly LocalControlPairingProofValidator _proofValidator;
 
     public PairingEndpointRouteBuilderExtensionsTests()
     {
         _time = new FakeTimeProvider(new DateTimeOffset(2026, 4, 1, 0, 0, 0, TimeSpan.Zero));
         _registry = new DeviceRegistry(new NetclawPaths(_dir.Path), _time, NullLogger<DeviceRegistry>.Instance);
-        _pairingCodeService = new PairingCodeService(_time);
         _exchangeGuard = new PairingExchangeGuard(_time);
+        var provider = SecretsProtection.CreateDataProtectionProvider(new NetclawPaths(_dir.Path));
+        _proofProtector = new LocalControlPairingProofProtector(provider);
+        _proofValidator = new LocalControlPairingProofValidator(
+            _proofProtector,
+            _time,
+            NullLogger<LocalControlPairingProofValidator>.Instance);
     }
 
     public ValueTask DisposeAsync()
@@ -63,17 +89,21 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         bool spoofLoopback = false,
         IPAddress? remoteIp = null,
         string[]? trustedProxies = null,
-        bool useRealRateLimiter = false)
+        bool useRealRateLimiter = false,
+        ExposureMode exposureMode = ExposureMode.Local)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
 
         builder.Services.AddSingleton(_registry);
-        builder.Services.AddSingleton(_pairingCodeService);
         builder.Services.AddSingleton(_exchangeGuard);
+        builder.Services.AddSingleton(_proofProtector);
+        builder.Services.AddSingleton(_proofValidator);
         builder.Services.AddSingleton<TimeProvider>(_time);
-        builder.Services.AddNetclawAuthSchemes(new DaemonConfig());
+        builder.Services.AddNetclawAuthSchemes(new DaemonConfig { ExposureMode = exposureMode });
         builder.Services.AddAuthorization();
+        builder.Services.AddAkka($"pairing-endpoint-tests-{Guid.NewGuid():N}", (akka, _) =>
+            akka.WithPairingActor());
 
         // Most tests use a very high permit limit so the ASP.NET rate limiter never fires —
         // the guard lockout under test is PairingExchangeGuard (Layer 1). Tests that
@@ -91,6 +121,15 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
                         QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
                         QueueLimit = 0,
                     }));
+            if (useRealRateLimiter)
+            {
+                PairingEndpointRouteBuilderExtensions.AddLocalControlRateLimitPolicy(options);
+            }
+            else
+            {
+                options.AddPolicy(PairingEndpointRouteBuilderExtensions.LocalControlRateLimitPolicy, context =>
+                    RateLimitPartition.GetNoLimiter(context.Connection.RemoteIpAddress?.ToString() ?? "unknown"));
+            }
             options.RejectionStatusCode = 429;
         });
 
@@ -133,6 +172,302 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
 
     // ─── POST /api/pair/exchange ───────────────────────────────────────────────
 
+    [Fact]
+    public async Task Production_style_DI_constructs_pairing_actor()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync();
+
+        Assert.Null(await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Theory]
+    [InlineData(ExposureMode.Local)]
+    [InlineData(ExposureMode.ReverseProxy)]
+    [InlineData(ExposureMode.TailscaleServe)]
+    [InlineData(ExposureMode.TailscaleFunnel)]
+    [InlineData(ExposureMode.CloudflareTunnel)]
+    public async Task Local_control_proof_generates_code_in_each_exposure_mode(ExposureMode mode)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(exposureMode: mode);
+        var client = app.GetTestClient();
+        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+
+        var response = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var result = await response.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
+        Assert.NotNull(result);
+        Assert.Equal(await GetPendingExpiryAsync(app, ct), result.ExpiresAt);
+    }
+
+    [Fact]
+    public async Task Local_control_generation_preserves_existing_device_token()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (rawToken, device) = DeviceTestHelpers.MakeDevice("existing-device", _time.GetUtcNow());
+        await _registry.AddAsync(device, ct);
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+
+        var generation = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+        client.DefaultRequestHeaders.Authorization = new("Bearer", rawToken);
+        var devices = await client.GetAsync("/api/pair/devices", ct);
+
+        Assert.Equal(HttpStatusCode.OK, generation.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, devices.StatusCode);
+        var records = await devices.Content.ReadFromJsonAsync<PairedDeviceInfoDto[]>(ct);
+        Assert.Contains(records!, record => record.Name == "existing-device");
+    }
+
+    [Fact]
+    public async Task Local_control_endpoint_rejects_missing_proof_without_generating_code()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(remoteIp: IPAddress.Parse("198.51.100.10"));
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof = "" },
+            ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Null(await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Theory]
+    [MemberData(nameof(RemoteCredentialModes))]
+    public async Task Valid_remote_credential_cannot_replace_host_proof(
+        ExposureMode mode,
+        bool isBootstrapDevice)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (rawToken, device) = DeviceTestHelpers.MakeDevice(
+            isBootstrapDevice ? "bootstrap" : "device",
+            _time.GetUtcNow(),
+            isBootstrapDevice);
+        await _registry.AddAsync(device, ct);
+        await using var app = await CreateAppAsync(
+            remoteIp: IPAddress.Parse("198.51.100.10"),
+            exposureMode: mode);
+        var client = app.GetTestClient();
+        client.DefaultRequestHeaders.Authorization = new("Bearer", rawToken);
+
+        var response = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof = "" },
+            ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Null(await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Fact]
+    public async Task Forwarded_loopback_and_device_token_cannot_replace_host_proof()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (rawToken, device) = DeviceTestHelpers.MakeDevice("remote-device", _time.GetUtcNow());
+        await _registry.AddAsync(device, ct);
+        await using var app = await CreateAppAsync(
+            remoteIp: IPAddress.Parse("10.0.0.5"),
+            trustedProxies: ["10.0.0.5"],
+            exposureMode: ExposureMode.ReverseProxy);
+        var client = app.GetTestClient();
+        using var request = new HttpRequestMessage(HttpMethod.Post, "/api/local-control/v1/pairing-code")
+        {
+            Content = JsonContent.Create(new { proof = "" }),
+            Headers = { Authorization = new("Bearer", rawToken) },
+        };
+        request.Headers.TryAddWithoutValidation("X-Forwarded-For", "127.0.0.1");
+
+        using var response = await client.SendAsync(request, ct);
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+        Assert.Null(await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Theory]
+    [InlineData("malformed", HttpStatusCode.Unauthorized)]
+    [InlineData("changed", HttpStatusCode.Unauthorized)]
+    [InlineData("cross-home", HttpStatusCode.Unauthorized)]
+    [InlineData("stale", HttpStatusCode.Unauthorized)]
+    [InlineData("future", HttpStatusCode.Unauthorized)]
+    [InlineData("wrong-operation", HttpStatusCode.Unauthorized)]
+    [InlineData("unsupported-version", HttpStatusCode.BadRequest)]
+    public async Task Local_control_denial_does_not_generate_code(
+        string proofCase,
+        HttpStatusCode expectedStatus)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var proof = CreateRejectedProof(proofCase);
+
+        var response = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+
+        Assert.Equal(expectedStatus, response.StatusCode);
+        Assert.Null(await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Fact]
+    public async Task Local_control_endpoint_rejects_replay_without_replacing_code()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+
+        var first = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+        var expiry = await GetPendingExpiryAsync(app, ct);
+        var replay = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+        Assert.Equal(expiry, await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Fact]
+    public async Task Local_control_endpoint_rejects_replay_after_pairing_actor_restart()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var (rawToken, device) = DeviceTestHelpers.MakeDevice("existing-device", _time.GetUtcNow());
+        await _registry.AddAsync(device, ct);
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+
+        var first = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+        Assert.Equal(HttpStatusCode.OK, first.StatusCode);
+        var generated = await first.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
+        Assert.NotNull(generated);
+
+        var actor = await GetPairingActorAsync(app, ct);
+        var actorSystem = app.Services.GetRequiredService<ActorSystem>();
+        var restartProbe = actorSystem.ActorOf(Props.Create(() => new PairingRestartProbe(actor)));
+        var restart = await restartProbe.Ask<PairingRestartObservation>(
+            new PairingRestartProbe.Restart(generated.FormattedCode, ct),
+            ActorTestTimeout,
+            ct);
+        var failure = Assert.IsType<InvalidOperationException>(restart.Failure.Cause);
+        Assert.Equal("The pairing exchange failed unexpectedly.", failure.Message);
+        Assert.DoesNotContain(generated.FormattedCode, failure.Message, StringComparison.Ordinal);
+        Assert.Null(restart.PendingExpiry.ExpiresAt);
+
+        var replay = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+        Assert.Equal(HttpStatusCode.Unauthorized, replay.StatusCode);
+
+        var freshProof = _proofProtector.CreateProof(_time.GetUtcNow());
+        var fresh = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof = freshProof },
+            ct);
+        Assert.Equal(HttpStatusCode.OK, fresh.StatusCode);
+        var freshCode = await fresh.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
+        Assert.NotNull(freshCode);
+        Assert.Equal(freshCode.ExpiresAt, await GetPendingExpiryAsync(app, ct));
+
+        client.DefaultRequestHeaders.Authorization = new("Bearer", rawToken);
+        var devicesResponse = await client.GetAsync("/api/pair/devices", ct);
+        Assert.Equal(HttpStatusCode.OK, devicesResponse.StatusCode);
+        var devices = await devicesResponse.Content.ReadFromJsonAsync<PairedDeviceInfoDto[]>(ct);
+        Assert.Contains(devices!, record => record.Name == "existing-device");
+    }
+
+    [Fact]
+    public async Task Local_control_capacity_failure_does_not_generate_code()
+    {
+        for (var index = 0; index < LocalControlPairingProofValidator.MaximumLiveNonces; index++)
+        {
+            var accepted = _proofValidator.ValidateAndConsume(
+                _proofProtector.CreateProof(_time.GetUtcNow()));
+            Assert.Equal(LocalControlPairingProofValidation.Valid, accepted);
+        }
+
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+        var proof = _proofProtector.CreateProof(_time.GetUtcNow());
+
+        var response = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof },
+            ct);
+
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Null(await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Fact]
+    public async Task Local_control_endpoint_rejects_oversized_body_without_generating_code()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync();
+        var client = app.GetTestClient();
+
+        var response = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof = new string('A', 4_097) },
+            ct);
+
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Null(await GetPendingExpiryAsync(app, ct));
+    }
+
+    [Fact]
+    public async Task Local_control_rate_limit_rejects_excess_requests_without_replacing_code()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await using var app = await CreateAppAsync(useRealRateLimiter: true);
+        var client = app.GetTestClient();
+        PairingCodeResultDto? lastAccepted = null;
+
+        for (var index = 0; index < 10; index++)
+        {
+            var response = await client.PostAsJsonAsync(
+                "/api/local-control/v1/pairing-code",
+                new { proof = _proofProtector.CreateProof(_time.GetUtcNow()) },
+                ct);
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            lastAccepted = await response.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
+        }
+
+        var rejected = await client.PostAsJsonAsync(
+            "/api/local-control/v1/pairing-code",
+            new { proof = _proofProtector.CreateProof(_time.GetUtcNow()) },
+            ct);
+        var exchange = await client.PostAsJsonAsync(
+            "/api/pair/exchange",
+            new { code = lastAccepted!.FormattedCode, deviceName = "rate-limit-proof" },
+            ct);
+
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, exchange.StatusCode);
+    }
+
     /// <summary>Test case 1: no pending code → 404 (endpoint hidden).</summary>
     [Fact]
     public async Task Exchange_returns_404_when_no_code_pending()
@@ -156,15 +491,13 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task Exchange_returns_200_with_token_and_registers_device_for_valid_code()
     {
         var ct = TestContext.Current.CancellationToken;
-        // Produce a known pending code by calling GenerateCode() directly on the service.
-        var (code, _) = _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync();
+        var generated = await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
         // No Authorization header — proves AllowAnonymous is wired.
 
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code, deviceName = "my-laptop" }, ct);
+            new { code = generated.FormattedCode, deviceName = "my-laptop" }, ct);
 
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>(ct);
@@ -183,10 +516,10 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task Exchange_returns_401_for_invalid_code_and_records_guard_failure()
     {
         var ct = TestContext.Current.CancellationToken;
-        _pairingCodeService.GenerateCode(); // ensure a code is pending so the gate opens
         var remoteIp = IPAddress.Parse("10.0.0.1");
 
         await using var app = await CreateAppAsync(remoteIp: remoteIp);
+        await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
@@ -198,14 +531,14 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         // Drive to threshold – 1 more attempts, then the very next should be blocked.
         for (var i = 1; i < PairingExchangeGuard.FailureThreshold; i++)
         {
-            _pairingCodeService.GenerateCode();
+            await GenerateCodeAsync(app, ct);
             var r = await client.PostAsJsonAsync("/api/pair/exchange",
                 new { code = "ZZZZ-ZZZZ", deviceName = "laptop" }, ct);
             Assert.Equal(HttpStatusCode.Unauthorized, r.StatusCode);
         }
 
         // One more pending code, then the IP should now be blocked.
-        _pairingCodeService.GenerateCode();
+        await GenerateCodeAsync(app, ct);
         var blocked = await client.PostAsJsonAsync("/api/pair/exchange",
             new { code = "ZZZZ-ZZZZ", deviceName = "laptop" }, ct);
         Assert.Equal(HttpStatusCode.TooManyRequests, blocked.StatusCode);
@@ -226,14 +559,13 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         for (var i = 0; i < PairingExchangeGuard.FailureThreshold; i++)
             _exchangeGuard.RecordFailure(remoteIp);
 
-        // Even with a valid pending code, the guard blocks before any code check.
-        _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync(remoteIp: remoteIp);
+        // Even with a valid pending code, the guard blocks before any code check.
+        var generated = await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code = "ABCD-EFGH", deviceName = "laptop" }, ct);
+            new { code = generated.FormattedCode, deviceName = "laptop" }, ct);
 
         Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
         Assert.True(response.Headers.TryGetValues("Retry-After", out var values));
@@ -245,9 +577,8 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task Exchange_returns_400_when_code_is_missing()
     {
         var ct = TestContext.Current.CancellationToken;
-        _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync();
+        await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
@@ -260,13 +591,12 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task Exchange_returns_400_when_device_name_is_missing()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (code, _) = _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync();
+        var generated = await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code, deviceName = "" }, ct);
+            new { code = generated.FormattedCode, deviceName = "" }, ct);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
@@ -276,21 +606,27 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     /// Seeds the registry with an existing device, then submits a valid code with the same name.
     /// </summary>
     [Fact]
-    public async Task Exchange_returns_409_for_duplicate_device_name()
+    public async Task Exchange_duplicate_name_preserves_code_for_retry()
     {
         var ct = TestContext.Current.CancellationToken;
         var (_, existingDevice) = DeviceTestHelpers.MakeDevice("laptop", _time.GetUtcNow());
         await _registry.AddAsync(existingDevice, ct);
 
-        var (code, _) = _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync();
+        var generated = await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code, deviceName = "Laptop" }, ct); // case-insensitive duplicate
+            new { code = generated.FormattedCode, deviceName = "Laptop" }, ct); // case-insensitive duplicate
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+
+        var retry = await client.PostAsJsonAsync("/api/pair/exchange",
+            new { code = generated.FormattedCode, deviceName = "tablet" }, ct);
+
+        Assert.Equal(HttpStatusCode.OK, retry.StatusCode);
+        var devices = await _registry.ListAsync(ct);
+        Assert.Equal(2, devices.Count);
     }
 
     /// <summary>Coverage from old tests: code already consumed → 404 on second attempt.</summary>
@@ -298,18 +634,17 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task Exchange_returns_404_when_code_already_consumed()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (code, _) = _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync();
+        var generated = await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         var first = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code, deviceName = "laptop" }, ct);
+            new { code = generated.FormattedCode, deviceName = "laptop" }, ct);
         Assert.Equal(HttpStatusCode.OK, first.StatusCode);
 
         // Code is consumed; second attempt sees no pending code → 404.
         var second = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code, deviceName = "phone" }, ct);
+            new { code = generated.FormattedCode, deviceName = "phone" }, ct);
         Assert.Equal(HttpStatusCode.NotFound, second.StatusCode);
     }
 
@@ -318,39 +653,38 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task Exchange_returns_404_when_code_is_expired()
     {
         var ct = TestContext.Current.CancellationToken;
-        _pairingCodeService.GenerateCode();
+        await using var app = await CreateAppAsync();
+        var generated = await GenerateCodeAsync(app, ct);
         // Advance past the 5-minute TTL.
         _time.Advance(TimeSpan.FromMinutes(6));
 
-        await using var app = await CreateAppAsync();
         var client = app.GetTestClient();
 
         var response = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code = "ABCD-EFGH", deviceName = "laptop" }, ct);
+            new { code = generated.FormattedCode, deviceName = "laptop" }, ct);
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
 
     /// <summary>
-    /// Coverage from old tests: the returned bearer token authenticates a subsequent
-    /// request to an authorized endpoint.
+    /// The returned bearer token stays valid after the pairing code lifetime ends.
     /// </summary>
     [Fact]
-    public async Task Exchange_returned_token_authenticates_against_authorized_endpoints()
+    public async Task Exchange_returned_token_remains_valid_after_pairing_code_lifetime()
     {
         var ct = TestContext.Current.CancellationToken;
-        var (code, _) = _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync();
+        var generated = await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         var exchangeResponse = await client.PostAsJsonAsync("/api/pair/exchange",
-            new { code, deviceName = "phone" }, ct);
+            new { code = generated.FormattedCode, deviceName = "phone" }, ct);
         Assert.Equal(HttpStatusCode.OK, exchangeResponse.StatusCode);
 
         var body = await exchangeResponse.Content.ReadFromJsonAsync<JsonElement>(ct);
         var token = body.GetProperty("token").GetString()!;
 
+        _time.Advance(TimeSpan.FromMinutes(6));
         client.DefaultRequestHeaders.Authorization =
             new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", token);
 
@@ -466,13 +800,12 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task ReverseProxy_guard_locks_out_by_forwarded_client_ip()
     {
         var ct = TestContext.Current.CancellationToken;
-        _pairingCodeService.GenerateCode();
-
         // The direct peer is the trusted proxy; UseForwardedHeaders rewrites the
         // request IP to the X-Forwarded-For client.
         await using var app = await CreateAppAsync(
             remoteIp: IPAddress.Parse("10.0.0.5"),
             trustedProxies: ["10.0.0.5"]);
+        await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         for (var i = 0; i < PairingExchangeGuard.FailureThreshold; i++)
@@ -500,12 +833,11 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
     public async Task ReverseProxy_rate_limiter_partitions_by_forwarded_client_ip()
     {
         var ct = TestContext.Current.CancellationToken;
-        _pairingCodeService.GenerateCode();
-
         await using var app = await CreateAppAsync(
             remoteIp: IPAddress.Parse("10.0.0.5"),
             trustedProxies: ["10.0.0.5"],
             useRealRateLimiter: true); // production 5/min/IP limit
+        await GenerateCodeAsync(app, ct);
         var client = app.GetTestClient();
 
         // Exhaust the 5-request window for one forwarded client IP (well under the
@@ -524,6 +856,43 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         Assert.Equal(HttpStatusCode.Unauthorized, other.StatusCode);
     }
 
+    private static async Task<IActorRef> GetPairingActorAsync(
+        WebApplication app,
+        CancellationToken cancellationToken)
+    {
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        watchdog.CancelAfter(ActorTestTimeout);
+        var requiredActor = app.Services.GetRequiredService<IRequiredActor<PairingActor>>();
+        return await requiredActor.GetAsync(watchdog.Token);
+    }
+
+    private static async Task<PairingCodeResultDto> GenerateCodeAsync(
+        WebApplication app,
+        CancellationToken cancellationToken)
+    {
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        watchdog.CancelAfter(ActorTestTimeout);
+        var actor = await GetPairingActorAsync(app, watchdog.Token);
+        return await actor.Ask<PairingCodeResultDto>(
+            new PairingActor.GenerateCode(watchdog.Token),
+            Timeout.InfiniteTimeSpan,
+            watchdog.Token);
+    }
+
+    private static async Task<DateTimeOffset?> GetPendingExpiryAsync(
+        WebApplication app,
+        CancellationToken cancellationToken)
+    {
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        watchdog.CancelAfter(ActorTestTimeout);
+        var actor = await GetPairingActorAsync(app, watchdog.Token);
+        var pending = await actor.Ask<PairingActor.PendingExpiry>(
+            PairingActor.GetPendingExpiry.Instance,
+            Timeout.InfiniteTimeSpan,
+            watchdog.Token);
+        return pending.ExpiresAt;
+    }
+
     private static Task<HttpResponseMessage> PostExchangeAsync(
         HttpClient client,
         string code,
@@ -537,5 +906,70 @@ public sealed class PairingEndpointRouteBuilderExtensionsTests : IAsyncDisposabl
         };
         request.Headers.TryAddWithoutValidation("X-Forwarded-For", forwardedFor);
         return client.SendAsync(request, ct);
+    }
+
+    private sealed class PairingRestartProbe : ReceiveActor
+    {
+        private readonly IActorRef _pairingActor;
+        private IActorRef? _replyTo;
+        private Status.Failure? _failure;
+
+        public PairingRestartProbe(IActorRef pairingActor)
+        {
+            _pairingActor = pairingActor;
+
+            Receive<Restart>(restart =>
+            {
+                _replyTo = Sender;
+                _pairingActor.Tell(
+                    new PairingActor.ExchangeCode(restart.Code, null!, restart.CancellationToken),
+                    Self);
+                _pairingActor.Tell(PairingActor.GetPendingExpiry.Instance, Self);
+            });
+            Receive<Status.Failure>(failure => _failure = failure);
+            Receive<PairingActor.PendingExpiry>(pending =>
+            {
+                _replyTo!.Tell(new PairingRestartObservation(_failure!, pending));
+                Context.Stop(Self);
+            });
+        }
+
+        internal sealed record Restart(string Code, CancellationToken CancellationToken);
+    }
+
+    private sealed record PairingRestartObservation(
+        Status.Failure Failure,
+        PairingActor.PendingExpiry PendingExpiry);
+
+    private string CreateRejectedProof(string proofCase)
+    {
+        var payload = new LocalControlPairingProofPayload(
+            LocalControlPairingProofProtector.CurrentVersion,
+            LocalControlPairingProofProtector.GeneratePairingCodeOperation,
+            _time.GetUtcNow(),
+            Convert.ToHexString(new byte[LocalControlPairingProofProtector.NonceSize]));
+
+        if (proofCase == "malformed")
+            return "not-a-proof";
+
+        if (proofCase == "cross-home")
+        {
+            using var otherDir = new DisposableTempDir();
+            var otherProvider = SecretsProtection.CreateDataProtectionProvider(new NetclawPaths(otherDir.Path));
+            return new LocalControlPairingProofProtector(otherProvider).ProtectPayload(payload);
+        }
+
+        var proof = proofCase switch
+        {
+            "stale" => _proofProtector.ProtectPayload(payload with { IssuedAt = _time.GetUtcNow().AddSeconds(-31) }),
+            "future" => _proofProtector.ProtectPayload(payload with { IssuedAt = _time.GetUtcNow().AddSeconds(6) }),
+            "wrong-operation" => _proofProtector.ProtectPayload(payload with { Operation = 2 }),
+            "unsupported-version" => _proofProtector.ProtectPayload(payload with { Version = 2 }),
+            _ => _proofProtector.ProtectPayload(payload),
+        };
+
+        return proofCase == "changed"
+            ? (proof[0] == 'A' ? "B" : "A") + proof[1..]
+            : proof;
     }
 }

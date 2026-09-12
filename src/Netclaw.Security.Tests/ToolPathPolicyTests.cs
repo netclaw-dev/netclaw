@@ -12,33 +12,61 @@ public sealed class ToolPathPolicyTests
 {
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
-    [Fact]
-    public void IsDenied_blocks_exact_match()
+    [Theory]
+    [InlineData("relative/path", ShellPathStyle.Posix)]
+    [InlineData("/work/line\nbreak", ShellPathStyle.Posix)]
+    [InlineData("relative\\path", ShellPathStyle.Windows)]
+    [InlineData("C:\\work\\line\nbreak", ShellPathStyle.Windows)]
+    [InlineData(@"C:\work", (ShellPathStyle)999)]
+    public void Canonical_shell_path_rejects_invalid_values(
+        string path,
+        ShellPathStyle pathStyle)
     {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
-        Assert.True(policy.IsDenied("/home/user/.netclaw/config/secrets.json"));
+        Assert.False(CanonicalShellPath.TryCreate(path, pathStyle, out _));
+    }
+
+    [Theory]
+    [InlineData("/work/../external/file.txt", ShellPathStyle.Posix, "/external/file.txt")]
+    [InlineData(@"C:\work\..\external\file.txt", ShellPathStyle.Windows, @"C:\external\file.txt")]
+    [InlineData(@"\\server\share\work\..\file.txt", ShellPathStyle.Windows, @"\\server\share\file.txt")]
+    public void Canonical_shell_path_uses_declared_style_on_every_host(
+        string value,
+        ShellPathStyle pathStyle,
+        string expected)
+    {
+        Assert.True(CanonicalShellPath.TryCreate(value, pathStyle, out var path));
+        Assert.Equal(expected, path.Value);
     }
 
     [Fact]
-    public void IsDenied_allows_non_matching_path()
+    public void Projected_path_check_rejects_a_mismatched_path_style()
     {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
-        Assert.False(policy.IsDenied("/home/user/.netclaw/config/netclaw.json"));
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7);
+        var policy = new ToolPathPolicy(environment, [@"C:\protected"]);
+        Assert.True(CanonicalShellPath.TryCreate(
+            "/protected",
+            ShellPathStyle.Posix,
+            out var path));
+
+        Assert.True(policy.IsShellDeniedProjectedPath(path));
     }
 
-    [Fact]
-    public void IsDenied_normalizes_path_traversal()
+    // Path traversal (..) must normalize to the denied path before matching.
+    // Matching is case-insensitive.
+    [Theory]
+    [InlineData("/home/user/.netclaw/config/secrets.json", "/home/user/.netclaw/config/secrets.json", true)]
+    [InlineData("/home/user/.netclaw/config/secrets.json", "/home/user/.netclaw/config/netclaw.json", false)]
+    [InlineData("/home/user/.netclaw/config/secrets.json", "/home/user/.netclaw/config/../config/secrets.json", true)]
+    [InlineData("/home/user/.netclaw/config/Secrets.json", "/home/user/.netclaw/config/secrets.json", true)]
+    [InlineData("/home/user/.netclaw/keys", "/home/user/.netclaw/keys/keyring.xml", true)]
+    [InlineData("/home/user/.netclaw/keys", "/home/user/.netclaw/keys-backup/data.txt", false)]
+    [InlineData("/home/user/.netclaw/config/webhooks", "/home/user/.netclaw/config/webhooks/github-issues.json", true)]
+    public void IsDenied_matches_denied_paths(string deniedPath, string testPath, bool expected)
     {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
-        // Path with .. that resolves to the denied path
-        Assert.True(policy.IsDenied("/home/user/.netclaw/config/../config/secrets.json"));
-    }
-
-    [Fact]
-    public void IsDenied_case_insensitive()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/Secrets.json"]);
-        Assert.True(policy.IsDenied("/home/user/.netclaw/config/secrets.json"));
+        var policy = new ToolPathPolicy([deniedPath]);
+        Assert.Equal(expected, policy.IsDenied(testPath));
     }
 
     [Fact]
@@ -49,22 +77,47 @@ public sealed class ToolPathPolicyTests
         Assert.False(policy.IsDenied("  "));
     }
 
-    [Fact]
-    public void CommandReferencesDeniedPath_detects_path_in_command()
+    [Theory]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat /home/user/.netclaw/config/secrets.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat /home/user/.netclaw/config/secrets.json | jq .", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "ls -la /tmp", false)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "echo hello", false)]
+    [InlineData(new[] { "/some/path" }, "", false)]
+    [InlineData(new[] { "/some/path" }, "  ", false)]
+    [InlineData(new[] { "/home/user/.netclaw/keys" }, "ls ~/.netclaw/keys", true)]
+    [InlineData(new[] { "/home/user/.netclaw/keys" }, "tar czf /tmp/k.tgz ~/.netclaw/keys", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/webhooks" }, "cat ~/.netclaw/config/webhooks/github-issues.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/webhooks" }, "tar czf /tmp/webhooks.tgz ~/.netclaw/config/webhooks", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/*.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "jq . ~/.netclaw/config/*.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "tar czf /tmp/netclaw-config.tgz ~/.netclaw/config", true)]
+    public void CommandReferencesDeniedPath_matches_denied_paths_in_commands(
+        string[] deniedPaths,
+        string command,
+        bool expected)
     {
-        var secretsPath = "/home/user/.netclaw/config/secrets.json";
-        var policy = new ToolPathPolicy([secretsPath]);
-
-        Assert.True(policy.CommandReferencesDeniedPath($"cat {secretsPath}"));
-        Assert.True(policy.CommandReferencesDeniedPath($"cat {secretsPath} | jq ."));
+        var policy = new ToolPathPolicy(deniedPaths);
+        Assert.Equal(expected, policy.CommandReferencesDeniedPath(command));
     }
 
     [Fact]
-    public void CommandReferencesDeniedPath_allows_safe_commands()
+    public void CommandReferencesDeniedPath_checks_finite_authored_filesystem_values()
     {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
-        Assert.False(policy.CommandReferencesDeniedPath("ls -la /tmp"));
-        Assert.False(policy.CommandReferencesDeniedPath("echo hello"));
+        var policy = new ToolPathPolicy(["/work/src/B.cs"]);
+        const string command =
+            "for f in src/A.cs src/B.cs; do cat /work/$f; done";
+
+        Assert.True(policy.CommandReferencesDeniedPath(command, "/work"));
+    }
+
+    [Fact]
+    public void CommandReferencesDeniedPath_checks_the_working_directory()
+    {
+        var policy = new ToolPathPolicy(["/protected/catalog"]);
+
+        Assert.True(policy.CommandReferencesDeniedPath("find", "/protected/catalog"));
+        Assert.True(policy.CommandReferencesDeniedPath("find", "/protected/catalog/mcp"));
+        Assert.False(policy.CommandReferencesDeniedPath("find", "/work"));
     }
 
     [Fact]
@@ -80,34 +133,12 @@ public sealed class ToolPathPolicyTests
     }
 
     [Fact]
-    public void CommandReferencesDeniedPath_returns_false_for_empty()
-    {
-        var policy = new ToolPathPolicy(["/some/path"]);
-        Assert.False(policy.CommandReferencesDeniedPath(""));
-        Assert.False(policy.CommandReferencesDeniedPath("  "));
-    }
-
-    [Fact]
     public void Multiple_denied_paths()
     {
         var policy = new ToolPathPolicy(["/path/a", "/path/b"]);
         Assert.True(policy.IsDenied("/path/a"));
         Assert.True(policy.IsDenied("/path/b"));
         Assert.False(policy.IsDenied("/path/c"));
-    }
-
-    [Fact]
-    public void IsDenied_blocks_children_of_denied_directory()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/keys"]);
-        Assert.True(policy.IsDenied("/home/user/.netclaw/keys/keyring.xml"));
-    }
-
-    [Fact]
-    public void IsDenied_does_not_match_prefix_without_path_boundary()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/keys"]);
-        Assert.False(policy.IsDenied("/home/user/.netclaw/keys-backup/data.txt"));
     }
 
     [Fact]
@@ -118,49 +149,6 @@ public sealed class ToolPathPolicyTests
 
         Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/secrets.json"));
         Assert.True(policy.CommandReferencesDeniedPath("cat $HOME/.netclaw/config/secrets.json"));
-    }
-
-    [Fact]
-    public void CommandReferencesDeniedPath_detects_keys_directory_access()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/keys"]);
-
-        Assert.True(policy.CommandReferencesDeniedPath("ls ~/.netclaw/keys"));
-        Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/k.tgz ~/.netclaw/keys"));
-    }
-
-    [Fact]
-    public void IsDenied_blocks_children_of_webhooks_directory()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/webhooks"]);
-
-        Assert.True(policy.IsDenied("/home/user/.netclaw/config/webhooks/github-issues.json"));
-    }
-
-    [Fact]
-    public void CommandReferencesDeniedPath_detects_webhooks_directory_access()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/webhooks"]);
-
-        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/webhooks/github-issues.json"));
-        Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/webhooks.tgz ~/.netclaw/config/webhooks"));
-    }
-
-    [Fact]
-    public void CommandReferencesDeniedPath_detects_high_risk_glob_in_config_directory()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
-
-        Assert.True(policy.CommandReferencesDeniedPath("cat ~/.netclaw/config/*.json"));
-        Assert.True(policy.CommandReferencesDeniedPath("jq . ~/.netclaw/config/*.json"));
-    }
-
-    [Fact]
-    public void CommandReferencesDeniedPath_detects_high_risk_archive_of_config_directory()
-    {
-        var policy = new ToolPathPolicy(["/home/user/.netclaw/config/secrets.json"]);
-
-        Assert.True(policy.CommandReferencesDeniedPath("tar czf /tmp/netclaw-config.tgz ~/.netclaw/config"));
     }
 
     private static ToolPathPolicy CreateProductionPolicy()
@@ -181,12 +169,18 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/config/secrets.json",
             "/home/user/.netclaw/keys",
             "/home/user/.netclaw/config/webhooks",
+            "/home/user/.netclaw/netclaw.db",
+            "/home/user/.netclaw/netclaw.db-wal",
+            "/home/user/.netclaw/netclaw.db-shm",
+            "/home/user/.netclaw/netclaw.db-journal",
+            "/home/user/.netclaw/netclaw.pid",
+            "/home/user/.netclaw/netclaw.lock",
+            "/home/user/.netclaw/cache/restart-manifest.json",
         };
         var shellIndicators = new[]
         {
-            // ConfigDirectory is a directory-scoped shell indicator in production
-            // (src/Netclaw.Daemon/Program.cs), so the whole config dir is denied
-            // for shell references AND (via the IsReadDenied union) for reads.
+            // ConfigDirectory is a directory-scoped shell indicator in production.
+            // Structured file reads use the independent read deny list.
             "/home/user/.netclaw/config",
             "/home/user/.netclaw/config/secrets.json",
             "/home/user/.netclaw/config/webhooks",
@@ -243,11 +237,7 @@ public sealed class ToolPathPolicyTests
         Assert.True(policy.IsReadDenied(path));
     }
 
-    // The read deny surface is the union of the read deny list and the shell
-    // indicator list, so read tools cannot reach control-plane lifecycle files
-    // that shell cannot even reference (#1724).
     [Theory]
-    [InlineData("/home/user/.netclaw/config/netclaw.json")]
     [InlineData("/home/user/.netclaw/netclaw.db")]
     [InlineData("/home/user/.netclaw/netclaw.db-wal")]
     [InlineData("/home/user/.netclaw/netclaw.db-shm")]
@@ -259,6 +249,16 @@ public sealed class ToolPathPolicyTests
     {
         var policy = CreateProductionPolicy();
         Assert.True(policy.IsReadDenied(path));
+    }
+
+    [Fact]
+    public void IsReadDenied_allows_ordinary_config_while_shell_remains_denied()
+    {
+        var policy = CreateProductionPolicy();
+        const string configPath = "/home/user/.netclaw/config/netclaw.json";
+
+        Assert.False(policy.IsReadDenied(configPath));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat {configPath}"));
     }
 
     public enum SymlinkTraversalShape
@@ -363,10 +363,8 @@ public sealed class ToolPathPolicyTests
         }
     }
 
-    // The fixture mirrors production (Program.cs): ConfigDirectory is a
-    // directory-scoped shell indicator, so the whole config dir is read-denied
-    // via the IsReadDenied union. Sidecar files (db-wal/db-shm/db-journal) are
-    // also in the fixture, matching the production shell indicator list.
+    // Structured reads use their own explicit deny list. Shell indicators do
+    // not widen that list.
     [Theory]
     [InlineData("/home/user/repositories/foo.cs")]
     [InlineData("/tmp/notes.txt")]
@@ -465,40 +463,18 @@ public sealed class ToolPathPolicyTests
     // cannot instruct the agent to rewrite tool-approvals.json or
     // hard-deny-overrides.json and grant itself global trust.
 
-    [Fact]
-    public void IsDenied_blocks_tool_approvals_json_under_config_dir()
+    [Theory]
+    [InlineData("tool-approvals.json")]
+    [InlineData("netclaw.json")]
+    [InlineData("hard-deny-overrides.json")]
+    [InlineData("future/subsystem/settings.json")]
+    public void IsDenied_blocks_descendants_of_config_dir(string relativePath)
     {
         var configDir = "/home/user/.netclaw/config";
         var policy = new ToolPathPolicy([configDir]);
+        var segments = relativePath.Split('/');
 
-        Assert.True(policy.IsDenied(Path.Combine(configDir, "tool-approvals.json")));
-    }
-
-    [Fact]
-    public void IsDenied_blocks_netclaw_json_under_config_dir()
-    {
-        var configDir = "/home/user/.netclaw/config";
-        var policy = new ToolPathPolicy([configDir]);
-
-        Assert.True(policy.IsDenied(Path.Combine(configDir, "netclaw.json")));
-    }
-
-    [Fact]
-    public void IsDenied_blocks_hard_deny_overrides_under_config_dir()
-    {
-        var configDir = "/home/user/.netclaw/config";
-        var policy = new ToolPathPolicy([configDir]);
-
-        Assert.True(policy.IsDenied(Path.Combine(configDir, "hard-deny-overrides.json")));
-    }
-
-    [Fact]
-    public void IsDenied_blocks_arbitrary_descendant_of_config_dir()
-    {
-        var configDir = "/home/user/.netclaw/config";
-        var policy = new ToolPathPolicy([configDir]);
-
-        Assert.True(policy.IsDenied(Path.Combine(configDir, "future", "subsystem", "settings.json")));
+        Assert.True(policy.IsDenied(Path.Combine([configDir, .. segments])));
     }
 
     [Fact]
@@ -511,24 +487,16 @@ public sealed class ToolPathPolicyTests
         Assert.False(policy.IsDenied("/home/user/.netclaw/configbackup/file.json"));
     }
 
-    [Fact]
-    public void CommandReferencesDeniedPath_detects_shell_redirect_to_config_file()
+    [Theory]
+    [InlineData("echo {} > {configDir}/tool-approvals.json")]
+    [InlineData("echo content | tee {configDir}/netclaw.json")]
+    public void CommandReferencesDeniedPath_detects_writes_into_config_dir(string commandTemplate)
     {
         var configDir = "/home/user/.netclaw/config";
         var policy = new ToolPathPolicy(deniedPaths: [configDir]);
+        var command = commandTemplate.Replace("{configDir}", configDir);
 
-        Assert.True(policy.CommandReferencesDeniedPath(
-            $"echo {{}} > {configDir}/tool-approvals.json"));
-    }
-
-    [Fact]
-    public void CommandReferencesDeniedPath_detects_tee_to_config_file()
-    {
-        var configDir = "/home/user/.netclaw/config";
-        var policy = new ToolPathPolicy(deniedPaths: [configDir]);
-
-        Assert.True(policy.CommandReferencesDeniedPath(
-            $"echo content | tee {configDir}/netclaw.json"));
+        Assert.True(policy.CommandReferencesDeniedPath(command));
     }
 
     [Fact]

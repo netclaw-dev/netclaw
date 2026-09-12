@@ -22,6 +22,12 @@ namespace Netclaw.Actors.Tools;
     "Create, edit, patch, or delete skills and their resource files. "
     + "Actions: create, edit, patch, delete, write_file, remove_file.",
     Grant = "builtin")]
+[ToolArgumentVariant("Action", "create", Required = ["Content"], Forbidden = ["FilePath", "FileContent", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "edit", Required = ["Content"], Forbidden = ["FilePath", "FileContent", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "patch", Required = ["OldString", "NewString"], Forbidden = ["Content", "FileContent"])]
+[ToolArgumentVariant("Action", "delete", Forbidden = ["Content", "FilePath", "FileContent", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "write_file", Required = ["FilePath", "FileContent"], Forbidden = ["Content", "OldString", "NewString", "ReplaceAll"])]
+[ToolArgumentVariant("Action", "remove_file", Required = ["FilePath"], Forbidden = ["Content", "FileContent", "OldString", "NewString", "ReplaceAll"])]
 public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params>
 {
     [GeneratedRegex(@"^[a-z0-9]([a-z0-9-]*[a-z0-9])?$")]

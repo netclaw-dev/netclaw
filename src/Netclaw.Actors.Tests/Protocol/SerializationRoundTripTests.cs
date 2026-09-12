@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SerializationRoundTripTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -149,6 +149,24 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.Equal(original.SourceReminderId, result.SourceReminderId);
         Assert.Equal(original.SourceBackgroundJobId, result.SourceBackgroundJobId);
+    }
+
+    [Fact]
+    public void Tool_result_failure_code_round_trips_through_the_transport_DTO()
+    {
+        var original = new ToolResultOutput
+        {
+            SessionId = new SessionId("test/wire"),
+            CallId = new ToolCallId("call-rejected"),
+            ToolName = new ToolName("search"),
+            Result = "The tool was not executed.",
+            FailureCode = "invalid_rationale"
+        };
+
+        var result = Assert.IsType<ToolResultOutput>(
+            SessionOutputDtoMapper.FromDto(SessionOutputDtoMapper.ToDto(original)));
+
+        Assert.Equal("invalid_rationale", result.FailureCode);
     }
 
     [Fact]
@@ -794,6 +812,7 @@ public sealed class SerializationRoundTripTests : TestKit
         {
             SessionId = new SessionId("C123/1700000000.000001"),
             CallId = "call-pending-1",
+            AuthorizationAttemptId = "auth-0123456789abcdef0123456789abcdef",
             ToolName = "shell_execute",
             Patterns = ["git status", "ls"],
             CandidateVerbs = ["git", "ls"],
@@ -806,10 +825,15 @@ public sealed class SerializationRoundTripTests : TestKit
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U-observer"],
             Cwd = "/home/user/project",
+            ManagedTemporaryDirectory = "/home/user/.netclaw/sessions/example/tmp/parent",
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
             [
-                new Netclaw.Security.ApprovalCandidate("git", "/home/user/project"),
+                new Netclaw.Security.ApprovalCandidate("git", "/home/user/project")
+                {
+                    Shell = Netclaw.Configuration.ApprovalShell.Bash,
+                    VerbTokens = Array.AsReadOnly(["git", "push"]),
+                },
                 new Netclaw.Security.ApprovalCandidate("ls", null)
             ],
             TurnContext = new TurnContextRecord
@@ -848,6 +872,7 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.Equal(wrapped.SessionId, result.SessionId);
         Assert.Equal(wrapped.CallId, result.CallId);
+        Assert.Equal(wrapped.AuthorizationAttemptId, result.AuthorizationAttemptId);
         Assert.Equal(wrapped.ToolName, result.ToolName);
         Assert.Equal(wrapped.Patterns, result.Patterns);
         Assert.Equal(wrapped.CandidateVerbs, result.CandidateVerbs);
@@ -860,12 +885,18 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.HasThirdPartyAdoptedContext, result.HasThirdPartyAdoptedContext);
         Assert.Equal(wrapped.AdoptedSpeakerIds, result.AdoptedSpeakerIds);
         Assert.Equal(wrapped.Cwd, result.Cwd);
+        Assert.Null(result.SessionScratchDirectory);
+        Assert.Equal(wrapped.ManagedTemporaryDirectory, result.ManagedTemporaryDirectory);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);
         Assert.Equal("git", result.Candidates[0].Verb);
         Assert.Equal("/home/user/project", result.Candidates[0].Directory);
+        Assert.Equal(Netclaw.Configuration.ApprovalShell.Bash, result.Candidates[0].Shell);
+        Assert.Equal(["git", "push"], result.Candidates[0].VerbTokens);
         Assert.Equal("ls", result.Candidates[1].Verb);
         Assert.Null(result.Candidates[1].Directory);
+        Assert.Null(result.Candidates[1].Shell);
+        Assert.Null(result.Candidates[1].VerbTokens);
         Assert.NotNull(result.TurnContext);
         Assert.Equal(wrapped.TurnContext.SessionId, result.TurnContext.SessionId);
         Assert.Equal(wrapped.TurnContext.TurnId, result.TurnContext.TurnId);
@@ -885,6 +916,70 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.TurnContext.AdoptedSpeakerIds, result.TurnContext.AdoptedSpeakerIds);
         Assert.Equal(wrapped.TurnContext.SupportsInteractiveApproval, result.TurnContext.SupportsInteractiveApproval);
         Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);
+    }
+
+    [Fact]
+    public void ToolApprovalResolved_round_trips_authorization_attempt_id()
+    {
+        var wrapped = new ToolApprovalResolved
+        {
+            SessionId = new SessionId("C123/1700000000.000001"),
+            CallId = "call-resolved-1",
+            AuthorizationAttemptId = "auth-fedcba9876543210fedcba9876543210",
+            Decision = ApprovalDecision.ApprovedOnce.ToString(),
+            ResolvedAtMs = 1700000001000
+        };
+
+        var result = RoundTrip(wrapped);
+
+        Assert.Equal(wrapped.SessionId, result.SessionId);
+        Assert.Equal(wrapped.CallId, result.CallId);
+        Assert.Equal(wrapped.AuthorizationAttemptId, result.AuthorizationAttemptId);
+        Assert.Equal(wrapped.Decision, result.Decision);
+        Assert.Equal(wrapped.ResolvedAtMs, result.ResolvedAtMs);
+    }
+
+    [Fact]
+    public void ToolApprovalRequested_writes_only_managed_temporary_directory()
+    {
+        var wrapped = new ToolApprovalRequested
+        {
+            SessionId = new SessionId("C123/1700000000.000001"),
+            CallId = "call-managed-temp",
+            ToolName = "file_write",
+            Audience = Netclaw.Configuration.TrustAudience.Personal,
+            SessionScratchDirectory = "/legacy/session-directory",
+            ManagedTemporaryDirectory = "/managed/tmp/parent",
+            RequestedAtMs = 1700000000000
+        };
+
+        var proto = NetclawProtoMapper.ToProto(wrapped);
+
+        Assert.False(proto.HasSessionScratchDirectory);
+        Assert.True(proto.HasManagedTemporaryDirectory);
+        Assert.Equal(wrapped.ManagedTemporaryDirectory, proto.ManagedTemporaryDirectory);
+    }
+
+    [Fact]
+    public void ToolApprovalRequested_reads_legacy_session_directory_without_temp_reinterpretation()
+    {
+        var proto = new Serialization.Proto.ToolApprovalRequestedProto
+        {
+            SessionId = new Serialization.Proto.SessionIdProto
+            {
+                Value = "C123/1700000000.000001"
+            },
+            CallId = "call-legacy-temp",
+            ToolName = "file_write",
+            Audience = Serialization.Proto.TrustAudience.Personal,
+            SessionScratchDirectory = "/legacy/session-directory",
+            RequestedAtMs = 1700000000000
+        };
+
+        var result = NetclawProtoMapper.FromProto(proto);
+
+        Assert.Equal(proto.SessionScratchDirectory, result.SessionScratchDirectory);
+        Assert.Null(result.ManagedTemporaryDirectory);
     }
 
     [Fact]
@@ -920,6 +1015,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.SupportsInteractiveApproval, result.SupportsInteractiveApproval);
         Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
         Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
+        Assert.Null(result.AuthorizationAttemptId);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Null(result.TurnContext);
         Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);

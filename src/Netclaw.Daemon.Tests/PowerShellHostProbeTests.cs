@@ -145,23 +145,32 @@ public class PowerShellHostProbeTests
     [Fact]
     public async Task Timeout_terminates_process_tree_without_waiting_real_time()
     {
-        var timeProvider = new FakeTimeProvider();
-        var process = new ControlledProbeProcess(
-            "7.6.4",
-            string.Empty,
-            waitForKill: true);
-        var probe = CreateProbe(process, timeProvider);
+        var timeProvider = new RetrySignalingTimeProvider();
+        var first = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
+        var second = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
+        var probe = new PowerShellHostProbe(
+            timeProvider,
+            new FixedExecutableLocator(),
+            new SequenceProcessFactory(first, second));
 
         var pending = probe.ProbeAsync("pwsh.exe", TestContext.Current.CancellationToken);
-        await process.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        await first.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
         timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
+
+        // ProbeAsync retries once on timeout, so drive the second attempt too.
+        // The retry gets the escalated budget (ProbeRetryTimeout).
+        await StartRetryAsync(second, timeProvider);
+        timeProvider.Advance(PowerShellHostProbe.ProbeRetryTimeout);
         var result = await pending;
 
         var failed = Assert.IsType<PowerShellHostProbeResult.Failed>(result);
         Assert.Equal(PowerShellProbeFailure.Timeout, failed.Failure);
-        Assert.True(process.KillTreeCalled);
-        Assert.True(process.WaitedAfterKill);
-        Assert.True(process.Disposed);
+        Assert.True(failed.ElapsedMs > 0);
+        Assert.True(first.KillTreeCalled);
+        Assert.True(first.WaitedAfterKill);
+        Assert.True(first.Disposed);
+        Assert.True(second.KillTreeCalled);
+        Assert.True(second.Disposed);
     }
 
     [Fact]
@@ -215,6 +224,91 @@ public class PowerShellHostProbeTests
         Assert.True(process.Disposed);
     }
 
+    [Fact]
+    public async Task Timeout_retries_once_and_recovers_when_second_attempt_succeeds()
+    {
+        var timeProvider = new RetrySignalingTimeProvider();
+        var slow = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
+        var healthy = new ControlledProbeProcess("7.6.4", string.Empty);
+        var probe = new PowerShellHostProbe(
+            timeProvider,
+            new FixedExecutableLocator(),
+            new SequenceProcessFactory(slow, healthy));
+
+        var pending = probe.ProbeAsync("pwsh.exe", TestContext.Current.CancellationToken);
+        await slow.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
+
+        await StartRetryAsync(healthy, timeProvider);
+
+        var result = await pending;
+
+        var found = Assert.IsType<PowerShellHostProbeResult.Found>(result);
+        Assert.Equal(ExecutablePath, found.ExecutablePath);
+        Assert.Equal(new Version(7, 6, 4), found.Version);
+        Assert.True(slow.KillTreeCalled);
+        Assert.True(healthy.Disposed);
+    }
+
+    [Fact]
+    public async Task Retry_attempt_gets_a_larger_budget_than_the_first_attempt()
+    {
+        var timeProvider = new RetrySignalingTimeProvider();
+        var first = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
+        var second = new ControlledProbeProcess("7.6.4", string.Empty, waitForKill: true);
+        var probe = new PowerShellHostProbe(
+            timeProvider,
+            new FixedExecutableLocator(),
+            new SequenceProcessFactory(first, second));
+
+        var pending = probe.ProbeAsync("pwsh.exe", TestContext.Current.CancellationToken);
+        await first.WaitStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+        timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
+
+        // Attempt 2 starts after the retry delay. It must still be running at the
+        // first attempt's budget...
+        await StartRetryAsync(second, timeProvider);
+        timeProvider.Advance(PowerShellHostProbe.ProbeTimeout);
+        Assert.False(pending.IsCompleted);
+
+        // ...and only time out once the escalated retry budget is exhausted.
+        timeProvider.Advance(PowerShellHostProbe.ProbeRetryTimeout - PowerShellHostProbe.ProbeTimeout);
+        var result = await pending;
+
+        var failed = Assert.IsType<PowerShellHostProbeResult.Failed>(result);
+        Assert.Equal(PowerShellProbeFailure.Timeout, failed.Failure);
+        Assert.True(second.KillTreeCalled);
+    }
+
+    [Fact]
+    public async Task Non_timeout_failure_does_not_retry()
+    {
+        var factory = new TrackingProcessFactory(
+            new ControlledProbeProcess("not-a-version", string.Empty));
+        var probe = new PowerShellHostProbe(
+            TimeProvider.System,
+            new FixedExecutableLocator(),
+            factory);
+
+        var result = await probe.ProbeAsync(
+            "pwsh.exe",
+            TestContext.Current.CancellationToken);
+
+        var failed = Assert.IsType<PowerShellHostProbeResult.Failed>(result);
+        Assert.Equal(PowerShellProbeFailure.MalformedVersion, failed.Failure);
+        Assert.Equal(1, factory.StartCount);
+    }
+
+    private static async Task StartRetryAsync(
+        ControlledProbeProcess nextAttempt,
+        RetrySignalingTimeProvider timeProvider)
+    {
+        var ct = TestContext.Current.CancellationToken;
+        await timeProvider.RetryDelayCreated.Task.WaitAsync(ct);
+        timeProvider.Advance(PowerShellHostProbe.ProbeRetryDelay);
+        await nextAttempt.WaitStarted.Task.WaitAsync(ct);
+    }
+
     private static PowerShellHostProbe CreateProbe(
         IPowerShellProbeProcess process,
         TimeProvider? timeProvider = null) =>
@@ -258,11 +352,54 @@ public class PowerShellHostProbeTests
             new PowerShellExecutableLookup.Found(ExecutablePath);
     }
 
+    private sealed class RetrySignalingTimeProvider : FakeTimeProvider
+    {
+        public TaskCompletionSource RetryDelayCreated { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override ITimer CreateTimer(
+            TimerCallback callback,
+            object? state,
+            TimeSpan dueTime,
+            TimeSpan period)
+        {
+            var timer = base.CreateTimer(callback, state, dueTime, period);
+            if (dueTime == PowerShellHostProbe.ProbeRetryDelay)
+                RetryDelayCreated.TrySetResult();
+            return timer;
+        }
+    }
+
     private sealed class FixedProcessFactory(IPowerShellProbeProcess process)
         : IPowerShellProbeProcessFactory
     {
         public IPowerShellProbeProcess Start(string executablePath)
         {
+            Assert.Equal(ExecutablePath, executablePath);
+            return process;
+        }
+    }
+
+    private sealed class SequenceProcessFactory(params IPowerShellProbeProcess[] processes)
+        : IPowerShellProbeProcessFactory
+    {
+        private readonly Queue<IPowerShellProbeProcess> _processes = new(processes);
+
+        public IPowerShellProbeProcess Start(string executablePath)
+        {
+            Assert.Equal(ExecutablePath, executablePath);
+            return _processes.Dequeue();
+        }
+    }
+
+    private sealed class TrackingProcessFactory(IPowerShellProbeProcess process)
+        : IPowerShellProbeProcessFactory
+    {
+        public int StartCount { get; private set; }
+
+        public IPowerShellProbeProcess Start(string executablePath)
+        {
+            StartCount++;
             Assert.Equal(ExecutablePath, executablePath);
             return process;
         }

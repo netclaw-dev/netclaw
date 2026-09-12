@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="IToolExecutor.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -7,6 +7,7 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions.Pipelines;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -20,6 +21,11 @@ public interface IToolExecutor
     Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default);
 
     Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default);
+
+    /// <summary>Creates the exact launch that the background actor must reauthorize before process creation.</summary>
+    Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+        FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+        => throw new NotSupportedException("This executor does not support checked background shell launches.");
 
     /// <summary>
     /// Pre-dispatch argument validation shared by every caller (main session
@@ -81,6 +87,12 @@ public interface IToolExecutor
     {
         yield return new ToolCompletedUpdate(await ExecuteAsync(toolCall, context, ct));
     }
+}
+
+/// <summary>Exposes the shell grammar used to compare one managed-temporary correction retry.</summary>
+internal interface IApprovalShellProvider
+{
+    ApprovalShell Shell { get; }
 }
 
 /// <summary>

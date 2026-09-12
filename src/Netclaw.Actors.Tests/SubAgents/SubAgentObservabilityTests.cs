@@ -47,6 +47,7 @@ public sealed class SubAgentObservabilityTests : TestKit
         };
 
     private static ToolAccessPolicy PermissivePolicy() => new(
+        new NetclawPaths(),
         new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed },
         new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal, ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
         new ShellCommandPolicy(),
@@ -95,6 +96,30 @@ public sealed class SubAgentObservabilityTests : TestKit
     }
 
     [Fact]
+    public async Task Startup_emits_one_payload_free_tool_exposure_diagnostic()
+    {
+        var core = new FakeNetclawTool("core_marker", "core result");
+        var deferred = new FakeNetclawTool("deferred_marker", "deferred result");
+        var props = SubAgentActor.CreatePropsWithProjectInstructionProvider(
+            CreateDefinition([core, deferred]),
+            new FakeChatClient(),
+            PermissivePolicy(),
+            NullSystemPromptProvider.Instance,
+            coreToolNames: new HashSet<string>([core.Name], StringComparer.Ordinal));
+        var agent = Sys.ActorOf(props);
+
+        await EventFilter.Info(
+            message: "SubAgent tool exposure core=1 deferredVisible=1 loaded=0")
+            .ExpectAsync(1, async () =>
+            {
+                await agent.Ask<SubAgentResult>(
+                    NewRun("Inspect /private/payload-marker.txt"),
+                    TimeSpan.FromSeconds(5),
+                    TestContext.Current.CancellationToken);
+            }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Tool_dispatch_logs_a_tool_start_event_with_call_id()
     {
         var fakeTool = new FakeNetclawTool("greet", "Hello from tool!");
@@ -108,12 +133,42 @@ public sealed class SubAgentObservabilityTests : TestKit
         };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(CreateDefinition([fakeTool]), fakeClient, PermissivePolicy()));
 
-        // A tool start event (distinct from the existing tool-result log) lets an
-        // operator see when a slow tool began, not just when it finished.
-        await EventFilter.Info(contains: "tool start callId=call-1 name=greet").ExpectAsync(1, async () =>
+        // The start event carries the call and authorization identities so an
+        // operator can distinguish concurrent calls and follow the lifecycle.
+        await EventFilter.Info(contains: "authorization attempt started").ExpectAsync(1, async () =>
         {
             await agent.Ask<SubAgentResult>(
                 NewRun("Greet the user"), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Tool_dispatch_emits_only_the_bounded_outcome_category()
+    {
+        var fakeTool = new FakeNetclawTool("greet", "private-result-marker");
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                new FunctionCallContent("private-call-marker", "greet",
+                    new Dictionary<string, object?>
+                    {
+                        ["name"] = "private-argument-marker",
+                        ["_rationale"] = "Exercise the bounded diagnostic."
+                    })
+            ]
+        };
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy()));
+
+        await EventFilter.Info(contains: "outcomeCategory=Success").ExpectAsync(1, async () =>
+        {
+            await agent.Ask<SubAgentResult>(
+                NewRun("Use the tool with a private payload marker."),
+                TimeSpan.FromSeconds(5),
+                TestContext.Current.CancellationToken);
         }, cancellationToken: TestContext.Current.CancellationToken);
     }
 

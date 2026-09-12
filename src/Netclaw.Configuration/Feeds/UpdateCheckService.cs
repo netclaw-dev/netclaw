@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="UpdateCheckService.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -64,7 +64,7 @@ public enum ManifestFetchStatus
 /// <summary>
 /// Checks the binary feed manifest for available updates.
 /// Shared between CLI (update command + startup check) and daemon (startup notification).
-/// Modeled after <see cref="SystemSkillSyncService"/> manifest fetch pattern.
+/// Uses the same bounded HTTP request pattern as the skill feed clients.
 /// Results are cached for 1 hour to avoid hammering the CDN.
 /// </summary>
 public static class UpdateCheckService

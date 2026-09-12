@@ -9,13 +9,11 @@
 #
 # Environment knobs:
 #   START_TIMEOUT_SECONDS  daemon start/health timeout (default: 180)
-#   STOP_TIMEOUT_SECONDS   daemon stop timeout         (default: 90)
 #   STEP_TIMEOUT_SECONDS   per-command timeout         (default: 120)
 #   DAEMON_BASE_URL        health endpoint base        (default loopback:56199)
 #   DAEMON_PORT            daemon listen port          (default: port from DAEMON_BASE_URL or 56199)
 
 START_TIMEOUT_SECONDS="${START_TIMEOUT_SECONDS:-180}"
-STOP_TIMEOUT_SECONDS="${STOP_TIMEOUT_SECONDS:-90}"
 STEP_TIMEOUT_SECONDS="${STEP_TIMEOUT_SECONDS:-120}"
 DAEMON_BASE_URL="${DAEMON_BASE_URL:-http://127.0.0.1:56199}"
 DAEMON_PORT="${DAEMON_PORT:-${DAEMON_BASE_URL##*:}}"
@@ -217,22 +215,27 @@ wait_for_health() {
   return 1
 }
 
-# stop_daemon — best-effort daemon stop. Never fails the caller.
+# stop_daemon — stop smoke-owned daemon processes. Never fail the caller.
 stop_daemon() {
-  : "${NETCLAW_SMOKE_CLI:?NETCLAW_SMOKE_CLI must be set}"
-  run_timed "$STOP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" daemon stop >/dev/null 2>&1 || true
-  # `daemon stop` only signals the PID in this NETCLAW_HOME's PID file; make
-  # sure the listening socket is actually released before the next daemon
-  # tries to bind it.
+  local holders
+  holders="$(lsof -ti "tcp:${DAEMON_PORT}" -sTCP:LISTEN 2>/dev/null || true)"
+  local pid
+  for pid in $holders; do
+    if pid_is_smoke_daemon "$pid"; then
+      log "stopping smoke daemon (pid=${pid})."
+      kill "$pid" 2>/dev/null || true
+    fi
+  done
+
   ensure_daemon_port_free || true
 }
 
 # ── Scenario helpers ─────────────────────────────────────────────────────────
 
-# Smoke model + Ollama endpoint defaults — shared by every scenario so
-# they cannot drift apart.
-SMOKE_MODEL="${SMOKE_OLLAMA_MODEL:-qwen2:0.5b}"
-OLLAMA_ENDPOINT="${SMOKE_OLLAMA_ENDPOINT:-http://localhost:11434}"
+# Smoke model + OpenAI-compatible endpoint — set by run-smoke.sh.
+: "${SMOKE_LLM_MODEL:?SMOKE_LLM_MODEL must be set by run-smoke.sh}"
+: "${SMOKE_LLM_ENDPOINT:?SMOKE_LLM_ENDPOINT must be set by run-smoke.sh}"
+SMOKE_MODEL="$SMOKE_LLM_MODEL"
 
 # nc — run the netclaw CLI under the per-step timeout.
 nc() { run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" "$@"; }
@@ -243,8 +246,8 @@ die() { fail "$1"; summarize || true; exit 1; }
 # seed_provider_model — write a minimal provider + main-model config so a
 # fresh NETCLAW_HOME has a usable provider before the daemon starts.
 seed_provider_model() {
-  nc provider add local-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
-  nc model set main local-ollama "$SMOKE_MODEL"
+  nc provider add local-smoke openai-compatible --endpoint "$SMOKE_LLM_ENDPOINT"
+  nc model set main local-smoke "$SMOKE_MODEL"
 }
 
 # seed_and_start_daemon — the common scenario preamble: install the daemon

@@ -48,7 +48,7 @@ public sealed class DiscordChannelHealthContractTests(ITestOutputHelper output)
                 AudienceProfiles = TestDiscordGatewayDeps.DefaultAudienceProfiles
             },
             TestDiscordGatewayDeps.DefaultVisionCapableModel,
-            TestDiscordGatewayDeps.NewTestPaths());
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
     }
 
     protected override Task SetTransportStateAsync(bool connected, bool ready, string? healthDetail)

@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <!-- Research/instrumentation tool (memory-core-redesign task 2.13): a one-shot honest
+         percentile harness for OnnxMemoryEmbedder latency, not a shipped artifact. Deliberately
+         NOT added to Netclaw.slnx so it never rides along in the default solution build/publish;
+         run it explicitly with dotnet run, configuration Release, project set to this folder. -->
+    <IsPackable>false</IsPackable>
+    <AssemblyName>embed-latency-bench</AssemblyName>
+    <RootNamespace>Netclaw.Tools.EmbedLatencyBench</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\Netclaw.Embeddings\Netclaw.Embeddings.csproj" />
+  </ItemGroup>
+
+</Project>

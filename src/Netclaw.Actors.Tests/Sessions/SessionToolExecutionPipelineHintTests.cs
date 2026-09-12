@@ -6,6 +6,8 @@
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
@@ -118,4 +120,55 @@ public sealed class SessionToolExecutionPipelineHintTests
 
         Assert.Empty(hint);
     }
+
+    [Fact]
+    public void Denied_managed_temp_retry_recommends_managed_temp_directory()
+    {
+        var context = new ToolApprovalContext(
+            ToolName: ShellTool,
+            DisplayText: "diagnostic-command",
+            Patterns: ["diagnostic-command"],
+            CandidateVerbs: ["diagnostic-command"],
+            Options: [])
+        {
+            IsManagedTemporaryRetry = true,
+            ManagedTemporaryDirectory = "/home/user/.netclaw/sessions/abc",
+            PlatformTemporaryRoot = "/tmp"
+        };
+
+        var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
+            toolName: ShellTool,
+            decision: ApprovalDecision.Denied,
+            cwd: "/tmp",
+            sessionDirectory: "/home/user/.netclaw/sessions/abc",
+            projectDirectory: null,
+            setWorkingDirectoryAvailable: true,
+            approvalContext: context);
+
+        Assert.Contains("managed temporary directory", hint);
+        Assert.Contains("/home/user/.netclaw/sessions/abc", hint);
+        Assert.DoesNotContain("set_working_directory", hint);
+    }
+
+    [Fact]
+    public void Undeclarable_foreign_cwd_has_no_project_hint()
+    {
+        var invocation = TestToolExecutionContext.CreateBound(
+            "signalr/example",
+            "/home/user/.netclaw/sessions/abc",
+            TrustAudience.Personal).Invocation;
+
+        var hint = SessionToolExecutionPipeline.BuildSetWorkingDirectoryHint(
+            toolName: ShellTool,
+            decision: ApprovalDecision.Denied,
+            cwd: "/outside/project",
+            sessionDirectory: "/home/user/.netclaw/sessions/abc",
+            projectDirectory: null,
+            setWorkingDirectoryAvailable: true,
+            invocation: invocation,
+            canDeclare: static (_, _) => false);
+
+        Assert.Empty(hint);
+    }
+
 }

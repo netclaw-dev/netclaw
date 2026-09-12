@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="UpdateCommand.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -50,7 +50,14 @@ internal static class UpdateCommand
         }
     }
 
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, bool selfUpdateDisabled = false, UpdateChannel channel = UpdateChannel.Stable)
+    public static async Task<int> RunAsync(
+        string[] args,
+        NetclawPaths paths,
+        bool selfUpdateDisabled,
+        UpdateChannel channel,
+        TextReader input,
+        TextWriter output,
+        TextWriter error)
     {
         var checkOnly = false;
         var force = false;
@@ -69,24 +76,24 @@ internal static class UpdateCommand
                 case "--channel":
                     if (i + 1 >= args.Length)
                     {
-                        Console.Error.WriteLine("--channel requires a value: stable or beta.");
-                        WriteHelp();
+                        error.WriteLine("--channel requires a value: stable or beta.");
+                        WriteHelp(output);
                         return 1;
                     }
                     if (!DaemonConfig.TryParseUpdateChannel(args[++i], out var parsedChannel))
                     {
-                        Console.Error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta.");
-                        WriteHelp();
+                        error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta.");
+                        WriteHelp(output);
                         return 1;
                     }
                     channelOverride = parsedChannel;
                     break;
                 case "-h" or "--help" or "help":
-                    WriteHelp();
+                    WriteHelp(output);
                     return 0;
                 default:
-                    Console.WriteLine($"Unknown option: {args[i]}");
-                    WriteHelp();
+                    output.WriteLine($"Unknown option: {args[i]}");
+                    WriteHelp(output);
                     return 1;
             }
         }
@@ -102,7 +109,7 @@ internal static class UpdateCommand
 
             if (checkOnly)
             {
-                Console.WriteLine($"Checking '{channel.ToWireValue()}' channel (run without --check to switch).");
+                output.WriteLine($"Checking '{channel.ToWireValue()}' channel (run without --check to switch).");
             }
             else
             {
@@ -112,11 +119,11 @@ internal static class UpdateCommand
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
+                    error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
                     return 1;
                 }
 
-                Console.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
+                output.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
             }
         }
 
@@ -134,16 +141,16 @@ internal static class UpdateCommand
         {
             if (fetchResult.Status is ManifestFetchStatus.SignatureFailure or ManifestFetchStatus.PlatformUnavailable)
             {
-                Console.Error.WriteLine($"Error: {fetchResult.ErrorMessage}");
-                Console.Error.WriteLine(fetchResult.Status == ManifestFetchStatus.PlatformUnavailable
+                error.WriteLine($"Error: {fetchResult.ErrorMessage}");
+                error.WriteLine(fetchResult.Status == ManifestFetchStatus.PlatformUnavailable
                     ? "The update manifest could not be verified because signature verification is unavailable on this platform."
                     : "The update manifest could not be verified. This may indicate tampering.");
-                Console.Error.WriteLine("If this persists, report the issue at https://github.com/netclaw-dev/netclaw/issues");
+                error.WriteLine("If this persists, report the issue at https://github.com/netclaw-dev/netclaw/issues");
                 return 1;
             }
 
             // Network failure — could be transient
-            Console.Error.WriteLine($"Could not check for updates: {fetchResult.ErrorMessage}");
+            error.WriteLine($"Could not check for updates: {fetchResult.ErrorMessage}");
             return 1;
         }
 
@@ -151,41 +158,41 @@ internal static class UpdateCommand
 
         if (!result.IsUpdateAvailable)
         {
-            Console.WriteLine($"Netclaw is up to date (v{result.CurrentVersion}).");
+            output.WriteLine($"Netclaw is up to date (v{result.CurrentVersion}).");
             return 0;
         }
 
-        Console.WriteLine($"Update available: v{result.CurrentVersion} → v{result.LatestVersion}");
+        output.WriteLine($"Update available: v{result.CurrentVersion} → v{result.LatestVersion}");
         if (result.ReleaseNotesUrl is not null)
-            Console.WriteLine($"Release notes: {result.ReleaseNotesUrl}");
+            output.WriteLine($"Release notes: {result.ReleaseNotesUrl}");
 
         if (checkOnly)
             return 0;
 
         if (selfUpdateDisabled)
         {
-            Console.WriteLine();
-            Console.WriteLine("Self-update is disabled (Daemon.DisableSelfUpdate=true).");
-            Console.WriteLine("Pull a newer container image to upgrade.");
+            output.WriteLine();
+            output.WriteLine("Self-update is disabled (Daemon.DisableSelfUpdate=true).");
+            output.WriteLine("Pull a newer container image to upgrade.");
             return 1;
         }
 
         // Show what will be downloaded
-        Console.WriteLine();
+        output.WriteLine();
         foreach (var asset in result.MatchingAssets)
         {
             var sizeMb = asset.SizeBytes / (1024.0 * 1024.0);
-            Console.WriteLine($"  {asset.Component} ({asset.Rid}) — {sizeMb:F1} MB");
+            output.WriteLine($"  {asset.Component} ({asset.Rid}) — {sizeMb:F1} MB");
         }
 
         if (!force)
         {
-            Console.Write("\nProceed with update? [y/N]: ");
-            var response = Console.ReadLine();
+            output.Write("\nProceed with update? [y/N]: ");
+            var response = input.ReadLine();
             if (!string.Equals(response, "y", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(response, "yes", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("Update cancelled.");
+                output.WriteLine("Update cancelled.");
                 return 0;
             }
         }
@@ -267,15 +274,27 @@ internal static class UpdateCommand
                 var targetPath = Path.Combine(installDir, binaryName);
                 var backupPath = targetPath + ".backup";
 
-                // Backup existing binary
-                if (File.Exists(targetPath))
+                try
                 {
-                    if (File.Exists(backupPath))
-                        File.Delete(backupPath);
-                    File.Move(targetPath, backupPath);
+                    // Swap with automatic rollback: a failed swap restores the
+                    // previous binary so the install directory is never left
+                    // without an executable (which would brick the CLI).
+                    SwapBinaryIntoPlace(sourcePath, targetPath, backupPath);
                 }
-
-                File.Move(sourcePath, targetPath);
+                catch (Exception ex)
+                {
+                    var targetRestored = File.Exists(targetPath);
+                    Console.WriteLine($"\n  Failed to replace {binaryName}: {ex.Message}");
+                    if (targetRestored)
+                    {
+                        Console.WriteLine("  The previous binary was restored. The daemon is stopped; start it with 'netclaw daemon start'.");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"  The install directory is missing {binaryName}. Restore it from {binaryName}.backup, then start the daemon with 'netclaw daemon start'.");
+                    }
+                    return 1;
+                }
 
                 // Set executable permission on Unix
                 if (!OperatingSystem.IsWindows())
@@ -299,15 +318,23 @@ internal static class UpdateCommand
                 Console.WriteLine(" done.");
             }
 
-            // Clean up backup files
+            // Clean up backup files. The backup of the currently running CLI
+            // binary is the image this process still executes from; on Windows
+            // DeleteFile on a running image fails with
+            // UnauthorizedAccessException. Leave it — the install step deletes
+            // stale backups before moving the new binary on the next update.
+            // A leftover backup must never turn a successful update into a
+            // fatal error, so any other delete failure only warns.
+            var runningBackupPath = Environment.ProcessPath is { } processPath
+                ? processPath + ".backup"
+                : null;
             foreach (var (component, _) in extractedPaths)
             {
                 var binaryName = OperatingSystem.IsWindows()
                     ? $"{component}.exe"
                     : component;
                 var backupPath = Path.Combine(installDir, binaryName + ".backup");
-                if (File.Exists(backupPath))
-                    File.Delete(backupPath);
+                CleanupBackupFile(backupPath, runningBackupPath, OperatingSystem.IsWindows());
             }
 
             Console.WriteLine($"\nUpdated to v{result.LatestVersion}.");
@@ -493,6 +520,85 @@ internal static class UpdateCommand
         return null;
     }
 
+    /// <summary>
+    /// Replaces <paramref name="targetPath"/> with
+    /// <paramref name="sourcePath"/>, preserving the previous binary at
+    /// <paramref name="backupPath"/>. On failure the previous binary is
+    /// restored to <paramref name="targetPath"/> so a failed swap never
+    /// leaves the install directory without an executable.
+    /// </summary>
+    /// <param name="sourcePath">The new binary to install.</param>
+    /// <param name="targetPath">The installed binary to replace.</param>
+    /// <param name="backupPath">Where the previous binary is preserved.</param>
+    internal static void SwapBinaryIntoPlace(string sourcePath, string targetPath, string backupPath)
+    {
+        var movedOldToBackup = false;
+        try
+        {
+            if (File.Exists(targetPath))
+            {
+                if (File.Exists(backupPath))
+                    File.Delete(backupPath);
+                File.Move(targetPath, backupPath);
+                movedOldToBackup = true;
+            }
+
+            File.Move(sourcePath, targetPath);
+        }
+        catch
+        {
+            // Roll the previous binary back so a failed swap leaves a
+            // working binary in place instead of a missing executable.
+            if (movedOldToBackup && !File.Exists(targetPath) && File.Exists(backupPath))
+            {
+                try { File.Move(backupPath, targetPath); }
+                catch (Exception rollbackEx)
+                {
+                    // Best-effort rollback; the original swap failure is
+                    // rethrown below and reported to the user.
+                    Console.Error.WriteLine($"warn: failed to restore {targetPath} from {backupPath}: {rollbackEx.Message}");
+                }
+            }
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Deletes a leftover <c>.backup</c> file after a successful update.
+    /// On Windows the backup of the currently running image cannot be
+    /// deleted — the process still executes from that file, so DeleteFile
+    /// fails with <see cref="UnauthorizedAccessException"/>. Such backups are
+    /// removed by the install step on the next update, before it renames the
+    /// new binary. Any other delete failure only warns; a leftover backup must
+    /// never turn a successful update into a fatal error.
+    /// </summary>
+    /// <param name="backupPath">The backup file to delete.</param>
+    /// <param name="runningBackupPath">
+    /// The backup path of the currently running process
+    /// (<c>Environment.ProcessPath + ".backup"</c>), or <c>null</c> if unknown.
+    /// </param>
+    /// <param name="isWindows">True when running on Windows.</param>
+    internal static void CleanupBackupFile(string backupPath, string? runningBackupPath, bool isWindows)
+    {
+        if (isWindows
+            && runningBackupPath is not null
+            && string.Equals(backupPath, runningBackupPath, StringComparison.OrdinalIgnoreCase))
+        {
+            // Running image — cannot be deleted on Windows.
+            return;
+        }
+
+        try
+        {
+            if (File.Exists(backupPath))
+                File.Delete(backupPath);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"warn: could not remove backup {backupPath}: {ex.Message}");
+        }
+    }
+
     private static string GetInstallDirectory()
     {
         // Use the directory containing the current CLI binary
@@ -537,16 +643,16 @@ internal static class UpdateCommand
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
     }
 
-    internal static void WriteHelp()
+    internal static void WriteHelp(TextWriter output)
     {
-        Console.WriteLine("Usage: netclaw update [options]");
-        Console.WriteLine();
-        Console.WriteLine("Check for and install Netclaw updates.");
-        Console.WriteLine();
-        Console.WriteLine("Options:");
-        Console.WriteLine("  --check              Check for updates without installing");
-        Console.WriteLine("  --force              Skip confirmation prompt");
-        Console.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta");
+        output.WriteLine("Usage: netclaw update [options]");
+        output.WriteLine();
+        output.WriteLine("Check for and install Netclaw updates.");
+        output.WriteLine();
+        output.WriteLine("Options:");
+        output.WriteLine("  --check              Check for updates without installing");
+        output.WriteLine("  --force              Skip confirmation prompt");
+        output.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta");
     }
 
     /// <summary>

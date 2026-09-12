@@ -76,17 +76,6 @@ internal static class SubAgentSpawnBreadcrumbs
                 agentName, runId.Value);
     }
 
-    public static void ToolDenied(ILogger? logger, ToolInvocationContext context, string agentName, string toolName)
-    {
-        // INFO so tool denials are visible in production: a sub-agent missing a tool may be unable
-        // to finish its task. Routed via the SessionId scope like every other breadcrumb (no
-        // hand-rolled (session=…) field), so it lands in the session.log without string drift.
-        using (BeginSessionScope(logger, context.SessionId))
-            logger?.LogInformation(
-                "SubAgent [{AgentName}] tool '{ToolName}' denied by SubAgentToolPolicy",
-                agentName, toolName);
-    }
-
     public static void SpawnRefused(ILogger? logger, ToolInvocationContext context, string agentName, TrustAudience audience, bool subsystemEnabled)
     {
         using (BeginSessionScope(logger, context.SessionId))

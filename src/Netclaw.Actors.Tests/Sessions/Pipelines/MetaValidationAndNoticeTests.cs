@@ -98,6 +98,35 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         }
     }
 
+    private sealed class RequiredRationaleExecutor : IToolExecutor
+    {
+        public int ExecutionCount;
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            return Task.CompletedTask;
+        }
+
+        public ToolArgumentRejection? ValidateToolCall(FunctionCallContent toolCall)
+            => ToolCallMetaExtractor.ValidateRequiredRationale(
+                toolCall.Arguments,
+                ToolCallMeta.ResolveExactMetaField) is { } error
+                ? new ToolArgumentRejection(error, "invalid_rationale")
+                : null;
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            ExecutionCount++;
+            return Task.FromResult($"executed:{toolCall.CallId}");
+        }
+    }
+
     // ── Timeout hint is honored exactly (no clamp, no floor) ──
 
     [Fact]
@@ -237,6 +266,47 @@ public sealed class MetaValidationAndNoticeTests(ITestOutputHelper output) : Tes
         Assert.Equal(new ToolCallId("call-invalid-background"), result.ToolCallId);
         Assert.Contains("NOT executed", result.Content);
         Assert.Contains("'_background'", result.Content);
+    }
+
+    [Fact]
+    public async Task Missing_rationale_rejects_while_a_parallel_sibling_runs()
+    {
+        var executor = new RequiredRationaleExecutor();
+        var probe = CreateTestProbe("rationale-isolation");
+        var sessionId = new SessionId("D1/rationale-isolation");
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-valid", "shell_execute", new Dictionary<string, object?>
+            {
+                ["Command"] = "echo valid",
+                ["_rationale"] = "Run the valid sibling."
+            }),
+            new("call-invalid", "shell_execute", new Dictionary<string, object?>
+            {
+                ["Command"] = "echo invalid"
+            })
+        };
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, executor.ExecutionCount);
+        Assert.Equal(2, completed.ToolResults.Count);
+        Assert.Contains(completed.ToolResults, result =>
+            result.ToolCallId == new ToolCallId("call-valid")
+            && result.Content == "executed:call-valid");
+        Assert.Contains(completed.ToolResults, result =>
+            result.ToolCallId == new ToolCallId("call-invalid")
+            && result.Content.Contains("'_rationale'", StringComparison.Ordinal)
+            && result.Content.Contains("NOT executed", StringComparison.Ordinal));
+        Assert.Equal("invalid_rationale", completed.ToolFailureCodes["call-invalid"]);
+        Assert.False(completed.ToolFailureCodes.ContainsKey("call-valid"));
     }
 
     [Fact]

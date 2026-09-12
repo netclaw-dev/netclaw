@@ -1,0 +1,399 @@
+{
+  "schemaVersion": 1,
+  "sourceRuntime": {
+    "version": "0.26.0",
+    "commit": "ba83530",
+    "windowStartUtc": "2026-08-13T20:29:54Z",
+    "windowEndUtc": "2026-08-13T22:22:43Z",
+    "shellCallCount": 140,
+    "approvalPromptCount": 42
+  },
+  "sanitization": {
+    "home": "/home/user",
+    "repositoryRoot": "/work/project",
+    "worktreeRoot": "/work/project-worktree",
+    "remoteRepository": "example/project",
+    "internalHost": "service.example.invalid",
+    "inlineBodies": "Private titles, bodies, messages, branches, and source identifiers were replaced by semantic placeholders."
+  },
+  "cases": [
+    {
+      "id": "S10",
+      "sourcePromptTimeUtc": "2026-08-13T20:30:00.488Z",
+      "commandShape": "gh pr create --repo example/project --title '<test title>' --body '<test body>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a remote pull request."
+    },
+    {
+      "id": "S11",
+      "sourcePromptTimeUtc": "2026-08-13T20:33:31.023Z",
+      "commandShape": "df -h /work; du -sh /work/project/* | sort -rh | head",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent combined broad disk traversal and sorting for a diagnostic summary."
+    },
+    {
+      "id": "S12",
+      "sourcePromptTimeUtc": "2026-08-13T20:34:55.384Z",
+      "commandShape": "du -sh /work/project/* /work/project/.[!.]* | sort -rh | head",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used broad repository traversal and authored globs for a size query."
+    },
+    {
+      "id": "S13",
+      "sourcePromptTimeUtc": "2026-08-13T20:35:16.622Z",
+      "commandShape": "rm -rf /work/project/Trash/*; ls -la /work/project/Trash; df -h /work",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call recursively deletes files."
+    },
+    {
+      "id": "S14",
+      "sourcePromptTimeUtc": "2026-08-13T20:37:24.116Z",
+      "commandShape": "gh pr create --repo example/project --title '<title>' --body '<body>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a remote pull request."
+    },
+    {
+      "id": "S15",
+      "sourcePromptTimeUtc": "2026-08-13T20:40:31.508Z",
+      "commandShape": "gh pr merge 49 --repo example/project --auto --squash; gh pr view 49 --repo example/project",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call schedules a remote pull request merge."
+    },
+    {
+      "id": "S16",
+      "sourcePromptTimeUtc": "2026-08-13T20:42:08.442Z",
+      "commandShape": "grep -Rni '<project marker>' /work/project; find /work/project -maxdepth 3 -name '*.csproj'",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent combined recursive search and filesystem discovery instead of using bounded repository queries."
+    },
+    {
+      "id": "S17",
+      "sourcePromptTimeUtc": "2026-08-13T20:42:59.113Z",
+      "commandShape": "grep -Rni '<observability marker>' /work/project; find /work/project -maxdepth 4 -type d",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent combined recursive content search with broad directory discovery."
+    },
+    {
+      "id": "S18",
+      "sourcePromptTimeUtc": "2026-08-13T20:43:43.563Z",
+      "commandShape": "grep -Rni '<type marker>' /work/project/src | head; ls /work/project/src/Observability",
+      "observedResponse": "Once",
+      "classification": "NetclawPolicyDebt",
+      "owner": "NetclawPolicy",
+      "reason": "The bounded source search and directory listing are read-only within the declared project."
+    },
+    {
+      "id": "S19",
+      "sourcePromptTimeUtc": "2026-08-13T20:44:12.915Z",
+      "commandShape": "grep -Rni '<analyzer marker>' /work/project; find /work/project -maxdepth 4 -iname '*analyzer*'",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent mixed a repository search with broad filesystem discovery."
+    },
+    {
+      "id": "S20",
+      "sourcePromptTimeUtc": "2026-08-13T20:46:21.027Z",
+      "commandShape": "git add <files>; git commit -m '<message>'; git push origin <branch>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a commit and mutates a remote branch."
+    },
+    {
+      "id": "S21",
+      "sourcePromptTimeUtc": "2026-08-13T20:48:05.240Z",
+      "commandShape": "dotnet test > /tmp/test.log; sed -n \"$(grep -n '<failure>' /tmp/test.log | cut -d: -f1),+4p\" /tmp/test.log",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call runs a build tool, writes temporary output, and constructs a dynamic range."
+    },
+    {
+      "id": "S22",
+      "sourcePromptTimeUtc": "2026-08-13T20:55:22.245Z",
+      "commandShape": "grep -Rni '<test marker>' /work/project/tests | head",
+      "observedResponse": "Once",
+      "classification": "NetclawPolicyDebt",
+      "owner": "NetclawPolicy",
+      "reason": "The bounded test-source search is read-only within the declared project."
+    },
+    {
+      "id": "S23",
+      "sourcePromptTimeUtc": "2026-08-13T20:58:21.870Z",
+      "commandShape": "gh pr create --repo example/project --title '<title>' --body '<body>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a remote pull request."
+    },
+    {
+      "id": "S24",
+      "sourcePromptTimeUtc": "2026-08-13T21:06:01.313Z",
+      "commandShape": "gh pr merge 50 --repo example/project --auto --squash; gh pr view 50 --repo example/project",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call schedules a remote pull request merge."
+    },
+    {
+      "id": "S25",
+      "sourcePromptTimeUtc": "2026-08-13T21:22:21.625Z",
+      "commandShape": "git fetch origin; git merge origin/dev; git push origin <branch>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call fetches remote state, merges it, and pushes a branch."
+    },
+    {
+      "id": "S26",
+      "sourcePromptTimeUtc": "2026-08-13T21:23:09.549Z",
+      "commandShape": "git merge origin/dev; git push origin <branch>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call mutates repository history and a remote branch."
+    },
+    {
+      "id": "S27",
+      "sourcePromptTimeUtc": "2026-08-13T21:32:36.466Z",
+      "commandShape": "git fetch origin; git ls-remote --tags origin; git tag <version>; git push origin <version>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call contacts a remote and creates a remote tag."
+    },
+    {
+      "id": "S28",
+      "sourcePromptTimeUtc": "2026-08-13T21:33:53.811Z",
+      "commandShape": "git show <ref>:<path>; git diff <refs> -- <path>",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent issued repository reads before declaring the project scope."
+    },
+    {
+      "id": "S29",
+      "sourcePromptTimeUtc": "2026-08-13T21:34:51.893Z",
+      "commandShape": "gh pr create --repo example/project --title '<release title>' --body '<release body>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a remote pull request."
+    },
+    {
+      "id": "S30",
+      "sourcePromptTimeUtc": "2026-08-13T21:35:03.577Z",
+      "commandShape": "gh pr merge <number> --repo example/project --auto --squash",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call schedules a remote pull request merge."
+    },
+    {
+      "id": "S31",
+      "sourcePromptTimeUtc": "2026-08-13T21:35:36.673Z",
+      "commandShape": "git status --short; git log -1 --oneline; git worktree list",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent issued repository diagnostics before declaring the project scope."
+    },
+    {
+      "id": "S32",
+      "sourcePromptTimeUtc": "2026-08-13T21:35:56.411Z",
+      "commandShape": "git show --stat <ref>; git show <ref>:<path>",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent issued repository reads before declaring the project scope."
+    },
+    {
+      "id": "S33",
+      "sourcePromptTimeUtc": "2026-08-13T21:40:10.994Z",
+      "commandShape": "git tag <version>; git push origin <version>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a local and remote tag."
+    },
+    {
+      "id": "S34",
+      "sourcePromptTimeUtc": "2026-08-13T21:43:43.423Z",
+      "commandShape": "git remote -v",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent queried repository configuration before declaring the project scope."
+    },
+    {
+      "id": "S35",
+      "sourcePromptTimeUtc": "2026-08-13T21:43:53.009Z",
+      "commandShape": "gh pr create --repo example/project --title '<deployment title>' --body '<deployment body>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a remote pull request."
+    },
+    {
+      "id": "S36",
+      "sourcePromptTimeUtc": "2026-08-13T21:44:43.720Z",
+      "commandShape": "git fetch origin",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call contacts a remote and updates repository metadata."
+    },
+    {
+      "id": "S37",
+      "sourcePromptTimeUtc": "2026-08-13T21:54:08.405Z",
+      "commandShape": "git worktree remove --force /work/project-worktree; git branch -D <branch>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call forcefully removes a worktree and deletes a branch."
+    },
+    {
+      "id": "S38",
+      "sourcePromptTimeUtc": "2026-08-13T21:55:07.302Z",
+      "commandShape": "git branch -D <branch>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call forcefully deletes a branch."
+    },
+    {
+      "id": "S39",
+      "sourcePromptTimeUtc": "2026-08-13T21:55:21.035Z",
+      "commandShape": "for repo in /work/project/*; do git -C \"$repo\" branch -D <branch>; done",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call dynamically deletes branches across repositories."
+    },
+    {
+      "id": "S40",
+      "sourcePromptTimeUtc": "2026-08-13T22:01:04.710Z",
+      "commandShape": "grep -Rni '<policy marker>' /work/project/src /work/project/tests | head",
+      "observedResponse": "Once",
+      "classification": "NetclawPolicyDebt",
+      "owner": "NetclawPolicy",
+      "reason": "The bounded source and test search is read-only within the declared project."
+    },
+    {
+      "id": "S41",
+      "sourcePromptTimeUtc": "2026-08-13T22:02:32.082Z",
+      "commandShape": "gh pr create --repo example/project --title '<title>' --body '<body>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a remote pull request."
+    },
+    {
+      "id": "S42",
+      "sourcePromptTimeUtc": "2026-08-13T22:02:52.528Z",
+      "commandShape": "gh pr merge <number> --repo example/project --auto --squash",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call schedules a remote pull request merge."
+    },
+    {
+      "id": "S43",
+      "sourcePromptTimeUtc": "2026-08-13T22:04:50.582Z",
+      "commandShape": "git add <files>; git commit -m '<message>'; git push; gh pr create --repo example/project --title '<title>' --body '<body>'",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a commit, mutates a remote branch, and creates a pull request."
+    },
+    {
+      "id": "S44",
+      "sourcePromptTimeUtc": "2026-08-13T22:05:07.704Z",
+      "commandShape": "grep -Rni '<resource marker>' /work/project/src | head",
+      "observedResponse": "Once",
+      "classification": "NetclawPolicyDebt",
+      "owner": "NetclawPolicy",
+      "reason": "The bounded source search is read-only within the declared project."
+    },
+    {
+      "id": "S45",
+      "sourcePromptTimeUtc": "2026-08-13T22:05:31.537Z",
+      "commandShape": "grep -Rni '<skill marker>' /work/project/tests /work/project/feeds | head",
+      "observedResponse": "Once",
+      "classification": "NetclawPolicyDebt",
+      "owner": "NetclawPolicy",
+      "reason": "The bounded test and skill search is read-only within the declared project."
+    },
+    {
+      "id": "S46",
+      "sourcePromptTimeUtc": "2026-08-13T22:06:36.288Z",
+      "commandShape": "gh pr merge <number> --repo example/project --auto --squash",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call schedules a remote pull request merge."
+    },
+    {
+      "id": "S47",
+      "sourcePromptTimeUtc": "2026-08-13T22:09:00.656Z",
+      "commandShape": "gh pr merge <number> --repo example/project --auto --squash",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call schedules a remote pull request merge."
+    },
+    {
+      "id": "S48",
+      "sourcePromptTimeUtc": "2026-08-13T22:14:10.416Z",
+      "commandShape": "git fetch origin; git tag <version>; git push origin <version>; git ls-remote --tags origin; gh run list --repo example/project",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call contacts a remote and creates a remote tag."
+    },
+    {
+      "id": "S49",
+      "sourcePromptTimeUtc": "2026-08-13T22:14:26.630Z",
+      "commandShape": "git fetch origin; git checkout <branch>; git merge origin/dev; git push origin <branch>; git worktree add /work/project-worktree <branch>",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call updates local history, pushes a remote branch, and creates a worktree."
+    },
+    {
+      "id": "S50",
+      "sourcePromptTimeUtc": "2026-08-13T22:21:22.673Z",
+      "commandShape": "gh pr create --repo example/project --title '<deployment title>' --body '<deployment body>'",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a remote pull request."
+    },
+    {
+      "id": "S51",
+      "sourcePromptTimeUtc": "2026-08-13T22:22:42.720Z",
+      "commandShape": "gh pr merge <number> --repo example/project --auto --squash",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call schedules a remote pull request merge."
+    }
+  ]
+}

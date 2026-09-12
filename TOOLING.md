@@ -43,6 +43,7 @@ TUI code SHOULD run the harness before declaring a change done.
 | `./scripts/smoke/run-smoke.sh light` | PR-gating subset: all flow tapes + non-interactive scenarios |
 | `./scripts/smoke/run-smoke.sh full` | Full suite (placeholder: identical to light until backfilled) |
 | `./scripts/smoke/run-smoke.sh <name>` | Single tape or scenario, e.g. `init-wizard` (fastest inner loop) |
+| `./scripts/smoke/run-smoke.sh skill-sync` | Live daemon and RFC feed proof for immediate skill updates |
 | `./scripts/smoke/run-smoke.sh screenshots` | Screenshot regression: capture + byte-compare against baselines |
 | `./scripts/smoke/install-vhs.sh` | Idempotent VHS install (Linux/x86_64 + macOS via Homebrew) |
 
@@ -54,6 +55,11 @@ Config-writing flow tapes (`init-wizard`, `provider-add`, `provider-rename`,
 and `config-*`) must have executable semantic assertion scripts under
 `tests/smoke/assertions/`. `run-native-tape.sh` fails these tapes when the
 assertion is missing or non-executable.
+
+The `skill-sync` scenario starts a mutable local RFC feed and the published
+daemon. It runs `netclaw skill sync` twice and changes the feed between passes.
+It checks the exact resource SHA-256, the live `/api/skills` inventory, and an
+unchanged `netclaw.json` file. The scenario does not call a model.
 
 When a tape fails, `smoke-logs/tapes/<name>/` collects: a debug GIF of the
 last frame, the combined tape file, daemon logs, and the produced

@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="MemoryDomainEnums.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -69,6 +69,12 @@ public enum MemoryUpdateSemantics
 /// </summary>
 public enum CheckpointTriggerType
 {
+    /// <summary>
+    /// Retired trigger. No code enqueues this checkpoint now. The value stays for
+    /// backward compatibility, because an upgraded installation can still hold
+    /// turn-complete rows in its SQLite checkpoint queue.
+    /// <see cref="MemoryRulesFirstExtractor"/> drains such a row to zero candidates.
+    /// </summary>
     TurnComplete,
     ExplicitMemoryRequest,
     SubagentFindings,

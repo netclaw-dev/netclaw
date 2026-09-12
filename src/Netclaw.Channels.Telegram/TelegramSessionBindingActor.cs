@@ -205,12 +205,9 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         }
 
         var inlineImages = _dependencies.ModelCapabilities.InputModalities.HasFlag(ModelModality.Image);
-        var inbox = SessionDirectoryHelper.GetOrCreateInboxDirectory(
-            _sessionId,
-            _dependencies.Paths.SessionsDirectory);
-        var staging = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(
-            _sessionId,
-            _dependencies.Paths.SessionsDirectory);
+        var storage = _dependencies.StorageResolver.Resolve(_sessionId);
+        var inbox = SessionDirectoryHelper.GetOrCreateInboxDirectory(storage);
+        var staging = SessionDirectoryHelper.GetOrCreateAttachmentStagingDirectory(storage);
         var acceptedLines = new List<string>();
 
         foreach (var file in files)

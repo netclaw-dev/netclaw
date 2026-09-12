@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="FileSystemPromptProviderAudienceTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -35,6 +35,18 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         _dir.Dispose();
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Every_audience_receives_the_tool_rationale_contract(TrustAudience audience)
+    {
+        var prompt = _provider.GetSystemPrompt(audience);
+
+        Assert.Contains("Every tool call must include a non-empty `_rationale` string.", prompt);
+        Assert.Contains("Apply this rule to each parallel call", prompt);
+    }
+
     [Fact]
     public void Public_audience_gets_stripped_agents_without_team_only_content()
     {
@@ -68,6 +80,82 @@ public sealed class FileSystemPromptProviderAudienceTests : IDisposable
         Assert.Contains("Identity Files", prompt);
         Assert.Contains("Scheduling", prompt);
         Assert.Contains("Skill Loading", prompt);
+    }
+
+    [Fact]
+    public void Personal_rules_apply_directory_order_and_bound_failed_project_scope_recovery()
+    {
+        var prompt = _provider.GetSystemPrompt(TrustAudience.Personal);
+
+        var projectIndex = prompt.IndexOf("For declared-project work, omit `WorkingDirectory`", StringComparison.Ordinal);
+        var childIndex = prompt.IndexOf("For one call in a named child directory", StringComparison.Ordinal);
+        var temporaryIndex = prompt.IndexOf("Use `temp_dir` for disposable files", StringComparison.Ordinal);
+        var transitionIndex = prompt.IndexOf("Use an inline directory change only when", StringComparison.Ordinal);
+        Assert.True(projectIndex >= 0);
+        Assert.True(childIndex > projectIndex);
+        Assert.True(temporaryIndex > childIndex);
+        Assert.True(transitionIndex > temporaryIndex);
+        Assert.Contains("Program-specific directory options do not replace it", prompt);
+        Assert.Contains("Keep the project root unless the user requests", prompt);
+        Assert.Contains("A denied child-directory call does not permit a project change", prompt);
+        Assert.Contains("Path arguments give the approval gate an exact candidate scope", prompt);
+        Assert.Contains("add a trusted root", prompt);
+        Assert.DoesNotContain("path argument IS the declaration", prompt);
+        Assert.Contains("before the first project tool call", prompt);
+        Assert.Contains("The work needs a shell or file tool", prompt);
+        Assert.Contains("Do not probe a named project path first", prompt);
+        Assert.Contains("user-provided fallback before other tools", prompt);
+        Assert.Contains("Use the task's first project path exactly", prompt);
+        Assert.Contains("Do not substitute its parent", prompt);
+        Assert.Contains("Do not repeat", prompt);
+        Assert.Contains("`project_dir` already names the correct project", prompt);
+        Assert.Contains("Only `Tool execution deferred:` permits one scope correction", prompt);
+        Assert.Contains("Do not call `set_working_directory` to evade an access denial during the same user turn", prompt);
+        Assert.Contains("correct an evident path error once", prompt);
+        Assert.Contains("preserve the current scope and report the block", prompt);
+        Assert.DoesNotContain("Recovery from a denied shell call", prompt);
+        Assert.DoesNotContain("correct the path and retry the tool", prompt);
+    }
+
+    [Theory]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void Trusted_audiences_prefer_file_tools_for_known_content(TrustAudience audience)
+    {
+        var prompt = _provider.GetSystemPrompt(audience);
+
+        Assert.Contains("use `file_read` for a known local file read", prompt);
+        Assert.Contains("use `file_list` for a known local directory listing", prompt);
+        Assert.Contains("use `file_write` or `file_edit` for a known local file change", prompt);
+        Assert.Contains("use `shell_execute` for local search", prompt);
+        Assert.Contains("use `web_search` for external discovery", prompt);
+        Assert.Contains("Do not substitute shell commands", prompt);
+        Assert.Contains("Do not delegate a known file operation", prompt);
+        Assert.Contains("do not use shell only to verify", prompt);
+        Assert.Contains("do not attempt a shell redirect first", prompt);
+        Assert.Contains("Start with the smallest single shell operation", prompt);
+        Assert.Contains("Use one operation per call", prompt);
+        Assert.Contains("Keep independent searches and diagnostics separate", prompt);
+        Assert.Contains("do not join them with separators or labels", prompt);
+        Assert.Contains("Add a pipeline only when the requested result requires it", prompt);
+        Assert.Contains("If approval is required but no interactive requester is available", prompt);
+        Assert.Contains("After an access denial, do not retry that call during the same user turn", prompt);
+        Assert.Contains("A later explicit user request can start a new call", prompt);
+        Assert.Contains("Use `temp_dir` for disposable files", prompt);
+        Assert.Contains("Standard temporary APIs already use this directory", prompt);
+        Assert.Contains("Apply one `Tool execution deferred:` correction unchanged", prompt);
+        Assert.Contains("Use `load_tool` directly for a known exact tool name", prompt);
+        Assert.Contains("Use `search_tools` when the capability is known", prompt);
+    }
+
+    [Fact]
+    public void Public_audience_omits_shell_selection_guidance()
+    {
+        var prompt = _provider.GetSystemPrompt(TrustAudience.Public);
+
+        Assert.DoesNotContain("use `shell_execute` for local search", prompt);
+        Assert.DoesNotContain("session_dir", prompt);
+        Assert.DoesNotContain("Keep shell approval friction bounded", prompt);
     }
 
     [Fact]

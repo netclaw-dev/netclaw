@@ -1,0 +1,102 @@
+{
+  "schemaVersion": 1,
+  "sourceRuntime": {
+    "version": "0.26.0",
+    "commit": "ba83530",
+    "windowStartUtc": "2026-08-13T19:27:39Z",
+    "windowEndUtc": "2026-08-13T20:29:54Z",
+    "shellCallCount": 62,
+    "approvalPromptCount": 9
+  },
+  "sanitization": {
+    "home": "/home/user",
+    "repositoryRoot": "/work/project",
+    "worktreeRoot": "/work/project-worktree",
+    "remoteRepository": "example/project",
+    "internalHost": "service.example.invalid",
+    "inlineBodies": "Long inline programs and private commit messages were replaced by semantic placeholders."
+  },
+  "cases": [
+    {
+      "id": "S01",
+      "sourcePromptTimeUtc": "2026-08-13T20:11:38.238Z",
+      "commandShape": "curl -sS https://service.example.invalid/api/signals | python3 -c '<inline parser>'",
+      "observedResponse": "Session",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used an inline interpreter for a read-only HTTP inspection."
+    },
+    {
+      "id": "S02",
+      "sourcePromptTimeUtc": "2026-08-13T20:11:38.407Z",
+      "commandShape": "cd /work/project && branch=$(git <repository query>); [ -z \"$branch\" ] && <fallback>; git remote -v; git worktree list",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used shell state and command substitution for repository discovery instead of bounded direct reads."
+    },
+    {
+      "id": "S03",
+      "sourcePromptTimeUtc": "2026-08-13T20:12:23.083Z",
+      "commandShape": "cd /work/project && git fetch origin && git pull --ff-only origin dev && git rev-parse <refs> && ls /work/project-worktree",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "Git fetch and pull contact a remote and mutate repository state."
+    },
+    {
+      "id": "S04",
+      "sourcePromptTimeUtc": "2026-08-13T20:15:58.134Z",
+      "commandShape": "dotnet slopwatch analyze | tail; echo '<status>'; pwsh -NoProfile -Command './scripts/Add-FileHeaders.ps1 -Verify' | tail",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "General dotnet and PowerShell invocations can perform effects that shell syntax cannot prove absent."
+    },
+    {
+      "id": "S05",
+      "sourcePromptTimeUtc": "2026-08-13T20:16:40.981Z",
+      "commandShape": "cd /work/project && grep -rn 'ExampleMethod' src/example | head",
+      "observedResponse": "Once",
+      "classification": "AgentAlignmentDebt",
+      "owner": "AgentGuidance",
+      "reason": "The agent used a shell directory transition for a bounded read in a known project instead of declaring the working directory."
+    },
+    {
+      "id": "S06",
+      "sourcePromptTimeUtc": "2026-08-13T20:20:20.290Z",
+      "commandShape": "git add <files>; git commit -m '<message>'; git push",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a commit and mutates a remote branch."
+    },
+    {
+      "id": "S07",
+      "sourcePromptTimeUtc": "2026-08-13T20:21:21.610Z",
+      "commandShape": "cd /work/project && git log <query>; mkdir -p /work/project-worktree && git worktree add /work/project-worktree -b fix/example dev",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a directory, branch, and Git worktree."
+    },
+    {
+      "id": "S08",
+      "sourcePromptTimeUtc": "2026-08-13T20:22:57.499Z",
+      "commandShape": "for i in $(seq 1 10); do dotnet test <filter> | inspect; done | sort | uniq -c",
+      "observedResponse": "Session",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "Runtime iteration and test execution can create artifacts and hide future command data."
+    },
+    {
+      "id": "S09",
+      "sourcePromptTimeUtc": "2026-08-13T20:24:44.194Z",
+      "commandShape": "git checkout -b fix/example; git add <file>; git commit -m '<message>'; git push -u origin fix/example",
+      "observedResponse": "Once",
+      "classification": "ExpectedApproval",
+      "owner": "ApprovalPolicy",
+      "reason": "The call creates a branch and commit, then publishes the branch."
+    }
+  ]
+}

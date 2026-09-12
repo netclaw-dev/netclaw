@@ -159,10 +159,7 @@
       },
       "additionalProperties": false
     },
-    "Persistence": {
-      "type": "object",
-      "additionalProperties": true
-    },
+    "Persistence": false,
     "Session": {
       "type": "object",
       "description": "Operator-facing session configuration.",
@@ -418,6 +415,113 @@
           "maximum": 10,
           "default": 3,
           "description": "Maximum number of memory items auto-injected per turn."
+        },
+        "Embeddings": {
+          "type": "object",
+          "description": "In-process ONNX embedding runtime settings (memory-core-redesign).",
+          "properties": {
+            "Enabled": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true, the daemon provisions the embedding model, computes embeddings, uses semantic curation nomination and hybrid recall, and enables the relevance gate unless explicitly disabled."
+            },
+            "ModelId": {
+              "type": "string",
+              "default": "snowflake-arctic-embed-m-int8",
+              "description": "Allowlisted embedding model id. An id absent from the in-code allowlist is a configuration error. Defaults to the int8/uint8 quantized artifact, measured as a strict retrieval-quality improvement over the fp32 snowflake-arctic-embed-m weights it is quantized from (not merely a size/latency tradeoff), at ~57% less steady-state RSS. fp32 (snowflake-arctic-embed-m) and mxbai-embed-large-v1 remain allowlisted as explicit alternatives."
+            },
+            "AutoDownload": {
+              "type": "boolean",
+              "default": true,
+              "description": "When true, downloads the model artifact at daemon startup if not already provisioned. When false, a missing model degrades loudly instead of fetching over the network."
+            }
+          },
+          "additionalProperties": false
+        },
+        "Curation": {
+          "type": "object",
+          "description": "Write-side curation settings: embedding kNN nominator and curation LLM call (memory-core-redesign Slice 3).",
+          "properties": {
+            "NominatorSimilarityThreshold": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.86,
+              "description": "Embedding cosine similarity threshold above which an existing memory is nominated for the curator LLM to adjudicate."
+            },
+            "NominatorK": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 5,
+              "description": "Maximum number of nearest-neighbor nominees the kNN nominator shortlists per proposal."
+            },
+            "LlmMaxOutputTokens": {
+              "type": "integer",
+              "minimum": 1,
+              "default": 4096,
+              "description": "Maximum output tokens for the curation LLM call. Sized generously — the token cap is a defense-in-depth bound, not the primary control."
+            },
+            "LlmTimeoutSeconds": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300,
+              "default": 60,
+              "description": "Wall-clock timeout in seconds for the curation LLM call."
+            }
+          },
+          "additionalProperties": false
+        },
+        "Recall": {
+          "type": "object",
+          "description": "Read-side hybrid recall settings: weighted lexical/vector fusion and the absolute cosine floor (memory-core-redesign Slice 4).",
+          "properties": {
+            "VectorWeight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.7,
+              "description": "Weight applied to a candidate's cosine similarity in the hybrid fusion score."
+            },
+            "LexicalWeight": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 1,
+              "default": 0.3,
+              "description": "Weight applied to a candidate's squashed lexical selector score in the hybrid fusion score."
+            },
+            "MinCosineSimilarity": {
+              "type": ["number", "null"],
+              "minimum": 0,
+              "maximum": 1,
+              "description": "Absolute relevance floor: when a query vector is available, any candidate below this cosine similarity is dropped before ranking, regardless of source. When null (default), the effective floor follows the active embedding model's manifest-carried calibration (0.24 for the shipped default snowflake-arctic-embed-m-int8 prefixed encoding; also 0.24 for the fp32 snowflake-arctic-embed-m prefixed encoding). The value is model- and encoding-specific — cosine distributions shift materially when a model's documented query prefix is adopted or removed, so a value pinned for one model/encoding must never be carried into another without re-running the calibration procedure."
+            },
+            "RecencyHalfLifeDays": {
+              "type": "number",
+              "minimum": 1,
+              "maximum": 3650,
+              "default": 30,
+              "description": "Half-life in days for the recency-decay multiplier applied to a candidate's fused score in hybrid mode, floor-bounded at 0.85."
+            },
+            "RelevanceGate": {
+              "type": "object",
+              "description": "Post-floor cross-encoder relevance gate settings (memory-relevance-gate).",
+              "properties": {
+                "Enabled": {
+                  "type": ["boolean", "null"],
+                  "description": "When null (default), the gate follows Memory.Embeddings.Enabled. An explicit true/false overrides that, independent of the embeddings switch."
+                },
+                "Threshold": {
+                  "type": ["number", "null"],
+                  "minimum": 0,
+                  "maximum": 1,
+                  "description": "When null (default), the active threshold follows the provisioned relevance model's manifest-carried calibrated threshold (S*=0.02 for ms-marco-minilm-l-6-v2). An explicit value overrides it."
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
         }
       },
       "additionalProperties": false
@@ -450,17 +554,12 @@
     },
     "SkillSync": {
       "type": "object",
-      "description": "Startup synchronization behavior for system skills.",
+      "description": "Skill index access behavior.",
       "properties": {
         "Enabled": {
           "type": "boolean",
           "default": true,
-          "description": "When false, the skill sync subsystem is disabled entirely."
-        },
-        "DisableSystemSkillSync": {
-          "type": "boolean",
-          "default": false,
-          "description": "When true, skip feed sync at startup and use local built-in/on-disk system skills only."
+          "description": "When false, skill index tools are unavailable to the session."
         }
       },
       "additionalProperties": false

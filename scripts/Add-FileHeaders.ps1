@@ -96,8 +96,8 @@ foreach ($file in $csFiles) {
             $createdYear = Get-FileCreatedYear -FilePath $file.FullName
             $header = Get-FileHeader -FileName $file.Name -CreatedYear $createdYear
 
-            # Handle BOM if present
-            $encoding = [System.Text.UTF8Encoding]::new($true)
+            # Write UTF-8 without BOM to match the repo convention (charset = utf-8).
+            $encoding = [System.Text.UTF8Encoding]::new($false)
             $newContent = $header + $content.TrimStart()
 
             [System.IO.File]::WriteAllText($file.FullName, $newContent, $encoding)

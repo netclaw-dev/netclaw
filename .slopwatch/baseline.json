@@ -1,8 +1,8 @@
 {
   "version": 1,
   "createdAt": "2026-05-12T17:20:55.7365203+00:00",
-  "updatedAt": "2026-06-10T19:44:08.3092383+00:00",
-  "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC",
+  "updatedAt": "2026-09-11T00:41:02.1660437+00:00",
+  "description": "Initial baseline created by 'slopwatch init' on 2026-05-12 17:20:55 UTC. The BuiltInSkillSeedingTests entries are conditional xUnit platform gates. Supported systems execute the tests; unsupported systems report explicit skips.",
   "entries": [
     {
       "hash": "9d4a53dc5193e639",
@@ -30,24 +30,6 @@
       "codeSnippet": "<NoWarn>$(NoWarn);OPENAI001</NoWarn>",
       "message": "Adding warnings to NoWarn: OPENAI001",
       "baselinedAt": "2026-05-12T17:20:55.7420301+00:00"
-    },
-    {
-      "hash": "1a29ed65e4ed3efb",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Daemon.Tests/Services/ConfigWatcherServiceTests.cs",
-      "lineNumber": 139,
-      "codeSnippet": "Task.Delay(50, ct)",
-      "message": "Test uses Task.Delay(50) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-05-12T17:20:55.7420338+00:00"
-    },
-    {
-      "hash": "fcb5e461d7f70a7c",
-      "ruleId": "SW004",
-      "filePath": "src/Netclaw.Daemon.Tests/Services/ConfigWatcherServiceTests.cs",
-      "lineNumber": 154,
-      "codeSnippet": "Task.Delay(100, ct)",
-      "message": "Test uses Task.Delay(100) which may indicate a timing-dependent test",
-      "baselinedAt": "2026-05-12T17:20:55.7420454+00:00"
     },
     {
       "hash": "6ea5c8bbead4b59c",
@@ -174,6 +156,78 @@
       "codeSnippet": "Fact(SkipUnless = nameof(IsPosix), Skip = \"POSIX-only — matcher routes through BashParser on POSIX\")",
       "message": "Test method 'IsApproved_git_tag_grant_matches_both_version_forms' is disabled: POSIX-only — matcher routes through BashParser on POSIX",
       "baselinedAt": "2026-06-10T19:44:08.3092375+00:00"
+    },
+    {
+      "hash": "687db840a8ff6f35",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Embeddings.Tests/BoundedConcurrencyGateTests.cs",
+      "lineNumber": 32,
+      "codeSnippet": "Task.Delay(20, ct)",
+      "message": "Test uses Task.Delay(20) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-07-08T22:05:54.9567742+00:00"
+    },
+    {
+      "hash": "06c8b73e9ee96bc1",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Embeddings.Tests/BoundedConcurrencyGateTests.cs",
+      "lineNumber": 54,
+      "codeSnippet": "Enumerable.Range(0, 10)\n            .Select(_ => gate.RunAsync(async ct =>\n            {\n                await Task.Delay(5, ct);\n                return Interlocked.Increment(ref completed);\n            }, TestContext.Current.CancellationToken))\n            .ToArray()",
+      "message": "Test uses Task.Delay(?) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-07-08T22:05:54.9568105+00:00"
+    },
+    {
+      "hash": "3d71bddf21a28fee",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Embeddings.Tests/BoundedConcurrencyGateTests.cs",
+      "lineNumber": 57,
+      "codeSnippet": "Task.Delay(5, ct)",
+      "message": "Test uses Task.Delay(5) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-07-08T22:05:54.9568168+00:00"
+    },
+    {
+      "hash": "be802d7249cc2884",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Daemon.Tests/Services/EmbeddingWarmupHostedServiceTests.cs",
+      "lineNumber": 281,
+      "codeSnippet": "Task.Delay(25 * (i + 1))",
+      "message": "Test uses Task.Delay(25 * (i + 1)) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-07-08T22:05:54.9568311+00:00"
+    },
+    {
+      "hash": "233d9d75b339f3f3",
+      "ruleId": "SW004",
+      "filePath": "src/Netclaw.Actors.Tests/Sessions/SQLiteMemoryRecallGateTests.cs",
+      "lineNumber": 456,
+      "codeSnippet": "Task.Delay(Timeout.InfiniteTimeSpan, ct)",
+      "message": "Test uses Task.Delay(Timeout.InfiniteTimeSpan) which may indicate a timing-dependent test",
+      "baselinedAt": "2026-07-08T22:05:54.957+00:00"
+    },
+    {
+      "hash": "6678c335cb502724",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Daemon.Tests/BuiltInSkillSeedingTests.cs",
+      "lineNumber": 126,
+      "codeSnippet": "Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),\n        Skip = \"Symbolic link fixture requires POSIX filesystem support\")",
+      "message": "Test method 'Restore_rejects_a_symbolic_link_for_the_managed_tree' is disabled: Symbolic link fixture requires POSIX filesystem support",
+      "baselinedAt": "2026-09-10T13:51:43.27388+00:00"
+    },
+    {
+      "hash": "48454923737c5dce",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Daemon.Tests/BuiltInSkillSeedingTests.cs",
+      "lineNumber": 156,
+      "codeSnippet": "Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsLinux),\n        Skip = \"Cleanup failure requires Linux directory permission semantics\")",
+      "message": "Test method 'Restore_keeps_the_committed_tree_when_backup_cleanup_fails' is disabled: Cleanup failure requires Linux directory permission semantics",
+      "baselinedAt": "2026-09-10T13:51:43.273895+00:00"
+    },
+    {
+      "hash": "148eb09250d2e874",
+      "ruleId": "SW001",
+      "filePath": "src/Netclaw.Daemon.Tests/BuiltInSkillSeedingTests.cs",
+      "lineNumber": 180,
+      "codeSnippet": "Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),\n        Skip = \"This case uses native Windows junction semantics.\")",
+      "message": "Test method 'Restore_rejects_a_windows_reparse_point_for_the_managed_tree' is disabled: This case uses native Windows junction semantics.",
+      "baselinedAt": "2026-09-11T00:41:02.1659415+00:00"
     }
   ]
 }

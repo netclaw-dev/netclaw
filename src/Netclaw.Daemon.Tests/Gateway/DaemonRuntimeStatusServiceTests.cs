@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using System.Net;
 using Microsoft.Extensions.AI;
-using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
@@ -47,7 +46,6 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
 
     private DaemonRuntimeStatusService CreateService(
         IChannelRegistry? channelRegistry = null,
-        DaemonPersistenceOptions? persistenceOptions = null,
         IOptions<TelemetryOptions>? telemetryOptions = null,
         ModelCapabilities? modelCapabilities = null,
         ModelSelection? modelSelection = null,
@@ -56,13 +54,14 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         McpClientManager? mcpClientManager = null,
         SQLiteMemoryStore? sqliteMemoryStore = null,
         IChatClientProvider? chatClientProvider = null,
-        ProviderRuntimeValidation? providerValidation = null)
+        ProviderRuntimeValidation? providerValidation = null,
+        MemoryEmbedderHolder? memoryEmbedderHolder = null,
+        MemoryConfig? memoryConfig = null)
     {
         return new DaemonRuntimeStatusService(
             new DaemonStartClock(TimeProvider.System),
             TimeProvider.System,
             channelRegistry ?? CreateRegistry([]),
-            persistenceOptions ?? new DaemonPersistenceOptions(),
             telemetryOptions ?? Options.Create(new TelemetryOptions()),
             modelCapabilities ?? DefaultModelCapabilities,
             modelSelection ?? DefaultModelSelection,
@@ -71,7 +70,9 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
             chatClientProvider ?? new TestChatClientProvider(),
             providerValidation ?? new ProviderRuntimeValidation(ProviderRuntimeStatus.Valid, null, []),
             mcpClientManager,
-            sqliteMemoryStore);
+            sqliteMemoryStore,
+            memoryEmbedderHolder,
+            memoryConfig);
     }
 
     private static IChannelRegistry CreateRegistry(
@@ -113,14 +114,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         if (!Directory.Exists(path))
             return;
 
-        // Clear only the connection pool for THIS test's database, not all pools.
-        // Using ClearAllPools() would interfere with other parallel tests.
-        var dbPath = Path.Combine(path, "netclaw.db");
-        if (File.Exists(dbPath))
-        {
-            var connectionString = new SqliteConnectionStringBuilder { DataSource = dbPath }.ToString();
-            SqliteConnection.ClearPool(new SqliteConnection(connectionString));
-        }
+        SqliteTestPools.Clear(new NetclawPaths(path));
 
         for (var i = 0; i < 8; i++)
         {
@@ -368,7 +362,7 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         var paths = CreatePaths();
         paths.EnsureDirectoriesExist();
 
-        var sqliteStore = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+        var sqliteStore = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
         await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
 
         var service = CreateService(paths: paths, sqliteMemoryStore: sqliteStore);
@@ -378,8 +372,67 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
         Assert.NotNull(status.Memory);
         Assert.Equal("sqlite", status.Memory.Provider);
         Assert.Equal("healthy", status.Memory.Status);
-        Assert.Equal(paths.MemorySqliteDbPath, status.Memory.DatabasePath);
+        Assert.Equal(paths.SqliteDbPath, status.Memory.DatabasePath);
         Assert.Equal(0, status.Memory.PendingCheckpoints);
+    }
+
+    [Fact]
+    public async Task StatusReportsEmbeddingsDisabled_WhenConfigOff()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+        var sqliteStore = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
+        await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var service = CreateService(
+            paths: paths,
+            sqliteMemoryStore: sqliteStore,
+            memoryConfig: new MemoryConfig { Embeddings = { Enabled = false } });
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("disabled", status.Memory!.Embeddings!.Status);
+    }
+
+    [Fact]
+    public async Task StatusReportsEmbeddingsOk_WhenHolderIsAvailable()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+        var sqliteStore = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
+        await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var holder = new MemoryEmbedderHolder(new FakeAvailableEmbedder("tiny-fixture"), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
+        var service = CreateService(
+            paths: paths,
+            sqliteMemoryStore: sqliteStore,
+            memoryEmbedderHolder: holder,
+            memoryConfig: new MemoryConfig { Embeddings = { Enabled = true, ModelId = "tiny-fixture" } });
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("ok", status.Memory!.Embeddings!.Status);
+        Assert.Equal("tiny-fixture", status.Memory.Embeddings.ModelId);
+    }
+
+    [Fact]
+    public async Task StatusReportsEmbeddingsDegraded_WhenEnabledButHolderIsUnavailable()
+    {
+        var paths = CreatePaths();
+        paths.EnsureDirectoriesExist();
+        var sqliteStore = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
+        await sqliteStore.InitializeAsync(TestContext.Current.CancellationToken);
+
+        var holder = new MemoryEmbedderHolder(new UnavailableMemoryEmbedder("tiny-fixture", "model missing"), initialQueryPrefix: "", initialCalibratedMinCosineSimilarity: null);
+        var service = CreateService(
+            paths: paths,
+            sqliteMemoryStore: sqliteStore,
+            memoryEmbedderHolder: holder,
+            memoryConfig: new MemoryConfig { Embeddings = { Enabled = true, ModelId = "tiny-fixture" } });
+
+        var status = await service.GetStatusAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal("degraded", status.Memory!.Embeddings!.Status);
     }
 
     [Fact]
@@ -443,5 +496,20 @@ public sealed class DaemonRuntimeStatusServiceTests : IAsyncLifetime
     private sealed class TestChatClientProvider : IChatClientProvider
     {
         public IChatClient GetClient(ModelRole role) => throw new NotSupportedException();
+    }
+
+    private sealed class FakeAvailableEmbedder(string modelId) : IMemoryEmbedder
+    {
+        public string ModelId => modelId;
+
+        public int Dimensions => 8;
+
+        public bool IsAvailable => true;
+
+        public ValueTask<ReadOnlyMemory<float>> EmbedAsync(string text, EmbeddingPurpose purpose, CancellationToken ct)
+            => ValueTask.FromResult<ReadOnlyMemory<float>>(new float[Dimensions]);
+
+        public ValueTask<IReadOnlyList<ReadOnlyMemory<float>>> EmbedBatchAsync(IReadOnlyList<string> texts, EmbeddingPurpose purpose, CancellationToken ct)
+            => ValueTask.FromResult<IReadOnlyList<ReadOnlyMemory<float>>>(texts.Select(_ => (ReadOnlyMemory<float>)new float[Dimensions]).ToList());
     }
 }

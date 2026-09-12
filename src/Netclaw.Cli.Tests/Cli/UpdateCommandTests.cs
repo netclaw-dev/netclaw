@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="UpdateCommandTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -17,9 +17,17 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
-[Collection("Update verification")]
 public sealed class UpdateCommandTests : IDisposable
 {
+    /// <summary>
+    /// xunit.v3 <c>SkipUnless</c> hook for tests that simulate Windows
+    /// file-lock failures by revoking directory write permission. The
+    /// simulation is POSIX-only (<c>File.SetUnixFileMode</c>) and is
+    /// ineffective for root, which bypasses directory permission bits.
+    /// </summary>
+    public static bool CanSimulateFileLock =>
+        !OperatingSystem.IsWindows() && Environment.UserName != "root";
+
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly Key _testSigningKey;
@@ -201,21 +209,12 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
 
         using var stdout = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(stdout);
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update"], _paths, true, UpdateChannel.Stable, TextReader.Null, stdout, TextWriter.Null);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(["update"], _paths, selfUpdateDisabled: true);
-
-            Assert.Equal(1, exitCode);
-            Assert.Contains("Self-update is disabled", stdout.ToString());
-            Assert.Contains("Pull a newer container image to upgrade.", stdout.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Self-update is disabled", stdout.ToString());
+        Assert.Contains("Pull a newer container image to upgrade.", stdout.ToString());
     }
 
     [Theory]
@@ -227,27 +226,15 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
 
         using var stdout = new StringWriter();
-        var originalOut = Console.Out;
-        var originalIn = Console.In;
-        Console.SetOut(stdout);
+        using var stdin = new StringReader("n\n");
         // An update is available; decline the install prompt so this exercises
         // only channel switching + persistence, not the download path.
-        Console.SetIn(new StringReader("n\n"));
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update", "--channel", arg], _paths, false, UpdateChannel.Stable, stdin, stdout, TextWriter.Null);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(
-                ["update", "--channel", arg], _paths);
-
-            Assert.Equal(0, exitCode);
-            Assert.Equal(expectedWire, ReadPersistedChannel());
-            Assert.Contains($"Update channel set to '{expectedWire}'", stdout.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-            Console.SetIn(originalIn);
-        }
+        Assert.Equal(0, exitCode);
+        Assert.Equal(expectedWire, ReadPersistedChannel());
+        Assert.Contains($"Update channel set to '{expectedWire}'", stdout.ToString());
     }
 
     [Fact]
@@ -257,50 +244,187 @@ public sealed class UpdateCommandTests : IDisposable
         UpdateCommand.TestHttpMessageHandlerFactory = () => CreateSignedHandler(manifest);
 
         using var stdout = new StringWriter();
-        var originalOut = Console.Out;
-        Console.SetOut(stdout);
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update", "--check", "--channel", "beta"],
+            _paths,
+            false,
+            UpdateChannel.Stable,
+            TextReader.Null,
+            stdout,
+            TextWriter.Null);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(
-                ["update", "--check", "--channel", "beta"], _paths);
-
-            Assert.Equal(0, exitCode);
-            // --check is read-only: the channel is previewed for this run, not written to disk.
-            Assert.False(File.Exists(_paths.NetclawConfigPath));
-            Assert.Contains("Checking 'beta' channel", stdout.ToString());
-        }
-        finally
-        {
-            Console.SetOut(originalOut);
-        }
+        Assert.Equal(0, exitCode);
+        // --check is read-only: the channel is previewed for this run, not written to disk.
+        Assert.False(File.Exists(_paths.NetclawConfigPath));
+        Assert.Contains("Checking 'beta' channel", stdout.ToString());
     }
 
     [Fact]
     public async Task RunAsync_RejectsUnknownChannel()
     {
         using var stderr = new StringWriter();
-        var originalErr = Console.Error;
-        Console.SetError(stderr);
+        var exitCode = await UpdateCommand.RunAsync(
+            ["update", "--channel", "nightly"],
+            _paths,
+            false,
+            UpdateChannel.Stable,
+            TextReader.Null,
+            TextWriter.Null,
+            stderr);
 
-        try
-        {
-            var exitCode = await UpdateCommand.RunAsync(["update", "--channel", "nightly"], _paths);
-
-            Assert.Equal(1, exitCode);
-            Assert.Contains("Unknown channel", stderr.ToString());
-            Assert.False(File.Exists(_paths.NetclawConfigPath));
-        }
-        finally
-        {
-            Console.SetError(originalErr);
-        }
+        Assert.Equal(1, exitCode);
+        Assert.Contains("Unknown channel", stderr.ToString());
+        Assert.False(File.Exists(_paths.NetclawConfigPath));
     }
 
     private string? ReadPersistedChannel()
     {
         using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
         return doc.RootElement.GetProperty("Daemon").GetProperty("UpdateChannel").GetString();
+    }
+
+    [Fact]
+    public void CleanupBackupFile_DoesNotDelete_RunningImageBackup_OnWindows()
+    {
+        var backupPath = Path.Combine(_dir.Path, "netclaw.exe.backup");
+        File.WriteAllText(backupPath, "old image");
+
+        // The running process's backup is the very image this process executes
+        // from; on Windows DeleteFile fails with UnauthorizedAccessException.
+        // NTFS path comparison is case-insensitive, so pin that here — a
+        // regression to Ordinal would leave the backup deleted.
+        var runningBackupPath = Path.Combine(_dir.Path, "NETCLAW.EXE.BACKUP");
+        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath, isWindows: true);
+
+        Assert.True(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public void SwapBinaryIntoPlace_ReplacesTarget_AndBacksUpOldBinary()
+    {
+        var sourcePath = Path.Combine(_dir.Path, "new.exe");
+        var targetPath = Path.Combine(_dir.Path, "netclaw.exe");
+        var backupPath = targetPath + ".backup";
+        File.WriteAllText(sourcePath, "new image");
+        File.WriteAllText(targetPath, "old image");
+
+        UpdateCommand.SwapBinaryIntoPlace(sourcePath, targetPath, backupPath);
+
+        Assert.Equal("new image", File.ReadAllText(targetPath));
+        Assert.Equal("old image", File.ReadAllText(backupPath));
+    }
+
+    [Fact]
+    public void SwapBinaryIntoPlace_RestoresOldBinary_WhenNewBinaryMoveFails()
+    {
+        var sourcePath = Path.Combine(_dir.Path, "new.exe");
+        var targetPath = Path.Combine(_dir.Path, "netclaw.exe");
+        var backupPath = targetPath + ".backup";
+        File.WriteAllText(sourcePath, "new image");
+        File.WriteAllText(targetPath, "old image");
+
+        // Make the final move fail after the old binary was backed up: the
+        // install directory must never be left without an executable.
+        File.Delete(sourcePath);
+
+        Assert.ThrowsAny<Exception>(() => UpdateCommand.SwapBinaryIntoPlace(sourcePath, targetPath, backupPath));
+        // The old binary is rolled back into place; the backup is consumed by
+        // the restore, so the install directory is left with a working binary.
+        Assert.Equal("old image", File.ReadAllText(targetPath));
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Fact(SkipUnless = nameof(CanSimulateFileLock), Skip = "POSIX-only permission simulation (ineffective on Windows or as root)")]
+    [SlopwatchSuppress("SW001", "Simulates Windows file locks via POSIX directory permissions, which cannot run on Windows or as root.")]
+    public void SwapBinaryIntoPlace_LeavesTargetIntact_WhenStaleBackupDeleteFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // SkipUnless gates the skip; this guard satisfies CA1416 for Unix-only APIs
+
+        var sourcePath = Path.Combine(_dir.Path, "new.exe");
+        var targetPath = Path.Combine(_dir.Path, "netclaw.exe");
+        var backupPath = targetPath + ".backup";
+        File.WriteAllText(sourcePath, "new image");
+        File.WriteAllText(targetPath, "old image");
+        File.WriteAllText(backupPath, "stale image");
+        var dir = Path.GetDirectoryName(targetPath)!;
+        var originalMode = File.GetUnixFileMode(dir);
+
+        try
+        {
+            // Remove write permission on the directory so the stale-backup
+            // delete fails with UnauthorizedAccessException — the same failure
+            // class as an AV-locked file on Windows. The target must be left
+            // untouched (no half-swap).
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+            Assert.ThrowsAny<Exception>(() => UpdateCommand.SwapBinaryIntoPlace(sourcePath, targetPath, backupPath));
+            Assert.Equal("old image", File.ReadAllText(targetPath));
+            Assert.Equal("stale image", File.ReadAllText(backupPath));
+        }
+        finally
+        {
+            File.SetUnixFileMode(dir, originalMode);
+        }
+    }
+
+    [Fact]
+    public void CleanupBackupFile_Deletes_OtherComponentBackup_OnWindows()
+    {
+        var backupPath = Path.Combine(_dir.Path, "netclawd.exe.backup");
+        File.WriteAllText(backupPath, "old image");
+        var runningBackupPath = Path.Combine(_dir.Path, "netclaw.exe") + ".backup";
+
+        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath, isWindows: true);
+
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Fact]
+    public void CleanupBackupFile_Deletes_Backup_OnNonWindows()
+    {
+        var backupPath = Path.Combine(_dir.Path, "netclaw.backup");
+        File.WriteAllText(backupPath, "old image");
+
+        // POSIX allows unlinking a running image, so even the running
+        // process's own backup is removed.
+        UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath: backupPath, isWindows: false);
+
+        Assert.False(File.Exists(backupPath));
+    }
+
+    [Fact(SkipUnless = nameof(CanSimulateFileLock), Skip = "POSIX-only permission simulation (ineffective on Windows or as root)")]
+    [SlopwatchSuppress("SW001", "Simulates Windows file locks via POSIX directory permissions, which cannot run on Windows or as root.")]
+    public void CleanupBackupFile_DoesNotThrow_WhenDeleteFails()
+    {
+        if (OperatingSystem.IsWindows())
+            return; // SkipUnless gates the skip; this guard satisfies CA1416 for Unix-only APIs
+
+        var backupPath = Path.Combine(_dir.Path, "netclaw.backup");
+        File.WriteAllText(backupPath, "old image");
+        var dir = Path.GetDirectoryName(backupPath)!;
+        var originalMode = File.GetUnixFileMode(dir);
+
+        try
+        {
+            // Remove write permission on the directory so unlink fails with
+            // UnauthorizedAccessException — the same failure class as deleting
+            // a running image on Windows.
+            File.SetUnixFileMode(dir, UnixFileMode.UserRead | UnixFileMode.UserExecute
+                | UnixFileMode.GroupRead | UnixFileMode.GroupExecute
+                | UnixFileMode.OtherRead | UnixFileMode.OtherExecute);
+
+            UpdateCommand.CleanupBackupFile(backupPath, runningBackupPath: null, isWindows: false);
+
+            // Warned, not crashed; the leftover self-heals on the next update.
+            Assert.True(File.Exists(backupPath));
+        }
+        finally
+        {
+            File.SetUnixFileMode(dir, originalMode);
+        }
     }
 
     [Theory]
@@ -471,5 +595,15 @@ public sealed class UpdateCommandTests : IDisposable
                 : _results.Dequeue());
         }
     }
+}
 
+/// <summary>
+/// Supplies source-level Slopwatch suppressions without a runtime package dependency.
+/// </summary>
+[AttributeUsage(AttributeTargets.Method, AllowMultiple = true)]
+internal sealed class SlopwatchSuppressAttribute(string ruleId, string reason) : Attribute
+{
+    public string RuleId { get; } = ruleId;
+
+    public string Reason { get; } = reason;
 }

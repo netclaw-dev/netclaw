@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="ReminderTargetResolutionPathTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -117,7 +117,7 @@ public sealed class ReminderTargetResolutionPathTests : IDisposable
         => new(reminderManager, _timeProvider, new SchedulingConfig(), [resolver]);
 
     private static ToolExecutionContext BuildManualToolContext()
-        => TestToolExecutionContext.CreateUnbound(TrustAudience.Personal, "manual");
+        => TestToolExecutionContext.CreateUnboundWithoutApproval(TrustAudience.Personal, "manual");
 
     private sealed class StubReminderTargetResolver(Func<string, ReminderTargetResolution> resolve) : IReminderTargetResolver
     {

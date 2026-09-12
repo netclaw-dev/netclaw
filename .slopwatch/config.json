@@ -1,0 +1,11 @@
+{
+  "suppressions": [
+    {
+      "ruleId": "SW003",
+      "pattern": "**/Netclaw.Embeddings.Tests/LocalArtifactServer.cs",
+      "justification": "Test-only loopback HttpListener fixture: empty catches deliberately absorb ObjectDisposedException/HttpListenerException aborts from Stop()/Close() during teardown (see issue #2071).",
+      "issueUrl": "https://github.com/netclaw-dev/netclaw/issues/2071"
+    }
+  ],
+  "globalSuppressions": []
+}

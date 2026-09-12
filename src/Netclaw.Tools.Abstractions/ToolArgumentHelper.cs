@@ -190,6 +190,44 @@ public static class ToolArgumentHelper
         throw new ArgumentException($"Parameter '{key}' must be an object with string values.");
     }
 
+    /// <summary>
+    /// Reads a JSON or CLR string array without coercing non-string elements.
+    /// Generated tool binders use this for bounded list parameters.
+    /// </summary>
+    public static string[]? GetStringArray(
+        IDictionary<string, object?>? arguments,
+        string key)
+    {
+        if (!TryGetValueFlexible(arguments, key, out var value) || IsAbsent(value))
+            return null;
+
+        if (value is string[] array)
+            return [.. array];
+
+        if (value is IEnumerable<string> strings)
+            return [.. strings];
+
+        if (value is JsonElement { ValueKind: JsonValueKind.Array } element)
+        {
+            return [.. element.EnumerateArray().Select((item, index) =>
+                item.ValueKind == JsonValueKind.String
+                    ? item.GetString()!
+                    : throw new ArgumentException($"Parameter '{key}[{index}]' must be a string."))];
+        }
+
+        if (value is IEnumerable<object?> objects)
+        {
+            return [.. objects.Select((item, index) => item switch
+            {
+                string text => text,
+                JsonElement { ValueKind: JsonValueKind.String } json => json.GetString()!,
+                _ => throw new ArgumentException($"Parameter '{key}[{index}]' must be a string.")
+            })];
+        }
+
+        throw new ArgumentException($"Parameter '{key}' must be an array of strings.");
+    }
+
     private static string ReadDictionaryString(string parameter, string property, object? value)
         => value switch
         {

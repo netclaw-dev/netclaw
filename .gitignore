@@ -456,3 +456,6 @@ phase*-mattermost-*.png
 # (~/recall-research-local/), never in the repo — it operates on real
 # (PII) corpus data and embeds instance-specific labels/endpoints.
 tools/recall-research/
+
+# Publish output. The CONTRIBUTING.md build steps use `dotnet publish -o ./out`.
+out/

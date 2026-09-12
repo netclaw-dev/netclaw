@@ -110,3 +110,28 @@ persisted trust context.
   audience and boundary
 - **WHEN** the reminder store deserializes it
 - **THEN** the audience and boundary are read verbatim with no error logged
+
+### Requirement: Soft deletion retains reminder history
+
+Netclaw SHALL retain execution history when it soft-deletes a one-shot that reached its poison threshold. Only an explicit delete command SHALL remove that history file.
+
+A successful one-shot is not soft-deleted: Netclaw removes its definition and its history file together, so no orphaned history remains.
+
+#### Scenario: Completed one-shot removes its history with its definition
+
+- **GIVEN** a one-shot has a successful execution record
+- **WHEN** Netclaw settles it as complete
+- **THEN** Netclaw deletes the definition and the history file together
+
+#### Scenario: Failed one-shot retains history
+
+- **GIVEN** a one-shot reaches its poison threshold
+- **WHEN** Netclaw disables it with outcome `Failed`
+- **THEN** all failure records remain available through reminder history
+
+#### Scenario: Execution actor stops before it reports an outcome
+
+- **GIVEN** a reminder execution actor stops before manager acceptance
+- **WHEN** DeathWatch reports the stop
+- **THEN** the manager appends a failed execution record
+- **AND** the failure record identifies the unexpected stop

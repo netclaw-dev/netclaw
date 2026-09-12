@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="FileReadTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -14,18 +14,24 @@ using Netclaw.Media;
 using Netclaw.Security;
 using Netclaw.Tools;
 
+using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
+
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
 /// Reads text files and inspects non-text files without returning raw bytes.
 /// </summary>
 [NetclawTool(ToolName,
-    "Read text files or inspect non-text files. Images can be loaded for visual inspection when the active model supports image input; PDFs/media/archives return metadata and guidance. For large text files, use StartLine and Limit to read sections.",
+    "Use for a known local file read. Read text or inspect non-text files without shell. " +
+    "Use to read disposable text after file_write. " +
+    "Images can load for visual inspection when the active model supports image input. " +
+    "PDFs, media, and archives return metadata and guidance. Use StartLine and Limit for large text files.",
     Grant = "file")]
 public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
 {
     public const string ToolName = "file_read";
     private const long MaxModelInputFileBytes = ChannelAttachmentPolicy.DefaultMaxFileBytes;
+    private const int MaxInspectionBytes = 64 * 1024;
     private static readonly Encoding StrictUtf8 = new UTF8Encoding(encoderShouldEmitUTF8Identifier: false, throwOnInvalidBytes: true);
     private static readonly Encoding StrictUtf16Le = new UnicodeEncoding(bigEndian: false, byteOrderMark: true, throwOnInvalidBytes: true);
     private static readonly Encoding StrictUtf16Be = new UnicodeEncoding(bigEndian: true, byteOrderMark: true, throwOnInvalidBytes: true);
@@ -36,14 +42,13 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     public override bool SuppressOutputRedaction => true;
 
     private readonly ToolConfig _config;
-    private readonly ToolPathPolicy _pathPolicy;
-    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+    private readonly PathAccessPolicy _pathAccessPolicy;
     private readonly SkillRegistry? _skillRegistry;
     private readonly ISessionMetrics? _sessionMetrics;
     private readonly ILogger? _logger;
 
     public record Params(
-        [property: Description("Absolute path to the file to read")] string Path,
+        [property: Description("File path to read. Relative paths use the current project, then session_dir.")] string Path,
         [property: Description("Line number to start reading at, 1-based: the first line is line 1, matching the line numbers shown in this tool's output and in editors/grep/sed. To read line N, pass StartLine=N. Use with Limit to read sections of large files and avoid context window truncation.")] int? StartLine = null,
         [property: Description("Maximum number of lines to read. Use with StartLine to paginate through large files instead of reading the whole file.")] int? Limit = null);
 
@@ -54,10 +59,24 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         SkillRegistry? skillRegistry = null,
         ISessionMetrics? sessionMetrics = null,
         ILogger<FileReadTool>? logger = null)
+        : this(
+            config,
+            new PathAccessPolicy(config, paths, pathPolicy),
+            skillRegistry,
+            sessionMetrics,
+            logger)
+    {
+    }
+
+    internal FileReadTool(
+        ToolConfig config,
+        PathAccessPolicy pathAccessPolicy,
+        SkillRegistry? skillRegistry = null,
+        ISessionMetrics? sessionMetrics = null,
+        ILogger<FileReadTool>? logger = null)
     {
         _config = config;
-        _pathPolicy = pathPolicy;
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
+        _pathAccessPolicy = pathAccessPolicy;
         _skillRegistry = skillRegistry;
         _sessionMetrics = sessionMetrics;
         _logger = logger;
@@ -66,16 +85,16 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     protected override async Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Path))
-            return "Error: 'path' parameter is required.";
+            return context.InvalidInput("Error: 'path' parameter is required.");
 
-        if (!_fileAccessPolicy.TryResolveReadPath(args.Path, context, out var authorizedPath, out var accessError))
-            return accessError;
+        var access = _pathAccessPolicy.Evaluate(args.Path, context, PathAccessPolicy.FileOperation.Read);
+        if (access is PathAccessDecision.Denied denied)
+            return context.PathAccessFailure(denied.Error, denied.Failure);
 
-        if (_pathPolicy.IsReadDenied(authorizedPath))
-            return FileToolErrors.CredentialReadDenied(authorizedPath);
+        var authorizedPath = access.GetAllowedPath();
 
         if (!File.Exists(authorizedPath))
-            return $"Error: File not found: {authorizedPath}";
+            return context.NotFound($"Error: File not found: {authorizedPath}");
 
         // Treat 0 or negative as "not specified"
         int? startLine = args.StartLine > 0 ? args.StartLine : null;
@@ -85,14 +104,27 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         {
             var inspection = await InspectFileAsync(authorizedPath, ct);
             if (!inspection.IsTextLike)
-                return HandleNonTextFile(authorizedPath, inspection, context);
+            {
+                if (inspection.ImageDimensionStatus == ImageDimensionStatus.Invalid)
+                {
+                    return context.InvalidInput(BuildMetadataResponse(
+                        authorizedPath,
+                        inspection,
+                        "Image header is malformed or its dimensions exceed supported bounds. Raw binary output is not returned by file_read."));
+                }
+
+                return context.SuccessFile(
+                    HandleNonTextFile(authorizedPath, inspection, context),
+                    authorizedPath,
+                    ToolFileActivityKind.Read);
+            }
 
             var encoding = inspection.TextEncoding ?? StrictUtf8;
             if (startLine.HasValue || limit.HasValue)
             {
                 var lines = await ReadLinesAsync(authorizedPath, encoding, startLine ?? 1, limit, _config.MaxOutputChars, ct);
                 RecordSkillReadIfApplicable(authorizedPath);
-                return lines; // redaction + inline bound + spill happen centrally in the dispatcher
+                return context.SuccessFile(lines, authorizedPath, ToolFileActivityKind.Read);
             }
 
             // Bounded head read (not ReadAllTextAsync): a multi-hundred-MB file must
@@ -102,25 +134,45 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
             // memory safety and steers past the cap.
             var (content, truncated) = await ReadBoundedHeadAsync(authorizedPath, encoding, _config.MaxOutputChars, ct);
             RecordSkillReadIfApplicable(authorizedPath);
-            return truncated
+            var result = truncated
                 ? content + $"\n[output truncated at {_config.MaxOutputChars} chars — read a specific range with StartLine and Limit, or grep the file, for the rest]"
                 : content;
+            return context.SuccessFile(result, authorizedPath, ToolFileActivityKind.Read);
         }
         catch (DecoderFallbackException)
         {
             var sizeBytes = TryGetFileLength(authorizedPath);
-            return BuildMetadataResponse(
+            return context.SuccessFile(
+                BuildMetadataResponse(
+                    authorizedPath,
+                    new FileInspection(
+                        MimeType.Default,
+                        AttachmentCategory.Other,
+                        sizeBytes,
+                        false,
+                        null,
+                        ImageDimensionStatus.NotSupported,
+                        null,
+                        null),
+                    "File is not valid in the detected text encoding. Raw binary output is not returned by file_read."),
                 authorizedPath,
-                new FileInspection(MimeType.Default, AttachmentCategory.Other, sizeBytes, false, null),
-                "File is not valid in the detected text encoding. Raw binary output is not returned by file_read.");
+                ToolFileActivityKind.Read);
         }
         catch (UnauthorizedAccessException)
         {
-            return $"Error: Permission denied: {authorizedPath}";
+            return context.AccessDenied($"Error: Permission denied: {authorizedPath}");
+        }
+        catch (FileNotFoundException)
+        {
+            return context.NotFound($"Error: File not found: {authorizedPath}");
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return context.NotFound($"Error: File not found: {authorizedPath}");
         }
         catch (IOException ex)
         {
-            return $"Error reading file: {ex.Message}";
+            return context.TransientFailure($"Error reading file: {ex.Message}");
         }
     }
 
@@ -128,11 +180,19 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     {
         var info = new FileInfo(path);
         if (info.Length == 0)
-            return new FileInspection(new MimeType(MimeTypeCatalog.TextPlain), AttachmentCategory.Document, 0, true, StrictUtf8);
+            return new FileInspection(
+                new MimeType(MimeTypeCatalog.TextPlain),
+                AttachmentCategory.Document,
+                0,
+                true,
+                StrictUtf8,
+                ImageDimensionStatus.NotSupported,
+                null,
+                null);
 
-        var sampleLength = (int)Math.Min(info.Length, 4096);
+        var sampleLength = (int)Math.Min(info.Length, MaxInspectionBytes);
         var buffer = new byte[sampleLength];
-        await using (var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        await using (var stream = OpenSharedRead(path, useAsync: true))
         {
             var read = await stream.ReadAsync(buffer.AsMemory(0, sampleLength), ct);
             if (read < buffer.Length)
@@ -146,8 +206,17 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         var mimeType = ResolveMimeType(path, magicMime, extensionMime, textEncoding);
         var category = MimeTypeCatalog.GetCategory(mimeType);
         var isTextLike = looksText && MimeTypeCatalog.IsText(mimeType);
+        var dimensionStatus = ImageDimensionReader.Read(mimeType, buffer, out var dimensions);
 
-        return new FileInspection(mimeType, category, info.Length, isTextLike, isTextLike ? textEncoding : null);
+        return new FileInspection(
+            mimeType,
+            category,
+            info.Length,
+            isTextLike,
+            isTextLike ? textEncoding : null,
+            dimensionStatus,
+            dimensionStatus == ImageDimensionStatus.Valid ? dimensions.Width : null,
+            dimensionStatus == ImageDimensionStatus.Valid ? dimensions.Height : null);
     }
 
     private static MimeType ResolveMimeType(
@@ -234,10 +303,14 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         FileInspection inspection,
         string guidance)
     {
+        var dimensions = inspection is { Width: { } width, Height: { } height }
+            ? $"Dimensions: {width}x{height}\n"
+            : string.Empty;
         return $"File is not readable as plain text.\n" +
                $"Path: {path}\n" +
                $"Type: {inspection.MimeType} ({inspection.Category})\n" +
                $"Size: {ByteSizeFormatter.Format(inspection.SizeBytes)}\n" +
+               dimensions +
                guidance;
     }
 
@@ -436,7 +509,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
     private static async Task<(string Content, bool Truncated)> ReadBoundedHeadAsync(
         string path, Encoding encoding, int maxChars, CancellationToken ct)
     {
-        using var reader = new StreamReader(path, encoding, detectEncodingFromByteOrderMarks: true);
+        using var reader = new StreamReader(
+            OpenSharedRead(path, useAsync: true),
+            encoding,
+            detectEncodingFromByteOrderMarks: true);
         var sb = new StringBuilder();
         var buf = new char[4096];
         while (sb.Length < maxChars)
@@ -464,7 +540,10 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         var lineNumber = 0;
         var linesRead = 0;
 
-        using var reader = new StreamReader(path, encoding, detectEncodingFromByteOrderMarks: true);
+        using var reader = new StreamReader(
+            OpenSharedRead(path, useAsync: true),
+            encoding,
+            detectEncodingFromByteOrderMarks: true);
         while (await reader.ReadLineAsync(ct) is { } line)
         {
             lineNumber++;
@@ -486,12 +565,23 @@ public sealed partial class FileReadTool : NetclawTool<FileReadTool.Params>
         return sb.ToString();
     }
 
+    private static FileStream OpenSharedRead(string path, bool useAsync) => new(
+        path,
+        FileMode.Open,
+        FileAccess.Read,
+        FileShare.ReadWrite | FileShare.Delete,
+        bufferSize: 4096,
+        useAsync);
+
     private sealed record FileInspection(
         MimeType MimeType,
         AttachmentCategory Category,
         long SizeBytes,
         bool IsTextLike,
-        Encoding? TextEncoding);
+        Encoding? TextEncoding,
+        ImageDimensionStatus ImageDimensionStatus,
+        int? Width,
+        int? Height);
 
     private static long TryGetFileLength(string path)
     {

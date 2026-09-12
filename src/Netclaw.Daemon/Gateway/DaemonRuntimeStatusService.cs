@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="DaemonRuntimeStatusService.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -26,7 +26,6 @@ internal sealed class DaemonRuntimeStatusService(
     DaemonStartClock startClock,
     TimeProvider timeProvider,
     IChannelRegistry channelRegistry,
-    DaemonPersistenceOptions persistenceOptions,
     IOptions<TelemetryOptions> telemetryOptions,
     ModelCapabilities modelCapabilities,
     ModelSelection modelSelection,
@@ -36,6 +35,8 @@ internal sealed class DaemonRuntimeStatusService(
     ProviderRuntimeValidation providerValidation,
     McpClientManager? mcpClientManager = null,
     SQLiteMemoryStore? sqliteMemoryStore = null,
+    MemoryEmbedderHolder? memoryEmbedderHolder = null,
+    MemoryConfig? memoryConfig = null,
     IRequiredActor<ReminderManagerActorKey>? reminderManagerActor = null)
 {
     public async Task<DaemonRuntimeStatus.Response> GetStatusAsync(CancellationToken cancellationToken = default)
@@ -69,7 +70,7 @@ internal sealed class DaemonRuntimeStatusService(
             Connectors = connectors,
             Persistence = new DaemonRuntimeStatus.Persistence
             {
-                Provider = persistenceOptions.Provider.ToString()
+                Provider = "Sqlite"
             },
             Telemetry = BuildTelemetry(),
             Model = new DaemonRuntimeStatus.Model
@@ -274,13 +275,14 @@ internal sealed class DaemonRuntimeStatusService(
 
     private async Task<DaemonRuntimeStatus.Memory> BuildMemoryStatusAsync(CancellationToken ct)
     {
+        var databasePath = paths.SqliteDbPath;
         if (sqliteMemoryStore is null)
         {
             return new DaemonRuntimeStatus.Memory
             {
                 Provider = "sqlite",
                 Status = "unavailable",
-                DatabasePath = paths.MemorySqliteDbPath
+                DatabasePath = databasePath
             };
         }
 
@@ -291,8 +293,9 @@ internal sealed class DaemonRuntimeStatusService(
             {
                 Provider = "sqlite",
                 Status = "healthy",
-                DatabasePath = paths.MemorySqliteDbPath,
-                PendingCheckpoints = pending
+                DatabasePath = databasePath,
+                PendingCheckpoints = pending,
+                Embeddings = BuildEmbeddingsStatus()
             };
         }
         catch
@@ -301,9 +304,38 @@ internal sealed class DaemonRuntimeStatusService(
             {
                 Provider = "sqlite",
                 Status = "degraded",
-                DatabasePath = paths.MemorySqliteDbPath
+                DatabasePath = databasePath,
+                Embeddings = BuildEmbeddingsStatus()
             };
         }
+    }
+
+    /// <summary>
+    /// Embeddings status (memory-core-redesign D2/Requirement "Loud degradation without silent
+    /// fallback"): <c>"disabled"</c> when <c>Memory.Embeddings.Enabled</c> is false, <c>"ok"</c>
+    /// when the resolved <see cref="IMemoryEmbedder"/> is available, otherwise <c>"degraded"</c>.
+    /// </summary>
+    private DaemonRuntimeStatus.Embeddings BuildEmbeddingsStatus()
+    {
+        if (memoryConfig?.Embeddings.Enabled != true)
+        {
+            return new DaemonRuntimeStatus.Embeddings { Status = "disabled" };
+        }
+
+        var embedder = memoryEmbedderHolder?.Current;
+        if (embedder is { IsAvailable: true })
+        {
+            return new DaemonRuntimeStatus.Embeddings { Status = "ok", ModelId = embedder.ModelId };
+        }
+
+        return new DaemonRuntimeStatus.Embeddings
+        {
+            Status = "degraded",
+            ModelId = embedder?.ModelId ?? memoryConfig.Embeddings.ModelId,
+            DegradedReason = memoryEmbedderHolder is null
+                ? "embedding subsystem not wired up"
+                : "embedding model unavailable — see daemon logs for memory_embedding_unavailable"
+        };
     }
 
     private async Task<DaemonRuntimeStatus.Reminders?> BuildReminderHealthAsync(CancellationToken ct)

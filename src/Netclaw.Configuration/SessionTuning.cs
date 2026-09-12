@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SessionTuning.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -36,22 +36,23 @@ public sealed record SessionTuning
     /// a tool result inlined into conversation history, for tools whose output the
     /// model needs to read in full (file_read, web_fetch, memory recall, MCP).
     /// Oversized results are truncated to a head+tail window by the dispatcher and
-    /// the full (redacted) output is spilled to a session file with a steer to read
-    /// a slice / grep. Verbose tools (shell) override this with a much smaller
+    /// the full (redacted) output is spilled to a session file with an opaque
+    /// <c>tool_output_read</c> continuation. Verbose tools (shell) override this with a much smaller
     /// per-tool budget (<see cref="Netclaw.Tools.INetclawTool.InlineOutputBudgetChars"/>).
     /// </summary>
     public int MaxInlineToolResultChars { get; init; } = 12_000;
 
     /// <summary>
-    /// Number of future user turns that dynamically discovered MCP tools remain
-    /// available without re-running <c>search_tools</c>. Set to 0 to require
-    /// discovery on every user turn.
+    /// Number of future user turns that dynamically loaded deferred first-party
+    /// or MCP tools remain available without another load. Set to 0 to require
+    /// activation again on every user turn.
     /// </summary>
     public int DiscoveredToolRetentionTurns { get; init; } = 3;
 
     /// <summary>
-    /// Maximum number of discovered MCP tools retained across turns.
-    /// Oldest discovered tools are evicted first when the cap is exceeded.
+    /// Maximum number of loaded deferred first-party or MCP tools retained
+    /// across turns. Oldest loaded tools are evicted first when the cap is
+    /// exceeded.
     /// </summary>
     public int DiscoveredToolMaxCount { get; init; } = 12;
 

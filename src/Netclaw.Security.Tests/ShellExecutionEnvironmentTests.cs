@@ -99,6 +99,18 @@ public class ShellExecutionEnvironmentTests
     }
 
     [Fact]
+    public void Parse_preserves_the_two_parameter_public_contract()
+    {
+        var parse = Assert.Single(
+            typeof(ShellExecutionEnvironment).GetMethods(),
+            static method => method.Name == nameof(ShellExecutionEnvironment.Parse));
+
+        Assert.Equal(
+            [typeof(string), typeof(string)],
+            parse.GetParameters().Select(static parameter => parameter.ParameterType));
+    }
+
+    [Fact]
     public void PowerShell_parser_uses_selected_dialect()
     {
         var powerShell7 = ShellExecutionEnvironment.CreatePowerShell(

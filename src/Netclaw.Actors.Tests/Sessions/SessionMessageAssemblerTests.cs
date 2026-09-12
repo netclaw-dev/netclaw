@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Providers.SelfHosted;
 using Xunit;
@@ -349,8 +350,8 @@ public sealed class SessionMessageAssemblerTests
     [Fact]
     public void Public_audience_static_block_contains_session_id_only()
     {
-        // Public audience must see the session id but NOT filesystem paths
-        // (session_dir, media_dir) to avoid leaking host layout.
+        // Public audience must see the session id but not filesystem paths
+        // from the private storage envelope.
         var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Public);
         var messages = SessionMessageAssembler.Assemble(input);
 
@@ -360,6 +361,7 @@ public sealed class SessionMessageAssemblerTests
 
         Assert.Contains($"[session]\nid: {TestSession.Value}", text);
         Assert.DoesNotContain("session_dir:", text);
+        Assert.DoesNotContain("worktree_dir:", text);
         Assert.DoesNotContain("media_dir:", text);
     }
 
@@ -373,15 +375,28 @@ public sealed class SessionMessageAssemblerTests
 
         var staticBlock = messages[1];
         var text = staticBlock.Text ?? string.Empty;
+        var expectedStorage = input.Storage;
 
-        Assert.Contains("session_dir:", text);
+        Assert.Contains($"session_dir: {expectedStorage.SessionDirectory}", text);
+        Assert.Contains($"temp_dir: {expectedStorage.ManagedTemporary.Directory}", text);
+        Assert.Contains($"artifact_dir: {expectedStorage.ArtifactDirectory}", text);
+        Assert.Contains($"worktree_dir: {expectedStorage.WorktreeDirectory}", text);
+        Assert.Contains($"log_path: {expectedStorage.LogPath}", text);
+        Assert.Contains(ToolChoiceGuidance.StructuredWorkspaceSelection, text, StringComparison.Ordinal);
+        Assert.Contains(ToolChoiceGuidance.DirectorySelectionOrder, text, StringComparison.Ordinal);
+        Assert.Contains(ToolChoiceGuidance.ShellCompositionOrder, text, StringComparison.Ordinal);
+        Assert.Contains("temp_dir is private managed temporary storage", text);
+        Assert.Contains("Use one operation per call", text);
+        Assert.Contains("Standard temporary APIs already use this directory", text);
+        Assert.Contains("explicitly required platform temporary path unchanged", text);
+        Assert.Contains("does not automatically clean managed temporary storage yet", text);
         Assert.DoesNotContain("media_dir:", text);
     }
 
     [Fact]
     public void Public_audience_suppresses_working_context_in_volatile_block()
     {
-        // Working context leaks internal paths and scratch notes — Public must not see it.
+        // Working context leaks internal paths and temporary notes — Public must not see it.
         var stateWithWorkingContext = SessionState.Empty with
         {
             History = SeedHistory("hi"),
@@ -417,9 +432,11 @@ public sealed class SessionMessageAssemblerTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.Personal,
                 OutputLogPath = "/home/op/.netclaw/jobs/secret01/output.log"
-            }) with { History = SeedHistory("hi") };
+            }) with
+        { History = SeedHistory("hi") };
         var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Public)
-            with { State = stateWithJob };
+            with
+        { State = stateWithJob };
 
         var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
         Assert.DoesNotContain("[active-background-jobs]", block);
@@ -441,9 +458,11 @@ public sealed class SessionMessageAssemblerTests
                 Audience = TrustAudience.Personal,
                 Boundary = TrustBoundary.Personal,
                 OutputLogPath = "/home/op/.netclaw/jobs/job01/output.log"
-            }) with { History = SeedHistory("hi") };
+            }) with
+        { History = SeedHistory("hi") };
         var input = MakeInput(SeedHistory("hi"), activeRecall: null, audience: TrustAudience.Personal)
-            with { State = stateWithJob };
+            with
+        { State = stateWithJob };
 
         var block = SessionMessageAssembler.BuildVolatileContextBlock(input);
         Assert.Contains("[active-background-jobs]", block);
@@ -493,7 +512,10 @@ public sealed class SessionMessageAssemblerTests
             SessionPromptOverlay: overlay,
             TurnRestartNotice: restartNotice,
             SessionId: TestSession,
-            SessionsBasePath: "/tmp/netclaw-test",
+            Storage: SessionStoragePaths.CreateLegacy(
+                Path.Combine(Path.GetTempPath(), "netclaw-test", "session"),
+                Path.Combine(Path.GetTempPath(), "netclaw-test", "logs"),
+                "test-session"),
             FileReadGranted: fileReadGranted,
             ActiveRecall: activeRecall,
             WorkingContextBlock: state.WorkingContext.ToContextBlock(),

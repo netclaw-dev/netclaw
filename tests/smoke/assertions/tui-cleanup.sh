@@ -18,7 +18,7 @@ echo "tui-cleanup: checking seeded providers persisted across TUI exit..."
 list_output="$("$NETCLAW_SMOKE_CLI" provider list 2>/dev/null | tr -d '\r')"
 
 for name in seed-a seed-b; do
-  if ! echo "$list_output" | grep -qE "^${name}[[:space:]]+Ollama"; then
+  if ! echo "$list_output" | grep -qE "^${name}[[:space:]]+OpenAI-compatible"; then
     echo "FAIL: provider '$name' missing from list after TUI exit." >&2
     assert_fail=1
   else

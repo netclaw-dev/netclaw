@@ -20,7 +20,18 @@ namespace Netclaw.Actors.Tools;
 /// Captures stdout+stderr, enforces timeout, closes stdin immediately.
 /// </summary>
 [NetclawTool(ToolName,
-    "Execute a shell command and return stdout/stderr output with exit code",
+    "Execute local search, VCS, builds, tests, processes, or other operations requiring shell semantics. " +
+    "For declared-project work, omit WorkingDirectory. Use it for one call in a named child directory. " +
+    "Standard temporary APIs use temp_dir. Preserve an explicit host temporary path only when the task requires it. " +
+    "Keep inline directory changes only when requested. " +
+    "Start with the smallest operation that answers the request. Use one operation per call. " +
+    "Keep independent searches and diagnostics separate; do not join them with separators or labels. " +
+    "Add a pipeline only when the requested result requires it. Do not use shell only to verify successful structured results. " +
+    "If approval is required but no interactive requester is available, do not retry or substitute the call during that turn. " +
+    "After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. " +
+    "A later explicit user request can start a new call under normal approval policy. " +
+    "Apply one 'Tool execution deferred:' correction unchanged. " +
+    "Do not use shell for known file reads, listings, edits, or disposable text unless shell behavior is requested.",
     Grant = "shell")]
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
@@ -38,11 +49,15 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private readonly ToolConfig _config;
     private readonly ToolPathPolicy _pathPolicy;
     private readonly ShellCommandPolicy _commandPolicy;
-    private readonly ShellExecutionEnvironment _environment;
+    internal ShellExecutionEnvironment ShellEnvironment => _commandPolicy.Environment;
 
     public record Params(
-        [property: Description("The shell command to execute")] string Command,
-        [property: Description("Working directory to run the command in (optional)")] string? WorkingDirectory = null);
+        [param: Description(
+            "The smallest shell operation that answers the request. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels. Add a pipeline only when the requested result requires it. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. If approval is required but no interactive requester is available, do not retry or substitute the call during that turn. After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. A later explicit user request can start a new call under normal approval policy. Apply one 'Tool execution deferred:' correction unchanged.")]
+        string Command,
+        [param: Description(
+            "Set only for one call in a named child directory or worktree. Omit for declared-project work. Standard temporary APIs use temp_dir.")]
+        string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)
     {
@@ -56,79 +71,48 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 nameof(commandPolicy));
         }
 
-        _environment = commandPolicy.Environment;
     }
 
     protected override Task<string> ExecuteAsync(
         Params args,
         ToolInvocationContext context,
         CancellationToken ct)
-        => ExecuteCoreAsync(args, context, authorizedAnalysis: null, ct);
+        => ExecuteCoreAsync(args, context, authorizedLaunch: null, ct);
 
     internal async Task<string> ExecuteAuthorizedAsync(
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context,
-        ShellCommandAnalysis analysis,
+        ShellProcessLaunch launch,
         CancellationToken ct)
     {
         if (!TryParse(arguments, out var error, out var args))
             return error;
 
-        return await ExecuteCoreAsync(args, context, analysis, ct);
+        return await ExecuteCoreAsync(args, context, launch, ct);
     }
 
     private async Task<string> ExecuteCoreAsync(
         Params args,
         ToolInvocationContext context,
-        ShellCommandAnalysis? authorizedAnalysis,
+        ShellProcessLaunch? authorizedLaunch,
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
             return "Error: 'command' parameter is required.";
 
-        // Resolve once before parsing or execution. The same cwd and parse
-        // facts feed both security policies and the launched process.
-        var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
-        var analysis = ResolveAnalysis(args.Command, resolvedCwd, authorizedAnalysis);
-        var commandDecision = _commandPolicy.Evaluate(analysis);
-        if (!commandDecision.Allowed)
-            return $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}";
-
-        if (_pathPolicy.CommandReferencesDeniedPath(analysis))
-            return "Error: Command references a protected file path. Access denied by security policy.";
-
-        var psi = _environment.CreateProcessStartInfo(args.Command);
-
-        // Resolve working directory in priority order: explicit arg →
-        // WorkingContext.ProjectDirectory (declared via set_working_directory)
-        // → SessionDirectory (per-session scratch). Never falls through to
-        // ProcessStartInfo's default of inheriting the daemon process's cwd —
-        // that location is wherever the daemon happened to be launched and is
-        // unrelated to what the agent is "working on," which makes it
-        // impossible for the approval policy to reason about safe-space
-        // membership. The matcher reads context.Cwd against the same
-        // resolution chain so the gate evaluates folder-scoped ApprovalEntry
-        // records against the directory the spawned process will run in.
-        var workingDirectoryError = PrepareWorkingDirectory(
-            psi,
-            resolvedCwd,
-            context.SessionDirectory);
-        if (workingDirectoryError is not null)
-            return workingDirectoryError;
-
+        var launch = authorizedLaunch ?? CreateDirectLaunch(args.Command, args.WorkingDirectory, context);
         var effectiveTimeout = context.ExecutionTimeout.Value;
-
         using var timeoutCts = new CancellationTokenSource();
         using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct, timeoutCts.Token);
 
         Process process;
         try
         {
-            process = Process.Start(psi)!;
+            process = await launch.StartAsync(ct);
         }
-        catch (Exception ex)
+        catch (ShellProcessStartException ex)
         {
-            return FormatStartError(ex);
+            return ex.Message;
         }
 
         // Start the timeout countdown only after the shell process exists, so
@@ -140,16 +124,23 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             process.StandardInput.Close();
 
             // Start draining both pipes up front: a chatty child can deadlock if
-            // one pipe buffer fills while we wait on the other. The reads take
-            // CancellationToken.None deliberately — a redirected child holds the
-            // pipe write-ends open, so a blocked pipe read cannot be interrupted
-            // by a token; killing the process is what closes the pipes.
+            // one pipe buffer fills while we wait on the other.
+            //
+            // drainCts starts linked to the caller/timeout token, so a genuine
+            // command timeout still cuts the drain short. It gets a second,
+            // short fuse armed below once the direct child exits on its own:
+            // a forked or backgrounded grandchild (a daemon, a `cmd &` job)
+            // can inherit the pipe write end and hold it open past the
+            // parent's exit, so EOF may never arrive. Without that fuse the
+            // drain would hang for the grandchild's full life span instead of
+            // returning once the command itself is done.
             //
             // BoundedOutputReader reads into a head+tail window bounded by
             // MaxOutputChars but continues draining after the cap is reached so
             // the pipe never fills up and deadlocks a still-running child.
-            var stdoutTask = BoundedOutputReader.DrainToWindowAsync(process.StandardOutput, _config.MaxOutputChars, CancellationToken.None);
-            var stderrTask = BoundedOutputReader.DrainToWindowAsync(process.StandardError, _config.MaxOutputChars, CancellationToken.None);
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
+            var stdoutTask = BoundedOutputReader.DrainToWindowAsync(process.StandardOutput, _config.MaxOutputChars, drainCts.Token);
+            var stderrTask = BoundedOutputReader.DrainToWindowAsync(process.StandardError, _config.MaxOutputChars, drainCts.Token);
 
             try
             {
@@ -197,8 +188,13 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     : "Error: Command cancelled.";
             }
 
-            var (stdoutText, _) = await stdoutTask;
-            var (stderrText, _) = await stderrTask;
+            // The direct child exited on its own. Give the drain a short grace
+            // window to flush output that is already buffered, then stop
+            // waiting on it — see the comment above drainCts.
+            drainCts.CancelAfter(PostExitDrainGrace);
+
+            var (stdoutText, _, stdoutGraceCut) = await stdoutTask;
+            var (stderrText, _, stderrGraceCut) = await stderrTask;
 
             // Assemble the raw combined output (stdout then stderr). Each stream was
             // drained to MaxOutputChars, so the concatenation can be up to 2x — re-window
@@ -217,6 +213,9 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             }
 
             var captured = BoundedOutputReader.Window(combined.ToString(), _config.MaxOutputChars);
+            if (stdoutGraceCut || stderrGraceCut)
+                captured += GraceCutMarker;
+
             return $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}";
         }
     }
@@ -232,23 +231,23 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context,
         CancellationToken ct = default)
-        => ExecuteStreamWithAnalysisAsync(
+        => ExecuteStreamWithLaunchAsync(
             arguments,
             context,
-            authorizedAnalysis: null,
+            authorizedLaunch: null,
             ct);
 
     internal IAsyncEnumerable<ToolCallUpdate> ExecuteAuthorizedStreamAsync(
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context,
-        ShellCommandAnalysis analysis,
+        ShellProcessLaunch launch,
         CancellationToken ct)
-        => ExecuteStreamWithAnalysisAsync(arguments, context, analysis, ct);
+        => ExecuteStreamWithLaunchAsync(arguments, context, launch, ct);
 
-    private async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamWithAnalysisAsync(
+    private async IAsyncEnumerable<ToolCallUpdate> ExecuteStreamWithLaunchAsync(
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context,
-        ShellCommandAnalysis? authorizedAnalysis,
+        ShellProcessLaunch? authorizedLaunch,
         [EnumeratorCancellation] CancellationToken ct)
     {
         // All items (activities + completion) are produced by the non-iterator
@@ -261,7 +260,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         _ = ExecuteStreamCoreAsync(
             arguments,
             context,
-            authorizedAnalysis,
+            authorizedLaunch,
             channel.Writer,
             ct);
 
@@ -272,7 +271,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
     private async Task ExecuteStreamCoreAsync(
         IDictionary<string, object?>? arguments,
         ToolInvocationContext context,
-        ShellCommandAnalysis? authorizedAnalysis,
+        ShellProcessLaunch? authorizedLaunch,
         ChannelWriter<ToolCallUpdate> output,
         CancellationToken ct)
     {
@@ -290,42 +289,15 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 return;
             }
 
-            var resolvedCwd = context.ResolveShellCwd(args.WorkingDirectory);
-            var analysis = ResolveAnalysis(args.Command, resolvedCwd, authorizedAnalysis);
-            var commandDecision = _commandPolicy.Evaluate(analysis);
-            if (!commandDecision.Allowed)
-            {
-                output.TryWrite(new ToolCompletedUpdate(
-                    $"Error: Command blocked by hard deny policy: {commandDecision.DenyReason}"));
-                return;
-            }
-
-            if (_pathPolicy.CommandReferencesDeniedPath(analysis))
-            {
-                output.TryWrite(new ToolCompletedUpdate(
-                    "Error: Command references a protected file path. Access denied by security policy."));
-                return;
-            }
-
-            var psi = _environment.CreateProcessStartInfo(args.Command);
-            var workingDirectoryError = PrepareWorkingDirectory(
-                psi,
-                resolvedCwd,
-                context.SessionDirectory);
-            if (workingDirectoryError is not null)
-            {
-                output.TryWrite(new ToolCompletedUpdate(workingDirectoryError));
-                return;
-            }
-
+            var launch = authorizedLaunch ?? CreateDirectLaunch(args.Command, args.WorkingDirectory, context);
             Process process;
             try
             {
-                process = Process.Start(psi)!;
+                process = await launch.StartAsync(ct);
             }
-            catch (Exception ex)
+            catch (ShellProcessStartException ex)
             {
-                output.TryWrite(new ToolCompletedUpdate(FormatStartError(ex)));
+                output.TryWrite(new ToolCompletedUpdate(ex.Message));
                 return;
             }
 
@@ -348,22 +320,39 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             {
                 process.StandardInput.Close();
 
+                // drainCts starts linked to the caller/timeout token, so a
+                // genuine command timeout still cuts the drain short. It gets
+                // a second, short fuse armed below once the direct child
+                // exits on its own — see the matching comment in
+                // ExecuteCoreAsync for why that fuse is needed.
+                using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(linkedCts.Token);
+
                 var drainStdout = DrainPipeToChannelAsync(
-                    process.StandardOutput, stdoutAcc, activityChannel.Writer, "stdout");
+                    process.StandardOutput, stdoutAcc, activityChannel.Writer, "stdout", drainCts.Token);
                 var drainStderr = DrainPipeToChannelAsync(
-                    process.StandardError, stderrAcc, activityChannel.Writer, "stderr");
+                    process.StandardError, stderrAcc, activityChannel.Writer, "stderr", drainCts.Token);
 
                 _ = Task.WhenAll(drainStdout, drainStderr)
                     .ContinueWith(
                         _ => activityChannel.Writer.TryComplete(),
                         TaskContinuationOptions.ExecuteSynchronously);
 
+                // Relays activity updates to the caller as they arrive. This
+                // task runs independently of the awaits below, so output
+                // still streams live while the process is running — it only
+                // finishes once the channel completes (both drains done) or
+                // linkedCts cancels.
+                var relayActivities = RelayActivitiesAsync(activityChannel.Reader, output, linkedCts.Token);
+
                 try
                 {
-                    await foreach (var activity in activityChannel.Reader.ReadAllAsync(linkedCts.Token))
-                        output.TryWrite(activity);
-
+                    // WaitForExitAsync only tracks the direct child. Once it
+                    // returns, arm the drain's short post-exit grace window
+                    // (see drainCts above) instead of waiting on the drain
+                    // for the rest of the command timeout.
                     await process.WaitForExitAsync(linkedCts.Token);
+                    drainCts.CancelAfter(PostExitDrainGrace);
+                    await relayActivities;
                 }
                 catch (OperationCanceledException)
                 {
@@ -371,16 +360,26 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                     // accumulated) but a token fired in the narrow gap before
                     // WaitForExitAsync returned, fall through to assemble the
                     // valid accumulated output instead of discarding it.
+                    // drainCts already observes the same cancellation through
+                    // its link to linkedCts, so the relay below cannot hang.
                     if (!process.HasExited)
                     {
                         await KillAndDrainAsync(process, drainStdout, drainStderr);
+                        await relayActivities;
                         output.TryWrite(new ToolCompletedUpdate(
                             $"Error: Command timed out after {effectiveTimeout.TotalSeconds:F0} seconds."));
                         return;
                     }
+
+                    await relayActivities;
                 }
 
-                try { await Task.WhenAll(drainStdout, drainStderr); }
+                var graceCut = false;
+                try
+                {
+                    var drainCancelled = await Task.WhenAll(drainStdout, drainStderr);
+                    graceCut = drainCancelled[0] || drainCancelled[1];
+                }
                 catch (Exception ex) when (ex is IOException or ObjectDisposedException)
                 {
                     Debug.WriteLine($"shell_execute: pipe drain aborted — {ex.Message}");
@@ -400,9 +399,16 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
                 }
 
                 var captured = BoundedOutputReader.Window(combined.ToString(), _config.MaxOutputChars);
+                if (graceCut)
+                    captured += GraceCutMarker;
+
                 output.TryWrite(new ToolCompletedUpdate(
                     $"Exit code: {process.ExitCode}{Environment.NewLine}{captured}"));
             }
+        }
+        catch (Exception ex) when (ex is ToolApprovalRequiredException or ToolCorrectionRequiredException or ToolAccessDeniedException)
+        {
+            output.TryComplete(ex);
         }
         catch (Exception ex)
         {
@@ -418,53 +424,100 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         }
     }
 
-    private ShellCommandAnalysis ResolveAnalysis(
+    internal ShellProcessLaunch CreateLaunch(
         string command,
-        string? resolvedCwd,
-        ShellCommandAnalysis? authorizedAnalysis)
+        string workingDirectory,
+        ToolInvocationContext context,
+        Func<CancellationToken, Task> authorize)
+        => new(command, workingDirectory, context, _commandPolicy, _pathPolicy, authorize);
+
+    // Direct host callers retain the public tool's hard-policy contract. Routed calls require the coordinator.
+    private ShellProcessLaunch CreateDirectLaunch(string command, string? workingDirectory, ToolInvocationContext context)
     {
-        if (authorizedAnalysis is null)
-            return _commandPolicy.Analyze(command, resolvedCwd);
-
-        if (!string.Equals(authorizedAnalysis.Source, command, StringComparison.Ordinal)
-            || !string.Equals(
-                authorizedAnalysis.WorkingDirectory,
-                resolvedCwd,
-                StringComparison.Ordinal))
-        {
-            throw new InvalidOperationException(
-                "The authorized shell analysis does not match the executed command.");
-        }
-
-        return authorizedAnalysis;
+        var resolvedDirectory = context.ResolveShellCwd(workingDirectory)
+            ?? throw new InvalidOperationException("Shell execution requires a working directory.");
+        return CreateLaunch(command, resolvedDirectory, context, static _ => Task.CompletedTask);
     }
 
     private static readonly TimeSpan CoalesceInterval = TimeSpan.FromMilliseconds(500);
 
-    private static async Task DrainPipeToChannelAsync(
+    // Once the direct child process exits on its own, a forked or
+    // backgrounded grandchild can still hold the stdout/stderr pipe write
+    // end open (see the drainCts comments in ExecuteCoreAsync and
+    // ExecuteStreamCoreAsync). This grace window gives already-buffered
+    // output time to flush before the drain stops waiting for EOF.
+    private static readonly TimeSpan PostExitDrainGrace = TimeSpan.FromMilliseconds(500);
+
+    // The tool appends this text when the post-exit grace window cuts a drain
+    // before EOF. A background child can still hold the pipe open, so the
+    // capture can be partial. This marker makes the cut visible to the agent.
+    private static readonly string GraceCutMarker =
+        $"{Environment.NewLine}Note: a background process held the output pipe open. "
+        + "The tool did not capture output after this point.";
+
+    private static async Task RelayActivitiesAsync(
+        ChannelReader<ToolActivityUpdate> reader,
+        ChannelWriter<ToolCallUpdate> output,
+        CancellationToken ct)
+    {
+        try
+        {
+            await foreach (var activity in reader.ReadAllAsync(ct))
+                output.TryWrite(activity);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The outer token cancelled before the channel drained on its own
+            // (for example the process is being killed after a timeout).
+            // Whatever already relayed stays relayed.
+            Debug.WriteLine("shell_execute: activity relay stopped — outer token cancelled.");
+        }
+    }
+
+    /// <summary>
+    /// Drains one pipe into <paramref name="accumulator"/> and the live activity
+    /// channel. Returns true when <paramref name="ct"/> cancelled the read before
+    /// the pipe reached EOF. The caller uses this flag to mark a grace-cut — the
+    /// same signal that <see cref="BoundedOutputReader.DrainToWindowAsync"/>
+    /// returns for the non-streaming path.
+    /// </summary>
+    private static async Task<bool> DrainPipeToChannelAsync(
         TextReader pipe,
         BoundedOutputAccumulator accumulator,
         ChannelWriter<ToolActivityUpdate> channel,
-        string phase)
+        string phase,
+        CancellationToken ct)
     {
         var buf = ArrayPool<char>.Shared.Rent(4096);
         var coalesced = new StringBuilder(4096);
         var lastFlush = Stopwatch.GetTimestamp();
+        var cancelled = false;
         try
         {
-            int read;
-            while ((read = await pipe.ReadAsync(buf.AsMemory(), CancellationToken.None)) > 0)
+            try
             {
-                var span = buf.AsSpan(0, read);
-                accumulator.Append(span);
-                coalesced.Append(span);
-
-                if (Stopwatch.GetElapsedTime(lastFlush) >= CoalesceInterval)
+                int read;
+                while ((read = await pipe.ReadAsync(buf.AsMemory(), ct)) > 0)
                 {
-                    channel.TryWrite(new ToolActivityUpdate(phase, coalesced.ToString()));
-                    coalesced.Clear();
-                    lastFlush = Stopwatch.GetTimestamp();
+                    var span = buf.AsSpan(0, read);
+                    accumulator.Append(span);
+                    coalesced.Append(span);
+
+                    if (Stopwatch.GetElapsedTime(lastFlush) >= CoalesceInterval)
+                    {
+                        channel.TryWrite(new ToolActivityUpdate(phase, coalesced.ToString()));
+                        coalesced.Clear();
+                        lastFlush = Stopwatch.GetTimestamp();
+                    }
                 }
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // The pipe never reached EOF within the bound — most commonly a
+                // backgrounded or daemonized grandchild that inherited the write
+                // end after the direct process exited. Stop reading; whatever is
+                // already buffered still gets flushed below.
+                cancelled = true;
             }
 
             if (coalesced.Length > 0)
@@ -474,9 +527,11 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         {
             ArrayPool<char>.Shared.Return(buf, clearArray: true);
         }
+
+        return cancelled;
     }
 
-    private static async Task KillAndDrainAsync(Process process, Task drainStdout, Task drainStderr)
+    private static async Task KillAndDrainAsync(Process process, Task<bool> drainStdout, Task<bool> drainStderr)
     {
         try { process.Kill(entireProcessTree: true); }
         catch (InvalidOperationException ex)
@@ -496,51 +551,6 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         }
     }
 
-    private string? PrepareWorkingDirectory(
-        ProcessStartInfo startInfo,
-        string? resolvedCwd,
-        string? sessionDirectory)
-    {
-        if (string.IsNullOrWhiteSpace(resolvedCwd))
-            return null;
-
-        if (IsResolvedSessionDirectory(resolvedCwd, sessionDirectory))
-        {
-            try
-            {
-                Directory.CreateDirectory(resolvedCwd);
-            }
-            catch (Exception ex) when (ex is ArgumentException
-                                       or IOException
-                                       or NotSupportedException
-                                       or UnauthorizedAccessException
-                                       or System.Security.SecurityException)
-            {
-                return $"Error preparing session working directory: {ex.Message}";
-            }
-        }
-        else if (!Directory.Exists(resolvedCwd))
-        {
-            if (File.Exists(resolvedCwd))
-                return $"Error: Working directory '{resolvedCwd}' is a file, not a directory.";
-
-            return $"Error: Working directory '{resolvedCwd}' does not exist. "
-                   + $"Create it first, e.g.: {CreateDirectoryHint(resolvedCwd)}";
-        }
-
-        startInfo.WorkingDirectory = resolvedCwd;
-        return null;
-    }
-
-    private string CreateDirectoryHint(string path)
-        => _environment.PathStyle == ShellPathStyle.Windows
-            ? $"New-Item -ItemType Directory -Force -Path '{path.Replace("'", "''", StringComparison.Ordinal)}'"
-            : $"mkdir -p -- '{path.Replace("'", "'\\''", StringComparison.Ordinal)}'";
-
-    private string FormatStartError(Exception exception)
-        => $"Error starting shell '{_environment.ExecutableName}' "
-           + $"at '{_environment.ExecutablePath}': {exception.Message}";
-
     // Retained for compatibility with tests/benchmark that call it directly; the
     // main execution path no longer uses this — output is bounded at read time by
     // BoundedOutputReader.
@@ -552,7 +562,4 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         return string.Concat(output.AsSpan(0, maxChars), $"{Environment.NewLine}... [output truncated]");
     }
 
-    private static bool IsResolvedSessionDirectory(string resolvedCwd, string? sessionDirectory)
-        => !string.IsNullOrWhiteSpace(sessionDirectory)
-           && PathUtility.AreEquivalentPaths(resolvedCwd, sessionDirectory);
 }

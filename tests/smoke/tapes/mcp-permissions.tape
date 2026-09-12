@@ -9,20 +9,15 @@
 Output "/tmp/tape-mcp-permissions.gif"
 
 # ─── Launch ──────────────────────────────────────────────────────────
-Type "netclaw mcp permissions"
+Type "netclaw mcp permissions; status=$?; echo MCP_PERMISSIONS_EXIT=$status"
 Enter
 
 # BuildHeader() always renders regardless of daemon state.
 Wait+Screen@10s /MCP Permissions/
-Sleep 300ms
+Wait+Screen@5s /Could not reach daemon:/
 
 # ─── Exit TUI ────────────────────────────────────────────────────────
 Ctrl+Q
-Sleep 1s
-Wait+Screen@10s /TAPE\$/
-
-Type "echo MCP_PERMISSIONS_EXIT=$?"
-Enter
 Wait+Screen@5s /MCP_PERMISSIONS_EXIT=0/
 
 Type "exit"

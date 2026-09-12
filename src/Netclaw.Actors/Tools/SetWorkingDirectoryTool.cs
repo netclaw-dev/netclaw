@@ -1,59 +1,90 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SetWorkingDirectoryTool.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ComponentModel;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
+
+using PathAccessDecision = Netclaw.Actors.Tools.PathAccessPolicy.PathAccessDecision;
 
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
 /// Sets the session's project directory — the root of the codebase or project
-/// the agent is currently working on. The session actor intercepts successful
-/// results by tool name to update <c>WorkingContext.ProjectDirectory</c> and
+/// the agent is currently working on. The owning session or subagent actor
+/// intercepts successful results by tool name to update its project scope and
 /// re-assemble the system prompt with project-scoped identity files.
 /// </summary>
 [NetclawTool(ToolName,
-    "Declare your project root and expand your trusted scope. " +
-    "Once set, read-only verbs (ls, grep, cat, git status, git log, ...) inside that tree " +
-    "auto-run without prompting — the safe-verb short-circuit treats the directory as a safe space. " +
+    "Call this once before tool work in a named project. Do not call it again when the current project already matches. " +
+    "Declare the named path before probing it. If rejected, retry the user-provided fallback before other tool work. " +
+    "Use the task's first project path exactly; do not substitute its parent before this tool rejects it. " +
+    "It declares the project root for path authorization and shell approval. " +
+    "Once set, read-only phrases (ls, grep, cat, git status, git ls-tree, ...) inside that tree " +
+    "can auto-run without prompting when reviewed-safe policy allows them. " +
     "Mutating commands still prompt, but the prompt shows the right cwd so persisted approvals are " +
     "correctly scoped. Also loads the project's identity file (AGENTS.md / CLAUDE.md / etc.) into the " +
     "system prompt. Note: shell commands that pass a path argument (e.g. `find /repo`, `ls /var/log`) " +
-    "declare scope implicitly via that argument, so this tool is most useful for sessions where you'll " +
-    "run multiple commands without explicit paths (git status, git diff, make build, etc.). " +
+    "provide exact approval scope but do not declare the project root. " +
     "Use an absolute path to the project root.",
     Grant = "file")]
 public sealed partial class SetWorkingDirectoryTool : NetclawTool<SetWorkingDirectoryTool.Params>
 {
     public const string ToolName = "set_working_directory";
 
-    private readonly ScopedFileAccessPolicy _fileAccessPolicy;
+    private readonly PathAccessPolicy _pathAccessPolicy;
 
     public record Params(
-        [property: Description("Absolute path to the project root directory.")]
+        [param: Description("Absolute path to the project root for the current task.")]
         string Path);
 
-    public SetWorkingDirectoryTool(ToolConfig config, NetclawPaths paths)
+    public SetWorkingDirectoryTool(ToolConfig config, NetclawPaths paths, ToolPathPolicy pathPolicy)
+        : this(new PathAccessPolicy(config, paths, pathPolicy))
     {
-        _fileAccessPolicy = new ScopedFileAccessPolicy(config, paths);
+    }
+
+    internal SetWorkingDirectoryTool(PathAccessPolicy pathAccessPolicy)
+    {
+        _pathAccessPolicy = pathAccessPolicy;
     }
 
     protected override Task<string> ExecuteAsync(Params args, ToolInvocationContext context, CancellationToken ct)
     {
+        if (ContainsInvalidControlCharacter(args.Path))
+            return Task.FromResult(context.InvalidInput("Error: path contains an invalid control character."));
+
         var raw = args.Path?.Trim() ?? string.Empty;
         if (string.IsNullOrEmpty(raw))
-            return Task.FromResult("Error: path is required.");
+            return Task.FromResult(context.InvalidInput("Error: path is required."));
 
-        if (!_fileAccessPolicy.TryResolveWorkingDirectory(raw, context, out var fullPath, out var accessError))
-            return Task.FromResult(accessError);
+        if (!Path.IsPathFullyQualified(raw))
+            return Task.FromResult(context.InvalidInput("Error: path must be absolute."));
+
+        var access = _pathAccessPolicy.Evaluate(raw, context, PathAccessPolicy.FileOperation.DeclareProjectScope);
+        if (access is PathAccessDecision.Denied denied)
+            return Task.FromResult(context.PathAccessFailure(denied.Error, denied.Failure));
+
+        var fullPath = access.GetAllowedPath();
 
         if (!Directory.Exists(fullPath))
-            return Task.FromResult($"Error: directory does not exist: {fullPath}");
+            return Task.FromResult(context.NotFound($"Error: directory does not exist: {fullPath}"));
 
-        return Task.FromResult(fullPath);
+        return Task.FromResult(context.SuccessProject(fullPath, fullPath));
     }
+
+    internal bool CanDeclare(string path, ToolInvocationContext context)
+        => !ContainsInvalidControlCharacter(path)
+           && _pathAccessPolicy.Evaluate(
+               path,
+               context,
+               PathAccessPolicy.FileOperation.DeclareProjectScope) is PathAccessDecision.Allowed access
+           && PathUtility.AreEquivalentPaths(path, access.CanonicalPath)
+           && Directory.Exists(access.CanonicalPath);
+
+    private static bool ContainsInvalidControlCharacter(string? path)
+        => path is not null && path.AsSpan().IndexOfAny('\0', '\r', '\n') >= 0;
 
 }

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "scenario": "personal-session-with-fixed-synthetic-mcp-catalog",
+  "metric": "Compact UTF-8 JSON array of final function names, descriptions, and input schemas in ChatOptions.Tools order.",
+  "syntheticMcpToolCount": 200,
+  "mainCore": {
+    "count": 3,
+    "serializedDefinitionBytes": 1047
+  },
+  "subagentFull": {
+    "count": 202,
+    "serializedDefinitionBytes": 133816
+  }
+}

@@ -52,7 +52,10 @@ internal sealed class ShellCommandAnalyzer
         ParsedCommand parsed;
         try
         {
-            parsed = _environment.Parse(command, workingDirectory);
+            parsed = _environment.ParseForApproval(
+                command,
+                workingDirectory,
+                publishAuthoredSourceFacts: depth == 0);
         }
         catch
         {
@@ -68,7 +71,9 @@ internal sealed class ShellCommandAnalyzer
             return ShellAnalysisFailure.None;
         }
 
-        var innerCommands = PosixShellApprovalSemantics.Instance.ExtractInnerCommands(command);
+        var innerCommands = ShellApprovalSemantics.ExtractInnerCommands(
+            command,
+            ShellPathStyle.Posix);
         var unexpandedWrappers = parsed.Commands
             .Where(static occurrence => IsUnexpandedWrapperClause(occurrence.Clause))
             .ToList();
@@ -78,21 +83,34 @@ internal sealed class ShellCommandAnalyzer
             return ShellAnalysisFailure.None;
         }
 
-        // The v0.3 parser owns contracted wrapper forms. This fallback keeps
-        // Netclaw's extra bundled bash -lc form. Remove only a direct shell
-        // dispatch: prefix executables such as sudo, env, and nohup remain
-        // visible to hard-deny and approval policy.
-        commands.AddRange(parsed.Commands.Where(static occurrence =>
-            !IsUnexpandedWrapperClause(occurrence.Clause)
-            || !IsTransparentShellDispatch(occurrence.Clause)));
-
         if (innerCommands.Count != unexpandedWrappers.Count)
-            return ShellAnalysisFailure.Unresolved;
-
-        for (var i = 0; i < innerCommands.Count; i++)
         {
+            // Preserve the prior defense scan when wrapper extraction is incomplete.
+            commands.AddRange(parsed.Commands.Where(static occurrence =>
+                !IsUnexpandedWrapperClause(occurrence.Clause)
+                || !IsTransparentShellDispatch(occurrence.Clause)));
+            return ShellAnalysisFailure.Unresolved;
+        }
+
+        // The v0.3 parser owns contracted wrapper forms. This fallback keeps
+        // Netclaw's extra bundled bash -lc form. Expand each wrapper at its
+        // parser-owned position so every consumer sees execution order. Remove
+        // only a direct shell dispatch; retain prefix executables such as sudo,
+        // env, and nohup for hard-deny and approval policy.
+        var innerIndex = 0;
+        foreach (var occurrence in parsed.Commands)
+        {
+            if (!IsUnexpandedWrapperClause(occurrence.Clause))
+            {
+                commands.Add(occurrence);
+                continue;
+            }
+
+            if (!IsTransparentShellDispatch(occurrence.Clause))
+                commands.Add(occurrence);
+
             if (!TryResolveWrapperWorkingDirectory(
-                    unexpandedWrappers[i],
+                    occurrence,
                     workingDirectory,
                     out var innerWorkingDirectory))
             {
@@ -100,7 +118,7 @@ internal sealed class ShellCommandAnalyzer
             }
 
             var failure = Analyze(
-                innerCommands[i],
+                innerCommands[innerIndex++],
                 innerWorkingDirectory,
                 depth + 1,
                 commands);
@@ -198,7 +216,7 @@ internal sealed class ShellCommandAnalyzer
     }
 
     private static bool IsShellInvokerToken(string token)
-        => PosixShellApprovalSemantics.IsPosixShellInvoker(
+        => ShellApprovalSemantics.IsPosixShellInvoker(
             ShellTokenizer.TrimShellPunctuation(token));
 
     private static bool ContainsBackgroundListOperator(string command)
@@ -305,36 +323,118 @@ public sealed record ShellCommandAnalysis
 
     public bool IsResolved => Failure == ShellAnalysisFailure.None && Commands.Count > 0;
 
-    public bool HasDynamicSyntax => Commands.Any(command =>
-        !command.IsComplete
-        || !Enum.IsDefined(command.ImmediateRole)
-        || command.ImmediateRole == CommandOccurrenceRole.Unknown
-        || command.Ancestry.Any(static frame =>
-            !IsKnownAncestor(frame.Ancestor)
-            || !Enum.IsDefined(frame.Region)
-            || frame.Region == CommandAncestryRegion.Unknown)
-        || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
-        || command.Clause.Verb.IsDynamic
-        || command.Clause.Args.Any(static arg =>
-            arg.Kind == ArgKind.DynamicSkip && !arg.IsCwdAttribution)
-        || command.Clause.Args.Any(static arg =>
-            arg.Kind == ArgKind.EnvVar
-            && !arg.IsCwdAttribution
-            && string.IsNullOrWhiteSpace(arg.Resolved))
-        || command.Clause.Args.Any(static arg =>
-            arg.IsPath
-            && arg.Kind != ArgKind.Glob
-            && string.IsNullOrWhiteSpace(arg.Resolved))
-        || command.Arguments.Any(HasUnsupportedArgumentDomain)
-        // A glob in a directory segment can hide traversal or a symlink.
-        // Only a leaf glob has a fixed directory scope.
-        || command.Clause.Args.Any(arg =>
-            ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
-        || HasUnresolvedRedirect(command));
+    public bool HasDynamicSyntax
+    {
+        get
+        {
+            var accountedRegionArguments = FindAccountedExecutionRegionArguments();
+            return Commands.Any(command =>
+                CommandHasDynamicSyntax(command, accountedRegionArguments));
+        }
+    }
 
     internal ShellExecutionEnvironment Environment { get; }
 
     internal ShellAnalysisFailure Failure { get; }
+
+    private bool CommandHasDynamicSyntax(
+        CommandOccurrence command,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => !command.IsComplete
+            || !Enum.IsDefined(command.ImmediateRole)
+            || command.ImmediateRole == CommandOccurrenceRole.Unknown
+            || command.Ancestry.Any(static frame =>
+                !IsKnownAncestor(frame.Ancestor)
+                || !Enum.IsDefined(frame.Region)
+                || frame.Region == CommandAncestryRegion.Unknown)
+            || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
+            || command.Clause.Verb.IsDynamic
+            || command.Clause.Args.Any(arg =>
+                arg.Kind == ArgKind.DynamicSkip
+                && !arg.IsCwdAttribution
+                && !IsAccountedExecutionRegionArgument(
+                    command,
+                    arg,
+                    accountedRegionArguments)
+                && !HasBoundedAuthoredFileSystemValue(command, arg))
+            || command.Clause.Args.Any(static arg =>
+                arg.IsPath
+                && arg.Kind != ArgKind.Glob
+                && string.IsNullOrWhiteSpace(arg.Resolved))
+            || command.Arguments.Any(argument =>
+                !IsAccountedExecutionRegionArgument(
+                    argument,
+                    accountedRegionArguments)
+                && HasUnsupportedArgumentDomain(argument))
+            // A glob in a directory segment can hide traversal or a symlink.
+            // Only a leaf glob has a fixed directory scope.
+            || command.Clause.Args.Any(arg =>
+                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
+            || HasUnresolvedRedirect(command);
+
+    private HashSet<ClauseElement> FindAccountedExecutionRegionArguments()
+    {
+        // PowerShell keeps a script-block host argument opaque while projecting
+        // its executable body as command occurrences. Suppress only that exact
+        // host element after a complete descendant proves the region metadata.
+        var arguments = new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance);
+        foreach (var command in Commands)
+        {
+            if (!command.IsComplete)
+            {
+                continue;
+            }
+
+            foreach (var frame in command.Ancestry)
+            {
+                if (frame is
+                    {
+                        Region: CommandAncestryRegion.ExecutionRegion,
+                        Ancestor: ExecutionRegionSyntax region
+                    }
+                    && IsKnownCommandArgumentRegion(region))
+                {
+                    arguments.Add(region.HostArgument!);
+                }
+            }
+        }
+
+        return arguments;
+    }
+
+    private static bool IsKnownCommandArgumentRegion(ExecutionRegionSyntax region)
+        => region.Origin == ExecutionRegionOrigin.CommandArgument
+            && region.HostArgument is not null
+            && Enum.IsDefined(region.Phase)
+            && region.Phase != ExecutionRegionPhase.Unknown
+            && Enum.IsDefined(region.Timing)
+            && region.Timing != ExecutionRegionTiming.Unknown
+            && Enum.IsDefined(region.Cardinality)
+            && region.Cardinality != ExecutionRegionCardinality.Unknown;
+
+    private static bool IsAccountedExecutionRegionArgument(
+        CommandOccurrence command,
+        Arg argument,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => command.Arguments.Any(analyzed =>
+            ReferenceEquals(analyzed.Argument, argument)
+            && IsAccountedExecutionRegionArgument(
+                analyzed,
+                accountedRegionArguments));
+
+    private static bool IsAccountedExecutionRegionArgument(
+        AnalyzedArgument argument,
+        HashSet<ClauseElement> accountedRegionArguments)
+        => argument.Argument.Kind == ArgKind.DynamicSkip
+            && accountedRegionArguments.Contains(argument.Element);
+
+    private static bool HasBoundedAuthoredFileSystemValue(
+        CommandOccurrence command,
+        Arg argument)
+        => command.Arguments.Any(analyzed =>
+            ReferenceEquals(analyzed.Argument, argument)
+            && analyzed.AuthoredFileSystemValue is ShellValueDomain.Exact
+                or ShellValueDomain.FiniteSet);
 
     private static bool IsKnownAncestor(ShellSyntaxNode ancestor)
         => ancestor is ShellBlockSyntax
@@ -355,7 +455,29 @@ public sealed record ShellCommandAnalysis
         };
 
     private static bool HasUnsupportedArgumentDomain(AnalyzedArgument argument)
-        => argument.Value switch
+    {
+        if (argument.AuthoredFileSystemValue is not ShellValueDomain.Unknown
+            and not ShellValueDomain.Exact
+            and not ShellValueDomain.FiniteSet)
+        {
+            return true;
+        }
+
+        var value = argument.Value;
+        if (value is ShellValueDomain.Unknown)
+        {
+            if (argument.AuthoredFileSystemValue is not ShellValueDomain.Unknown)
+            {
+                value = argument.AuthoredFileSystemValue;
+            }
+            else if (!argument.Argument.IsPath
+                     && argument.AuthoredValue is not ShellValueDomain.Unknown)
+            {
+                value = argument.AuthoredValue;
+            }
+        }
+
+        return value switch
         {
             // A raw authored glob has no one runtime value. Netclaw applies
             // its fixed covering-scope checks to the source Arg below.
@@ -364,11 +486,16 @@ public sealed record ShellCommandAnalysis
             ShellValueDomain.FiniteSet finite => finite.Values.Count is < 2 or > 32
                 || finite.Values.Any(static value => value is null)
                 || finite.Values.Distinct(StringComparer.Ordinal).Count() != finite.Values.Count,
+            // ShellSyntaxTree proves these domains are bounded. They remain
+            // data only and cannot establish path or execution authority.
+            ShellValueDomain.IntegerRange => argument.Argument.IsPath,
+            ShellValueDomain.Concatenation => argument.Argument.IsPath,
             ShellValueDomain.PathPattern pattern =>
                 string.IsNullOrWhiteSpace(pattern.Pattern)
                 || string.IsNullOrWhiteSpace(pattern.CoveringDirectory),
             _ => true
         };
+    }
 
     private static bool HasUnresolvedRedirect(CommandOccurrence occurrence)
         => occurrence.Redirects.Any(redirect => HasUnresolvedRedirect(occurrence, redirect));

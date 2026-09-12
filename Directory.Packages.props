@@ -3,29 +3,29 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
     <!-- Nuget package versions -->
-    <AkkaHostingVersion>1.5.70</AkkaHostingVersion>
+    <AkkaHostingVersion>1.5.71</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.7.0</AkkaRemindersVersion>
-    <OpenTelemetryVersion>1.17.0</OpenTelemetryVersion>
-    <SlackNetVersion>0.17.11</SlackNetVersion>
+    <OpenTelemetryVersion>1.18.0</OpenTelemetryVersion>
+    <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
-    <MattermostNetVersion>5.0.7</MattermostNetVersion>
+    <MattermostNetVersion>5.0.10</MattermostNetVersion>
     <TelegramBotVersion>22.10.2.1</TelegramBotVersion>
     <MicrosoftExtensionsAIVersion>10.8.3</MicrosoftExtensionsAIVersion>
     <!-- Microsoft.Extensions.TimeProvider.Testing ships on the dotnet/extensions minor
          cadence and has no 10.8.x patch, so it cannot share MicrosoftExtensionsAIVersion
          once the AI packages move to a patch release. -->
-    <MicrosoftExtensionsTimeProviderTestingVersion>10.8.0</MicrosoftExtensionsTimeProviderTestingVersion>
+    <MicrosoftExtensionsTimeProviderTestingVersion>10.9.0</MicrosoftExtensionsTimeProviderTestingVersion>
     <OpenAIVersion>2.12.0</OpenAIVersion>
-    <MicrosoftAspNetCoreVersion>10.0.10</MicrosoftAspNetCoreVersion>
-    <SkiaSharpVersion>4.151.1</SkiaSharpVersion>
+    <MicrosoftAspNetCoreVersion>10.0.12</MicrosoftAspNetCoreVersion>
+    <SkiaSharpVersion>4.152.0</SkiaSharpVersion>
     <!-- Aspire pins are exercised only by samples/Netclaw.Demo.AppHost and its
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
-    <AspireHostingVersion>13.4.6</AspireHostingVersion>
-    <CommunityToolkitAspireVersion>13.4.0</CommunityToolkitAspireVersion>
-    <ModelContextProtocolVersion>2.0.0</ModelContextProtocolVersion>
+    <AspireHostingVersion>13.5.3</AspireHostingVersion>
+    <CommunityToolkitAspireVersion>13.5.0</CommunityToolkitAspireVersion>
+    <ModelContextProtocolVersion>2.2.0</ModelContextProtocolVersion>
   </PropertyGroup>
   <!-- App dependencies -->
   <ItemGroup>
@@ -36,16 +36,20 @@
     <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
-    <PackageVersion Include="Anthropic" Version="12.39.0" />
-    <PackageVersion Include="HtmlAgilityPack" Version="1.12.4" />
+    <PackageVersion Include="Anthropic" Version="12.46.0" />
+    <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
     <!-- Transitive security pin: Microsoft.AspNetCore.OpenApi 10.0.9 pulls
          Microsoft.OpenApi 2.0.0, which trips NU1903 (CVE-2026-49451 /
          GHSA-v5pm-xwqc-g5wc, circular schema references can terminate OpenAPI
          parsing). Keep this on the patched 2.x line until ASP.NET Core ships a
-         non-vulnerable transitive dependency. -->
-    <PackageVersion Include="Microsoft.OpenApi" Version="2.7.5" />
+         non-vulnerable transitive dependency.
+         Microsoft.AspNetCore.OpenApi 10.0.12 requires Microsoft.OpenApi
+         >= 2.12.0 && < 3.0.0. Central transitive pinning turns a lower pin
+         into an NU1109 downgrade error, so keep this version at or above the
+         floor that MicrosoftAspNetCoreVersion demands. -->
+    <PackageVersion Include="Microsoft.OpenApi" Version="2.12.2" />
     <PackageVersion Include="Microsoft.Extensions.AI" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.AI.Abstractions" Version="$(MicrosoftExtensionsAIVersion)" />
     <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="$(MicrosoftAspNetCoreVersion)" />
@@ -77,12 +81,13 @@
     <PackageVersion Include="Telegram.Bot" Version="$(TelegramBotVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.3.0-alpha.6" />
-    <PackageVersion Include="Termina" Version="0.16.1" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.3.5" />
+    <PackageVersion Include="Termina" Version="0.16.2" />
+    <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.0" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
-    <PackageVersion Include="Google.Protobuf" Version="3.35.1" />
+    <PackageVersion Include="Google.Protobuf" Version="3.36.1" />
     <PackageVersion Include="Grpc.Tools" Version="2.83.0" />
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
@@ -91,10 +96,18 @@
     <PackageVersion Include="Akka.Hosting.TestKit" Version="$(AkkaHostingVersion)" />
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
-    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.8.1" />
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
     <PackageVersion Include="CsCheck" Version="4.8.0" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
-    <PackageVersion Include="Testcontainers" Version="4.13.0" />
+    <PackageVersion Include="Testcontainers" Version="4.14.0" />
+    <!-- Transitive security pin: Testcontainers 4.13.0 pulls SSH.NET 2025.1.0,
+         which trips NU1903 (CVE-2026-48798 / GHSA-q939-rpr3-3284, path traversal
+         in ScpClient.Download recursive downloads, affected <= 2025.1.0).
+         2026.0.0 is the patched line and still satisfies Testcontainers'
+         >= 2025.1.0 constraint. SSH.NET is a test-only transitive dependency with
+         no runtime exposure; remove this pin once Testcontainers ships a
+         non-vulnerable transitive dependency on its own. -->
+    <PackageVersion Include="SSH.NET" Version="2026.0.0" />
   </ItemGroup>
   <!-- .NET Aspire (samples/Netclaw.Demo.AppHost only) -->
   <ItemGroup>
@@ -118,13 +131,26 @@
   <ItemGroup>
     <PackageVersion Include="BenchmarkDotNet" Version="0.15.8" />
   </ItemGroup>
+  <!-- Memory embeddings (Netclaw.Embeddings + Netclaw.Embeddings.Tests). CPU-only ONNX
+       inference + a pure-managed WordPiece tokenizer, per memory-core-redesign D1: no
+       sidecar process, no native dependency beyond the ONNX Runtime CPU EP that already
+       ships linux-x64 + linux-arm64 native assets. -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.29.0" />
+    <PackageVersion Include="FastBertTokenizer" Version="1.0.28" />
+    <!-- Pinned to 10.0.10 (matches $(MicrosoftAspNetCoreVersion)), not the lowest version that
+         compiles: Microsoft.Extensions.AI 10.8.0 already pulls System.Numerics.Tensors
+         >= 10.0.10 transitively, and CentralPackageTransitivePinningEnabled requires the
+         central pin to be at least as high as every transitive floor in the graph. -->
+    <PackageVersion Include="System.Numerics.Tensors" Version="10.0.10" />
+  </ItemGroup>
   <!-- Source generators -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.CodeAnalysis.CSharp" Version="5.6.0" />
   </ItemGroup>
   <!-- SourceLink support for all Akka.NET projects -->
   <ItemGroup>
-    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.301" />
+    <PackageVersion Include="Microsoft.SourceLink.GitHub" Version="10.0.401" />
   </ItemGroup>
   <!-- Transitive audit suppress: Microsoft.Data.Sqlite → SQLitePCLRaw.lib.e_sqlite3 2.1.11
        is flagged by NuGetAudit (GHSA-2m69-gcr7-jv3q, CVE-2025-6965 — SQLite < 3.50.2

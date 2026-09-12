@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SlackSessionBindingContractTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -167,7 +167,7 @@ public sealed class SlackSessionBindingContractTests(ITestOutputHelper output)
             ThreadHistoryFetcher: historyFetcher ?? EmptyThreadHistoryFetcher.Instance,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultTextOnlyModel,
-            Paths: paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(paths),
             PromptInjectionDetector: detector);
 
         var suffix = string.IsNullOrEmpty(nameSuffix) ? "" : $"-{nameSuffix}";

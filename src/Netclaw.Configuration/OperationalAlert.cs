@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="OperationalAlert.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -37,6 +37,11 @@ public enum AlertType
     DaemonStopping,
     DaemonCrashed,
     UpdateAvailable,
+    MemoryEmbeddingModelUnavailable,
+    MemoryRelevanceModelUnavailable,
+    // New values stay at the end so prior ordinal values remain stable.
+    ReminderScheduleFailed,
+    ChannelReconnected,
 }
 
 /// <summary>

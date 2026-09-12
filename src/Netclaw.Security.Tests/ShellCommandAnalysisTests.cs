@@ -78,6 +78,24 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
+    [InlineData("bash -lc", "file_read", "file_write")]
+    [InlineData("sudo bash -lc", "sudo", "file_read", "file_write")]
+    [InlineData("env bash -lc", "env", "file_read", "file_write")]
+    public void Bash_wrapper_payload_stays_before_later_outer_command(
+        string invocation,
+        params string[] expectedVerbs)
+    {
+        var analysis = _analyzer.Analyze(
+            $"{invocation} \"file_read\"; file_write",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            expectedVerbs,
+            analysis.Commands.Select(static command => command.Clause.Verb.Tokens[0]));
+    }
+
+    [Theory]
     [InlineData("pwsh -NoProfile -NonInteractive -Command 'git status'", "pwsh")]
     [InlineData("powershell.exe -Command 'git status'", "powershell.exe")]
     public void Bash_treats_power_shell_as_an_ordinary_external_command(
@@ -190,6 +208,123 @@ public sealed class ShellCommandAnalysisTests
         Assert.False(
             analysis.HasDynamicSyntax,
             Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_proved_command_argument_region_is_complete()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            @"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            ["Get-ChildItem", "ForEach-Object", "Remove-Item"],
+            analysis.Commands.Select(command => command.Clause.Verb.Joined));
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_unknown_command_argument_region_stays_dynamic()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            @"Invoke-Custom { Remove-Item .\victim.txt }",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Theory]
+    [InlineData("echo \"---EXIT $?---\"")]
+    [InlineData("printf '%s' \"$?\"")]
+    [InlineData("status-report \"$?\"")]
+    public void Bash_bounded_non_path_data_keeps_static_structure(string command)
+    {
+        var analyzer = new ShellCommandAnalyzer(BashEnvironment);
+        var analysis = analyzer.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
+    public void Bash_finite_loop_data_keeps_static_structure()
+    {
+        var analysis = _analyzer.Analyze(
+            "for value in first second; do status-report \"$value\"; done",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        var argument = Assert.Single(Assert.Single(analysis.Commands).Arguments);
+        Assert.IsType<ShellValueDomain.Unknown>(argument.Value);
+        var authored = Assert.IsType<ShellValueDomain.FiniteSet>(argument.AuthoredValue);
+        Assert.Equal(["first", "second"], authored.Values);
+    }
+
+    [Fact]
+    public void Bash_finite_filesystem_loop_uses_the_strong_authored_domain()
+    {
+        var analysis = _analyzer.Analyze(
+            "for f in src/A.cs src/B.cs; do cat /work/$f; done",
+            "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        var argument = Assert.Single(Assert.Single(analysis.Commands).Arguments);
+        Assert.IsType<ShellValueDomain.Unknown>(argument.Value);
+        var authored = Assert.IsType<ShellValueDomain.FiniteSet>(
+            argument.AuthoredFileSystemValue);
+        Assert.Equal(["/work/src/A.cs", "/work/src/B.cs"], authored.Values);
+    }
+
+    [Theory]
+    [InlineData("status-report \"$1\"")]
+    [InlineData("rm \"$1\"")]
+    [InlineData("echo ok > \"$1\"")]
+    [InlineData("echo ok > \"result-$?.log\"")]
+    [InlineData("\"$1\" --version")]
+    [InlineData("sh -c \"$1\"")]
+    [InlineData("sh -c \"$?\"")]
+    [InlineData("for value in first second; do rm \"$value\"; done")]
+    [InlineData("for f in 'src/A.cs /etc/passwd'; do cat /work/$f; done")]
+    [InlineData("for f in '*.cs'; do cat /work/$f; done")]
+    public void Bash_unknown_or_authority_bearing_data_stays_dynamic(string command)
+    {
+        var analyzer = new ShellCommandAnalyzer(BashEnvironment);
+        var analysis = analyzer.Analyze(command, "/work");
+
+        Assert.True(
+            analysis.Failure != ShellAnalysisFailure.None || analysis.HasDynamicSyntax,
+            Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_empty_command_argument_region_stays_dynamic()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze("ForEach-Object { }", @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_multiple_proved_command_argument_regions_are_complete()
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(
+            "ForEach-Object -End { Write-Output end } -Begin { Write-Output begin } -Process { Write-Output process }",
+            @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            ["ForEach-Object", "Write-Output", "Write-Output", "Write-Output"],
+            analysis.Commands.Select(command => command.Clause.Verb.Joined));
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
     }
 
     [Fact]

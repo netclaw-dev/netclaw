@@ -15,12 +15,7 @@ fallback.
 ## Requirements
 ### Requirement: Context layer audience filtering
 
-The context layer system SHALL accept a `TrustAudience` parameter on
-`IContextLayerProvider.GetContextLayer()`. Each context layer implementation
-SHALL use the audience to determine what content to return. The
-`ContextAssemblyInput` record SHALL include a `TrustAudience Audience` field.
-When a feature is disabled deployment-wide, the corresponding context layer
-SHALL also return empty even for non-Public audiences.
+The context layer system SHALL accept a `TrustAudience` parameter on `IContextLayerProvider.GetContextLayer()`. Each context layer implementation SHALL use the audience to determine what content to return. The `ContextAssemblyInput` record SHALL include a `TrustAudience Audience` field. When a feature is disabled deployment-wide, the corresponding context layer SHALL also return empty even for non-Public audiences. The skill context layer SHALL use separate Team and Personal index values when source permissions differ.
 
 #### Scenario: Public audience receives no skill index
 
@@ -47,15 +42,23 @@ SHALL also return empty even for non-Public audiences.
 - **THEN** `SkillIndexContextLayer.GetContextLayer(Team)` returns empty string
 - **AND** no skill index appears in the session's system messages
 
-#### Scenario: Team audience receives all allowed context layers
+#### Scenario: Team audience receives allowed context layers
 
 - **WHEN** a Team-audience session assembles context
-- **THEN** all enabled context layers return their full content
+- **THEN** all enabled context layers return their allowed content
 
-#### Scenario: Personal audience receives all allowed context layers
+#### Scenario: Personal audience receives allowed context layers
 
 - **WHEN** a Personal-audience session assembles context
-- **THEN** all enabled context layers return their full content
+- **THEN** all enabled context layers return their allowed content
+
+#### Scenario: MCP prompt server differs by audience
+
+- **GIVEN** Personal can use MCP server `gigatron`
+- **AND** Team cannot use MCP server `gigatron`
+- **WHEN** both audiences request the skill context layer
+- **THEN** the Personal index contains `mcp__gigatron__` prompt skills
+- **AND** the Team index does not reveal those skill names
 
 ### Requirement: Session block path redaction
 
@@ -99,21 +102,21 @@ The working context block, including project directory, recent files, Git worktr
 ### Requirement: File access error message sanitization
 
 File access denial messages for Public-audience sessions SHALL NOT include
-the list of allowed root paths or mention the session directory as an allowed
-root. Team and Personal audiences SHALL continue to receive verbose error
-messages including allowed roots.
+the list of trusted roots or identify the session directory as a trusted root.
+Team and Personal audiences SHALL continue to receive verbose error messages
+that include trusted roots.
 
 #### Scenario: Public file access denial omits roots
 
-- **WHEN** a Public-audience session attempts to read a file outside allowed roots
-- **THEN** the error message does not reveal any allowed root
+- **WHEN** a Public-audience session attempts to read a file outside trusted roots
+- **THEN** the error message does not reveal any trusted root
 - **AND** no root paths are listed in the error
 - **AND** the session directory is not named or implied in the error
 
 #### Scenario: Team file access denial includes roots
 
-- **WHEN** a Team-audience session attempts to read a file outside allowed roots
-- **THEN** the error message includes the list of allowed root paths
+- **WHEN** a Team-audience session attempts to read a file outside trusted roots
+- **THEN** the error message includes the list of trusted root paths
 
 ### Requirement: Public audience has no implicit internal file roots
 

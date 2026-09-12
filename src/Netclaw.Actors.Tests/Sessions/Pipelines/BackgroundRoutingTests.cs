@@ -210,6 +210,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
     [Fact]
     public async Task ExplicitBackground_PreservesWorkingDirectory()
     {
+        var projectDirectory = Path.Combine(Path.GetTempPath(), "project");
         var executor = new EchoExecutor();
         var probe = CreateTestProbe("pipeline-probe-workingdir");
         var jobManagerProbe = CreateTestProbe("job-manager-workingdir");
@@ -220,7 +221,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
             new("call-bg-dir", "shell_execute", new Dictionary<string, object?>
             {
                 ["command"] = "dotnet test",
-                ["working_directory"] = "/tmp/project",
+                ["working_directory"] = projectDirectory,
                 ["_background"] = true,
                 ["_rationale"] = "run tests in repo"
             })
@@ -239,12 +240,13 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("/tmp/project", received.WorkingDirectory);
+        Assert.Equal(projectDirectory, received.WorkingDirectory);
     }
 
     [Fact]
     public async Task ExplicitBackground_PersistsResolvedProjectDirectoryWhenArgumentIsOmitted()
     {
+        var projectDirectory = Path.Combine(Path.GetTempPath(), "active-project");
         var executor = new EchoExecutor();
         var probe = CreateTestProbe("pipeline-probe-resolved-workingdir");
         var jobManagerProbe = CreateTestProbe("job-manager-resolved-workingdir");
@@ -263,7 +265,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         await new SessionToolPipelineTestFixture(
                 executor, toolCalls, new SessionId("test/background-resolved-dir"), probe.Ref)
             .From(TestMessageSource())
-            .InProject("/tmp/active-project")
+            .InProject(projectDirectory)
             .WithBackgroundJobs(fakeJobManager)
             .ExecuteAsync(TestContext.Current.CancellationToken);
 
@@ -274,7 +276,7 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
         var received = await jobManagerProbe.ExpectMsgAsync<StartBackgroundJob>(
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("/tmp/active-project", received.WorkingDirectory);
+        Assert.Equal(projectDirectory, received.WorkingDirectory);
     }
 
     [Fact]
@@ -411,6 +413,17 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
 
     private sealed class EchoExecutor : IToolExecutor
     {
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromResult(new ShellProcessLaunch(
+                ToolArgumentHelper.GetString(toolCall.Arguments, "Command")!,
+                context.ResolveShellCwd(ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"))
+                    ?? throw new InvalidOperationException("The test launch requires a working directory."),
+                context.Invocation,
+                new Netclaw.Security.ShellCommandPolicy(TestShellEnvironment.Current),
+                new Netclaw.Security.ToolPathPolicy(TestShellEnvironment.Current, []),
+                static _ => Task.CompletedTask));
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => Task.CompletedTask;
 
@@ -423,6 +436,10 @@ public sealed class BackgroundRoutingTests(ITestOutputHelper output) : TestKit(o
 
     private sealed class DenyingExecutor : IToolExecutor
     {
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+            => Task.FromException<ShellProcessLaunch>(new ToolAccessDeniedException("shell_disabled"));
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => Task.FromException(new ToolAccessDeniedException("shell_disabled"));
 

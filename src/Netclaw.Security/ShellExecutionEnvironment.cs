@@ -171,6 +171,15 @@ public sealed class ShellExecutionEnvironment
     /// Parses source with the environment's grammar, dialect, working directory, and unknown initial state.
     /// </summary>
     public ParsedCommand Parse(string source, string? workingDirectory = null)
+        => ParseForApproval(source, workingDirectory, publishAuthoredSourceFacts: false);
+
+    /// <summary>
+    /// Parses source for internal approval analysis with optional authored-source facts.
+    /// </summary>
+    internal ParsedCommand ParseForApproval(
+        string source,
+        string? workingDirectory,
+        bool publishAuthoredSourceFacts)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -179,7 +188,8 @@ public sealed class ShellExecutionEnvironment
             ShellGrammar.Bash => new BashParser(new BashParserOptions
             {
                 WorkingDirectory = workingDirectory,
-                InitialStateMode = BashInitialStateMode.Unknown
+                InitialStateMode = BashInitialStateMode.Unknown,
+                PublishAuthoredSourceFacts = publishAuthoredSourceFacts
             }).Parse(source),
             ShellGrammar.PowerShell when PowerShellDialect is { } dialect =>
                 new PwshParser(new PwshParserOptions

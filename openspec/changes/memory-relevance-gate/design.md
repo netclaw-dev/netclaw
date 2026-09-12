@@ -224,10 +224,13 @@ vector was available): the floor already reduced the candidate set to
 candidate-generation protocol — the gate never sees a candidate the floor
 would not already have admitted). Each survivor is paired with the query and
 scored via `RelevanceScorerHolder.Current.ScoreAsync`, under a CE sub-budget
-(~60 ms) nested inside the overall `RecallTimeoutMs` via a linked
+(ceiling 120 ms, envelope-clamped — raised from 60 ms and clamped to
+whatever remains of the outer envelope by a 2026-07 production-canary
+finding: two live cold-start timeouts, see the Open Questions entry below)
+nested inside the overall `RecallTimeoutMs` via a linked
 `CancellationTokenSource` — the same pattern the query-embedding sub-budget
 already uses (measured p95 35 ms for 3 pairs leaves roughly 1.7x headroom
-before the sub-budget itself is hit). Candidates scoring below the
+before the sub-budget itself is hit on a warm session). Candidates scoring below the
 manifest/config threshold are dropped; **zero survivors after the gate is a
 "nothing injected" outcome**, identical in kind to zero survivors at the
 floor — the `[memory-recall]` block continues to be omitted entirely, not
@@ -327,15 +330,25 @@ selectivity without one of these signals firing.
   (397 MB), the operator's measured total is ≈763 MB against a 1 GB K8s pod
   limit — inside budget, but the margin (≈260 MB) is not so large that a
   future addition to the memory runtime gets it for free. Mitigated by
-  measuring rather than assuming, and by keeping the CE sub-budget (~60 ms)
-  small relative to the overall 300 ms recall timeout so a degraded gate
-  never risks the turn itself.
-- [Nested sub-budgets: query-embedding (~150 ms) + gate (~60 ms) inside one
-  300 ms `RecallTimeoutMs`] → worst case both sub-budgets fully elapse
-  (210 ms) before any lexical/ranking work runs, leaving less slack than
-  Slice 4 alone had. Not yet measured end-to-end under production
-  contention. Flagged as an open question (below), not silently assumed
-  safe.
+  measuring rather than assuming, and by keeping the CE sub-budget
+  (120 ms ceiling, envelope-clamped) small relative to the overall 300 ms
+  recall timeout so a degraded gate never risks the turn itself.
+- [Nested sub-budgets: query-embedding (~150 ms) + gate (120 ms ceiling,
+  envelope-clamped) inside one 300 ms `RecallTimeoutMs`] → worst case both
+  sub-budgets fully elapse before any lexical/ranking work runs, leaving less
+  slack than Slice 4 alone had. **2026-07 production-canary update: this
+  materialized.** Two live `memory_recall_gate_degraded` events (reason
+  `score_failed:TaskCanceledException`) in scheduled-reminder sessions waking
+  from an idle period measured total turn latency already past the entire
+  300 ms envelope by the time the gate started scoring — a cold ONNX session
+  (paged-out weights) plus host contention, not a per-call latency
+  regression. Fix landed as (1) a periodic keep-warm tick in
+  `EmbeddingWarmupHostedService` keeping both ONNX sessions' working sets
+  resident, and (2) raising the gate ceiling to 120 ms while clamping the
+  actually-applied sub-budget to whatever remains of the outer envelope (the
+  linked CTS was already the hard cap; this just derives the sub-budget from
+  it instead of assuming a fixed value is always affordable). The Open
+  Questions entry below is resolved by this same finding.
 - [Two-holders-become-three] → `MemoryEmbedderHolder` +
   `MemoryVectorIndexHolder` + the new `RelevanceScorerHolder` is more moving
   parts than a consolidated holder would be. Accepted for this change (D4)
@@ -368,16 +381,79 @@ selectivity without one of these signals firing.
    re-run the shoot-out's threshold-sweep protocol against a different
    relevance model or a different corpus, so re-calibration is a documented
    procedure rather than tribal knowledge trapped in a local research
-   directory.
+   directory. See "Calibration Verification Procedure" below.
+
+## Calibration Verification Procedure
+
+S*=0.02 is calibrated specifically against `ms-marco-minilm-l-6-v2`'s score
+distribution (D3, D6) — it is not a universal constant. This section
+documents the re-run procedure so a future model swap or corpus-specific
+recalibration is a repeatable exercise, not tribal knowledge that only
+exists in the shoot-out's own history.
+
+**Where the harness lives**: the gate-shootout scripts (the 4-design
+comparison and the out-of-sample re-validation this design's scorecard
+reports) and the floor-calibration/quantization-eval harness this change's
+threshold sweep reuses both live in the operator's local research directory,
+never in this repo:
+
+- `~/recall-research-local/2026-07/gate-shootout/` — the 4-design shoot-out
+  (distribution-shape, cross-encoder, learned feature gate, per-memory
+  offender priors) and the threshold-sweep driver used to pick S* for a
+  given model's score distribution.
+- `~/recall-research-local/2026-07/quant-eval/` — the quantization/floor
+  harness (`floor_calibration.py` and related tooling) this change's sweep
+  protocol follows the same shape as: sweep a threshold over a fixed
+  corpus/gold-set pair, score every candidate, report zero-injection
+  accuracy, recall retention, and F0.5 at each candidate threshold.
+
+**Inputs required to re-run a sweep**:
+
+- A corpus snapshot as a SQLite file (`VACUUM INTO` clone of
+  `memory_documents`, same shape the July audit and the shoot-out both used)
+  — this is what candidates are drawn from.
+- A judged gold-set JSONL (query, candidate doc ids, relevance labels) —
+  either an existing ratified set (`gold-prod-2026-07`, the 450-query
+  expansion) or a freshly judged set for a new corpus/domain. The judging
+  protocol (dual-pass judging, harsher-wins aggregation for ambiguous
+  candidates) is documented in the shoot-out's own history, not repeated here.
+- The candidate relevance model as an ONNX artifact (the currently shipped
+  `model_quantized.onnx`, or a different cross-encoder being evaluated as a
+  replacement) — whatever model the new threshold will be calibrated *for*,
+  since the threshold is meaningless detached from the model that produced
+  the scores.
+
+**Outputs**: a per-threshold table (zero-injection accuracy, recall
+retention, F0.5, mean injected count) — the same shape as the D2 scorecard
+above — from which an operating point is chosen the same way S*=0.02 was:
+prefer the highest zero-injection accuracy whose recall retention still
+clears the ≥90% constraint, and re-validate the chosen point out-of-sample
+(a disjoint gold-set expansion) before treating it as calibrated, not just
+in-sample-optimal. The resulting `(ModelId, CalibratedThreshold)` pair is
+what gets hand-carried into a new `RelevanceModelManifestEntry` in
+`EmbeddingModelProvisioner`'s allowlist (D3) — recalibration never edits a
+bare config default disconnected from which model produced it.
+
+**Why this stays repo-external**: both harness directories operate on real,
+PII-bearing production traffic (query text, memory content) — the same
+constraint documented in `docs/research/memory-audit-2026-07.md` for every
+other research artifact referenced by this change and by
+memory-core-redesign. The scripts and their outputs are operator-local by
+design, never committed; only the *ratified, redacted results* (this
+scorecard, the frozen threshold, the pinned model SHA-256) enter the repo.
 
 ## Open Questions
 
-- Combined worst-case latency of the query-embedding sub-budget (~150 ms)
+- ~~Combined worst-case latency of the query-embedding sub-budget (~150 ms)
   plus the new CE sub-budget (~60 ms) inside the single 300 ms
   `RecallTimeoutMs`, measured end-to-end under realistic contention rather
-  than each sub-budget's own isolated measurement — gates this change's
-  sub-budget sizing the same way Slice 4 gated its own latency assumption
-  before shipping.
+  than each sub-budget's own isolated measurement.~~ **Resolved by the
+  2026-07 production-canary finding**: it materialized under real cold-start
+  contention (two live `score_failed:TaskCanceledException` degradations,
+  reminder sessions waking from idle). Fix: `EmbeddingWarmupHostedService`
+  keep-warm tick (keeps both ONNX sessions resident) + gate sub-budget
+  raised to a 120 ms ceiling, clamped to whatever remains of the outer
+  envelope rather than a fixed value.
 - Whether the deferred R2-mirroring decision for the embedding model artifact
   (memory-core-redesign, post-PoC) should extend to this second (relevance)
   model artifact once that decision is made.

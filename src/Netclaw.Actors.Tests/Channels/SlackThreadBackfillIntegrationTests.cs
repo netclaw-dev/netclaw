@@ -81,6 +81,14 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
+        // The stock single-expect-default is 3 seconds. That value measures
+        // scheduler load on a starved CI runner. It does not measure the
+        // correctness of the parameterless ExpectMsgAsync<ProactiveThreadAck>
+        // wait below (line ~728). The ack sits behind actor spawn, Akka.Persistence
+        // recovery, and stream materialization. Production allows 30 seconds for
+        // the same ack — see ProactiveSendFormatting.ProactiveThreadAckTimeout.
+        builder.AddHocon("akka.test.single-expect-default = 15s", HoconAddMode.Prepend);
+
         builder
             .WithInMemoryJournal()
             .WithInMemorySnapshotStore()
@@ -101,10 +109,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -127,7 +135,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-backfill");
@@ -193,10 +201,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -219,7 +227,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: countingFetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-recovery");
@@ -330,10 +338,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -355,7 +363,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             HttpClient: httpClient,
             PromptInjectionDetector: new ContainsIgnorePromptInjectionDetector());
 
@@ -455,10 +463,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -481,7 +489,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-bot-exclude");
@@ -566,10 +574,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -592,7 +600,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-proactive-root");
@@ -681,10 +689,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -711,7 +719,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-rearm");
@@ -773,10 +781,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -799,7 +807,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-stale-ordering");
@@ -901,10 +909,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             profiles,
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -931,7 +939,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: fetcher,
             AudienceProfiles: profiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-backfill-public-doc");
@@ -1002,10 +1010,10 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             new SlackChannelOptions { BotToken = new SensitiveString("xoxb-fake") },
             httpClient,
             new NullContentScanner(),
-            new NetclawPaths(Path.GetTempPath()),
             ToolAudienceProfileDefaults.CreateProfiles(),
             TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         var deps = new SlackGatewayDependencies(
             Pipeline: pipeline,
@@ -1029,7 +1037,7 @@ public sealed class SlackThreadBackfillIntegrationTests : TestKit
             ThreadHistoryFetcher: countingFetcher,
             AudienceProfiles: TestSlackGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestSlackGatewayDeps.DefaultVisionCapableModel,
-            Paths: _paths,
+            StorageResolver: new Netclaw.Actors.Protocol.TestSessionStorageResolver(_paths),
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
 
         var gateway = Sys.ActorOf(SlackGatewayActor.CreateProps(deps), "slack-gw-tap-rehydrate");

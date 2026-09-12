@@ -13,8 +13,15 @@ SOUL/AGENTS/TOOLING layers.
 Use `set_working_directory` to set or change the project directory:
 
 ```
-set_working_directory(path: "/home/user/workspaces/akadonic")
+set_working_directory(path: "/workspace/service")
 ```
+
+An absolute shell path gives approval policy an exact candidate scope. It does
+not add that directory as a safe-space root. When the declaration tool is
+available, declare a different user-named project before its first tool call.
+Declare the named path before probing it. If rejected, declare the
+user-provided fallback before other tools.
+Use the task's first project path exactly; do not substitute its parent first.
 
 Rules:
 
@@ -27,8 +34,37 @@ Rules:
 - The project directory persists across crash/restart via `WorkingContext`
 - The `[working-context]` block includes `project_dir:` so you always know which
   project is active
+- Do not call the tool again when `project_dir` already names the right project
+- A failed call does not change the project directory. Correct the path and
+  retry the tool before you continue.
+
+Choose directories in this order:
+
+1. For declared-project work, omit `WorkingDirectory`; the shell uses `project_dir`.
+2. For one call in a named child directory, set typed `WorkingDirectory`.
+3. Use `temp_dir` for disposable files. Standard temporary APIs already use this directory.
+4. Use an inline directory change only when the task requests that behavior.
+
+Keep shell approval friction bounded:
+
+1. Start with the smallest single shell operation that directly answers the request.
+2. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels.
+3. Add a pipeline only when the requested result requires it.
+4. Do not use shell only to verify a successful structured tool result.
+5. If approval is required but no interactive requester is available, do not retry or substitute the call during that turn.
+6. After an access denial, do not retry that call during the same user turn.
+7. Do not change its scope or substitute another tool to evade the denial.
+8. A later explicit user request can start a new call. Apply the normal approval policy to that call.
+9. Apply all compatible advice in a correction response before the next call.
+10. A shell call can return correction advice under Auto. Auto removes approval prompts; it does not remove corrections.
+11. Advice grants no authority. Every replacement call passes current policy.
+12. If you require the exact platform path, retry unchanged once through normal policy.
+13. Reviewed diagnostics without file output do not receive temporary relocation advice. Normal approval and denial rules still apply.
 
 The project directory is distinct from the session directory
 (`~/.netclaw/sessions/{id}/`). The session directory is immutable and used for
 state isolation (inbox, media). The project directory is mutable and points to
 the project root.
+
+For a Git worktree, choose a destination below `worktree_dir`. Use
+`shell_execute` to run Git. Use `set_working_directory` only after Git succeeds.

@@ -99,19 +99,42 @@ public class ShellExecutionEnvironmentResolverTests
     [InlineData((int)PowerShellProbeFailure.StartFailed)]
     [InlineData((int)PowerShellProbeFailure.Timeout)]
     [InlineData((int)PowerShellProbeFailure.MalformedVersion)]
-    public async Task Preferred_operational_failure_stops_without_fallback(
+    public async Task Preferred_probe_failure_selects_Windows_PowerShell51(
         int failureValue)
     {
         var failure = (PowerShellProbeFailure)failureValue;
         var probe = new SequencePowerShellProbe(
-            ("pwsh.exe", new PowerShellHostProbeResult.Failed(failure)));
+            ("pwsh.exe", new PowerShellHostProbeResult.Failed(failure)),
+            ("powershell.exe", Found(
+                "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+                "5.1")));
+        var resolver = new ShellExecutionEnvironmentResolver(probe);
+
+        var resolution = await resolver.ResolveAsync(
+            ShellPlatform.Windows,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(PwshDialect.WindowsPowerShell51, resolution.Environment.PowerShellDialect);
+        Assert.Equal(PowerShellFallbackReason.PreferredHostProbeFailed, resolution.FallbackReason);
+        Assert.Null(resolution.RejectedPreferredVersion);
+        Assert.Equal(["pwsh.exe", "powershell.exe"], probe.Calls);
+    }
+
+    [Fact]
+    public async Task Preferred_and_fallback_probe_failure_stops_startup()
+    {
+        var probe = new SequencePowerShellProbe(
+            ("pwsh.exe", new PowerShellHostProbeResult.Failed(PowerShellProbeFailure.Timeout)),
+            ("powershell.exe", new PowerShellHostProbeResult.Failed(
+                PowerShellProbeFailure.AccessDenied)));
         var resolver = new ShellExecutionEnvironmentResolver(probe);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             resolver.ResolveAsync(ShellPlatform.Windows, TestContext.Current.CancellationToken));
 
-        Assert.Contains(failure.ToString(), exception.Message);
-        Assert.Equal(["pwsh.exe"], probe.Calls);
+        Assert.Contains(nameof(PowerShellProbeFailure.Timeout), exception.Message);
+        Assert.Contains(nameof(PowerShellProbeFailure.AccessDenied), exception.Message);
+        Assert.Equal(["pwsh.exe", "powershell.exe"], probe.Calls);
     }
 
     [Fact]

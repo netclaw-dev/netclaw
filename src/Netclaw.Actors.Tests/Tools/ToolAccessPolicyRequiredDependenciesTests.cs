@@ -55,11 +55,27 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         => new ShellTool(ShellConfig(), new ToolPathPolicy([]), new ShellCommandPolicy());
 
     [Fact]
+    public void Shell_commands_cannot_bypass_the_coordinator()
+    {
+        var policy = new ToolAccessPolicy(
+            new NetclawPaths(),
+            ShellConfig(),
+            Defaults(),
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        Assert.Throws<InvalidOperationException>(() => policy.AuthorizeInvocation(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "git status")));
+    }
+
+    [Fact]
     public void Protected_path_control_is_enforced_and_scoped()
     {
         var deniedRoot = Path.Combine(Path.GetTempPath(), "netclaw-protected-root");
         var otherRoot = Path.Combine(Path.GetTempPath(), "netclaw-open-root");
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             ShellConfig(),
             Defaults(),
             new ShellCommandPolicy(),
@@ -67,7 +83,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
 
         // A command that touches the protected path is denied — the enforcement
         // a null toolPathPolicy silently lost.
-        var deniedDecision = policy.AuthorizeInvocation(
+        var deniedDecision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             ToolInput.Create("Command", $"cat {Path.Combine(deniedRoot, "secret.txt")}"));
@@ -78,7 +94,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         // A command that touches a path outside the protected set is NOT denied
         // for that reason — proving the policy is actually consulted and scoped,
         // not a blanket deny.
-        var otherDecision = policy.AuthorizeInvocation(
+        var otherDecision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             ToolInput.Create("Command", $"cat {Path.Combine(otherRoot, "notes.txt")}"));
@@ -95,14 +111,14 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         const string deniedRoot = @"C:\protected\config";
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, [deniedRoot]);
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             ShellConfig(),
             Defaults(),
             commandPolicy,
             pathPolicy);
         var shellTool = new ShellTool(ShellConfig(), pathPolicy, commandPolicy);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             shellTool,
             PersonalContext(),
             ToolInput.Create("Command", @"Get-Content C:\protected\config\secret.txt"));
@@ -112,12 +128,12 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
     }
 
     [Fact]
-    public void Shell_authorization_captures_one_analysis_for_execution()
+    public void Shell_preflight_returns_one_analysis_for_completion()
     {
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var commandPolicy = new ShellCommandPolicy(environment);
         var pathPolicy = new ToolPathPolicy(environment, []);
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             ShellConfig(),
             Defaults(),
             commandPolicy,
@@ -126,12 +142,12 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         var context = PersonalContext();
         var arguments = ToolInput.Create("Command", "git status");
 
-        _ = policy.AuthorizeInvocation(shellTool, context, arguments);
+        var preflight = policy.AuthorizeShellPreflight(shellTool, context, arguments);
 
-        Assert.True(policy.TryTakeAuthorizedShellAnalysis(context, out var analysis));
-        Assert.NotNull(analysis);
-        Assert.Equal("git status", analysis.Source);
-        Assert.Equal(context.ResolveShellCwd(null), analysis.WorkingDirectory);
-        Assert.False(policy.TryTakeAuthorizedShellAnalysis(context, out _));
+        var continuation = Assert.IsType<ShellPolicyPreflightResult.Continue>(preflight);
+        Assert.Equal("git status", continuation.Analysis.Source);
+        Assert.Equal(context.ResolveShellCwd(null), continuation.Analysis.WorkingDirectory);
+        Assert.Same(environment, continuation.Environment);
+        Assert.Equal(shellTool.Name, continuation.ApprovalContext.ToolName);
     }
 }

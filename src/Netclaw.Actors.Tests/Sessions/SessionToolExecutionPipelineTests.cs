@@ -1,4 +1,4 @@
-﻿// -----------------------------------------------------------------------
+// -----------------------------------------------------------------------
 // <copyright file="SessionToolExecutionPipelineTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
@@ -18,9 +18,13 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Actors.Tests.Sessions.Pipelines;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Tests.Tools;
+using Netclaw.Actors.Tests.Memory;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -28,6 +32,13 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    private static readonly string ManagedTemporarySessionDirectory = Path.GetFullPath(
+        Path.Combine(Path.GetTempPath(), "netclaw-test-sessions", "example"));
+    private static readonly string TestManagedTemporaryDirectory = Path.Combine(
+        ManagedTemporarySessionDirectory,
+        "tmp",
+        "parent");
+
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
     }
@@ -63,7 +74,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
             turnContext,
             new SessionToolRunEnvironment
             {
-                SessionDirectory = Path.GetTempPath(),
+                Storage = SessionStoragePaths.CreateLegacy(
+                    Path.GetTempPath(),
+                    Path.Combine(Path.GetTempPath(), "netclaw-test-session-logs"),
+                    "test-session"),
                 InlineOutputBudget = new InlineOutputBudget(4096),
                 SpawnChildActor = static (_, _, _) => Task.FromResult<object>(new object())
             })
@@ -134,6 +148,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
         Assert.Single(completed.ToolResults);
         Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
+        Assert.True(AuthorizationAttemptId.TryParse(approvalRequest.AuthorizationAttemptId, out var attemptId));
+        Assert.Equal(attemptId, completed.AuthorizationAttemptIds["call-1"]);
+        Assert.Equal([attemptId, attemptId], executor.AttemptIds);
     }
 
     [Fact]
@@ -215,7 +232,537 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var result = Assert.Single(completed.ToolResults);
         Assert.Contains("no interactive approval requester is available", result.Content);
         Assert.Empty(approvals);
+        Assert.True(AuthorizationAttemptId.TryParse(
+            completed.AuthorizationAttemptIds["call-no-source"].Value,
+            out _));
     }
+
+    [Fact]
+    public async Task Undeclared_project_scope_returns_agent_correction_without_user_prompt()
+    {
+        var directory = Path.GetFullPath(AppContext.BaseDirectory);
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [ShellTool.ToolName] = ToolApprovalMode.Approval
+            }
+        };
+        var environment = TestShellEnvironment.Current;
+        var command = environment.Grammar == ShellGrammar.Bash ? "pwd" : "Get-Location";
+        var shell = environment.Grammar == ShellGrammar.Bash ? ApprovalShell.Bash : ApprovalShell.PowerShell;
+        var paths = new NetclawPaths(directory, directory);
+        var registry = new ToolRegistry();
+        var shellTool = new FakeNetclawTool(ShellTool.ToolName, "unexpected execution");
+        registry.Register(shellTool);
+        registry.Register(new SetWorkingDirectoryTool(config, paths, new ToolPathPolicy(environment, [])));
+        var policy = new ToolAccessPolicy(paths, config,
+            new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
+            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []),
+            safeVerbs: SafeVerbList.FromVerbs(shell, [command]));
+        var executor = new DispatchingToolExecutor(registry, policy);
+        var probe = CreateTestProbe("project-scope-correction-probe");
+        var approvals = new List<ToolInteractionRequest>();
+        var sessionId = new SessionId("D1/project-scope-correction");
+        var toolCalls = new List<FunctionCallContent>
+        {
+            new("call-1", "shell_execute", new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = directory,
+                ["_rationale"] = "Inspect the project directory."
+            })
+        };
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .WithSetWorkingDirectoryAvailable()
+            .WithApprovals(
+                new ApprovalChannel(),
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal(
+            "Tool execution deferred: working_directory_not_declared\n" +
+            $"Project directory: '{directory}'.\n" +
+            "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
+            result.Content);
+        Assert.Equal(
+            ToolRemediationCode.SetWorkingDirectory,
+            Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-1"]).RemediationCode);
+        Assert.Empty(approvals);
+        Assert.False(shellTool.WasCalled);
+        Assert.Empty(completed.ManagedTemporaryCorrectionChanges);
+        Assert.True(AuthorizationAttemptId.TryParse(
+            completed.AuthorizationAttemptIds["call-1"].Value,
+            out _));
+    }
+
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    public async Task Native_tool_correction_bypasses_approval_and_background_dispatch(
+        bool streamResults,
+        bool background)
+    {
+        var executor = new NativeToolCorrectionExecutor();
+        var resultProbe = CreateTestProbe("native-correction-result");
+        var jobManagerProbe = CreateTestProbe("native-correction-job-manager");
+        var approvals = new List<ToolInteractionRequest>();
+        var arguments = new Dictionary<string, object?>
+        {
+            ["command"] = "file_read README.md"
+        };
+        if (background)
+        {
+            arguments["_background"] = true;
+            arguments["_rationale"] = "read later";
+        }
+
+        var fixture = new SessionToolPipelineTestFixture(
+                executor,
+                [new FunctionCallContent("call-native-correction", "shell_execute", arguments)],
+                new SessionId("D1/native-tool-correction"),
+                resultProbe.Ref)
+            .WithBackgroundJobs(jobManagerProbe.Ref)
+            .WithApprovals(
+                new ApprovalChannel(),
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan);
+        if (streamResults)
+            fixture.StreamingResults();
+
+        var pipelineTask = fixture.ExecuteAsync(TestContext.Current.CancellationToken);
+        ToolCallResult result;
+        if (streamResults)
+        {
+            result = (await resultProbe.ExpectMsgAsync<ToolExecutionSingleCompleted>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken)).Result;
+            await resultProbe.ExpectMsgAsync<ToolExecutionBatchCompleted>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+        }
+        else
+        {
+            var completed = await resultProbe.ExpectMsgAsync<ToolExecutionCompleted>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+            var message = Assert.Single(completed.ToolResults);
+            var request = Assert.Single(completed.ToolExposureRequests);
+            result = new ToolCallResult(
+                message,
+                [],
+                [],
+                [],
+                [],
+                completed.AuthorizationAttemptIds[message.ToolCallId!.Value.Value],
+                Receipt: completed.ToolReceipts[message.ToolCallId!.Value.Value],
+                ExposureRequest: request.Value);
+        }
+
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "Shell execution stopped because 'file_read' is a native Netclaw tool.\n" +
+            "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
+            result.Message.Content);
+        Assert.Equal(ToolInvocationOutcomeCategory.RecoverableCorrection, result.Receipt?.Category);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(result.Receipt).RemediationCode);
+        Assert.Equal("file_read", result.ExposureRequest?.ToolName.Value);
+        Assert.True(AuthorizationAttemptId.TryParse(result.AuthorizationAttemptId.Value, out _));
+        Assert.Empty(approvals);
+        Assert.Equal(background ? 1 : 0, executor.AuthorizationAttempts);
+        Assert.Equal(background ? 0 : 1, executor.ExecutionBoundaryAttempts);
+        await jobManagerProbe.ExpectNoMsgAsync(
+            TimeSpan.FromMilliseconds(200),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Native_and_temporary_collection_returns_one_model_response()
+    {
+        var executor = CreateApprovalGatedShellExecutor();
+        var probe = CreateTestProbe("native-temporary-collection");
+        var nativePath = Path.Combine(Path.GetTempPath(), "netclaw-p3-output.txt");
+        var call = new FunctionCallContent(
+            "call-native-temporary-collection",
+            "shell_execute",
+            new Dictionary<string, object?>
+            {
+                ["Command"] = $"file_write --path {nativePath}",
+                ["WorkingDirectory"] = Path.GetTempPath(),
+                ["_rationale"] = "Write disposable output with the native tool."
+            });
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [call],
+                new SessionId("D1/native-temporary-collection"),
+                probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(new SessionId("D1/native-temporary-collection")))
+            .WithApprovals(new ApprovalChannel(), _ => throw new InvalidOperationException("The collection must not prompt."), Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal(
+            "Shell execution stopped because 'file_write' is a native Netclaw tool.\n" +
+            $"Managed temporary directory: '{Path.Combine(Path.GetTempPath(), "tmp", "parent")}'.\n" +
+            "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
+            result.Content);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-native-temporary-collection"]).RemediationCode);
+        Assert.Equal("file_write", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
+        Assert.Empty(completed.ManagedTemporaryCorrectionChanges);
+    }
+
+    [Fact]
+    public async Task Native_file_read_response_keeps_the_existing_path_without_temporary_advice()
+    {
+        // The native reader must keep the requested source path.
+        // Managed temporary advice would redirect the read to a different file.
+        var executor = CreateApprovalGatedShellExecutor();
+        var probe = CreateTestProbe("native-read-without-temporary");
+        var call = new FunctionCallContent(
+            "call-native-read-without-temporary",
+            ShellTool.ToolName,
+            new Dictionary<string, object?>
+            {
+                ["Command"] = $"file_read --path {Path.Combine(Path.GetTempPath(), "existing-report.txt")}",
+                ["WorkingDirectory"] = Path.GetTempPath(),
+                ["_rationale"] = "Read the requested diagnostic report with the native tool."
+            });
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [call],
+                new SessionId("D1/native-read-without-temporary"),
+                probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(new SessionId("D1/native-read-without-temporary")))
+            .WithApprovals(new ApprovalChannel(), _ => throw new InvalidOperationException("The correction must not prompt."), Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal(
+            "Shell execution stopped because 'file_read' is a native Netclaw tool.\n" +
+            "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
+            result.Content);
+        Assert.DoesNotContain("Managed temporary directory", result.Content, StringComparison.Ordinal);
+        Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-native-read-without-temporary"]).RemediationCode);
+        Assert.Equal("file_read", Assert.Single(completed.ToolExposureRequests).Value.ToolName.Value);
+    }
+
+    [Theory]
+    [InlineData(ShellTool.ToolName)]
+    [InlineData(FileWriteTool.ToolName)]
+    public async Task Temporary_only_policy_result_uses_the_common_correction_delivery(
+        string toolName)
+    {
+        var executor = CreateApprovalGatedShellExecutor();
+        var probe = CreateTestProbe("temporary-only-policy-result");
+        var sessionId = new SessionId("D1/temporary-only-policy-result");
+        var arguments = toolName == ShellTool.ToolName
+            ? new Dictionary<string, object?>
+            {
+                ["Command"] = "gh api repos/example/project",
+                ["WorkingDirectory"] = Path.GetTempPath(),
+                ["_rationale"] = "Inspect a disposable diagnostic artifact."
+            }
+            : new Dictionary<string, object?>
+            {
+                ["Path"] = Path.Combine(Path.GetTempPath(), "netclaw-structured-output.txt"),
+                ["Content"] = "unused",
+                ["_rationale"] = "Write a disposable diagnostic artifact."
+            };
+        var call = new FunctionCallContent(
+            $"call-temporary-only-{toolName}",
+            toolName,
+            arguments);
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, [call], sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .InSessionDirectory(ManagedTemporarySessionDirectory)
+            .WithApprovals(
+                new ApprovalChannel(),
+                _ => throw new InvalidOperationException("The correction must not prompt."),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal(
+            "Tool execution deferred: use_managed_temporary_directory\n" +
+            $"Managed temporary directory: '{TestManagedTemporaryDirectory}'.\n" +
+            "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths.",
+            result.Content);
+        Assert.Equal(
+            ToolRemediationCode.UseManagedTemporaryDirectory,
+            Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts[call.CallId]).RemediationCode);
+        Assert.IsType<ManagedTemporaryCorrectionChange.Arm>(
+            Assert.Single(completed.ManagedTemporaryCorrectionChanges));
+        Assert.Empty(completed.ToolExposureRequests);
+    }
+
+    [Fact]
+    public async Task Streaming_result_is_presented_before_delivery()
+    {
+        var executor = new CorrectiveReceiptExecutor();
+        var probe = CreateTestProbe("streaming-remediation-probe");
+        var call = new FunctionCallContent(
+            "call-streaming-remediation",
+            "file_read",
+            new Dictionary<string, object?> { ["Path"] = "README.md" });
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [call],
+                new SessionId("D1/streaming-remediation"),
+                probe.Ref)
+            .WithSetWorkingDirectoryAvailable()
+            .StreamingResults()
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionSingleCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await probe.ExpectMsgAsync<ToolExecutionBatchCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            "Error: invalid_context: No project or session directory is available.\n" +
+            "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
+            completed.Result.Message.Content);
+        Assert.Equal(ToolRemediationCode.SetWorkingDirectory, Assert.IsType<ToolInvocationReceipt.Correction>(completed.Result.Receipt).RemediationCode);
+    }
+
+    [Fact]
+    public async Task Hidden_working_directory_tool_is_not_named_by_parent_result()
+    {
+        var executor = new CorrectiveReceiptExecutor();
+        var probe = CreateTestProbe("hidden-remediation-probe");
+        var call = new FunctionCallContent(
+            "call-hidden-remediation",
+            "file_read",
+            new Dictionary<string, object?> { ["Path"] = "README.md" });
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [call],
+                new SessionId("D1/hidden-remediation"),
+                probe.Ref)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var result = Assert.Single(completed.ToolResults);
+        Assert.Equal("Error: invalid_context: No project or session directory is available.", result.Content);
+        Assert.DoesNotContain(SetWorkingDirectoryTool.ToolName, result.Content, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Parallel_platform_temp_calls_all_return_corrections_before_prompt()
+    {
+        var executor = new ManagedTemporaryCorrectionRequiredExecutor();
+        var probe = CreateTestProbe("managed-temporary-parallel-correction-probe");
+        var approvals = new List<ToolInteractionRequest>();
+        var sessionId = new SessionId("D1/managed-temporary-parallel-correction");
+        var calls = new List<FunctionCallContent>
+        {
+            PlatformTemporaryCall("managed-temporary-1"),
+            PlatformTemporaryCall("managed-temporary-2")
+        };
+
+        var pipelineTask = new SessionToolPipelineTestFixture(executor, calls, sessionId, probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .InSessionDirectory(ManagedTemporarySessionDirectory)
+            .WithApprovals(
+                new ApprovalChannel(),
+                request => approvals.Add(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, completed.ToolResults.Count);
+        Assert.All(completed.ToolResults, result =>
+            Assert.Equal(
+                "Tool execution deferred: use_managed_temporary_directory\n" +
+                $"Managed temporary directory: '{TestManagedTemporaryDirectory}'.\n" +
+                "Next action: use the managed temporary directory from this result for disposable files, or retry unchanged for exact platform paths.",
+                result.Content));
+        Assert.All(completed.ToolReceipts.Values, receipt =>
+            Assert.Equal(ToolRemediationCode.UseManagedTemporaryDirectory, Assert.IsType<ToolInvocationReceipt.Correction>(receipt).RemediationCode));
+        Assert.Equal(2, completed.ManagedTemporaryCorrectionChanges.Count);
+        Assert.All(completed.ManagedTemporaryCorrectionChanges,
+            change => Assert.IsType<ManagedTemporaryCorrectionChange.Arm>(change));
+        Assert.Empty(approvals);
+    }
+
+    [Fact]
+    public async Task Later_exact_retry_consumes_key_and_offers_once_or_deny()
+    {
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var executor = new ManagedTemporaryRetryApprovalExecutor();
+        var approvalChannel = new ApprovalChannel();
+        var probe = CreateTestProbe("managed-temporary-retry-probe");
+        var approvalRequest = new TaskCompletionSource<ToolInteractionRequest>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var sessionId = new SessionId("D1/managed-temporary-retry");
+
+        var pipelineTask = new SessionToolPipelineTestFixture(
+                executor,
+                [PlatformTemporaryCall("managed-temporary-retry")],
+                sessionId,
+                probe.Ref)
+            .WithTurnContext(InteractiveTurnContext(sessionId))
+            .InSessionDirectory(key.Target.ManagedTemporaryDirectory)
+            .WithManagedTemporaryCorrections(key)
+            .WithApprovals(
+                approvalChannel,
+                request => approvalRequest.TrySetResult(request.Request),
+                Timeout.InfiniteTimeSpan)
+            .ExecuteAsync(TestContext.Current.CancellationToken);
+
+        var request = await approvalRequest.Task.WaitAsync(
+            TimeSpan.FromSeconds(3),
+            TestContext.Current.CancellationToken);
+        Assert.Equal([ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            request.Options.Select(option => option.Key.Value));
+        approvalChannel.Complete(request.CallId, ApprovalDecision.Denied);
+
+        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var change = Assert.Single(completed.ManagedTemporaryCorrectionChanges);
+        Assert.Equal(key, Assert.IsType<ManagedTemporaryCorrectionChange.Consume>(change).Key);
+    }
+
+    [Fact]
+    public void Managed_temporary_retry_key_is_consumed_once()
+    {
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var dispatch = new ManagedTemporaryCorrectionDispatch([key]);
+
+        Assert.True(dispatch.TryConsume(key.Call, out var consumed));
+        Assert.Equal(key, consumed);
+        Assert.False(dispatch.TryConsume(key.Call, out _));
+    }
+
+    [Theory]
+    [InlineData("different-command", "/tmp", false, 5)]
+    [InlineData("gh api repos/example/project", null, false, 5)]
+    [InlineData("gh api repos/example/project", "/var/tmp", false, 5)]
+    [InlineData("gh api repos/example/project", "/tmp", true, 5)]
+    [InlineData("gh api repos/example/project", "/tmp", false, 30)]
+    public void Execution_change_does_not_consume_managed_temporary_retry_key(
+        string command,
+        string? workingDirectory,
+        bool background,
+        int timeoutSeconds)
+    {
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var dispatch = new ManagedTemporaryCorrectionDispatch([key]);
+        var originalCall = Assert.IsType<ManagedTemporaryCallSemantics.ShellCall>(key.Call);
+        var changedCall = originalCall with
+        {
+            Command = command,
+            WorkingDirectory = workingDirectory,
+            Background = background,
+            Timeout = TimeSpan.FromSeconds(timeoutSeconds)
+        };
+
+        Assert.False(dispatch.TryConsume(changedCall, out _));
+    }
+
+    [Fact]
+    public void Rationale_is_not_part_of_managed_temporary_retry_semantics()
+    {
+        var call = PlatformTemporaryCall("managed-temporary-rationale");
+        var first = ManagedTemporaryCorrection.BuildCallSemantics(
+            call,
+            new ToolCallMeta { Rationale = "first explanation" },
+            TimeSpan.FromSeconds(5));
+        var second = ManagedTemporaryCorrection.BuildCallSemantics(
+            call,
+            new ToolCallMeta { Rationale = "different explanation" },
+            TimeSpan.FromSeconds(5));
+
+        Assert.Equal(first, second);
+    }
+
+    [Fact]
+    public void Shell_change_does_not_consume_managed_temporary_retry_key()
+    {
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var dispatch = new ManagedTemporaryCorrectionDispatch([key]);
+        var originalCall = Assert.IsType<ManagedTemporaryCallSemantics.ShellCall>(key.Call);
+
+        Assert.False(dispatch.TryConsume(
+            originalCall with { Shell = ApprovalShell.PowerShell },
+            out _));
+    }
+
+    [Fact]
+    public void Managed_temporary_correction_state_clears_lifecycle_authority()
+    {
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var state = new ManagedTemporaryCorrectionState();
+        state.Apply(new ManagedTemporaryCorrectionChange.Arm(key));
+        state.Clear();
+
+        Assert.False(state.Snapshot().TryConsume(key.Call, out _));
+    }
+
+    [Fact]
+    public void Managed_temporary_correction_state_removes_consumed_key_after_history_commit()
+    {
+        var key = ManagedTemporaryCorrectionRequiredExecutor.Key;
+        var state = new ManagedTemporaryCorrectionState();
+        state.Apply(new ManagedTemporaryCorrectionChange.Arm(key));
+        state.Apply(new ManagedTemporaryCorrectionChange.Consume(key));
+
+        Assert.False(state.Snapshot().TryConsume(key.Call, out _));
+    }
+
+    private static FunctionCallContent PlatformTemporaryCall(string callId)
+        => new(callId, ShellTool.ToolName, new Dictionary<string, object?>
+        {
+            ["Command"] = "gh api repos/example/project",
+            ["WorkingDirectory"] = "/tmp"
+        });
 
     [Theory]
     [InlineData(ChannelType.Headless)]
@@ -415,6 +962,10 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal("fast_tool-ok", fast.Content);
         Assert.Contains("slow_tool", slow.Content);
         Assert.Contains("exceeded execution budget", slow.Content);
+        Assert.Equal(2, completed.AuthorizationAttemptIds.Count);
+        Assert.NotEqual(
+            completed.AuthorizationAttemptIds["call-fast"],
+            completed.AuthorizationAttemptIds["call-slow"]);
     }
 
     [Fact]
@@ -815,12 +1366,16 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
     {
         private int _attempt;
 
+        public List<AuthorizationAttemptId> AttemptIds { get; } = [];
+
         public Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
             => ExecuteAsync(toolCall, context, ct);
 
         public Task<string> ExecuteAsync(FunctionCallContent toolCall, ToolExecutionContext? context = null, CancellationToken ct = default)
         {
             _attempt++;
+            AttemptIds.Add(context?.Approval.AuthorizationAttemptId
+                ?? throw new InvalidOperationException("Execution context is required."));
 
             if (_attempt == 1)
             {
@@ -840,6 +1395,159 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
 
             ct.ThrowIfCancellationRequested();
             return Task.FromResult("approved-and-ran");
+        }
+    }
+
+    private sealed class CorrectiveReceiptExecutor : IToolExecutor
+    {
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => Task.CompletedTask;
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            var requiredContext = context
+                ?? throw new InvalidOperationException("Execution context is required.");
+            requiredContext.Outputs.TryComplete(new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory));
+            return Task.FromResult("Error: invalid_context: No project or session directory is available.");
+        }
+    }
+
+    private sealed class NativeToolCorrectionExecutor : IToolExecutor
+    {
+        public int AuthorizationAttempts { get; private set; }
+
+        public int ExecutionBoundaryAttempts { get; private set; }
+
+        public Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+            FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+        {
+            AuthorizationAttempts++;
+            throw CreateCorrection();
+        }
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            AuthorizationAttempts++;
+            throw CreateCorrection();
+        }
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            ExecutionBoundaryAttempts++;
+            throw CreateCorrection();
+        }
+
+        private static ToolCorrectionRequiredException CreateCorrection()
+            => new(new ToolCorrectionCollection(
+                [new ToolCorrection.NativeToolSuggested(new ToolName("file_read"))]));
+    }
+
+    private static DispatchingToolExecutor CreateApprovalGatedShellExecutor()
+    {
+        var environment = TestShellEnvironment.Current;
+        var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
+        {
+            ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
+            {
+                [ShellTool.ToolName] = ToolApprovalMode.Approval,
+                [FileWriteTool.ToolName] = ToolApprovalMode.Approval
+            }
+        };
+        var commandPolicy = new ShellCommandPolicy(environment);
+        var pathPolicy = new ToolPathPolicy(environment, []);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        var policy = new ToolAccessPolicy(
+            new NetclawPaths(),
+            config,
+            new EffectivePolicyDefaults(
+                DeploymentPosture.Personal,
+                TrustAudience.Personal,
+                ShellExecutionMode.HostAllowed,
+                UsedStrictFallback: false),
+            commandPolicy,
+            pathPolicy);
+        return new DispatchingToolExecutor(registry, policy, approvalService: null);
+    }
+
+    private sealed class ManagedTemporaryCorrectionRequiredExecutor : IToolExecutor
+    {
+        private const string Command = "gh api repos/example/project";
+
+        internal static ManagedTemporaryCorrectionKey Key { get; } = new(
+            new ManagedTemporaryCallSemantics.ShellCall(
+                Shell: ApprovalShell.Bash,
+                Command: Command,
+                WorkingDirectory: "/tmp",
+                Background: false,
+                Timeout: TimeSpan.FromSeconds(5)),
+            new ManagedTemporaryCorrectionTarget(
+                TestManagedTemporaryDirectory,
+                "/tmp"));
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => throw new ToolCorrectionRequiredException(
+                new ToolCorrectionCollection([new ToolCorrection.ManagedTemporaryDirectorySuggested(Key.Target)]));
+    }
+
+    private sealed class ManagedTemporaryRetryApprovalExecutor
+        : IToolExecutor, IApprovalShellProvider
+    {
+        public ApprovalShell Shell => ApprovalShell.Bash;
+
+        public Task AuthorizeAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+            => ExecuteAsync(toolCall, context, ct);
+
+        public Task<string> ExecuteAsync(
+            FunctionCallContent toolCall,
+            ToolExecutionContext? context = null,
+            CancellationToken ct = default)
+        {
+            var retryMarked = context?.Approval.ManagedTemporaryRetry is not null;
+            var options = retryMarked
+                ? new ToolApprovalOption[]
+                {
+                    new(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                    new(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                }
+                : [];
+            throw new ToolApprovalRequiredException(new ToolApprovalContext(
+                ToolName: toolCall.Name,
+                DisplayText: "gh api repos/example/project",
+                Patterns: ["gh api"],
+                CandidateVerbs: ["gh api"],
+                Options: options,
+                Cwd: "/tmp")
+            {
+                IsManagedTemporaryRetry = retryMarked,
+                ManagedTemporaryDirectory = ManagedTemporaryCorrectionRequiredExecutor.Key.Target.ManagedTemporaryDirectory,
+                PlatformTemporaryRoot = ManagedTemporaryCorrectionRequiredExecutor.Key.Target.PlatformTemporaryRoot
+            });
         }
     }
 

@@ -319,7 +319,13 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         try
         {
-            var store = new ToolApprovalStore(approvalsPath);
+            var nativeShell = OperatingSystem.IsWindows()
+                ? ApprovalShell.PowerShell
+                : ApprovalShell.Bash;
+            var store = new ToolApprovalStore(
+                approvalsPath,
+                timeProvider: null,
+                migrationContext: new ApprovalStoreMigrationContext(nativeShell));
             var data = store.Load();
 
             foreach (var (audienceKey, tools) in data.Audiences)

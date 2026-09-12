@@ -34,8 +34,8 @@ NETCLAW_JSON="${NETCLAW_HOME}/config/netclaw.json"
 trap stop_daemon EXIT
 
 log "Seeding provider + model ($SMOKE_MODEL)..."
-nc provider add local-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
-nc model set main local-ollama "$SMOKE_MODEL"
+nc provider add local-smoke openai-compatible --endpoint "$SMOKE_LLM_ENDPOINT"
+nc model set main local-smoke "$SMOKE_MODEL"
 
 # ── Register the MCP server (before the daemon starts) ──
 log "Registering MCP server '$MCP_SERVER_NAME' (stdio, --grant-all)..."

@@ -2,6 +2,9 @@
 
 This directory contains implementation-facing specifications derived from PRDs.
 
+Use [GLOSSARY.md](GLOSSARY.md) for cross-cutting engineering terms. A spec can
+narrow a glossary term only when it states the exception.
+
 ## Active Specs
 
 - `SPEC-001-runtime-boundaries.md` (PRD-001, PRD-002)

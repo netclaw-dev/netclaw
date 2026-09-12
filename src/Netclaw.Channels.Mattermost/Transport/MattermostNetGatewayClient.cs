@@ -19,6 +19,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IMa
 
     private readonly ActorSystem _actorSystem;
     private readonly IActorRef _lifecycleActor;
+    private readonly ILogger<MattermostNetGatewayClient> _logger;
     private volatile MattermostGatewaySnapshot _latestSnapshot = new(
         IsConnected: false,
         IsReady: false,
@@ -42,6 +43,7 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IMa
         ILogger<MattermostNetGatewayClient> logger)
     {
         _actorSystem = actorSystem;
+        _logger = logger;
         _lifecycleActor = actorSystem.ActorOf(
             MattermostNetGatewayLifecycleActor.CreateProps(
                 new MattermostNetGatewayTransport(client, timeProvider, logger),
@@ -68,10 +70,26 @@ internal sealed class MattermostNetGatewayClient : IMattermostGatewayClient, IMa
 
     public async Task DisconnectAsync(CancellationToken cancellationToken = default)
     {
-        UpdateSnapshot(await _lifecycleActor.Ask<MattermostGatewaySnapshot>(
-            MattermostNetGatewayLifecycleActor.Disconnect.Instance,
-            ConnectAskTimeout,
-            cancellationToken: cancellationToken));
+        // The CLR shutdown hook can terminate the actor system before host
+        // shutdown reaches the channel. An Ask to a dead actor dead-letters and
+        // stalls for the full ConnectAskTimeout; with the system gone there is
+        // nothing left to disconnect (#2035).
+        if (_actorSystem.WhenTerminated.IsCompleted)
+            return;
+
+        try
+        {
+            UpdateSnapshot(await _lifecycleActor.Ask<MattermostGatewaySnapshot>(
+                MattermostNetGatewayLifecycleActor.Disconnect.Instance,
+                ConnectAskTimeout,
+                cancellationToken: cancellationToken));
+        }
+        catch (AskTimeoutException ex) when (_actorSystem.WhenTerminated.IsCompleted)
+        {
+            // The system terminated while the disconnect was in flight; the
+            // drain result no longer matters.
+            _logger.LogDebug(ex, "Gateway disconnect interrupted by actor system termination during shutdown; drain result discarded.");
+        }
     }
 
     public void Dispose() => _actorSystem.Stop(_lifecycleActor);
@@ -195,7 +213,15 @@ internal sealed class MattermostNetGatewayTransport : IMattermostGatewayTranspor
         _logger.LogInformation("Bot identity resolved: {BotUserId} (@{Username})",
             me.Id, me.Username);
 
-        await _client.StartReceivingAsync(cancellationToken);
+        // Mattermost.NET starts its receiver before the authenticated WebSocket
+        // exists. Preserve the transport contract by waiting for OnConnected.
+        await MattermostInitialConnectionGate.StartAndWaitAsync(
+            _client.StartReceivingAsync,
+            handler => _client.OnConnected += handler,
+            handler => _client.OnConnected -= handler,
+            _timeProvider,
+            cancellationToken);
+
         return new MattermostBotIdentity(me.Id, me.Username);
     }
 
@@ -397,6 +423,33 @@ internal sealed class MattermostNetGatewayTransport : IMattermostGatewayTranspor
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error handling {Operation}", operation);
+        }
+    }
+}
+
+internal static class MattermostInitialConnectionGate
+{
+    internal static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+    public static async Task StartAndWaitAsync(
+        Func<CancellationToken, Task> startReceivingAsync,
+        Action<EventHandler<ConnectionEventArgs>> subscribe,
+        Action<EventHandler<ConnectionEventArgs>> unsubscribe,
+        TimeProvider timeProvider,
+        CancellationToken cancellationToken)
+    {
+        var connected = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        void HandleConnected(object? sender, ConnectionEventArgs e) => connected.TrySetResult();
+
+        subscribe(HandleConnected);
+        try
+        {
+            await startReceivingAsync(cancellationToken);
+            await connected.Task.WaitAsync(Timeout, timeProvider, cancellationToken);
+        }
+        finally
+        {
+            unsubscribe(HandleConnected);
         }
     }
 }

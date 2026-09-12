@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "sourceRuntime": {
+    "version": "0.26.0-beta.4",
+    "commit": "334cb4c430a5fe79131dde4c7185f9a4e1d5a95f",
+    "binarySha256": "d347b551aa82329aeeb53a43818864fee329e5a6593cd83b8b02f80fa02cc48f",
+    "freshSessionCount": 1,
+    "shellCallCount": 10,
+    "approvalPromptCount": 4,
+    "measurementBoundary": "One stable post-swap snapshot supplied the counts. The active session had two completed turns when the snapshot was frozen."
+  },
+  "sanitization": {
+    "projectRoot": "/work/project",
+    "sessionScratch": "/home/user/.netclaw/sessions/example",
+    "sourceBoundary": "Raw logs remain local. This artifact omits sessions, calls, users, repositories, hosts, URLs, timestamps, rationales, responses, and raw lines.",
+    "grammarBoundary": "Neutral commands retain operator order, pipelines, redirects, globs, relative paths, patterns, and inline directory changes."
+  },
+  "summary": {
+    "approvedLogicalCallCount": 4,
+    "diagnosticOrReadApprovalCount": 4,
+    "independentBatchCount": 4,
+    "inlineDirectoryChangeCount": 1,
+    "typedWorkingDirectoryCount": 0,
+    "legitimateMutationOrNetworkApprovalCount": 0,
+    "interpretation": "All approved calls batched independent diagnostics. One call also contained an unreviewed VCS phrase that remains approval-gated when isolated."
+  },
+  "directEvalBaseline": {
+    "providerType": "deepseek",
+    "model": "deepseek-v4-flash",
+    "runs": 5,
+    "behaviorPassCount": 3,
+    "shellCallCount": 6,
+    "approvalPromptEquivalentCount": 1,
+    "independentBatchRunCount": 1,
+    "interpretation": "The strict assertion exposed one prompted batch. One separate run failed an existing content assertion without a shell-composition fault."
+  },
+  "cases": [
+    {
+      "id": "B01",
+      "classification": "AgentAlignmentDebt",
+      "owner": "ShellCompositionGuidance",
+      "commandShape": "grep -n \"Alpha\" src/Alpha.cs | head -5; grep -rn \"Beta\" src/*.cs tests/*.cs docs/*.md 2>/dev/null | head",
+      "workingDirectory": "/work/project",
+      "observedOutcome": "RequiresApproval",
+      "targetBehavior": "SeparateIndependentOperations",
+      "reason": "The call joined two independent searches. Each requested read belongs in its own shell call."
+    },
+    {
+      "id": "B02",
+      "classification": "AgentAlignmentDebt",
+      "owner": "ShellCompositionGuidance",
+      "commandShape": "cd /work/project && git log --oneline -5 -- src/Alpha.cs && grep -n \"Timeout\" src/Alpha.cs tests/AlphaTests.cs 2>/dev/null | head -5; cat Project.csproj",
+      "workingDirectory": "/work/project",
+      "observedOutcome": "RequiresApproval",
+      "targetBehavior": "KeepProjectScopeAndSeparateOperations",
+      "reason": "The call added an inline directory change and unrelated reads. The VCS phrase remains approval-gated when isolated."
+    },
+    {
+      "id": "B03",
+      "classification": "AgentAlignmentDebt",
+      "owner": "ShellCompositionGuidance",
+      "commandShape": "grep -n \"Timeout\\|Exit\" src/*.cs | head -20; echo \"---SOURCE---\"; grep -rn \"Timeout\\|Exit\" src/Alpha.cs tests/ 2>/dev/null; echo \"---TESTS---\"; grep -rn \"Timeout\\|Exit\" tests/AlphaTests.cs src/ 2>/dev/null",
+      "workingDirectory": "/work/project",
+      "observedOutcome": "RequiresApproval",
+      "targetBehavior": "SeparateIndependentOperations",
+      "reason": "Presentation labels joined three independent searches. The labels did not answer the user task."
+    },
+    {
+      "id": "B04",
+      "classification": "AgentAlignmentDebt",
+      "owner": "ShellCompositionGuidance",
+      "commandShape": "grep -rn \"Alpha\" src/*.cs | head -5; echo \"---FIRST---\"; grep -rn \"Beta\" tests/*.cs | head -3; echo \"---SECOND---\"; grep -n \"Gamma\\|Delta\" docs/guide.md",
+      "workingDirectory": "/work/project",
+      "observedOutcome": "RequiresApproval",
+      "targetBehavior": "SeparateIndependentOperations",
+      "reason": "The call joined three independent searches with labels. Separate calls preserve normal policy decisions."
+    }
+  ]
+}

@@ -11,7 +11,25 @@ audience sessions cannot use scheduling tools regardless of the config flag.
 |------|---------|
 | `once` | `"30m"`, `"2h"`, `"2026-03-15T14:30:00Z"` |
 | `interval` | `"30m"`, `"6h"`, `"1d"` |
-| `cron` | `"0 */6 * * *"`, `"0 9 * * MON-FRI"` |
+| `cron` | `"0 */6 * * *"`, `"0 9 * * MON-FRI"`, `"CRON_TZ=Europe/Brussels 0 9 * * *"` |
+
+### Cron time zones (`CRON_TZ`)
+
+Cron schedules evaluate in **UTC by default**. To anchor a schedule to a local
+time zone, prefix the expression with `CRON_TZ=<time-zone-id>` (Vixie crontab
+syntax). The prefix is stored with the expression, so it survives reschedules
+and daemon restarts, and it is DST-aware:
+
+- `CRON_TZ=Europe/Brussels 0 9 * * *` — every day at 09:00 Brussels time
+  (08:00 UTC in winter, 07:00 UTC during DST; transitions handled automatically).
+- `CRON_TZ=America/New_York 0 9 * * MON-FRI` — weekdays at 09:00 New York time.
+
+The time zone id must be an **IANA identifier without spaces** (e.g.
+`Europe/Brussels`, `America/New_York`, `Asia/Tokyo`). Windows display names
+such as `Eastern Standard Time` are not supported — the id ends at the first
+space, so multi-word names resolve to a truncated, unknown identifier and the
+reminder fails to schedule. When a user names a zone loosely ("Eastern time"),
+translate it to the IANA id (`America/New_York`) before scheduling.
 
 Delivery contract parameters:
 
@@ -60,13 +78,21 @@ netclaw reminder cancel <id>     # disable, keep definition
 netclaw reminder delete <id>     # permanent delete + history
 ```
 
-Reminders that hit 5 consecutive execution failures are auto-disabled with a
+Reminders that hit 5 consecutive failures are auto-disabled with a
 `ReminderAutoDisabled` critical alert. The definition stays on disk so the
-operator can diagnose and re-enable after fixing the root cause.
+operator can diagnose and re-enable after fixing the root cause. Both execution
+failures and scheduling failures count toward the same threshold.
+
+A **scheduling failure** is a failure to compute the next fire time. A cron with
+no future occurrence, or an unresolvable `CRON_TZ` time zone, is a scheduling
+failure. Netclaw raises a `ReminderScheduleFailed` alert, increments the failure
+count, and never falls back to a different time — a wrong-time fire is worse than
+a missed one. A scheduling failure at startup does not disable the reminder on
+its own; the count must reach the threshold across restarts or fires.
 
 A known execution or delivery failure starts the Akka.Reminders retry policy.
 The retry uses bounded backoff and the same durable occurrence identity. A
-successful attempt resets the consecutive failure count.
+successful execution resets the consecutive failure count.
 
 A one-shot reminder stays enabled while an occurrence can retry. After a
 successful acknowledgement, Netclaw deletes its definition and history. A poison
@@ -287,6 +313,11 @@ Rules:
   model server that takes minutes to respond) should run as background jobs.
 - The user must approve the command before it starts running in the background.
 - Maximum 5 concurrent background jobs; overflow queues FIFO.
+- Submission confirms acceptance. A queued job still needs a policy check when its slot opens.
+- The job keeps its exact command, cwd, shell, and child environment while it waits.
+- Use an absolute `WorkingDirectory`, or omit it to use the session or project directory.
+- A revoked grant or a newly protected path can cause a failed launch. Read the job result before another request.
+- A background job keeps its own lifetime after submission. Use its job identifier to cancel it.
 - Job definitions persist to `~/.netclaw/jobs/{id}.json` until 24 hours after
   the job reaches a terminal state.
 

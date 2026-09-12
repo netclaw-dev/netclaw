@@ -4,14 +4,16 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Security;
-using Netclaw.Daemon;
 using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tests;
 
 internal static class TestShellEnvironment
 {
-    public static ShellExecutionEnvironment Current { get; } = CreateCurrent();
+    // The production resolver probes real processes and validates host versions.
+    // Its focused tests cover that behavior. Actor tests use the CI contract
+    // directly, so host load cannot poison a test class during static setup.
+    public static ShellExecutionEnvironment Current { get; } = CreateEnvironment();
 
     public static string PrintWorkingDirectoryCommand =>
         Current.Grammar == ShellGrammar.PowerShell
@@ -67,11 +69,18 @@ internal static class TestShellEnvironment
             PwshDialect.WindowsPowerShell51);
     }
 
-    private static ShellExecutionEnvironment CreateCurrent()
-        => ShellExecutionEnvironmentResolver
-            .CreateDefault(TimeProvider.System)
-            .ResolveAsync(ShellExecutionEnvironmentResolver.DetectCurrentPlatform())
-            .GetAwaiter()
-            .GetResult()
-            .Environment;
+    private static ShellExecutionEnvironment CreateEnvironment()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            return ShellExecutionEnvironment.CreatePowerShell(
+                @"C:\Program Files\PowerShell\7\pwsh.exe",
+                PwshDialect.PowerShell7);
+        }
+
+        var platform = OperatingSystem.IsMacOS()
+            ? ShellPlatform.MacOS
+            : ShellPlatform.Linux;
+        return ShellExecutionEnvironment.CreateBash(platform);
+    }
 }

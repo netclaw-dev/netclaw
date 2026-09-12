@@ -1,0 +1,104 @@
+{
+  "schemaVersion": 1,
+  "sourceCommit": "f08a2fb81166954252f932188acd7b3569ea6513",
+  "installedBinarySha256": "4e8beedf19ac898763636f4d5b66b943745a31f1c64ac5254c63a1650983101d",
+  "runtimeMatchedInstalledBinary": true,
+  "sample": {
+    "freshSessions": 6,
+    "completedObjectives": 6,
+    "approvalEvents": 0,
+    "denialEvents": 0,
+    "toolCalls": 39,
+    "structuredToolCalls": 28,
+    "shellToolCalls": 11,
+    "sessionsUsingShell": 2
+  },
+  "cases": [
+    {
+      "id": "project-batch-read",
+      "completed": true,
+      "focusedToolSelected": false,
+      "approvalEvents": 0,
+      "toolCalls": {
+        "file_list": 1,
+        "shell_execute": 6
+      }
+    },
+    {
+      "id": "json-projection",
+      "completed": true,
+      "focusedToolSelected": false,
+      "approvalEvents": 0,
+      "toolCalls": {
+        "set_working_directory": 2,
+        "file_list": 4,
+        "file_read": 1
+      }
+    },
+    {
+      "id": "image-metadata",
+      "completed": true,
+      "focusedToolSelected": true,
+      "approvalEvents": 0,
+      "toolCalls": {
+        "file_search": 2,
+        "file_read": 2
+      }
+    },
+    {
+      "id": "source-search",
+      "completed": true,
+      "focusedToolSelected": true,
+      "approvalEvents": 0,
+      "toolCalls": {
+        "file_list": 4,
+        "file_search": 6
+      }
+    },
+    {
+      "id": "session-scratch-write-read",
+      "completed": true,
+      "focusedToolSelected": true,
+      "approvalEvents": 0,
+      "toolCalls": {
+        "file_write": 1,
+        "file_read": 1
+      }
+    },
+    {
+      "id": "deferred-reminder-discovery",
+      "completed": true,
+      "focusedToolSelected": true,
+      "approvalEvents": 0,
+      "toolCalls": {
+        "skill_load": 1,
+        "search_tools": 1,
+        "skill_read_resource": 1,
+        "load_tool": 1,
+        "shell_execute": 5
+      }
+    }
+  ],
+  "focusedSelection": {
+    "file_read_many": "0/1",
+    "json_read": "0/1",
+    "image_metadata": "1/1",
+    "file_search": "1/1",
+    "session_scratch": "1/1",
+    "deferred_search_and_load": "1/1"
+  },
+  "interpretation": [
+    "The merged binary completed every bounded objective without an approval or denial event.",
+    "Session-scratch I/O and progressive deferred-tool discovery worked in fresh sessions.",
+    "Batch reading and JSON projection still missed their focused tools.",
+    "Shell fallback remains material and needs continued PII-free corpus hardening."
+  ],
+  "privacy": {
+    "rawCapturesTracked": false,
+    "containsPrompts": false,
+    "containsResponses": false,
+    "containsOpaqueIdentifiers": false,
+    "containsPaths": false,
+    "containsProviderOrHostDetails": false
+  }
+}

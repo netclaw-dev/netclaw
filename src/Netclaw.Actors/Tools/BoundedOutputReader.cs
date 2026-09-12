@@ -30,19 +30,43 @@ internal static class BoundedOutputReader
     /// <paramref name="budget"/> chars. Chars beyond the budget are discarded but
     /// the source continues to be read so a still-running child never deadlocks on
     /// a full pipe buffer. A non-positive <paramref name="budget"/> disables the
-    /// cap (reads the whole stream). Returns the captured text and whether it was
-    /// truncated.
+    /// cap (reads the whole stream). Returns the captured text, whether the budget
+    /// truncated it, and whether <paramref name="ct"/> cancelled the read before
+    /// the source reached EOF.
     /// </summary>
-    public static async Task<(string Text, bool Truncated)> DrainToWindowAsync(
+    /// <remarks>
+    /// A cancelled <paramref name="ct"/> stops the read and returns whatever was
+    /// captured so far, instead of throwing. Callers pass a real, boundable token
+    /// (not <see cref="CancellationToken.None"/>): a process pipe reaches EOF only
+    /// when every process holding its write end closes it, and a forked or
+    /// backgrounded grandchild (a daemon, a `cmd &amp;` job) can hold that write
+    /// end open long after the direct child process has exited. Without a way to
+    /// stop the read, the drain would hang for the grandchild's full life span.
+    /// When <paramref name="ct"/> cancels the read, unread data may still wait
+    /// behind it. A caller that cares about a silent partial capture must check
+    /// the returned <c>Cancelled</c> flag. The <c>Truncated</c> flag alone is not
+    /// enough: it reports only the budget cut.
+    /// </remarks>
+    public static async Task<(string Text, bool Truncated, bool Cancelled)> DrainToWindowAsync(
         TextReader reader, int budget, CancellationToken ct)
     {
         if (budget <= 0)
         {
-            var all = await reader.ReadToEndAsync(ct);
-            return (all, false);
+            try
+            {
+                var all = await reader.ReadToEndAsync(ct);
+                return (all, false, false);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                // ReadToEndAsync has no partial-read API, so a cancellation here
+                // returns nothing captured rather than hanging past the bound.
+                return (string.Empty, true, true);
+            }
         }
 
         var acc = new BoundedOutputAccumulator(budget);
+        var cancelled = false;
 
         var buf = ArrayPool<char>.Shared.Rent(4096);
         try
@@ -51,12 +75,19 @@ internal static class BoundedOutputReader
             while ((read = await reader.ReadAsync(buf.AsMemory(), ct)) > 0)
                 acc.Append(buf.AsSpan(0, read));
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The source never reached EOF within the caller's bound. Return
+            // whatever was captured instead of discarding it or hanging.
+            cancelled = true;
+        }
         finally
         {
             ArrayPool<char>.Shared.Return(buf, clearArray: true);
         }
 
-        return acc.Finish();
+        var (text, truncated) = acc.Finish();
+        return (text, truncated, cancelled);
     }
 
     /// <summary>

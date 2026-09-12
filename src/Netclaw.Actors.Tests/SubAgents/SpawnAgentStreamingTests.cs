@@ -38,14 +38,16 @@ public class SpawnAgentStreamingTests : TestKit
         // No persistence or hosting needed — SubAgentActor is spawned standalone.
     }
 
-    [Fact]
-    public async Task Spawn_agent_streams_activity_through_executor_dispatch_to_watchdog()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Spawn_agent_streams_activity_through_executor_dispatch_to_watchdog(bool fail)
     {
         using var dir = new DisposableTempDir();
         var paths = new NetclawPaths(dir.Path);
         paths.EnsureDirectoriesExist();
 
-        var toolAccessPolicy = new ToolAccessPolicy(
+        var toolAccessPolicy = new ToolAccessPolicy(new NetclawPaths(),
             new ToolConfig(),
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -71,7 +73,7 @@ public class SpawnAgentStreamingTests : TestKit
         });
 
         var spawner = new SubAgentSpawner(
-            new SingleClientProvider(new FakeChatClient()),
+            new SingleClientProvider(new FakeChatClient { Failure = fail ? new InvalidOperationException("fixture LLM failure") : null }),
             registry,
             toolAccessPolicy,
             approvalService: null,
@@ -98,7 +100,8 @@ public class SpawnAgentStreamingTests : TestKit
             new Dictionary<string, object?>
             {
                 ["agent"] = "summarizer",
-                ["task"] = "Summarize the project."
+                ["task"] = "Summarize the project.",
+                ["_rationale"] = "Verify streamed sub-agent activity."
             });
 
         // Drain the stream the way the production pipeline drains a self-monitoring
@@ -120,7 +123,17 @@ public class SpawnAgentStreamingTests : TestKit
 
         // The DIM dispatch gap ran spawn_agent on the non-streaming path: zero
         // activity items. The streaming override emits progress.
+        if (fail)
+        {
+            Assert.NotNull(result);
+            Assert.Contains("Outcome: failed", result, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("LogPath:", result);
+            Assert.DoesNotContain("ArtifactDirectory:", result);
+            return;
+        }
         Assert.NotEmpty(activity);
+        Assert.Contains("LogPath:", result);
+        Assert.Contains("ArtifactDirectory:", result);
 
         // The terminal result still flows through — a successful sub-agent run,
         // not a "Subagent '...' failed: ..." message from FormatResult.
@@ -139,7 +152,7 @@ public class SpawnAgentStreamingTests : TestKit
         var paths = new NetclawPaths(dir.Path);
         paths.EnsureDirectoriesExist();
 
-        var toolAccessPolicy = new ToolAccessPolicy(
+        var toolAccessPolicy = new ToolAccessPolicy(new NetclawPaths(),
             new ToolConfig(),
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -191,7 +204,8 @@ public class SpawnAgentStreamingTests : TestKit
             new Dictionary<string, object?>
             {
                 ["agent"] = "summarizer",
-                ["task"] = "Summarize the project."
+                ["task"] = "Summarize the project.",
+                ["_rationale"] = "Verify self-monitored sub-agent activity."
             });
 
         // spawn_agent is self-monitoring, so the parent drains it with no watchdog at

@@ -42,7 +42,7 @@ public sealed class InitExistingInstallPageTests : IDisposable
             (_, _) => Task.FromResult(new DaemonResult(true, "Daemon stopped.")),
             path =>
             {
-                if (path == _paths.BasePath)
+                if (path == _paths.ConfigDirectory)
                 {
                     deleteStarted.TrySetResult();
                     releaseDelete.Task.GetAwaiter().GetResult();
