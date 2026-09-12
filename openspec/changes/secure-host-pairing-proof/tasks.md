@@ -64,7 +64,7 @@
 - [x] 10.2 Bound success and error responses before body allocation; prove byte limits and cancellation after headers.
 - [x] 10.3 Assert fixed protocol vectors and malformed payload rejection independently of a codec round trip.
 - [x] 10.4 Separate both mixed-version scenarios and sync the main specifications without a compatibility stub.
-- [ ] 10.5 Run regression checks, process smoke, quality gates, and independent verification; record evidence and limits.
+- [x] 10.5 Run regression checks, process smoke, quality gates, and independent verification; record evidence and limits.
 
 Local tests pass: Configuration 634, Daemon 1,121, and CLI 1,495.
 The daemon suite also has one existing Windows-only skip on Linux.
@@ -72,5 +72,5 @@ The native pairing scenario passes all eight checks.
 The independent review accepts all four corrections.
 Slopwatch, header verification, and strict OpenSpec validation pass.
 The codec mutation check fails five cases when both timestamp methods use little-endian bytes.
-The full behavioral eval remains blocked by absent provider type, endpoint, and model settings.
-Task 10.5 stays open until that eval runs or the user accepts the gap.
+The user excluded model evals from these corrections because they affect transport, persistence, and protocol bytes rather than model behavior.
+The completed deterministic checks establish the required local proof. Fresh CI remains a separate merge gate.
