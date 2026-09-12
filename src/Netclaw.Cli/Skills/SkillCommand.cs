@@ -24,7 +24,12 @@ namespace Netclaw.Cli.Skills;
 internal static class SkillCommand
 {
     public static Task<int> RunAsync(
-        string[] args, NetclawPaths paths, DaemonApi? daemonApi = null, TextWriter? output = null)
+        string[] args,
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        TextReader input,
+        DaemonApi? daemonApi = null,
+        TextWriter? output = null)
     {
         var subcommand = args.Length > 1 ? args[1] : "list";
 
@@ -56,7 +61,13 @@ internal static class SkillCommand
             return RunListAsync(daemonApi, output ?? Console.Out);
 
         if (subcommand is "sync")
-            return RunSyncAsync(daemonApi, output ?? Console.Out);
+            return RunSyncAsync(args, daemonApi, output ?? Console.Out);
+
+        if (subcommand is "plugin")
+        {
+            WriteHelp();
+            return Task.FromResult(2);
+        }
 
         return Task.FromResult(subcommand switch
         {
@@ -165,8 +176,17 @@ internal static class SkillCommand
         return 0;
     }
 
-    private static async Task<int> RunSyncAsync(DaemonApi? daemonApi, TextWriter output)
+    private static async Task<int> RunSyncAsync(
+        string[] args,
+        DaemonApi? daemonApi,
+        TextWriter output)
     {
+        var retryRejected = args.Length == 3 && args[2] == "--retry-rejected";
+        if (args.Length > 2 && !retryRejected)
+        {
+            output.WriteLine("Usage: netclaw skill sync [--retry-rejected]");
+            return 1;
+        }
         if (daemonApi is null)
         {
             output.WriteLine("Daemon unavailable: the daemon API is not configured.");
@@ -186,7 +206,9 @@ internal static class SkillCommand
             try
             {
                 output.WriteLine("Waiting for the daemon's skill sync pass. Press Ctrl+C to stop this wait.");
-                result = await daemonApi.SyncSkillsAsync(cancellation.Token);
+                result = await daemonApi.SyncSkillsAsync(
+                    cancellation.Token,
+                    retryRejected);
             }
             finally
             {
@@ -210,6 +232,8 @@ internal static class SkillCommand
                     $"{source.Name}: {state} changed={source.ChangedCount} unchanged={source.UnchangedCount} rejected={source.RejectedCount} failed={source.FailedCount} sidecar={source.Sidecar}");
                 if (!string.IsNullOrWhiteSpace(source.Error))
                     output.WriteLine($"  Error: {source.Error}");
+                foreach (var notice in source.Notices)
+                    output.WriteLine($"  Notice: {notice}");
             }
 
             output.WriteLine(result.Inventory.Succeeded
@@ -733,6 +757,7 @@ internal static class SkillCommand
         Console.WriteLine("Subcommands:");
         Console.WriteLine("  list                                          List all discovered skills (default)");
         Console.WriteLine("  sync                                          Sync configured external skill sources");
+        Console.WriteLine("  sync --retry-rejected                         Retry known rejected plugin commits");
         Console.WriteLine("  show <name>                                   Show skill details and content");
         Console.WriteLine("  validate <path>                               Validate a SKILL.md file's frontmatter");
         Console.WriteLine("  remove <name>                                 Remove a native skill");
@@ -745,8 +770,8 @@ internal static class SkillCommand
         Console.WriteLine("  source enable <name>                          Enable an external source");
         Console.WriteLine("  source disable <name>                         Disable an external source");
         Console.WriteLine();
-        Console.WriteLine("`list` and `sync` need the running daemon (list includes live MCP prompt skills);");
-        Console.WriteLine("every other subcommand is offline — no daemon required.");
+        Console.WriteLine("`list` and `sync` need the running daemon.");
+        Console.WriteLine("Every other subcommand is offline.");
         return 0;
     }
 

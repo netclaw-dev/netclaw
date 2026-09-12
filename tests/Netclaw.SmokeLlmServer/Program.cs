@@ -70,6 +70,11 @@ public sealed record SmokeLlmServerOptions(int Port, string RequestRecordPath, I
 
 public static class SmokeLlmServerHost
 {
+    public const string SkillPluginProofPrompt = "NETCLAW_SMOKE_SKILL_PLUGIN_PROOF";
+    public const string SkillPluginProofResponse = "Skill plugin proof passed.";
+    private const string ProofSkillName = "akka-net-best-practices";
+    private const string ProofResourcePath = "cluster-local-abstractions.md";
+
     public static async Task<WebApplication> StartAsync(
         SmokeLlmServerOptions options,
         CancellationToken cancellationToken = default)
@@ -167,6 +172,12 @@ public static class SmokeLlmServerHost
 
             if (stream)
             {
+                if (IsSkillPluginProofRequest(root))
+                {
+                    await WriteSkillPluginProofAsync(context.Response, knownModel, root);
+                    return;
+                }
+
                 await WriteStreamingCompletionAsync(context.Response, knownModel);
                 return;
             }
@@ -191,6 +202,124 @@ public static class SmokeLlmServerHost
     }
 
     private static async Task WriteStreamingCompletionAsync(HttpResponse response, string model)
+        => await WriteStreamingTextAsync(response, model, "Netclaw smoke response.");
+
+    private static async Task WriteSkillPluginProofAsync(
+        HttpResponse response,
+        string model,
+        JsonElement root)
+    {
+        var toolResults = GetToolResults(root);
+        if (toolResults.Count == 0)
+        {
+            if (!HasTool(root, "skill_load"))
+            {
+                await WriteStreamingTextAsync(response, model, "Skill plugin proof failed: skill_load is unavailable.");
+                return;
+            }
+
+            await WriteStreamingToolCallAsync(
+                response,
+                model,
+                "call_skill_load",
+                "skill_load",
+                JsonSerializer.Serialize(new
+                {
+                    Name = ProofSkillName,
+                    _rationale = "Load the installed skill for the public plugin proof.",
+                }));
+            return;
+        }
+
+        if (toolResults.Count == 1)
+        {
+            if (!toolResults[0].Contains("# Akka.NET Best Practices", StringComparison.Ordinal)
+                || !toolResults[0].Contains(ProofResourcePath, StringComparison.Ordinal))
+            {
+                await WriteStreamingTextAsync(response, model, "Skill plugin proof failed: skill_load returned unexpected content.");
+                return;
+            }
+            if (!HasTool(root, "skill_read_resource"))
+            {
+                await WriteStreamingTextAsync(response, model, "Skill plugin proof failed: skill_read_resource is unavailable.");
+                return;
+            }
+
+            await WriteStreamingToolCallAsync(
+                response,
+                model,
+                "call_skill_resource",
+                "skill_read_resource",
+                JsonSerializer.Serialize(new
+                {
+                    SkillName = ProofSkillName,
+                    ResourcePath = ProofResourcePath,
+                    _rationale = "Read the bundled resource for the public plugin proof.",
+                }));
+            return;
+        }
+
+        var resource = toolResults[^1];
+        var result = resource.StartsWith("# Cluster/Local Mode Abstractions", StringComparison.Ordinal)
+            && resource.Contains("GenericChildPerEntityParent", StringComparison.Ordinal)
+                ? SkillPluginProofResponse
+                : "Skill plugin proof failed: skill_read_resource returned unexpected content.";
+        await WriteStreamingTextAsync(response, model, result);
+    }
+
+    private static bool IsSkillPluginProofRequest(JsonElement root)
+    {
+        if (!root.TryGetProperty("messages", out var messages)
+            || messages.ValueKind is not JsonValueKind.Array)
+            return false;
+
+        foreach (var message in messages.EnumerateArray())
+        {
+            if (GetStringProperty(message, "role") == "user"
+                && GetStringProperty(message, "content") == SkillPluginProofPrompt)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static List<string> GetToolResults(JsonElement root)
+    {
+        var results = new List<string>();
+        if (!root.TryGetProperty("messages", out var messages)
+            || messages.ValueKind is not JsonValueKind.Array)
+            return results;
+
+        foreach (var message in messages.EnumerateArray())
+        {
+            if (GetStringProperty(message, "role") == "tool"
+                && GetStringProperty(message, "content") is { } content)
+                results.Add(content);
+        }
+
+        return results;
+    }
+
+    private static bool HasTool(JsonElement root, string name)
+    {
+        if (!root.TryGetProperty("tools", out var tools)
+            || tools.ValueKind is not JsonValueKind.Array)
+            return false;
+
+        foreach (var tool in tools.EnumerateArray())
+        {
+            if (tool.TryGetProperty("function", out var function)
+                && GetStringProperty(function, "name") == name)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static async Task WriteStreamingTextAsync(
+        HttpResponse response,
+        string model,
+        string content)
     {
         response.StatusCode = StatusCodes.Status200OK;
         response.ContentType = "text/event-stream";
@@ -204,7 +333,7 @@ public static class SmokeLlmServerHost
             model,
             choices = new[]
             {
-                new { index = 0, delta = new { role = "assistant", content = "Netclaw smoke response." }, finish_reason = (string?)null }
+                new { index = 0, delta = new { role = "assistant", content }, finish_reason = (string?)null }
             }
         });
         await WriteEventAsync(response, new
@@ -217,6 +346,61 @@ public static class SmokeLlmServerHost
             {
                 new { index = 0, delta = new { }, finish_reason = "stop" }
             }
+        });
+        await response.WriteAsync("data: [DONE]\n\n");
+        await response.Body.FlushAsync();
+    }
+
+    private static async Task WriteStreamingToolCallAsync(
+        HttpResponse response,
+        string model,
+        string callId,
+        string name,
+        string arguments)
+    {
+        response.StatusCode = StatusCodes.Status200OK;
+        response.ContentType = "text/event-stream";
+        response.Headers.CacheControl = "no-cache";
+
+        await WriteEventAsync(response, new
+        {
+            id = "chatcmpl-netclaw-smoke",
+            @object = "chat.completion.chunk",
+            created = 0,
+            model,
+            choices = new[]
+            {
+                new
+                {
+                    index = 0,
+                    delta = new
+                    {
+                        role = "assistant",
+                        tool_calls = new[]
+                        {
+                            new
+                            {
+                                index = 0,
+                                id = callId,
+                                type = "function",
+                                function = new { name, arguments },
+                            },
+                        },
+                    },
+                    finish_reason = (string?)null,
+                },
+            },
+        });
+        await WriteEventAsync(response, new
+        {
+            id = "chatcmpl-netclaw-smoke",
+            @object = "chat.completion.chunk",
+            created = 0,
+            model,
+            choices = new[]
+            {
+                new { index = 0, delta = new { }, finish_reason = "tool_calls" },
+            },
         });
         await response.WriteAsync("data: [DONE]\n\n");
         await response.Body.FlushAsync();

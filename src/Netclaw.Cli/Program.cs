@@ -846,6 +846,29 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Plugin management ──
+    if (mode is "plugin")
+    {
+        try
+        {
+            var builder = CreateQuietHostBuilder(args);
+            using var pluginHost = builder.Build();
+            Environment.ExitCode = await PluginCommand.RunAsync(
+                args,
+                pluginHost.Services.GetRequiredService<DaemonApi>(),
+                pluginHost.Services.GetRequiredService<TimeProvider>(),
+                Console.In,
+                Console.Out);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
+        {
+            Console.Error.WriteLine($"plugin: could not load local configuration: {ex.Message}");
+            Console.Error.WriteLine("Fix the file it names under ~/.netclaw/config, and retry.");
+            Environment.ExitCode = 1;
+        }
+        return;
+    }
+
     // ── Skill management ──
     if (mode is "skill")
     {
@@ -866,7 +889,12 @@ static async Task RunAsync(string[] args)
                 var skillPaths = skillHost.Services.GetRequiredService<NetclawPaths>();
                 skillPaths.EnsureDirectoriesExist();
                 var skillDaemonApi = skillHost.Services.GetRequiredService<DaemonApi>();
-                Environment.ExitCode = await SkillCommand.RunAsync(args, skillPaths, skillDaemonApi);
+                Environment.ExitCode = await SkillCommand.RunAsync(
+                    args,
+                    skillPaths,
+                    skillHost.Services.GetRequiredService<TimeProvider>(),
+                    Console.In,
+                    skillDaemonApi);
             }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
             {
@@ -881,7 +909,7 @@ static async Task RunAsync(string[] args)
         // All other skill subcommands are offline filesystem operations — no daemon needed.
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
-        Environment.ExitCode = await SkillCommand.RunAsync(args, paths);
+        Environment.ExitCode = await SkillCommand.RunAsync(args, paths, TimeProvider.System, Console.In);
         return;
     }
 
@@ -1316,6 +1344,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
     Console.WriteLine("  memory                   Manage cross-session memory (embeddings backfill, offline)");
     Console.WriteLine("  skill                    Manage skills and skill sources");
+    Console.WriteLine("  plugin                   Manage Git-based agent plugins");
     Console.WriteLine("  webhooks                 Manage inbound webhook routes");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");
