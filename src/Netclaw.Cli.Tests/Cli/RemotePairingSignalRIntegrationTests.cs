@@ -6,6 +6,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Threading.RateLimiting;
+using Akka.Hosting;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.DataProtection;
@@ -32,11 +33,9 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
     private readonly DeviceRegistry _deviceRegistry;
-    private readonly PairingCodeService _pairingCodeService;
     private readonly PairingExchangeGuard _exchangeGuard;
     private readonly LocalControlPairingProofProtector _proofProtector;
     private readonly LocalControlPairingProofValidator _proofValidator;
-    private readonly PairingCoordinator _pairingCoordinator;
 
     public RemotePairingSignalRIntegrationTests()
     {
@@ -44,7 +43,6 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         _paths.EnsureDirectoriesExist();
 
         _deviceRegistry = new DeviceRegistry(_paths, TimeProvider.System, NullLogger<DeviceRegistry>.Instance);
-        _pairingCodeService = new PairingCodeService(TimeProvider.System);
         _exchangeGuard = new PairingExchangeGuard(TimeProvider.System);
         var provider = SecretsProtection.CreateDataProtectionProvider(_paths);
         _proofProtector = new LocalControlPairingProofProtector(provider);
@@ -52,11 +50,6 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
             _proofProtector,
             TimeProvider.System,
             NullLogger<LocalControlPairingProofValidator>.Instance);
-        _pairingCoordinator = new PairingCoordinator(
-            _pairingCodeService,
-            _deviceRegistry,
-            TimeProvider.System,
-            NullLogger<PairingCoordinator>.Instance);
     }
 
     public void Dispose()
@@ -131,14 +124,14 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
 
         builder.Services.AddSingleton<TimeProvider>(TimeProvider.System);
         builder.Services.AddSingleton(_deviceRegistry);
-        builder.Services.AddSingleton(_pairingCodeService);
         builder.Services.AddSingleton(_exchangeGuard);
         builder.Services.AddSingleton(_proofProtector);
         builder.Services.AddSingleton(_proofValidator);
-        builder.Services.AddSingleton(_pairingCoordinator);
         builder.Services.AddNetclawAuthSchemes(new DaemonConfig());
         builder.Services.AddAuthorization();
         builder.Services.AddSignalR();
+        builder.Services.AddAkka($"remote-pairing-tests-{Guid.NewGuid():N}", (akka, _) =>
+            akka.WithPairingActor());
         builder.Services.AddRateLimiter(options =>
         {
             options.AddPolicy("pairing-exchange", context =>
@@ -162,7 +155,7 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         app.MapPairingEndpoints();
 
         app.MapHub<AuthenticatedHub>("/hub/session");
-        await app.StartAsync();
+        await app.StartAsync(TestContext.Current.CancellationToken);
         return app;
     }
 

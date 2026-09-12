@@ -92,8 +92,7 @@ internal sealed class DeviceRegistry
             if (devices.Any(existing =>
                 string.Equals(existing.Name, device.Name, StringComparison.OrdinalIgnoreCase)))
             {
-                throw new InvalidOperationException(
-                    $"A paired device named '{device.Name}' already exists. Revoke it before pairing again.");
+                throw new DeviceNameConflictException(device.Name);
             }
 
             var updated = new List<PairedDevice>(devices) { device };
@@ -253,3 +252,6 @@ internal sealed class DeviceRegistry
         _cachedDevices = devices;
     }
 }
+
+internal sealed class DeviceNameConflictException(string deviceName) : InvalidOperationException(
+    $"A paired device named '{deviceName}' already exists. Revoke it before pairing again.");

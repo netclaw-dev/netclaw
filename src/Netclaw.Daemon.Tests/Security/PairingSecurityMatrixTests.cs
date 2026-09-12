@@ -8,6 +8,8 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text;
 using System.Threading.RateLimiting;
+using Akka.Actor;
+using Akka.Hosting;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.RateLimiting;
@@ -25,6 +27,8 @@ namespace Netclaw.Daemon.Tests.Security;
 
 public sealed class PairingSecurityMatrixTests
 {
+    private static readonly TimeSpan ActorTestTimeout = TimeSpan.FromSeconds(10);
+
     [Fact]
     public async Task Pairing_authority_matrix_matches_approved_snapshot()
     {
@@ -46,7 +50,6 @@ public sealed class PairingSecurityMatrixTests
                     SecretsProtection.CreateDataProtectionProvider(paths));
                 var remoteProtector = new LocalControlPairingProofProtector(
                     SecretsProtection.CreateDataProtectionProvider(new NetclawPaths(remoteDir.Path)));
-                var pairingCodeService = new PairingCodeService(time);
                 var registry = new DeviceRegistry(paths, time, NullLogger<DeviceRegistry>.Instance);
                 string? bearerToken = null;
 
@@ -64,8 +67,8 @@ public sealed class PairingSecurityMatrixTests
                     mode,
                     time,
                     hostProtector,
-                    pairingCodeService,
                     registry);
+                var pairingActor = await GetPairingActorAsync(app);
                 var client = app.GetTestClient();
                 client.DefaultRequestHeaders.Authorization = bearerToken is null
                     ? null
@@ -105,14 +108,23 @@ public sealed class PairingSecurityMatrixTests
                     }
                     else if (priorCode is not null)
                     {
-                        var reservation = pairingCodeService.TryReserve(priorCode);
-                        Assert.NotNull(reservation);
-                        Assert.True(pairingCodeService.TryConsume(reservation.Value));
+                        var exchange = await pairingActor.Ask<PairingExchangeResult>(
+                            new PairingActor.ExchangeCode(
+                                priorCode,
+                                $"matrix-device-{caseIndex}",
+                                TestContext.Current.CancellationToken),
+                            ActorTestTimeout,
+                            TestContext.Current.CancellationToken);
+                        Assert.Equal(PairingExchangeStatus.Success, exchange.Status);
                         priorCode = null;
                     }
                     else
                     {
-                        Assert.Null(pairingCodeService.GetPendingExpiry());
+                        var pending = await pairingActor.Ask<PairingActor.PendingExpiry>(
+                            PairingActor.GetPendingExpiry.Instance,
+                            ActorTestTimeout,
+                            TestContext.Current.CancellationToken);
+                        Assert.Null(pending.ExpiresAt);
                     }
 
                     var httpResult = response.StatusCode == HttpStatusCode.BadRequest
@@ -133,20 +145,19 @@ public sealed class PairingSecurityMatrixTests
         ExposureMode mode,
         TimeProvider timeProvider,
         LocalControlPairingProofProtector proofProtector,
-        PairingCodeService pairingCodeService,
         DeviceRegistry registry)
     {
         var builder = WebApplication.CreateBuilder();
         builder.WebHost.UseTestServer();
         builder.Services.AddSingleton(timeProvider);
         builder.Services.AddSingleton(proofProtector);
-        builder.Services.AddSingleton(pairingCodeService);
         builder.Services.AddSingleton(registry);
         builder.Services.AddSingleton<PairingExchangeGuard>();
         builder.Services.AddSingleton<LocalControlPairingProofValidator>();
-        builder.Services.AddSingleton<PairingCoordinator>();
         builder.Services.AddNetclawAuthSchemes(new DaemonConfig { ExposureMode = mode });
         builder.Services.AddAuthorization();
+        builder.Services.AddAkka($"pairing-matrix-tests-{Guid.NewGuid():N}", (akka, _) =>
+            akka.WithPairingActor());
         builder.Services.AddRateLimiter(options =>
         {
             options.AddPolicy("pairing-exchange", context =>
@@ -162,6 +173,15 @@ public sealed class PairingSecurityMatrixTests
         app.MapPairingEndpoints();
         await app.StartAsync(TestContext.Current.CancellationToken);
         return app;
+    }
+
+    private static async Task<IActorRef> GetPairingActorAsync(WebApplication app)
+    {
+        using var watchdog = CancellationTokenSource.CreateLinkedTokenSource(
+            TestContext.Current.CancellationToken);
+        watchdog.CancelAfter(ActorTestTimeout);
+        var requiredActor = app.Services.GetRequiredService<IRequiredActor<PairingActor>>();
+        return await requiredActor.GetAsync(watchdog.Token);
     }
 
     private static Task<HttpResponseMessage> PostProofAsync(HttpClient client, string proof)

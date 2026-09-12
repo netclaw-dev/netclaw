@@ -6,6 +6,8 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.RateLimiting;
+using Akka.Actor;
+using Akka.Hosting;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.RateLimiting;
@@ -48,7 +50,7 @@ public static class PairingEndpointRouteBuilderExtensions
             HttpContext httpContext,
             PairingCodeExchangeRequest request,
             PairingExchangeGuard exchangeGuard,
-            PairingCoordinator pairingCoordinator,
+            IRequiredActor<PairingActor> pairingActor,
             CancellationToken ct) =>
         {
             var remoteIp = httpContext.Connection.RemoteIpAddress;
@@ -66,7 +68,11 @@ public static class PairingEndpointRouteBuilderExtensions
             if (string.IsNullOrWhiteSpace(request.Code) || string.IsNullOrWhiteSpace(request.DeviceName))
                 return TypedResults.BadRequest(new PairingErrorResponse("code and deviceName are required."));
 
-            var result = await pairingCoordinator.ExchangeAsync(request.Code, request.DeviceName, ct);
+            var actor = await pairingActor.GetAsync(ct);
+            var result = await actor.Ask<PairingExchangeResult>(
+                new PairingActor.ExchangeCode(request.Code, request.DeviceName, ct),
+                Timeout.InfiniteTimeSpan,
+                ct);
             switch (result.Status)
             {
                 case PairingExchangeStatus.Success when result.Token is { } token:
@@ -124,7 +130,7 @@ public static class PairingEndpointRouteBuilderExtensions
     private static async Task<IResult> GeneratePairingCodeAsync(
         HttpContext httpContext,
         LocalControlPairingProofValidator proofValidator,
-        PairingCoordinator pairingCoordinator,
+        IRequiredActor<PairingActor> pairingActor,
         CancellationToken cancellationToken)
     {
         if (httpContext.Request.ContentLength > MaximumLocalControlRequestBytes)
@@ -163,7 +169,11 @@ public static class PairingEndpointRouteBuilderExtensions
         switch (validation)
         {
             case LocalControlPairingProofValidation.Valid:
-                var result = await pairingCoordinator.GenerateCodeAsync(cancellationToken);
+                var actor = await pairingActor.GetAsync(cancellationToken);
+                var result = await actor.Ask<PairingCodeResultDto>(
+                    new PairingActor.GenerateCode(cancellationToken),
+                    Timeout.InfiniteTimeSpan,
+                    cancellationToken);
                 return TypedResults.Ok(result);
 
             case LocalControlPairingProofValidation.UnsupportedVersion:

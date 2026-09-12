@@ -63,28 +63,61 @@ The endpoint rejects bodies larger than 4 KiB.
 
 The endpoint owns HTTP status mapping only.
 The proof validator owns authentication, time, version, operation, and replay decisions.
-The pairing coordinator owns code generation and exchange state transitions.
+The pairing actor owns code generation and exchange state transitions.
 The device registry remains the durable owner of `devices.json`.
 
 ### Serialize each pairing transaction
 
-One singleton pairing coordinator serializes code generation and code exchange.
-It owns the call-local token material and the transaction order.
-The pairing code service owns the process-local active code.
+One `PairingActor` serializes code generation and code exchange.
+It owns the actor-local active code and the call-local token material.
 It validates the code before the registry checks the device name.
 It writes the device before it consumes the code.
-The code service returns an opaque reservation after a successful validity check.
-The reservation identifies the exact code generation that the coordinator accepted.
-The coordinator consumes that reservation without a second expiration check after the durable write.
+Its `ReceiveAsync` handler suspends ordinary mailbox work until the registry write completes.
+No generation counter, reservation object, code-service lock, or coordinator semaphore remains.
+The admitted command holds the code until the write completes without a second expiration check.
 
 If the registry write fails, the code stays active.
 The registry writes a sibling temporary file and replaces the destination only after a complete write and permission check.
 It uses the existing atomic-file helper rather than a second persistence mechanism.
 The prior file and cache remain unchanged when a write fails before replacement.
-If the write succeeds, code consumption occurs synchronously under the same coordinator lock.
+If the write succeeds, the actor consumes the code before it replies or processes another command.
 A code that expires during the durable write remains valid for that admitted transaction.
 A process failure after the write clears the in-memory code during restart.
 This order prevents a second device from using the old code.
+
+HTTP adapters validate authority and request shape before they send transport-neutral actor commands.
+Each command carries the request cancellation token for this single-process deployment.
+The actor rejects a canceled command before it changes state.
+The registry observes cancellation before file replacement.
+After successful replacement, the actor consumes the code even if the caller stops its wait.
+A lost reply does not prove rollback. The operator can inspect devices before another exchange.
+
+Expected storage and cancellation failures produce failure replies without actor restart.
+An unexpected actor failure clears the ephemeral code on restart; durable devices remain in the registry.
+The singleton proof validator retains its nonce cache outside the actor.
+The registry retains its semaphore because authentication, device lists, and revocation also use it.
+The actor lifetime token cancels outstanding I/O when the actor stops.
+The HTTP adapter does not add a separate default Ask timeout that can abandon a live transaction.
+
+| Boundary | Owner | Effect |
+|---|---|---|
+| Code and transaction | Pairing actor | One ordinary command at a time |
+| Device file and cache | Device registry | Atomic replacement shared with other consumers |
+| Proof nonce history | Proof validator | Actor restart cannot erase replay protection |
+| HTTP status and caller wait | Endpoint adapter | No actor dependency on HTTP types |
+
+```text
+ExchangeCode -> validate once -> await registry
+                                  | failure -> retain code -> failure reply
+                                  | success -> clear code -> token reply
+Next queued command <-------------+
+```
+
+The diagram is schematic. It omits request authority checks, rate limits, cancellation, and token hashes.
+For example, a write admitted before expiry can succeed after expiry and consume the code once.
+Counterexample: a second exchange cannot enter the registry while the first write remains incomplete.
+Tests control the write with explicit completion signals and advance the existing `TimeProvider`.
+Tests assert allowed outcomes across independent senders rather than assume their arrival order.
 
 ### Remove hub authority without a fallback
 
@@ -195,7 +228,7 @@ This command shares the daemon key ring and user identity.
 ### Ordered flow
 
 ```text
-Host CLI                 Local-control endpoint       Pairing coordinator       Device registry
+Host CLI                 Local-control endpoint       Pairing actor             Device registry
    | protect v1 proof              |                         |                         |
    | direct POST, no redirect ---->|                         |                         |
    |                               | validate time/replay    |                         |
@@ -217,7 +250,7 @@ It omits rate limits, token hashing, and HTTP error mapping.
 - Clock jumps can reject a proof. → The CLI creates a fresh proof and the daemon allows five seconds of future skew.
 - A full replay cache can deny a valid host. → Entries expire quickly and the daemon logs only a reason category.
 - Immediate removal breaks mixed versions. → A new CLI prints update guidance; an old CLI can report a missing-method error.
-- A registry write can fail after token creation. → The coordinator discards the raw token and preserves the code.
+- A registry write can fail after token creation. → The actor discards the raw token and preserves the code.
 - A code can expire during a successful registry write. → Admission reserves that code generation until the serialized transaction ends.
 - A general HTTP client can export the proof. → A dedicated direct client disables proxies, redirects, and bearer attachment.
 - A non-loopback HTTP path can expose the proof. → The deployment must protect the direct host path from an on-path observer.

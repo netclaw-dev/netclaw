@@ -17,7 +17,7 @@ Host authority path
     -> host CLI creates one ephemeral operation proof
     -> configured daemon endpoint authenticates the proof
     -> process-local replay cache records the nonce
-    -> pairing coordinator creates one ephemeral pairing code
+    -> daemon pairing subsystem creates one ephemeral pairing code
 
 Remote pairing path
   remote CLI
@@ -36,8 +36,8 @@ It omits HTTP error mapping, rate limits, and transport encryption.
 | Advertised remote pairing endpoint | Host CLI from operator client state | Durable input |
 | Proof validation | Local-control endpoint | Call-local |
 | Accepted nonces | Proof validator | Process-local |
-| Pending pairing code | Pairing code service | Process-local |
-| Pairing transaction order | Pairing coordinator | Process-local |
+| Pending pairing code | Daemon pairing subsystem | Process-local |
+| Pairing transaction order | Daemon pairing subsystem | Process-local |
 | Host key ring | Data Protection provider | Durable |
 
 | Request fact | Host authority | Expected result |

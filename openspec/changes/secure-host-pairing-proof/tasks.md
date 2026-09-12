@@ -74,3 +74,20 @@ Slopwatch, header verification, and strict OpenSpec validation pass.
 The codec mutation check fails five cases when both timestamp methods use little-endian bytes.
 The user excluded model evals from these corrections because they affect transport, persistence, and protocol bytes rather than model behavior.
 The completed deterministic checks establish the required local proof. Fresh CI remains a separate merge gate.
+
+## 11. Actor-Owned Pairing Transaction
+
+- [x] 11.1 Replace the coordinator and code service with one actor and remove their locks and reservation type.
+- [x] 11.2 Route the real HTTP endpoints through the registered actor without changing authority checks or HTTP contracts.
+- [x] 11.3 Prove transaction order, expiry, cancellation, write-failure recovery, and actor restart with deterministic actor tests.
+- [x] 11.4 Keep capability specs behavioral; record actor details in the design notes and update the glossary code anchor.
+- [x] 11.5 Run the affected suites, native process smoke, quality checks, and independent review without model evals.
+
+The local actor refactor passes 634 configuration tests, 1,122 daemon tests, and 1,495 CLI tests.
+One Windows-only daemon test is skipped on Linux.
+The native process scenario passes eight checks.
+The focused coverage run passes all 134 security tests.
+Slopwatch, header verification, and strict OpenSpec validation pass.
+The independent source review finds no remaining code blocker.
+The capability specs define behavior; the design notes contain actor details.
+Fresh remote CI remains a separate merge gate. Model evals remain outside this scope.

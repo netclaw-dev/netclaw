@@ -28,9 +28,9 @@ It omits rate limits, token hashing, and HTTP status mapping.
 
 | Decision or data | Owner | Lifetime |
 |---|---|---|
-| Pending code | Pairing code service | Process-local |
-| Exchange order | Pairing coordinator | Process-local |
-| Raw device token | Pairing coordinator | Call-local |
+| Pending code | Daemon pairing subsystem | Process-local |
+| Exchange order | Daemon pairing subsystem | Process-local |
+| Raw device token | Daemon pairing subsystem | Call-local |
 | Device record and token hash | Device registry | Durable |
 
 ## Credential Lifecycle
@@ -94,7 +94,7 @@ A remote CLI SHALL exchange a valid pairing code for a long-lived device token v
 The exchange SHALL use an unauthenticated endpoint that is separate from the main hub.
 The daemon SHALL validate the code before it checks the device name.
 The daemon SHALL consume the code only after it stores the new device.
-The daemon SHALL reserve the accepted code generation before the durable write.
+The daemon SHALL prevent another exchange or code request from changing the accepted code during its durable write.
 The daemon SHALL NOT repeat the expiration check after that durable write.
 The device registry SHALL replace its durable file only after a complete write to a sibling temporary file.
 The registry SHALL preserve its prior file and cache if a write fails before replacement.
@@ -184,7 +184,7 @@ The CLI SHALL enforce a 15-second deadline through the response body read.
 - **GIVEN** the daemon admits a valid code before its expiration
 - **AND** the code reaches its expiration during the registry write
 - **WHEN** the registry stores the device
-- **THEN** the daemon consumes the reserved code generation
+- **THEN** the daemon consumes the admitted code
 - **AND** the daemon returns the device token
 
 #### Scenario: Remote HTTP endpoint fails before code input

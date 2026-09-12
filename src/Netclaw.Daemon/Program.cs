@@ -185,10 +185,8 @@ static async Task RunDaemonAsync(
     builder.Services.AddSingleton<DeviceRegistry>();
     builder.Services.AddSingleton<BootstrapStateStore>();
     builder.Services.AddSingleton<BootstrapDeviceSeeder>();
-    builder.Services.AddSingleton<PairingCodeService>();
     builder.Services.AddSingleton<LocalControlPairingProofProtector>();
     builder.Services.AddSingleton<LocalControlPairingProofValidator>();
-    builder.Services.AddSingleton<PairingCoordinator>();
     builder.Services.AddSingleton<PairingExchangeGuard>();
     builder.Services.AddSingleton<IRemoteAuthSchemeRegistration, DevicePairingSchemeRegistration>();
     builder.Services.AddNetclawAuthSchemes(daemonConfig);
@@ -1095,6 +1093,7 @@ static void ConfigureDaemonServices(
 
         akkaBuilder.WithNetclawSerialization();
         akkaBuilder.WithNetclawActors(shellEnvironment, reminderStorage);
+        akkaBuilder.WithPairingActor();
         akkaBuilder.WithWebhookRouteActor();
         akkaBuilder.WithSessionLogDispatcher();
         akkaBuilder.WithSignalRGateway();

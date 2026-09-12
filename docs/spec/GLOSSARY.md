@@ -108,7 +108,7 @@ The daemon keeps one code in process memory for five minutes.
 A successful exchange consumes the code.
 An expired code requires a new `netclaw daemon pair` command.
 
-**Code anchor:** `PairingCodeService`
+**Code anchor:** `PairingActor`
 
 ### Device token
 
