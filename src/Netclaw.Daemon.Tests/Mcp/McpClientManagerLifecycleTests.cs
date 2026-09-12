@@ -442,8 +442,11 @@ public sealed class McpClientManagerLifecycleTests
         var context = TestToolExecutionContext.CreateBound(
             "slack/thread-1",
             null,
-            TrustAudience.Team,
-            "slack");
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Team,
+                ChannelType = "slack"
+            });
         await harness.Manager.InvokeAsync(
             ServerName.Value,
             "run",
