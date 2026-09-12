@@ -175,6 +175,29 @@ skill_read_resource("netclaw-operations", "SKILL.md")
 
 **Code anchors:** `SkillReadResourceTool`, `FileSkillSource`
 
+### Agent plugin
+
+An agent plugin is a portable package that can contain supported agent components.
+Agent Plugins 1.0.0 defines root `plugin.json`, skills under `skills/`, and optional MCP configuration.
+
+Netclaw initially publishes only the skill component type.
+Unsupported components do not grant authority and remain inactive.
+
+Host-specific manifests are compatibility formats.
+They do not change the portable Agent Plugins contract.
+
+**Code anchors:** `GitSkillPluginAcquirer`, `SkillInventoryRefresher`
+
+### Managed plugin source
+
+A managed plugin source is an operator-configured Git source for one plugin package.
+Its source ID is the durable key for configuration, local paths, receipts, and CLI mutations.
+
+The package manifest name is separate installed metadata.
+A package rename does not silently change the source ID.
+
+**Code anchors:** `ManagedPluginSource`, `ManagedPluginStateStore`
+
 ### Workspace tool
 
 A workspace tool reads, lists, writes, edits, attaches, or selects files and

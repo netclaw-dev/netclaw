@@ -2526,7 +2526,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
             {
                 var item = new Dictionary<string, object>
                 {
-                    ["Name"] = plugin.Name,
+                    ["Id"] = plugin.Id,
                     ["Repository"] = plugin.Repository,
                     ["Format"] = plugin.Format,
                     ["ReferenceKind"] = plugin.ReferenceKind.ToString(),
@@ -2636,7 +2636,7 @@ internal sealed class SkillSourcesConfigViewModel : ReactiveViewModel
 
         public List<SkillFeedConfigEntry> Feeds { get; set; } = [];
 
-        public List<GitSkillPluginSource> Plugins { get; set; } = [];
+        public List<ManagedPluginSource> Plugins { get; set; } = [];
     }
 
     private sealed class SkillFeedConfigEntry

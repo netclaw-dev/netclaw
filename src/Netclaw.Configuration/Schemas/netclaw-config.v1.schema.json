@@ -631,20 +631,20 @@
         "Plugins": {
           "type": "array",
           "maxItems": 20,
-          "description": "Managed public GitHub skill plugins.",
+          "description": "Managed plugin packages from public GitHub repositories.",
           "items": {
             "type": "object",
             "properties": {
-              "Name": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64 },
+              "Id": { "type": "string", "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$", "maxLength": 64 },
               "Repository": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$" },
-              "Format": { "type": "string", "enum": ["codex"], "default": "codex" },
+              "Format": { "type": "string", "enum": ["auto", "agent-plugin", "codex"], "default": "auto" },
               "Subdirectory": { "type": ["string", "null"], "minLength": 1, "maxLength": 512 },
               "ReferenceKind": { "type": "string", "enum": ["Branch", "Commit"] },
               "Reference": { "type": "string", "minLength": 1, "maxLength": 256 },
               "Enabled": { "type": "boolean", "default": true },
               "TimeoutSeconds": { "type": "integer", "minimum": 1, "maximum": 300, "default": 60 }
             },
-            "required": ["Name", "Repository", "Format", "ReferenceKind", "Reference"],
+            "required": ["Id", "Repository", "Format", "ReferenceKind", "Reference"],
             "additionalProperties": false
           }
         }
