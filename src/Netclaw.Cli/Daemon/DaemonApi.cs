@@ -14,6 +14,10 @@ using Netclaw.Configuration;
 
 namespace Netclaw.Cli.Daemon;
 
+internal sealed class DaemonProblemException(
+    HttpStatusCode statusCode,
+    string message) : HttpRequestException(message, null, statusCode);
+
 /// <summary>
 /// Single shared abstraction for all daemon REST HTTP communication.
 /// Owns endpoint resolution, client creation, timeout, and deserialization.
@@ -211,16 +215,151 @@ public sealed class DaemonApi
     /// A source pass can exceed normal status request limits. The caller controls
     /// only its wait through <paramref name="ct"/>.
     /// </summary>
-    public async Task<SkillSyncResult.Response?> SyncSkillsAsync(CancellationToken ct = default)
+    public async Task<SkillSyncResult.Response?> SyncSkillsAsync(
+        CancellationToken ct = default,
+        bool retryRejected = false)
     {
         var client = CreateHttpClient();
         client.Timeout = Timeout.InfiniteTimeSpan;
-        using var request = new HttpRequestMessage(HttpMethod.Post, $"{_endpoint}/api/skills/sync");
+        var suffix = retryRejected ? "?retryRejected=true" : string.Empty;
+        using var request = new HttpRequestMessage(
+            HttpMethod.Post,
+            $"{_endpoint}/api/skills/sync{suffix}");
         using var response = await client.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, ct);
         response.EnsureSuccessStatusCode();
         var stream = await response.Content.ReadAsStreamAsync(ct);
         return await JsonSerializer.DeserializeAsync<SkillSyncResult.Response>(stream, JsonDefaults.Api, ct);
     }
+
+    public async Task<ManagedPluginApi.ListResponse?> ListPluginsAsync(
+        CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(DefaultTimeout, ct);
+        var client = CreateHttpClient();
+        using var response = await client.GetAsync($"{_endpoint}/api/plugins", cts.Token);
+        await EnsurePluginSuccessAsync(response, cts.Token);
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<ManagedPluginApi.ListResponse>(
+            stream,
+            JsonDefaults.Api,
+            cts.Token);
+    }
+
+    public async Task<ManagedPluginApi.InstallResponse?> InstallPluginAsync(
+        ManagedPluginApi.InstallRequest request,
+        CancellationToken ct = default)
+    {
+        var client = CreateHttpClient();
+        client.Timeout = Timeout.InfiniteTimeSpan;
+        using var response = await client.PostAsJsonAsync(
+            $"{_endpoint}/api/plugins",
+            request,
+            JsonDefaults.Api,
+            ct);
+        await EnsurePluginSuccessAsync(response, ct);
+        var stream = await response.Content.ReadAsStreamAsync(ct);
+        return await JsonSerializer.DeserializeAsync<ManagedPluginApi.InstallResponse>(
+            stream,
+            JsonDefaults.Api,
+            ct);
+    }
+
+    public async Task<ManagedPluginApi.MutationResponse?> SetPluginEnabledAsync(
+        string name,
+        bool enabled,
+        CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(LongTimeout, ct);
+        var client = CreateHttpClient();
+        using var request = new HttpRequestMessage(
+            HttpMethod.Patch,
+            $"{_endpoint}/api/plugins/{Uri.EscapeDataString(name)}")
+        {
+            Content = JsonContent.Create(
+                new ManagedPluginApi.SetEnabledRequest { Enabled = enabled },
+                options: JsonDefaults.Api),
+        };
+        using var response = await client.SendAsync(request, cts.Token);
+        await EnsurePluginSuccessAsync(response, cts.Token);
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<ManagedPluginApi.MutationResponse>(
+            stream,
+            JsonDefaults.Api,
+            cts.Token);
+    }
+
+    public async Task<ManagedPluginApi.MutationResponse?> RemovePluginAsync(
+        string name,
+        CancellationToken ct = default)
+    {
+        using var cts = CreateTimeoutCts(LongTimeout, ct);
+        var client = CreateHttpClient();
+        using var response = await client.DeleteAsync(
+            $"{_endpoint}/api/plugins/{Uri.EscapeDataString(name)}",
+            cts.Token);
+        await EnsurePluginSuccessAsync(response, cts.Token);
+        var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+        return await JsonSerializer.DeserializeAsync<ManagedPluginApi.MutationResponse>(
+            stream,
+            JsonDefaults.Api,
+            cts.Token);
+    }
+
+    private static async Task EnsurePluginSuccessAsync(
+        HttpResponseMessage response,
+        CancellationToken cancellationToken)
+    {
+        if (response.IsSuccessStatusCode)
+            return;
+
+        const int maximumProblemBytes = 4_096;
+        const int maximumMessageLength = 512;
+        var fallback = $"The daemon returned HTTP {(int)response.StatusCode}.";
+        string? message = null;
+        try
+        {
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            var buffer = new byte[maximumProblemBytes + 1];
+            var length = 0;
+            while (length < buffer.Length)
+            {
+                var read = await stream.ReadAsync(buffer.AsMemory(length), cancellationToken);
+                if (read == 0)
+                    break;
+                length += read;
+            }
+            if (length <= maximumProblemBytes)
+            {
+                using var document = JsonDocument.Parse(buffer.AsMemory(0, length));
+                var root = document.RootElement;
+                if (root.ValueKind == JsonValueKind.Object)
+                {
+                    message = ReadProblemText(root, "detail") ?? ReadProblemText(root, "title");
+                }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or JsonException)
+        {
+            message = null;
+        }
+
+        var safe = message is null
+            ? fallback
+            : new string(message.Select(static character => char.IsControl(character)
+                || char.GetUnicodeCategory(character) == UnicodeCategory.Format ? ' ' : character).ToArray())
+                .Trim();
+        if (safe.Length == 0)
+            safe = fallback;
+        if (safe.Length > maximumMessageLength)
+            safe = safe[..maximumMessageLength];
+        throw new DaemonProblemException(response.StatusCode, safe);
+    }
+
+    private static string? ReadProblemText(JsonElement root, string propertyName)
+        => root.TryGetProperty(propertyName, out var value)
+            && value.ValueKind == JsonValueKind.String
+                ? value.GetString()
+                : null;
 
     // ── Reminders ─────────────────────────────────────────────────────
 

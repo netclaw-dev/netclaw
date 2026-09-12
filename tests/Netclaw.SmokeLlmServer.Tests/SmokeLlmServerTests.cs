@@ -75,6 +75,41 @@ public sealed class SmokeLlmServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Skill_plugin_proof_requests_both_logical_skill_tools()
+    {
+        var messages = new List<object>
+        {
+            new { role = "user", content = SmokeLlmServerHost.SkillPluginProofPrompt },
+        };
+        var tools = new[]
+        {
+            new { type = "function", function = new { name = "skill_load" } },
+            new { type = "function", function = new { name = "skill_read_resource" } },
+        };
+
+        var first = await PostStreamingAsync(messages, tools);
+        Assert.Contains("\"name\":\"skill_load\"", first, StringComparison.Ordinal);
+
+        messages.Add(new
+        {
+            role = "tool",
+            tool_call_id = "call_skill_load",
+            content = "# Akka.NET Best Practices\nAvailable: cluster-local-abstractions.md",
+        });
+        var second = await PostStreamingAsync(messages, tools);
+        Assert.Contains("\"name\":\"skill_read_resource\"", second, StringComparison.Ordinal);
+
+        messages.Add(new
+        {
+            role = "tool",
+            tool_call_id = "call_skill_resource",
+            content = "# Cluster/Local Mode Abstractions\nGenericChildPerEntityParent",
+        });
+        var third = await PostStreamingAsync(messages, tools);
+        Assert.Contains(SmokeLlmServerHost.SkillPluginProofResponse, third, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Bad_request_and_non_loopback_address_fail_loudly()
     {
         var response = await Client.PostAsJsonAsync("/v1/chat/completions", new { model = "unknown" }, TestContext.Current.CancellationToken);
@@ -124,4 +159,19 @@ public sealed class SmokeLlmServerTests : IAsyncLifetime
     }
 
     private HttpClient Client => _client ?? throw new InvalidOperationException("The test server is not initialized.");
+
+    private async Task<string> PostStreamingAsync(
+        IReadOnlyList<object> messages,
+        object tools)
+    {
+        using var response = await Client.PostAsJsonAsync("/v1/chat/completions", new
+        {
+            model = SmokeLlmServerOptions.ModelId,
+            messages,
+            tools,
+            stream = true,
+        }, TestContext.Current.CancellationToken);
+        response.EnsureSuccessStatusCode();
+        return await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken);
+    }
 }
