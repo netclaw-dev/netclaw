@@ -81,6 +81,7 @@
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
     <PackageVersion Include="ShellSyntaxTree" Version="0.3.5" />
     <PackageVersion Include="Termina" Version="0.16.2" />
+    <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.0" />
   </ItemGroup>
   <!-- Serialization -->
