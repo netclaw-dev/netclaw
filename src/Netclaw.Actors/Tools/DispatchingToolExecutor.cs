@@ -421,7 +421,16 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 ct);
 
             LogAuthorizationDecision(toolCall, context, shellAuthorization.Decision);
-            return (shellAuthorization.Decision, shellAuthorization.AuthorizedAnalysis);
+            return shellAuthorization switch
+            {
+                ShellAuthorizationResult.Authorized authorized =>
+                    (authorized.Decision, authorized.Analysis),
+                ShellAuthorizationResult.ToolValidation toolValidation =>
+                    (toolValidation.Decision, null),
+                ShellAuthorizationResult.Stopped stopped =>
+                    (stopped.Decision, null),
+                _ => throw new InvalidOperationException("Unsupported shell authorization result.")
+            };
         }
 
         var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);

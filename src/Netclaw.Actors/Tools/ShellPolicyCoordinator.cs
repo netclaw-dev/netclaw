@@ -26,7 +26,7 @@ internal sealed class ShellPolicyCoordinator(
     /// The coordinator then collects corrections before it accepts automatic policy approval or checks stored approval evidence.
     /// It returns the analysis only when the caller can start the authorized command.
     /// </remarks>
-    internal async Task<(ToolAuthorizationDecision Decision, ShellCommandAnalysis? AuthorizedAnalysis)> EvaluateAsync(
+    internal async Task<ShellAuthorizationResult> EvaluateAsync(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
@@ -53,15 +53,14 @@ internal sealed class ShellPolicyCoordinator(
         }
         catch (Exception)
         {
-            return (
+            return ShellAuthorizationResult.Stop(
                 CompleteWithTrace(
                     ToolAuthorizationDecision.Deny("internal_policy_failure"),
-                    trace),
-                null);
+                    trace));
         }
     }
 
-    private async Task<(ToolAuthorizationDecision Decision, ShellCommandAnalysis? AuthorizedAnalysis)> EvaluateCoreAsync(
+    private async Task<ShellAuthorizationResult> EvaluateCoreAsync(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
@@ -84,9 +83,8 @@ internal sealed class ShellPolicyCoordinator(
         // A native tool needs a separate call. Shell approval cannot authorize that replacement.
         if (corrections?.Items.Any(static correction => correction is ToolCorrection.NativeToolSuggested) == true)
         {
-            return (
-                Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace),
-                null);
+            return ShellAuthorizationResult.Stop(
+                Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace));
         }
 
         if (preflight is ShellPolicyPreflightResult.Complete complete)
@@ -95,9 +93,8 @@ internal sealed class ShellPolicyCoordinator(
             // Auto permits execution, but the agent must first receive any applicable directory advice.
             if (preflightDecision.AllowReason == ToolAllowReason.PolicyAuto && corrections is not null)
             {
-                return (
-                    Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace),
-                    null);
+                return ShellAuthorizationResult.Stop(
+                    Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace));
             }
 
             if (preflightDecision.NeedsApproval
@@ -111,7 +108,7 @@ internal sealed class ShellPolicyCoordinator(
                 preflightDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
             }
 
-            return (
+            return ShellAuthorizationResult.Create(
                 Complete(preflightDecision, [], trace),
                 complete.AuthorizedAnalysis);
         }
@@ -127,11 +124,10 @@ internal sealed class ShellPolicyCoordinator(
                 out var projection)
             || projection is null)
         {
-            return (
+            return ShellAuthorizationResult.Stop(
                 CompleteWithTrace(
                     ToolAuthorizationDecision.Deny("internal_policy_failure"),
-                    trace),
-                null);
+                    trace));
         }
 
         var projectedPathDecision = policy.EnforceProjectedShellFileProtection(
@@ -139,9 +135,8 @@ internal sealed class ShellPolicyCoordinator(
             context.Invocation);
         if (projectedPathDecision is not null)
         {
-            return (
-                CompleteWithTrace(projectedPathDecision, trace),
-                null);
+            return ShellAuthorizationResult.Stop(
+                CompleteWithTrace(projectedPathDecision, trace));
         }
 
         var decision = await CompleteAsync(
@@ -152,7 +147,7 @@ internal sealed class ShellPolicyCoordinator(
             corrections,
             cancellationToken);
 
-        return (
+        return ShellAuthorizationResult.Create(
             decision,
             decision.Outcome == ToolAuthorizationOutcome.Allowed
                 ? continuation.Analysis
@@ -167,7 +162,8 @@ internal sealed class ShellPolicyCoordinator(
         ShellPolicyPreflightResult preflight)
     {
         // Denial and approval without command analysis cannot become advice to submit a different call.
-        if (preflight is ShellPolicyPreflightResult.Complete { Decision.Allowed: false })
+        if (preflight is ShellPolicyPreflightResult.Complete
+            { Decision.Outcome: not ToolAuthorizationOutcome.Allowed })
             return null;
 
         var native = NativeToolShellCorrectionDetector.Detect(analysis, registry, policy, context.Invocation);

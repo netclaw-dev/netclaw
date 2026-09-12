@@ -187,19 +187,39 @@ public sealed class ToolAccessPolicy
         return true;
     }
 
+    /// <summary>Applies access and approval policy to a non-shell tool invocation.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="tool"/> is <c>shell_execute</c>, which requires the asynchronous shell coordinator.
+    /// </exception>
     public ToolAuthorizationDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext context)
         => AuthorizeInvocation(tool, context, arguments: null);
 
+    /// <summary>Applies access and approval policy to a non-shell tool invocation.</summary>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="tool"/> is <c>shell_execute</c>, which requires the asynchronous shell coordinator.
+    /// </exception>
     public ToolAuthorizationDecision AuthorizeInvocation(
         INetclawTool tool,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
-        => AuthorizeInvocationCore(
-            tool,
-            context,
-            arguments,
-            deferShellCompletion: false,
-            out _);
+    {
+        if (IsShellTool(tool))
+        {
+            throw new InvalidOperationException(
+                "Shell commands require the asynchronous shell policy coordinator.");
+        }
+
+        if (tool is McpToolAdapter mcp)
+            return AuthorizeMcpInvocation(mcp, context, arguments);
+
+        var toolName = new ToolName(tool.Name);
+        if (!_profileResolver.IsToolAllowed(toolName, context.Invocation))
+            return ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile");
+
+        return string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
+            ? AuthorizeBackgroundJobControl(context)
+            : AuthorizeStructuredInvocation(tool, toolName, context, arguments);
+    }
 
     /// <summary>Builds canonical shell analysis and applies synchronous access rules before approval evidence.</summary>
     internal ShellPolicyPreflightResult AuthorizeShellPreflight(
@@ -207,18 +227,20 @@ public sealed class ToolAccessPolicy
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
     {
-        var decision = AuthorizeInvocationCore(
-            tool,
-            context,
-            arguments,
-            deferShellCompletion: true,
-            out var analysis);
+        if (!IsShellTool(tool))
+            throw new ArgumentException("Shell preflight requires the shell tool.", nameof(tool));
+
+        ShellCommandAnalysis? analysis = null;
+        var toolName = new ToolName(tool.Name);
+        var decision = !_profileResolver.IsToolAllowed(toolName, context.Invocation)
+            ? ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile")
+            : AuthorizeShellInvocation(toolName, context, arguments, out analysis);
 
         if (!decision.NeedsApproval)
         {
             return new ShellPolicyPreflightResult.Complete(
                 decision,
-                decision.Allowed ? analysis : null);
+                decision.Outcome == ToolAuthorizationOutcome.Allowed ? analysis : null);
         }
 
         if (analysis is null)
@@ -236,33 +258,6 @@ public sealed class ToolAccessPolicy
             : new ShellPolicyPreflightResult.Complete(
                 ToolAuthorizationDecision.Deny("internal_policy_failure"),
                 authorizedAnalysis: null);
-    }
-
-    private ToolAuthorizationDecision AuthorizeInvocationCore(
-        INetclawTool tool,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments,
-        bool deferShellCompletion,
-        out ShellCommandAnalysis? authorizedAnalysis)
-    {
-        authorizedAnalysis = null;
-
-        if (tool is McpToolAdapter mcp)
-            return AuthorizeMcpInvocation(mcp, context, arguments);
-
-        var toolName = new ToolName(tool.Name);
-        if (!_profileResolver.IsToolAllowed(toolName, context.Invocation))
-            return ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile");
-
-        return IsShellCoupledTool(tool)
-            ? AuthorizeShellInvocation(
-                tool,
-                toolName,
-                context,
-                arguments,
-                deferShellCompletion,
-                out authorizedAnalysis)
-            : AuthorizeStructuredInvocation(tool, toolName, context, arguments);
     }
 
     private ToolAuthorizationDecision AuthorizeMcpInvocation(
@@ -291,7 +286,7 @@ public sealed class ToolAccessPolicy
             context,
             approvalArguments,
             McpApprovalMatcher.Instance);
-        return CheckApprovalGate(
+        return AuthorizeNonShellApproval(
             toolName,
             context,
             approvalArguments,
@@ -314,35 +309,19 @@ public sealed class ToolAccessPolicy
         if (approvalMode == ToolApprovalMode.Deny)
             return ToolAuthorizationDecision.Deny("tool_denied_by_approval_policy");
 
-        return CheckApprovalGate(toolName, context, arguments, matcher, approvalMode);
+        return AuthorizeNonShellApproval(toolName, context, arguments, matcher, approvalMode);
     }
 
     private ToolAuthorizationDecision AuthorizeShellInvocation(
-        INetclawTool tool,
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
-        bool deferShellCompletion,
         out ShellCommandAnalysis? authorizedAnalysis)
     {
         authorizedAnalysis = null;
 
-        var shellMode = ResolveShellMode();
-        if (shellMode == ShellExecutionMode.Off)
-            return ToolAuthorizationDecision.Deny("shell_disabled");
-
-        if (shellMode == ShellExecutionMode.SandboxOnly)
-            return ToolAuthorizationDecision.Deny("shell_requires_sandbox_backend");
-
-        var shellAudience = ResolveAudience(context.Invocation);
-        if (shellAudience != TrustAudience.Personal)
-            return ToolAuthorizationDecision.Deny("shell_requires_personal_context");
-
-        // shell_execute authorizes the process before the job starts. This tool
-        // can only control a job with the same session, audience, and boundary.
-        // It does not create a new shell invocation or require another approval.
-        if (string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal))
-            return ToolAuthorizationDecision.Allow(ToolAllowReason.BackgroundJobLifecycle);
+        if (EvaluateShellCapability(context.Invocation) is { } capabilityDecision)
+            return capabilityDecision;
 
         var shellCommand = ExtractShellCommand(arguments);
         var workingDirectory = context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
@@ -386,7 +365,7 @@ public sealed class ToolAccessPolicy
 
         var mode = GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher);
         var approvalModeDecision = GetApprovalModeDecision(mode);
-        if (approvalModeDecision is { Allowed: false })
+        if (approvalModeDecision is { Outcome: ToolAuthorizationOutcome.Denied })
             return approvalModeDecision;
 
         authorizedAnalysis = shellAnalysis;
@@ -394,15 +373,31 @@ public sealed class ToolAccessPolicy
         if (approvalModeDecision is not null)
             return approvalModeDecision;
 
-        return CheckApprovalGate(
+        return AuthorizeShellApproval(
             toolName,
             context,
             arguments,
-            _shellApprovalMatcher,
             mode,
             shellApproval,
-            shellAnalysis,
-            deferShellCompletion);
+            workingDirectory);
+    }
+
+    private ToolAuthorizationDecision AuthorizeBackgroundJobControl(ToolExecutionContext context)
+        => EvaluateShellCapability(context.Invocation)
+           ?? ToolAuthorizationDecision.Allow(ToolAllowReason.BackgroundJobLifecycle);
+
+    private ToolAuthorizationDecision? EvaluateShellCapability(ToolInvocationContext context)
+    {
+        var shellMode = ResolveShellMode();
+        if (shellMode == ShellExecutionMode.Off)
+            return ToolAuthorizationDecision.Deny("shell_disabled");
+
+        if (shellMode == ShellExecutionMode.SandboxOnly)
+            return ToolAuthorizationDecision.Deny("shell_requires_sandbox_backend");
+
+        return ResolveAudience(context) == TrustAudience.Personal
+            ? null
+            : ToolAuthorizationDecision.Deny("shell_requires_personal_context");
     }
 
     internal bool IsReviewedSafeCandidate(
@@ -703,87 +698,82 @@ public sealed class ToolAccessPolicy
         return analysisArguments;
     }
 
-    private ToolAuthorizationDecision CheckApprovalGate(
+    private ToolAuthorizationDecision AuthorizeNonShellApproval(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher,
-        ToolApprovalMode mode,
-        ShellApprovalAnalysis? shellApproval = null,
-        ShellCommandAnalysis? shellAnalysis = null,
-        bool deferShellCompletion = false)
+        ToolApprovalMode mode)
     {
         var approvalModeDecision = GetApprovalModeDecision(mode);
         if (approvalModeDecision is not null)
             return approvalModeDecision;
 
-        // The approval policy is authoritative for every channel — there is no
-        // safe-list auto-grant for non-interactive callers. A non-interactive
-        // caller (reminder, webhook, sub-agent without an approval bridge) that
-        // hits an approval-gated tool fails closed unless the patterns are
-        // already in the persistent approval store.
+        var patterns = matcher.ExtractPatterns(toolName, arguments);
+        var candidates = matcher.ExtractCandidates(toolName, arguments);
+        var displayText = matcher.FormatForDisplay(toolName, arguments);
+        var isMessy = matcher.IsMessy(toolName, arguments);
+        var correction = _temporaryPathCorrectionPolicy.EvaluateStructuredFileChange(
+            toolName,
+            arguments,
+            context.Invocation,
+            _toolPathPolicy);
+        return BuildApprovalDecision(
+            toolName,
+            context,
+            patterns,
+            candidates,
+            displayText,
+            isMessy,
+            correction,
+            hasReusablePhrase: true,
+            directoryApprovalAvailable: false);
+    }
 
-        // Approval prompts carry three views of the invocation:
-        // - `patterns`: the exact blocked units shown to the user and reused by
-        //   approve-once retries.
-        // - `candidates`: the (verb, directory) pairs evaluated against
-        //   persisted ApprovalEntry records by the gate. Candidates include
-        //   path operands, redirect targets, and each pipeline clause.
-        //   A null directory uses ToolExecutionContext.Cwd.
-        // - `candidateVerbs`: the verb-only projection of `candidates`, kept
-        //   for renderers (Slack/Discord builders) that bullet-list verbs in
-        //   the prompt body. Button labels stay fixed; runtime values like
-        //   paths never enter button text because Slack caps button text at
-        //   76 chars and Discord at 80.
-        // The shell process and the approval parser must use one cwd. The tool
-        // argument can omit it because the context supplies the project or
-        // session directory. Give that resolved value to the parser too.
-        var isShell = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal);
-        var resolvedShellCwd = isShell
-            ? context.ResolveShellCwd(ExtractWorkingDirectory(arguments))
-            : null;
-        if (isShell)
-            context.Approval.SetCwd(resolvedShellCwd);
+    private ToolAuthorizationDecision AuthorizeShellApproval(
+        ToolName toolName,
+        ToolExecutionContext context,
+        IDictionary<string, object?>? arguments,
+        ToolApprovalMode mode,
+        ShellApprovalAnalysis? analysis,
+        string? workingDirectory)
+    {
+        var approvalModeDecision = GetApprovalModeDecision(mode);
+        if (approvalModeDecision is not null)
+            return approvalModeDecision;
 
-        var analysisArguments = isShell
-            ? WithResolvedShellWorkingDirectory(arguments, resolvedShellCwd)
-            : arguments;
-        var patterns = shellApproval?.Patterns
-            ?? matcher.ExtractPatterns(toolName, analysisArguments);
-        var candidates = shellApproval?.Candidates
-            ?? matcher.ExtractCandidates(toolName, analysisArguments);
-        var displayText = shellApproval?.DisplayText
-            ?? matcher.FormatForDisplay(toolName, arguments);
-        var isMessy = shellApproval?.IsMessy
-            ?? matcher.IsMessy(toolName, analysisArguments);
+        context.Approval.SetCwd(workingDirectory);
+        analysis ??= _shellApprovalMatcher.AnalyzeInvocation(
+            toolName,
+            WithResolvedShellWorkingDirectory(arguments, workingDirectory));
+        return BuildApprovalDecision(
+            toolName,
+            context,
+            analysis.Patterns,
+            analysis.Candidates,
+            analysis.DisplayText,
+            analysis.IsMessy,
+            correction: null,
+            analysis.Candidates.All(HasReusableShellPhrase),
+            IsShellDirectoryApprovalAvailable(
+                analysis.Candidates,
+                context.Approval.Cwd,
+                GetSessionOwnedApprovalDirectories(context),
+                ShellEnvironment.PathStyle));
+    }
 
-        IReadOnlyList<ApprovalCandidate> approvalCandidates = candidates;
-        ToolCorrection? agentCorrection = null;
-
-        // The public synchronous API completes shell policy here. Live dispatch leaves those decisions to the coordinator.
-        if (isShell && !deferShellCompletion)
-        {
-            (approvalCandidates, agentCorrection) = EvaluateSynchronousShellPolicy(
-                shellAnalysis,
-                candidates,
-                isMessy,
-                arguments,
-                context);
-
-            // An empty original candidate set proves nothing. Only removal of covered candidates permits this early allow.
-            if (candidates.Count > 0 && approvalCandidates.Count == 0)
-                return ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy);
-        }
-        else if (!isShell)
-        {
-            agentCorrection = _temporaryPathCorrectionPolicy.EvaluateStructuredFileChange(
-                toolName,
-                arguments,
-                context.Invocation,
-                _toolPathPolicy);
-        }
-
-        var candidateVerbs = approvalCandidates
+    private ToolAuthorizationDecision BuildApprovalDecision(
+        ToolName toolName,
+        ToolExecutionContext context,
+        IReadOnlyList<string> patterns,
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string displayText,
+        bool isMessy,
+        ToolCorrection? correction,
+        bool hasReusablePhrase,
+        bool directoryApprovalAvailable)
+    {
+        var candidateVerbs = candidates
             .Select(static candidate => candidate.Verb)
             .Distinct(StringComparer.OrdinalIgnoreCase)
             .ToList();
@@ -797,17 +787,6 @@ public sealed class ToolAccessPolicy
         }
         else
         {
-            var hasReusablePhrase = !isShell || approvalCandidates.All(HasReusableShellPhrase);
-            var directoryApprovalAvailable = false;
-            if (matcher is ShellApprovalMatcher)
-            {
-                directoryApprovalAvailable = IsShellDirectoryApprovalAvailable(
-                    approvalCandidates,
-                    context.Approval.Cwd,
-                    GetSessionOwnedApprovalDirectories(context),
-                    ShellEnvironment.PathStyle);
-            }
-
             options = BuildApprovalOptions(GetApprovalOptionProfile(
                 toolName,
                 isMessy,
@@ -823,7 +802,7 @@ public sealed class ToolAccessPolicy
             options,
             Cwd: context.Approval.Cwd,
             IsMessy: isMessy,
-            Candidates: approvalCandidates)
+            Candidates: candidates)
         {
             IsManagedTemporaryRetry = isManagedTemporaryRetry,
             ManagedTemporaryDirectory = managedTemporaryRetry?.ManagedTemporaryDirectory,
@@ -832,37 +811,7 @@ public sealed class ToolAccessPolicy
 
         return ToolAuthorizationDecision.RequiresApproval(
             approvalContext,
-            isManagedTemporaryRetry ? null : agentCorrection);
-    }
-
-    private (IReadOnlyList<ApprovalCandidate> UncoveredCandidates, ToolCorrection? Correction) EvaluateSynchronousShellPolicy(
-        ShellCommandAnalysis? analysis,
-        IReadOnlyList<ApprovalCandidate> candidates,
-        bool isMessy,
-        IDictionary<string, object?>? arguments,
-        ToolExecutionContext context)
-    {
-        ToolCorrection? correction = null;
-        if (analysis is not null)
-            correction = EvaluateShellTemporaryCorrection(analysis, candidates, arguments, context.Invocation);
-
-        if (_safeVerbPolicy is null)
-            return (candidates, correction);
-
-        if (isMessy)
-            return (candidates, correction);
-
-        if (candidates.Count == 0)
-            return (candidates, correction);
-
-        if (correction is null)
-            correction = EvaluateShellProjectCorrection(candidates, context.Approval.Cwd, context.Invocation);
-
-        // Each removed candidate must satisfy both the reviewed verb and path rules. The approval store covers the remainder.
-        var uncovered = candidates
-            .Where(candidate => !_safeVerbPolicy.ShortCircuits(candidate, context.Approval.Cwd, context.Invocation))
-            .ToList();
-        return (uncovered, correction);
+            isManagedTemporaryRetry ? null : correction);
     }
 
     internal ToolCorrection? EvaluateShellTemporaryCorrection(

@@ -76,7 +76,7 @@ public sealed class ToolApprovalGateTests
         var context = PersonalContext();
         var args = ToolInput.Create("Command", "git push");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), context, args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), context, args);
 
         Assert.False(decision.Allowed);
         Assert.Equal("tool_denied_by_approval_policy", decision.DenyReason);
@@ -148,7 +148,7 @@ public sealed class ToolApprovalGateTests
     {
         var policy = CreatePolicy(mode);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             ToolInput.Create("Command", "rm -rf /"));
@@ -171,7 +171,7 @@ public sealed class ToolApprovalGateTests
         var policy = new ToolAccessPolicy(new NetclawPaths(), config, Defaults(), commandPolicy, pathPolicy);
         var tool = new ShellTool(config, pathPolicy, commandPolicy);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             tool,
             PersonalContext(),
             ToolInput.Create("Command", "cat /protected/secret.txt"));
@@ -190,7 +190,7 @@ public sealed class ToolApprovalGateTests
         var policy = CreatePolicy(mode);
         var context = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             context,
             ToolInput.Create("Command", "cat /external/data.txt"));
@@ -206,7 +206,7 @@ public sealed class ToolApprovalGateTests
         var policy = CreatePolicy((ToolApprovalMode)999);
         var context = PersonalContext();
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             context,
             ToolInput.Create("Command", "git status"));
@@ -231,7 +231,7 @@ public sealed class ToolApprovalGateTests
                 new ShellCommandPolicy(),
                 new ToolPathPolicy([]));
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             ToolInput.Create("Command", "git pull --ff-only"));
@@ -250,7 +250,7 @@ public sealed class ToolApprovalGateTests
             "Command", $"rm {dir.Path}/*.bak",
             "WorkingDirectory", dir.Path);
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         Assert.False(decision.ApprovalContext!.IsMessy);
@@ -268,7 +268,7 @@ public sealed class ToolApprovalGateTests
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var args = ToolInput.Create("Command", "git add . && git commit -m fix && git push");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         Assert.Contains("git add .", decision.ApprovalContext!.Patterns);
@@ -281,7 +281,7 @@ public sealed class ToolApprovalGateTests
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             ToolInput.Create("Command", "whoami user; whoami admin"));
@@ -723,7 +723,7 @@ public sealed class ToolApprovalGateTests
                 new ToolPathPolicy([]));
 
         var args = ToolInput.Create("Command", "git pull --ff-only");
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         // Shell default matcher fails closed on Personal → approval, not deny.
         Assert.True(decision.NeedsApproval);
@@ -880,7 +880,7 @@ public sealed class ToolApprovalGateTests
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?>
             {
                 ["command"] = TestShellEnvironment.ReadFileCommand(outsidePath)
@@ -901,7 +901,7 @@ public sealed class ToolApprovalGateTests
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?>
             {
                 ["command"] = TestShellEnvironment.ReadFileCommand(insidePath)
@@ -922,7 +922,7 @@ public sealed class ToolApprovalGateTests
         var ctx = PersonalContext(supportsApproval: false);
 
         // "git status" has no path-like arguments
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?> { ["command"] = "git status" });
 
         Assert.True(decision.NeedsApproval);
@@ -940,7 +940,7 @@ public sealed class ToolApprovalGateTests
 
         // The default Personal WriteFiles=All profile admits the path. The
         // approval layer still decides whether the shell call can execute.
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?> { ["command"] = "cat /etc/passwd" });
 
         Assert.True(decision.NeedsApproval);
@@ -956,7 +956,7 @@ public sealed class ToolApprovalGateTests
             ShellExecutionMode.Off,
             ToolFilesystemMode.None);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             new Dictionary<string, object?>
@@ -1019,7 +1019,7 @@ public sealed class ToolApprovalGateTests
             ShellExecutionMode.HostAllowed,
             ToolFilesystemMode.Roots);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             new Dictionary<string, object?>
@@ -1046,7 +1046,7 @@ public sealed class ToolApprovalGateTests
             ToolFilesystemMode.None,
             approvalMode);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             new Dictionary<string, object?>
@@ -1078,7 +1078,7 @@ public sealed class ToolApprovalGateTests
             ShellExecutionMode.HostAllowed,
             ToolFilesystemMode.Roots);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             new Dictionary<string, object?>
@@ -1097,7 +1097,7 @@ public sealed class ToolApprovalGateTests
     {
         var policy = CreatePolicy(ToolApprovalMode.Approval);
 
-        var decision = policy.AuthorizeInvocation(
+        var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             PersonalContext(),
             ToolInput.Create("Command", "custom-command \"$TARGET_FILE\""));
@@ -1120,7 +1120,7 @@ public sealed class ToolApprovalGateTests
         var command = OperatingSystem.IsWindows()
             ? $"pwsh -NoProfile -Command \"Get-Content '{outsidePath}'\""
             : $"bash -c \"cat '{outsidePath}'\"";
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?> { ["command"] = command });
 
         Assert.False(decision.Allowed);
@@ -1143,7 +1143,7 @@ public sealed class ToolApprovalGateTests
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?>
             {
                 ["command"] = "cat README.md",
@@ -1166,7 +1166,7 @@ public sealed class ToolApprovalGateTests
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?>
             {
                 ["command"] = "cat README.md",
@@ -1185,7 +1185,7 @@ public sealed class ToolApprovalGateTests
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?> { ["command"] = "cat /etc/passwd" });
 
         Assert.False(decision.Allowed);
@@ -1200,7 +1200,7 @@ public sealed class ToolApprovalGateTests
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?>
             {
                 ["command"] = "cat README.md",
@@ -1241,7 +1241,7 @@ public sealed class ToolApprovalGateTests
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
-        var decision = policy.AuthorizeInvocation(tool, ctx,
+        var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?> { ["command"] = "git status" });
 
         Assert.Null(decision.DenyReason);
@@ -1318,7 +1318,7 @@ public sealed class ToolApprovalGateTests
         var logPath = Path.Combine(ApprovalTestRoot, "logs", "crash.log");
         var args = ToolInput.Create("Command", $"cat \"{logPath}\"");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         Assert.NotNull(decision.ApprovalContext);
@@ -1343,7 +1343,7 @@ public sealed class ToolApprovalGateTests
         var logPath = Path.Combine(ApprovalTestRoot, "logs", "app.log");
         var args = ToolInput.Create("Command", $"grep 'error' \"{logPath}\"");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;
@@ -1360,7 +1360,7 @@ public sealed class ToolApprovalGateTests
             "Command",
             $"cat \"{inputPath}\" > \"{outputPath}\"");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;
@@ -1377,7 +1377,7 @@ public sealed class ToolApprovalGateTests
             "Command", "grep timeout logs/app.log | wc -l",
             "WorkingDirectory", root);
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         // Pipelines stay inside one approval unit, so the candidate is
@@ -1395,7 +1395,7 @@ public sealed class ToolApprovalGateTests
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var args = ToolInput.Create("Command", "git push origin main");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         // ExtractVerbChain (post-ShellSyntaxTree-0.1.4) extracts greedily
@@ -1432,7 +1432,7 @@ public sealed class ToolApprovalGateTests
 
         var args = ToolInput.Create("Command", $"grep error \"{deepPath}\"");
 
-        var decision = policy.AuthorizeInvocation(ShellTool(), PersonalContext(), args);
+        var decision = policy.GetShellPreflightDecision(ShellTool(), PersonalContext(), args);
 
         Assert.True(decision.NeedsApproval);
         var options = decision.ApprovalContext!.Options;

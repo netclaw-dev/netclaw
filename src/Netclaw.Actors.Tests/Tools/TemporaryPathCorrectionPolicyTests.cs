@@ -408,7 +408,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
                 PosixSession,
                 inspector: HostPlatformTemporaryPathInspector.Instance);
 
-            var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+            Assert.Null(decision.ApprovalContext);
             var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
             Assert.Equal(realTemp, correction.Target.PlatformTemporaryRoot);
         }
@@ -492,7 +492,18 @@ public sealed class TemporaryPathCorrectionPolicyTests
                 "Command", command,
                 "WorkingDirectory", explicitWorkingDirectory);
 
-        return policy.AuthorizeInvocation(shellTool, context, arguments);
+        var preflight = policy.AuthorizeShellPreflight(shellTool, context, arguments);
+        if (preflight is not ShellPolicyPreflightResult.Continue continuation)
+            return preflight.Decision;
+
+        var correction = policy.EvaluateShellTemporaryCorrection(
+            continuation.Analysis,
+            continuation.ApprovalContext.Candidates!,
+            arguments,
+            context.Invocation);
+        return correction is null
+            ? preflight.Decision
+            : ToolAuthorizationDecision.RequireAgentCorrection(correction);
     }
 
     private static ShellExecutionEnvironment BashEnvironment()

@@ -244,6 +244,13 @@ Done when:
 - [ ] The policy pipeline replaces the shell branches in `ToolAccessPolicy`
   and `ShellApprovalMatcher`; any retained legacy scan is deny-only and cannot
   authorize, create candidates, or widen scope.
+  - [x] `ToolAccessPolicy` no longer completes shell authorization synchronously.
+    It produces preflight facts only. `ShellPolicyCoordinator` is the sole path
+    that applies corrections, reviewed-safe coverage, grants, and a final shell
+    authorization result.
+  - [ ] Move the remaining parser-to-candidate projection out of the broad
+    `ShellApprovalMatcher` compatibility surface without changing its released
+    approval shapes.
   The preliminary complete-footprint audit after PR #1947 found 1,484 added
   production lines and 52 added control-flow lines. Later slices reduced the
   post-corpus footprint from 10,085 lines and 663 control-flow lines to 9,693

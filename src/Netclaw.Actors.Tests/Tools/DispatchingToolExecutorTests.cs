@@ -3508,7 +3508,7 @@ public partial class DispatchingToolExecutorTests
                 TestContext.Current.CancellationToken);
 
             Assert.Equal(ToolAuthorizationOutcome.Allowed, authorization.Decision.Outcome);
-            var analysis = Assert.IsType<ShellCommandAnalysis>(authorization.AuthorizedAnalysis);
+            var analysis = Assert.IsType<ShellAuthorizationResult.Authorized>(authorization).Analysis;
             Assert.Equal(phrase, analysis.Source);
             Assert.Equal(root, analysis.WorkingDirectory);
         }
@@ -3985,8 +3985,14 @@ public partial class DispatchingToolExecutorTests
         var preflight = Assert.IsType<ShellPolicyPreflightResult.Continue>(
             policy.AuthorizeShellPreflight(shellTool, context, arguments));
 
+        var collection = new ShellPolicyCoordinator(registry, policy, approvalService: null).CollectApplicableCorrections(
+            preflight.Analysis,
+            CreateToolCall("pair", ShellTool.ToolName, arguments),
+            context,
+            preflight);
+        Assert.NotNull(collection);
         var shellTemporary = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(
-            policy.AuthorizeInvocation(shellTool, context, arguments).AgentCorrection);
+            collection.Items[1]);
         var nativeCorrection = NativeToolShellCorrectionDetector.Detect(
             preflight.Analysis,
             registry,
@@ -4005,12 +4011,6 @@ public partial class DispatchingToolExecutorTests
             correctedNativeDecision.AgentCorrection);
         Assert.Equal(shellTemporary.Target, nativeTemporary.Target);
 
-        var collection = new ShellPolicyCoordinator(registry, policy, approvalService: null).CollectApplicableCorrections(
-            preflight.Analysis,
-            CreateToolCall("pair", ShellTool.ToolName, arguments),
-            context,
-            preflight);
-        Assert.NotNull(collection);
         Assert.Collection(
             collection.Items,
             correction => Assert.IsType<ToolCorrection.NativeToolSuggested>(correction),
@@ -4048,7 +4048,7 @@ public partial class DispatchingToolExecutorTests
             corrections.Items,
             correction => Assert.IsType<ToolCorrection.NativeToolSuggested>(correction),
             correction => Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(correction));
-        Assert.Null(authorization.AuthorizedAnalysis);
+        Assert.IsType<ShellAuthorizationResult.Stopped>(authorization);
         Assert.Equal(0, approvalService.RequestCount);
         Assert.Null(authoritativeContext.Receipt);
     }
@@ -4120,7 +4120,7 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Decision.Outcome);
         Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.Decision.AgentCorrection).Directory);
-        Assert.Null(result.AuthorizedAnalysis);
+        Assert.IsType<ShellAuthorizationResult.Stopped>(result);
         Assert.Null(result.Decision.ApprovalContext);
         Assert.Null(context.Receipt);
     }
@@ -4140,7 +4140,7 @@ public partial class DispatchingToolExecutorTests
         var result = await new ShellPolicyCoordinator(registry, policy, service).EvaluateAsync(
             registry.GetByName(ShellTool.ToolName)!, call, context, TestContext.Current.CancellationToken);
 
-        Assert.Null(result.AuthorizedAnalysis);
+        Assert.IsType<ShellAuthorizationResult.Stopped>(result);
         Assert.Equal(0, service.RequestCount);
         if (mode == ToolApprovalMode.Auto)
         {
@@ -4187,9 +4187,11 @@ public partial class DispatchingToolExecutorTests
         else
             Assert.Null(result.Decision.AgentCorrections);
         if (expected == nameof(ToolAuthorizationOutcome.Allowed))
-            Assert.Equal(Path.GetFullPath(directory), result.AuthorizedAnalysis!.WorkingDirectory);
+            Assert.Equal(
+                Path.GetFullPath(directory),
+                Assert.IsType<ShellAuthorizationResult.Authorized>(result).Analysis.WorkingDirectory);
         else
-            Assert.Null(result.AuthorizedAnalysis);
+            Assert.IsType<ShellAuthorizationResult.Stopped>(result);
     }
 
     [Fact]
