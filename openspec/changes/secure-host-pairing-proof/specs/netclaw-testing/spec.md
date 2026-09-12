@@ -95,3 +95,25 @@ The required suite SHALL not require a live tunnel provider.
 - **GIVEN** a non-loopback HTTP endpoint, redirect, timeout, or invalid success response
 - **WHEN** the CLI processes each case
 - **THEN** every case fails without a saved token or endpoint
+
+#### Scenario: Registry replacement failure preserves recovery
+
+- **GIVEN** a real registry contains a device and a valid code exists for another device
+- **WHEN** the test fails a temporary-file write or the step before replacement
+- **THEN** the prior file bytes and cached devices remain unchanged
+- **AND** a new registry instance accepts the existing token
+- **AND** a retry consumes the same unexpired code after the fault clears
+
+#### Scenario: Response-limit tests observe consumed bytes
+
+- **GIVEN** a controlled response stream contains more than 4 KiB
+- **WHEN** the CLI reads a success or error response
+- **THEN** the test observes at most 4,097 bytes consumed and no client-state change
+- **AND** a bounded valid response remains successful
+
+#### Scenario: Protocol tests do not depend on a paired codec defect
+
+- **GIVEN** fixed protocol bytes from the specification
+- **WHEN** the writer and reader run independently
+- **THEN** each matches the fixed vector
+- **AND** a matching byte-order defect in both methods cannot pass the tests

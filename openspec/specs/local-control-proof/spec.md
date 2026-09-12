@@ -147,15 +147,43 @@ The proof does not provide channel confidentiality for a plain HTTP non-loopback
 ### Requirement: The local-control proof has strict bounds
 
 The proof SHALL contain protocol version `1`, operation `generate-pairing-code`, an issue time, and a 128-bit random nonce.
+The shared codec SHALL use this exact 26-byte plaintext layout before Data Protection:
+
+| Offset | Size | Field |
+|---|---|---|
+| 0 | 1 byte | Protocol version |
+| 1 | 1 byte | Operation; `1` means code generation |
+| 2 | 8 bytes | Signed Unix milliseconds, big-endian |
+| 10 | 16 bytes | Nonce |
+
+The codec owns byte serialization. The daemon validator owns supported-version and operation decisions.
+A layout change SHALL require a new protocol version.
 The daemon SHALL accept a proof for 30 seconds after its issue time.
 The daemon SHALL allow no more than five seconds of future clock skew.
 The daemon SHALL reject a request body larger than 4 KiB.
+
+The daemon SHALL accept at most 10 local-control requests per second for each observed source address.
+The daemon SHALL apply this limit before proof validation.
+A rejected request SHALL return `429` and SHALL NOT replace the current pairing code.
 
 #### Scenario: Current proof succeeds
 
 - **GIVEN** a valid proof was issued 12 seconds ago
 - **WHEN** the daemon validates the proof
 - **THEN** validation succeeds
+
+#### Scenario: Version-one codec preserves the fixed byte vector
+
+- **GIVEN** version `1`, operation `1`, timestamp `0x010203040506`, and nonce `00112233445566778899AABBCCDDEEFF`
+- **WHEN** the shared codec serializes these values
+- **THEN** its plaintext hex is `0101000001020304050600112233445566778899AABBCCDDEEFF`
+- **AND** the reader independently accepts those bytes with the same field values
+
+#### Scenario: Authenticated malformed plaintext fails
+
+- **GIVEN** authenticated plaintext contains 25 or 27 bytes instead of 26
+- **WHEN** the codec reads that plaintext
+- **THEN** it rejects the payload rather than inferring a different layout
 
 #### Scenario: Stale or future proof fails
 
@@ -170,6 +198,20 @@ The daemon SHALL reject a request body larger than 4 KiB.
 - **WHEN** the daemon reads the proof
 - **THEN** it returns a stable unsupported-version error
 - **AND** it creates no pairing code
+
+#### Scenario: A request burst cannot replace the current code
+
+- **GIVEN** one source address used all 10 permits in the current second
+- **AND** the tenth request created pairing code `ABCD-EFGH`
+- **WHEN** the same address sends another valid proof in that second
+- **THEN** the daemon returns `429`
+- **AND** pairing code `ABCD-EFGH` remains valid
+
+#### Scenario: A short limit does not lock out the host
+
+- **GIVEN** one source address used all permits in a prior one-second window
+- **WHEN** that source sends a valid proof after the window resets
+- **THEN** the daemon creates a new pairing code
 
 ### Requirement: A local-control proof is single-use
 

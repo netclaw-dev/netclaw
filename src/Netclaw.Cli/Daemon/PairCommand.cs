@@ -21,7 +21,8 @@ namespace Netclaw.Cli.Daemon;
 /// </summary>
 internal static class PairCommand
 {
-    private const int MaximumErrorResponseBytes = 4 * 1024;
+    private const int MaximumResponseBytes = 4 * 1024;
+    private static readonly TimeSpan RequestTimeout = TimeSpan.FromSeconds(15);
 
     /// <summary>
     /// Entry point for <c>netclaw pair [endpoint]</c>.
@@ -29,7 +30,7 @@ internal static class PairCommand
     public static async Task<int> RunAsync(string[] args, NetclawPaths paths)
     {
         using var handler = CreateHttpHandler();
-        using var httpClient = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(15) };
+        using var httpClient = new HttpClient(handler) { Timeout = System.Threading.Timeout.InfiniteTimeSpan };
         return await RunAsync(
             args,
             paths,
@@ -37,6 +38,7 @@ internal static class PairCommand
             Console.In,
             Console.Out,
             Console.Error,
+            TimeProvider.System,
             CancellationToken.None);
     }
 
@@ -47,6 +49,7 @@ internal static class PairCommand
         TextReader input,
         TextWriter output,
         TextWriter error,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
         var endpoint = args.Length > 1 ? args[1] : null;
@@ -76,6 +79,7 @@ internal static class PairCommand
             pairingInput.Code,
             pairingInput.DeviceName,
             error,
+            timeProvider,
             cancellationToken);
         if (token is null)
             return 1;
@@ -121,20 +125,42 @@ internal static class PairCommand
         string code,
         string deviceName,
         TextWriter error,
+        TimeProvider timeProvider,
         CancellationToken cancellationToken)
     {
+        using var timeoutCts = new CancellationTokenSource(RequestTimeout, timeProvider);
+        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(
+            cancellationToken,
+            timeoutCts.Token);
+
         try
         {
             var requestBody = new { code, deviceName };
-            using var response = await httpClient.PostAsJsonAsync(exchangeUrl, requestBody, cancellationToken);
+            using var request = new HttpRequestMessage(HttpMethod.Post, exchangeUrl)
+            {
+                Content = JsonContent.Create(requestBody),
+            };
+            using var response = await httpClient.SendAsync(
+                request,
+                HttpCompletionOption.ResponseHeadersRead,
+                requestCts.Token);
 
             if (!response.IsSuccessStatusCode)
             {
-                await WriteFailureAsync(response, error, cancellationToken);
+                await WriteFailureAsync(response, error, requestCts.Token);
                 return null;
             }
 
-            var result = await response.Content.ReadFromJsonAsync<ExchangeResponse>(cancellationToken);
+            var responseBody = await ReadBoundedBodyAsync(response.Content, requestCts.Token);
+            if (responseBody is null)
+            {
+                error.WriteLine($"Pairing failed because the daemon response exceeded {MaximumResponseBytes} bytes.");
+                return null;
+            }
+
+            using var boundedContent = new ByteArrayContent(responseBody);
+            boundedContent.Headers.ContentType = response.Content.Headers.ContentType;
+            var result = await boundedContent.ReadFromJsonAsync<ExchangeResponse>(requestCts.Token);
             if (string.IsNullOrWhiteSpace(result?.Token))
             {
                 error.WriteLine("Pairing failed: the daemon returned an empty token.");
@@ -147,6 +173,11 @@ internal static class PairCommand
         {
             error.WriteLine($"Failed to connect to {exchangeUrl}: {ex.Message}");
             error.WriteLine("Make sure that the daemon runs and that the endpoint is available.");
+            return null;
+        }
+        catch (IOException ex)
+        {
+            error.WriteLine($"Pairing failed because the daemon response could not be read: {ex.Message}");
             return null;
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -162,6 +193,11 @@ internal static class PairCommand
         catch (NotSupportedException)
         {
             error.WriteLine("Pairing failed because the daemon returned an unsupported response format.");
+            return null;
+        }
+        catch (InvalidOperationException ex) when (ex.InnerException is ArgumentException)
+        {
+            error.WriteLine("Pairing failed because the daemon returned an unsupported response encoding.");
             return null;
         }
     }
@@ -210,24 +246,13 @@ internal static class PairCommand
         HttpContent content,
         CancellationToken cancellationToken)
     {
-        var body = new byte[MaximumErrorResponseBytes + 1];
-        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
-        var totalRead = 0;
-        while (totalRead < body.Length)
-        {
-            var read = await stream.ReadAsync(body.AsMemory(totalRead), cancellationToken);
-            if (read == 0)
-                break;
-
-            totalRead += read;
-        }
-
-        if (totalRead == 0 || totalRead > MaximumErrorResponseBytes)
+        var body = await ReadBoundedBodyAsync(content, cancellationToken);
+        if (body is null || body.Length == 0)
             return null;
 
         try
         {
-            using var document = JsonDocument.Parse(body.AsMemory(0, totalRead));
+            using var document = JsonDocument.Parse(body);
             if (document.RootElement.ValueKind == JsonValueKind.Object
                 && document.RootElement.TryGetProperty("error", out var error)
                 && error.ValueKind == JsonValueKind.String)
@@ -239,6 +264,28 @@ internal static class PairCommand
         }
 
         return null;
+    }
+
+    private static async Task<byte[]?> ReadBoundedBodyAsync(
+        HttpContent content,
+        CancellationToken cancellationToken)
+    {
+        var body = new byte[MaximumResponseBytes + 1];
+        await using var stream = await content.ReadAsStreamAsync(cancellationToken);
+        var totalRead = 0;
+        while (totalRead < body.Length)
+        {
+            var read = await stream.ReadAsync(body.AsMemory(totalRead), cancellationToken);
+            if (read == 0)
+                break;
+
+            totalRead += read;
+        }
+
+        if (totalRead > MaximumResponseBytes)
+            return null;
+
+        return body[..totalRead];
     }
 
     private static bool TryNormalizeEndpoint(

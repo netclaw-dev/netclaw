@@ -183,6 +183,27 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
     }
 
     [Fact]
+    public async Task Old_daemon_returns_not_found_without_a_legacy_retry()
+    {
+        var requests = new List<string>();
+        var api = CreateDaemonApi(
+            "http://127.0.0.1:5199",
+            request =>
+            {
+                requests.Add(request.RequestUri!.AbsolutePath);
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
+
+        var result = await api.RequestPairingCodeAsync(
+            "host-proof",
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.NotFound, result.StatusCode);
+        Assert.Null(result.Result);
+        Assert.Equal("/api/local-control/v1/pairing-code", Assert.Single(requests));
+    }
+
+    [Fact]
     public async Task ListPairedDevices_LoopbackEndpoint_SkipsBearerToken()
     {
         WriteDeviceToken("loopback-device-token");

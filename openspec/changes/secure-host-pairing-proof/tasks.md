@@ -57,3 +57,20 @@
 - [x] 9.3 Require HTTPS for remote exchange, reject redirects, bound error bodies, and handle invalid remote responses.
 - [x] 9.4 Remove invalid exchange-result states, use `Task` for I/O, and report the actual failed host endpoint.
 - [x] 9.5 Sync the main specs and rerun tests, evals, Slopwatch, headers, strict validation, and CRAP analysis.
+
+## 10. Recovery and Protocol Review Corrections
+
+- [x] 10.1 Preserve the prior registry and cache after a failed write; prove reopen, token use, and retry.
+- [x] 10.2 Bound success and error responses before body allocation; prove byte limits and cancellation after headers.
+- [x] 10.3 Assert fixed protocol vectors and malformed payload rejection independently of a codec round trip.
+- [x] 10.4 Separate both mixed-version scenarios and sync the main specifications without a compatibility stub.
+- [ ] 10.5 Run regression checks, process smoke, quality gates, and independent verification; record evidence and limits.
+
+Local tests pass: Configuration 634, Daemon 1,121, and CLI 1,495.
+The daemon suite also has one existing Windows-only skip on Linux.
+The native pairing scenario passes all eight checks.
+The independent review accepts all four corrections.
+Slopwatch, header verification, and strict OpenSpec validation pass.
+The codec mutation check fails five cases when both timestamp methods use little-endian bytes.
+The full behavioral eval remains blocked by absent provider type, endpoint, and model settings.
+Task 10.5 stays open until that eval runs or the user accepts the gap.

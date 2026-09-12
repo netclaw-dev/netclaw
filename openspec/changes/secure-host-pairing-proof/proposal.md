@@ -36,7 +36,8 @@ The MVP scope excludes a general local IPC service, OIDC changes, and automatic 
 - The daemon adds one local-control HTTP endpoint and a bounded replay cache.
 - The CLI uses the local key ring instead of SignalR for `netclaw daemon pair`.
 - The pairing exchange endpoint changes its code-consumption order.
-- Mixed old and new CLI or daemon versions fail with explicit upgrade guidance.
+- A new CLI with an old daemon fails with explicit upgrade guidance.
+- An old CLI with a new daemon can report a missing hub-method error.
 - Container operators run the CLI inside the daemon container.
 - The public draft PR receives normal CI before the fixed beta.
 - The website update describes functionality and procedures, not the advisory.

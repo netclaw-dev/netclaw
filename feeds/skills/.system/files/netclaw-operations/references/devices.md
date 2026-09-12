@@ -62,6 +62,10 @@ Reuse the same code while it remains valid.
 Create a new host code after an invalid, expired, used, or missing code response.
 Wait before a retry when the daemon reports a request limit.
 The CLI does not save a device token or endpoint after a failed exchange.
+The CLI rejects success and error bodies larger than 4 KiB.
+Its 15-second deadline covers the complete response.
+After a registry write failure, correct the storage fault before a retry with the same unexpired code.
+The registry retains the previous complete file when replacement fails.
 
 Use the normal pairing flow when a client loses its token.
 Select a unique replacement name if the old device record still exists.
@@ -69,7 +73,8 @@ Revoke the old device record after the replacement token works.
 Use the same flow after an operator revokes a device and later restores access.
 
 Update the CLI and daemon together when the command reports a protocol mismatch.
-The command does not use the old hub method as a fallback.
+A new CLI does not use the old hub method as a fallback.
+An old CLI with a new daemon can report a missing-method error. Update the CLI in that case.
 
 ### Device management
 

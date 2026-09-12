@@ -163,7 +163,7 @@ Done when:
 - [x] Process smoke proves host recovery without a live tunnel dependency.
 - [x] The operations skill and next `0.27` beta website task describe the new procedure.
 - [x] The public draft PR receives normal CI before the fixed beta.
-- [ ] The host command keeps proofs away from remote client endpoints, proxies, redirects, and bearer headers.
+- [x] The host command keeps proofs away from remote client endpoints, proxies, redirects, and bearer headers.
 
 ### Priority: Keep MCP HTTP Protocol Fallback Deterministic
 

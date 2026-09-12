@@ -78,6 +78,9 @@ The reservation identifies the exact code generation that the coordinator accept
 The coordinator consumes that reservation without a second expiration check after the durable write.
 
 If the registry write fails, the code stays active.
+The registry writes a sibling temporary file and replaces the destination only after a complete write and permission check.
+It uses the existing atomic-file helper rather than a second persistence mechanism.
+The prior file and cache remain unchanged when a write fails before replacement.
 If the write succeeds, code consumption occurs synchronously under the same coordinator lock.
 A code that expires during the durable write remains valid for that admitted transaction.
 A process failure after the write clears the in-memory code during restart.
@@ -164,7 +167,10 @@ It rejects plain HTTP for each non-loopback endpoint before it reads a pairing c
 It also rejects automatic redirects, because a redirect can export the pairing code.
 
 The remote response is untrusted input.
-The CLI bounds error bodies and reports timeouts or invalid JSON without a crash.
+The CLI reads response headers first, then reads at most 4 KiB plus one byte to detect an oversized body.
+This limit applies to success and error responses before JSON parsing.
+The 15-second request deadline covers the response body as well as the headers.
+The CLI reports oversized bodies, timeouts, and invalid JSON without a crash.
 It writes no token or endpoint after any remote failure.
 
 Examples:
@@ -210,7 +216,7 @@ It omits rate limits, token hashing, and HTTP error mapping.
 - Key-ring copies grant local-control authority. → Documentation treats the key ring as a host credential.
 - Clock jumps can reject a proof. → The CLI creates a fresh proof and the daemon allows five seconds of future skew.
 - A full replay cache can deny a valid host. → Entries expire quickly and the daemon logs only a reason category.
-- Immediate removal breaks mixed versions. → The CLI prints explicit joint-update guidance and never uses an unsafe fallback.
+- Immediate removal breaks mixed versions. → A new CLI prints update guidance; an old CLI can report a missing-method error.
 - A registry write can fail after token creation. → The coordinator discards the raw token and preserves the code.
 - A code can expire during a successful registry write. → Admission reserves that code generation until the serialized transaction ends.
 - A general HTTP client can export the proof. → A dedicated direct client disables proxies, redirects, and bearer attachment.

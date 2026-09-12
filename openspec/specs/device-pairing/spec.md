@@ -96,10 +96,15 @@ The daemon SHALL validate the code before it checks the device name.
 The daemon SHALL consume the code only after it stores the new device.
 The daemon SHALL reserve the accepted code generation before the durable write.
 The daemon SHALL NOT repeat the expiration check after that durable write.
+The device registry SHALL replace its durable file only after a complete write to a sibling temporary file.
+The registry SHALL preserve its prior file and cache if a write fails before replacement.
 The remote CLI SHALL not persist a token or endpoint after a failed exchange.
 The remote CLI SHALL require HTTPS for a non-loopback endpoint.
 The remote CLI MAY use HTTP for a loopback endpoint.
 The remote CLI SHALL NOT follow an HTTP redirect during code exchange.
+The remote CLI SHALL limit each success or error response body to 4 KiB before JSON parsing.
+The CLI MAY read one additional byte to detect an oversized body.
+The CLI SHALL enforce a 15-second deadline through the response body read.
 
 #### Scenario: Successful pairing exchange
 
@@ -123,6 +128,14 @@ The remote CLI SHALL NOT follow an HTTP redirect during code exchange.
 - **WHEN** the remote CLI submits the code and name
 - **THEN** the daemon returns a conflict response
 - **AND** the pairing code remains valid until its normal expiration
+
+#### Scenario: Failed write preserves existing devices
+
+- **GIVEN** device `laptop` has a valid token and an unexpired code exists for `tablet`
+- **WHEN** a registry write fails before replacement
+- **THEN** the prior registry bytes and cached device records remain unchanged
+- **AND** a fresh registry instance still accepts the `laptop` token
+- **AND** a retry can register `tablet` with the same unexpired code after the failure clears
 
 #### Scenario: Duplicate retry uses the same code
 
@@ -200,6 +213,26 @@ The remote CLI SHALL NOT follow an HTTP redirect during code exchange.
 - **WHEN** the remote CLI waits for the exchange result
 - **THEN** the CLI returns a clear failure
 - **AND** the CLI stores no token or endpoint
+
+#### Scenario: Oversized response stops at the byte boundary
+
+- **GIVEN** an exchange endpoint returns a success or error body larger than 4 KiB
+- **WHEN** the CLI reads the body
+- **THEN** it stops after at most 4,097 bytes and rejects the response
+- **AND** it preserves the prior client token and endpoint
+
+#### Scenario: Small success response remains valid
+
+- **GIVEN** the endpoint returns a valid device-token response within 4 KiB
+- **WHEN** the CLI reads the complete response before its deadline
+- **THEN** it stores the token and endpoint
+
+#### Scenario: Response stalls after headers
+
+- **GIVEN** the endpoint returns headers but does not finish its body
+- **WHEN** the request deadline expires
+- **THEN** the CLI cancels the body read and reports failure
+- **AND** it preserves the prior client token and endpoint
 
 ### Requirement: Paired device registry
 
@@ -357,12 +390,20 @@ The CLI SHALL NOT fall back to the removed hub method.
 - **THEN** the new local-control flow succeeds
 - **AND** previously paired remote devices remain valid
 
-#### Scenario: Mixed versions fail without fallback
+#### Scenario: New CLI with an old daemon gives update guidance
 
-- **GIVEN** only the daemon or CLI supports the local-control protocol
+- **GIVEN** the CLI supports local control but the daemon does not
 - **WHEN** the host runs `netclaw daemon pair`
 - **THEN** the command fails with guidance to update both components
 - **AND** the command does not call the legacy hub method
+
+#### Scenario: Old CLI with a new daemon cannot use the removed method
+
+- **GIVEN** the daemon supports local control but the old CLI still uses `GeneratePairingCode`
+- **WHEN** the old CLI invokes that hub method
+- **THEN** the daemon rejects the invocation because the method does not exist
+- **AND** the old CLI can report a missing-method error instead of the new update guidance
+- **AND** the daemon creates no code and exposes no compatibility stub
 
 #### Scenario: Host re-authentication uses normal pairing
 

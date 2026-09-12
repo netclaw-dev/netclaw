@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net.Http.Json;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Builder;
@@ -16,6 +17,8 @@ using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Cli.Config;
+using Netclaw.Cli.Daemon;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 using Netclaw.Daemon.Security;
@@ -86,21 +89,27 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         var codeResult = await codeResponse.Content.ReadFromJsonAsync<PairingCodeResultDto>(ct);
         Assert.NotNull(codeResult);
 
-        var exchangeResponse = await httpClient.PostAsJsonAsync(
-            "/api/pair/exchange",
-            new { code = codeResult.FormattedCode, deviceName = "remote-laptop" },
-            ct);
-        exchangeResponse.EnsureSuccessStatusCode();
-
-        var tokenPayload = await exchangeResponse.Content.ReadFromJsonAsync<ExchangeResponse>(ct);
-        Assert.NotNull(tokenPayload);
-        Assert.False(string.IsNullOrWhiteSpace(tokenPayload!.Token));
+        using var clientDirectory = new DisposableTempDir();
+        var clientPaths = new NetclawPaths(clientDirectory.Path);
+        clientPaths.EnsureDirectoriesExist();
+        using var input = new StringReader(codeResult.FormattedCode + "\nremote-laptop\n");
+        using var output = new StringWriter();
+        using var error = new StringWriter();
+        var exitCode = await PairCommand.RunAsync(
+            ["pair", "http://localhost"], clientPaths, httpClient, input, output, error, TimeProvider.System, ct);
+        Assert.Equal(0, exitCode);
+        Assert.Equal(string.Empty, error.ToString());
+        Assert.Equal("http://localhost", ClientConfigFile.ReadEndpoint(clientPaths));
+        var secrets = ConfigFileHelper.LoadJsonDict(clientPaths.SecretsPath);
+        var storedToken = Assert.IsType<JsonElement>(secrets["DeviceToken"]);
+        var token = ConfigFileHelper.DecryptIfEncrypted(clientPaths, storedToken.GetString());
+        Assert.False(string.IsNullOrWhiteSpace(token));
 
         var server = app.GetTestServer();
         await using var connection = new HubConnectionBuilder()
             .WithUrl("http://localhost/hub/session", options =>
             {
-                options.AccessTokenProvider = () => Task.FromResult<string?>(tokenPayload.Token);
+                options.AccessTokenProvider = () => Task.FromResult<string?>(token);
                 options.HttpMessageHandlerFactory = _ => server.CreateHandler();
                 options.Transports = HttpTransportType.LongPolling;
             })
@@ -157,5 +166,4 @@ public sealed class RemotePairingSignalRIntegrationTests : IDisposable
         return app;
     }
 
-    private sealed record ExchangeResponse(string Token);
 }

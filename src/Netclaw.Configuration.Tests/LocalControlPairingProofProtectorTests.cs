@@ -62,6 +62,56 @@ public sealed class LocalControlPairingProofProtectorTests : IDisposable
         Assert.NotEqual(first.Nonce, second.Nonce);
     }
 
+    [Theory]
+    [InlineData(1, 1, "0101000001020304050600112233445566778899AABBCCDDEEFF")]
+    [InlineData(2, 7, "0207000001020304050600112233445566778899AABBCCDDEEFF")]
+    public void Writer_emits_the_fixed_protocol_bytes(byte version, byte operation, string expectedHex)
+    {
+        var provider = SecretsProtection.CreateDataProtectionProvider(CreatePaths(_dir.Path));
+        var codec = new LocalControlPairingProofProtector(provider);
+        var proof = codec.ProtectPayload(new LocalControlPairingProofPayload(
+            version, operation, DateTimeOffset.FromUnixTimeMilliseconds(0x010203040506),
+            "00112233445566778899AABBCCDDEEFF"));
+
+        // Read the plaintext without the codec, so matching encoder and decoder defects cannot pass.
+        var plaintext = provider.CreateProtector("Netclaw.LocalControl.Pairing.v1")
+            .Unprotect(Base64Url.DecodeFromChars(proof));
+
+        Assert.Equal(Convert.FromHexString(expectedHex), plaintext);
+    }
+
+    [Theory]
+    [InlineData("0101000001020304050600112233445566778899AABBCCDDEEFF", 1, 1)]
+    [InlineData("0207000001020304050600112233445566778899AABBCCDDEEFF", 2, 7)]
+    public void Reader_accepts_independent_protocol_bytes(string payloadHex, byte version, byte operation)
+    {
+        var provider = SecretsProtection.CreateDataProtectionProvider(CreatePaths(_dir.Path));
+        var proof = Base64Url.EncodeToString(provider.CreateProtector("Netclaw.LocalControl.Pairing.v1")
+            .Protect(Convert.FromHexString(payloadHex)));
+
+        var payload = new LocalControlPairingProofProtector(provider).Unprotect(proof);
+
+        Assert.Equal(version, payload.Version);
+        Assert.Equal(operation, payload.Operation);
+        Assert.Equal(0x010203040506L, payload.IssuedAt.ToUnixTimeMilliseconds());
+        Assert.Equal("00112233445566778899AABBCCDDEEFF", payload.Nonce);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("0101000001020304050600112233445566778899AABBCCDDEE")]
+    [InlineData("0101000001020304050600112233445566778899AABBCCDDEEFF00")]
+    [InlineData("01017FFFFFFFFFFFFFFF00112233445566778899AABBCCDDEEFF")]
+    public void Authenticated_payload_with_invalid_size_or_timestamp_fails_closed(string payloadHex)
+    {
+        var provider = SecretsProtection.CreateDataProtectionProvider(CreatePaths(_dir.Path));
+        var proof = Base64Url.EncodeToString(provider.CreateProtector("Netclaw.LocalControl.Pairing.v1")
+            .Protect(Convert.FromHexString(payloadHex)));
+
+        Assert.Throws<CryptographicException>(() =>
+            new LocalControlPairingProofProtector(provider).Unprotect(proof));
+    }
+
     [Fact]
     public void Different_key_ring_cannot_read_proof()
     {

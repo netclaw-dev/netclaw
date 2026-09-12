@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
@@ -30,6 +29,7 @@ internal sealed class DeviceRegistry
     private readonly string _devicesPath;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<DeviceRegistry> _logger;
+    private readonly Action<string> _hardenTempPermissions;
     private readonly SemaphoreSlim _lock = new(1, 1);
 
     // In-memory cache — invalidated on AddAsync/RemoveAsync/UpdateLastUsedAsync writes.
@@ -40,10 +40,22 @@ internal sealed class DeviceRegistry
         NetclawPaths paths,
         TimeProvider timeProvider,
         ILogger<DeviceRegistry> logger)
+        : this(paths, timeProvider, logger, AtomicFile.HardenOwnerOnly)
     {
+    }
+
+    internal DeviceRegistry(
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        ILogger<DeviceRegistry> logger,
+        Action<string> hardenTempPermissions)
+    {
+        ArgumentNullException.ThrowIfNull(hardenTempPermissions);
+
         _devicesPath = paths.DevicesPath;
         _timeProvider = timeProvider;
         _logger = logger;
+        _hardenTempPermissions = hardenTempPermissions;
 
         var dir = Path.GetDirectoryName(_devicesPath);
         if (dir is not null)
@@ -237,9 +249,7 @@ internal sealed class DeviceRegistry
     private async Task WriteDevicesAsync(List<PairedDevice> devices, CancellationToken ct)
     {
         var json = JsonSerializer.Serialize(devices, JsonOptions);
-        await File.WriteAllTextAsync(_devicesPath, json, ct);
-        if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows) && File.Exists(_devicesPath))
-            File.SetUnixFileMode(_devicesPath, UnixFileMode.UserRead | UnixFileMode.UserWrite);
+        await AtomicFile.WriteAllTextAsync(_devicesPath, json, _hardenTempPermissions, ct);
         _cachedDevices = devices;
     }
 }
