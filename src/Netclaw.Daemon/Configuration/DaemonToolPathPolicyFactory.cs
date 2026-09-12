@@ -38,6 +38,7 @@ internal static class DaemonToolPathPolicyFactory
             ..processControlPaths,
             paths.SystemSkillsDirectory,
             paths.ServerFeedsDirectory,
+            paths.ManagedGitSkillsDirectory,
             paths.ToolingShadowDirectory,
         ];
         string[] readDenyList =
@@ -65,6 +66,7 @@ internal static class DaemonToolPathPolicyFactory
             ..sqliteSidecars,
             ..processControlPaths,
             paths.ToolingShadowDirectory,
+            paths.ManagedGitSkillsDirectory,
         ];
 
         return new ToolPathPolicy(

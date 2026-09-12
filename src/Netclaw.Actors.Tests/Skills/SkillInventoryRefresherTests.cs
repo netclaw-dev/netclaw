@@ -73,6 +73,32 @@ public sealed class SkillInventoryRefresherTests : IDisposable
     }
 
     [Fact]
+    public void Managed_git_plugins_stay_between_server_feeds_and_external_sources()
+    {
+        var feedRoot = _paths.ServerFeedDirectory("managed");
+        var gitRoot = Path.Join(_home, "git-plugin");
+        var externalRoot = Path.Join(_home, "external");
+        WriteSkill(_paths.SkillsDirectory, "native-only", "native");
+        WriteSkill(feedRoot, "shared", "feed wins");
+        WriteSkill(gitRoot, "shared", "git loses");
+        WriteSkill(gitRoot, "git-only", "managed git");
+        WriteSkill(externalRoot, "shared", "external loses");
+        WriteSkill(externalRoot, "external-only", "external");
+
+        var refresher = CreateRefresher(
+            new SkillFeedsConfig { Feeds = [new SkillFeedSource { Name = "managed" }] },
+            [new ResolvedExternalSource("external", [externalRoot], AllowSymlinks: false)]);
+
+        refresher.ReplaceManagedGitPluginSourcesAndRefresh(
+            [new ResolvedExternalSource("managed-git:fixture", [gitRoot], AllowSymlinks: false)]);
+        var result = refresher.Refresh();
+
+        Assert.Equal("feed wins", _registry.GetByName("shared")!.Description);
+        Assert.Contains(result.AcceptedSkills, skill => skill.Name == "git-only");
+        Assert.Contains(result.AcceptedSkills, skill => skill.Name == "external-only");
+    }
+
+    [Fact]
     public void ReplaceAll_never_exposes_a_partially_replaced_inventory()
     {
         var a = new[] { Entry("a-1"), Entry("a-2") };
