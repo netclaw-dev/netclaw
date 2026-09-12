@@ -1962,9 +1962,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeToolBatch.Start(toolCalls, preparedCycleBatch: null);
         foreach (var call in toolCalls)
         {
-            var receipt = new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: ToolRemediationCode.BreakToolCycle);
+            var receipt = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
             var message = ToolRemediationPresenter.Present(
                 new SerializableChatMessage
                 {

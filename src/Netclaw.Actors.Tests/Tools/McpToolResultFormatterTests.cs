@@ -81,7 +81,7 @@ public class McpToolResultFormatterTests
 
         Assert.Contains("declared failure", message);
         Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
-        Assert.Empty(context.Receipt!.FileActivity);
+        Assert.IsType<ToolInvocationReceipt.OtherOutcome>(context.Receipt);
     }
 
     [Fact]

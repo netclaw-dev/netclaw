@@ -902,9 +902,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
         var results = new List<SerializableChatMessage>(toolCalls.Count);
         foreach (var call in toolCalls)
         {
-            var receipt = new ToolInvocationReceipt(
-                ToolInvocationOutcomeCategory.RecoverableCorrection,
-                remediationCode: ToolRemediationCode.BreakToolCycle);
+            var receipt = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
             receipts.Add(call.CallId, receipt);
             authorizationAttemptIds.Add(call.CallId, AuthorizationAttemptId.New());
             results.Add(ToolRemediationPresenter.Present(
