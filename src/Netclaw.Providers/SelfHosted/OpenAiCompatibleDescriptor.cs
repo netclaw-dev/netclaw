@@ -26,7 +26,11 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     public string DisplayName => "OpenAI-compatible (llama.cpp / vLLM / DwarfStar ds4)";
     public string DefaultEndpoint => "http://localhost:11434";
     public string ModelListingPath => "/v1/models";
-    public IProviderAuth Auth { get; } = new EndpointOnlyAuth();
+    // Endpoint-only by default, but an operator may supply a Bearer key for
+    // gateways that sit in front of a protected vLLM / llama.cpp / SGLang
+    // endpoint. ProbeAsync and OpenAiCompatibleChatClient already send the key
+    // when present; this declaration is what lets the setup surfaces collect it.
+    public IProviderAuth Auth { get; } = new OptionalApiKeyAuth();
 
     public Task<ProviderProbeResult> ProbeAsync(
         ProviderEntry entry, CancellationToken ct = default)

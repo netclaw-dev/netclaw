@@ -34,6 +34,7 @@ public enum ProviderManagerState
     AddGitHubCopilotEnterpriseHost,
     AddGitHubCopilotEnterpriseApiBase,
     AddCredentials,
+    AddOptionalApiKey,
     AddOAuthDeviceFlow,
     AddBrowserOAuthFlow,
     AddValidating,
@@ -384,7 +385,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         if (NewProviderType is null) return;
 
         var descriptor = _registry.Get(NewProviderType);
-        if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
+
+        // Credential-optional providers skip the auth picker: nothing there is
+        // required. An optional Bearer key is offered after the endpoint
+        // (AddOptionalApiKey), which keeps the picker's label list — which drops
+        // AuthMethod.None — from forcing a key the provider does not need.
+        if (descriptor.Auth.IsCredentialOptional())
         {
             NewAuthMethod = AuthMethod.None;
             CurrentState.Value = ProviderManagerState.AddCredentials;
@@ -395,6 +401,30 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         }
 
         NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Submit the endpoint for a credential-optional provider. Providers that
+    /// accept an optional Bearer key route to <see cref="ProviderManagerState.AddOptionalApiKey"/>
+    /// before probing; the rest probe immediately.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="SubmitCredentials"/> because that method is also
+    /// the submit path for required API keys, where a blank answer is an error.
+    /// </remarks>
+    public void SubmitEndpoint()
+    {
+        if (NewProviderType is null) return;
+
+        var descriptor = _registry.Get(NewProviderType);
+        if (descriptor.Auth.OffersOptionalApiKey())
+        {
+            CurrentState.Value = ProviderManagerState.AddOptionalApiKey;
+            NotifyStateChanged();
+            return;
+        }
+
+        SubmitCredentials();
     }
 
     /// <summary>
@@ -653,6 +683,40 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Submit the optional Bearer key for a credential-optional provider and
+    /// start the validation probe. A blank key is valid: it leaves the provider
+    /// unauthenticated, which is the pre-existing default.
+    /// </summary>
+    /// <remarks>
+    /// Records <see cref="AuthMethod.ApiKey"/> only when a key was actually
+    /// supplied, so the provider list reports the credential that is on disk and
+    /// matches what <c>netclaw provider add --api-key</c> writes. The runtime sends
+    /// the Bearer header whenever <c>ProviderEntry.ApiKey</c> is present and never
+    /// requires it for this provider type, so the recorded method is descriptive —
+    /// it does not turn the key into a startup requirement.
+    /// </remarks>
+    public void SubmitOptionalApiKey()
+    {
+        NewAuthMethod = string.IsNullOrWhiteSpace(NewApiKey)
+            ? AuthMethod.None
+            : AuthMethod.ApiKey;
+        CurrentState.Value = ProviderManagerState.AddValidating;
+        NotifyStateChanged();
+        StartProbe();
+    }
+
+    /// <summary>
+    /// Route into <see cref="ProviderManagerState.AddOptionalApiKey"/>. Used by the
+    /// add flow (after the endpoint) and by the fix flow (after the endpoint), so
+    /// both collect the optional Bearer key in one place.
+    /// </summary>
+    public void AdvanceToOptionalApiKey()
+    {
+        CurrentState.Value = ProviderManagerState.AddOptionalApiKey;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
     /// Submit fixed credentials and start validation probe.
     /// </summary>
     public void SubmitFixCredentials()
@@ -662,7 +726,13 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var type = DetailProvider.ProviderType;
         var descriptor = _registry.Get(type);
 
-        if (descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
+        // A key is only mandatory when the provider cannot run credential-free.
+        // OptionalApiKeyAuth supports AuthMethod.ApiKey, so testing
+        // SupportedAuthMethods alone would reject the legitimate "no key" answer.
+        var keyIsRequired = descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.ApiKey)
+                            && !descriptor.Auth.IsCredentialOptional();
+
+        if (keyIsRequired && string.IsNullOrWhiteSpace(FixApiKey))
         {
             StatusMessage.Value = "API key is required.";
             RequestRedraw();
@@ -1016,10 +1086,16 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 break;
             case ProviderManagerState.AddCredentials:
                 var descriptor = _registry.Get(NewProviderType ?? "");
-                if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
+                if (descriptor.Auth.IsCredentialOptional())
                     GoBackToList();
                 else
                     CurrentState.Value = ProviderManagerState.AddSelectAuth;
+                NotifyStateChanged();
+                break;
+            case ProviderManagerState.AddOptionalApiKey:
+                // Back to the endpoint prompt. The fix flow reuses this state, where
+                // the endpoint lives in FixEndpoint rather than NewEndpoint.
+                CurrentState.Value = ProviderManagerState.AddCredentials;
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddValidating:

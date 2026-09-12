@@ -92,6 +92,7 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     ProviderManagerState.AddGitHubCopilotEnterpriseHost => BuildGitHubCopilotEnterpriseHostView(),
                     ProviderManagerState.AddGitHubCopilotEnterpriseApiBase => BuildGitHubCopilotEnterpriseApiBaseView(),
                     ProviderManagerState.AddCredentials => BuildCredentialsView(),
+                    ProviderManagerState.AddOptionalApiKey => BuildOptionalApiKeyView(),
                     ProviderManagerState.AddOAuthDeviceFlow => BuildOAuthDeviceFlowView(),
                     ProviderManagerState.AddBrowserOAuthFlow => BuildBrowserOAuthFlowView(),
                     ProviderManagerState.AddValidating => BuildValidatingView(),
@@ -161,6 +162,8 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.AddName =>
                         " [Enter] Continue  [Esc] Cancel  [Ctrl+Q] Quit",
+                    ProviderManagerState.AddOptionalApiKey =>
+                        " [Enter] Continue (blank skips the key)  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.AddGitHubCopilotAuthHost =>
                         " [\u2191/\u2193] Navigate  [Enter] Select  [Esc] Back  [Ctrl+Q] Quit",
                     ProviderManagerState.AddGitHubCopilotEnterpriseHost =>
@@ -534,8 +537,10 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     .WithForeground(Color.Gray));
             }
         }
-        else if (descriptor.Auth is EndpointOnlyAuth)
+        else if (descriptor.Auth.IsCredentialOptional())
         {
+            var offersOptionalKey = descriptor.Auth.OffersOptionalApiKey();
+
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode($"  Endpoint (default: {descriptor.DefaultEndpoint}):")
                 .WithForeground(Color.White));
@@ -549,16 +554,79 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                 .Subscribe(text =>
                 {
                     ViewModel.NewEndpoint = string.IsNullOrWhiteSpace(text) ? null : text;
-                    ViewModel.SubmitCredentials();
+
+                    if (offersOptionalKey)
+                        ViewModel.AdvanceToOptionalApiKey();
+                    else
+                        ViewModel.SubmitCredentials();
                 })
                 .DisposeWith(_stepSubs);
 
             children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_endpointInput, "Endpoint"));
 
             children.WithChild(new TextNode("").Height(1));
-            children.WithChild(new TextNode($"  {descriptor.DisplayName} runs locally. No authentication required.")
+            children.WithChild(new TextNode(offersOptionalKey
+                    ? $"  {descriptor.DisplayName} runs locally. Authentication is optional."
+                    : $"  {descriptor.DisplayName} runs locally. No authentication required.")
                 .WithForeground(Color.Gray));
         }
+
+        return children;
+    }
+
+    /// <summary>
+    /// Optional Bearer key prompt for <see cref="OptionalApiKeyAuth"/> providers.
+    /// Shared by the add flow (which writes <c>NewApiKey</c>) and the fix flow
+    /// (which writes <c>FixApiKey</c>), because those flows persist through
+    /// different view-model paths.
+    /// </summary>
+    private ILayoutNode BuildOptionalApiKeyView()
+    {
+        var isFixFlow = ViewModel.IsFixFlow;
+        var providerType = isFixFlow
+            ? ViewModel.DetailProvider?.ProviderType
+            : ViewModel.NewProviderType;
+        var descriptor = ViewModel.Registry.Get(providerType ?? "unknown");
+        var children = Layouts.Vertical();
+
+        children.WithChild(new TextNode("  API key (optional):").WithForeground(Color.White));
+
+        _apiKeyInput = new TextInputNode()
+            .AsPassword()
+            .WithPlaceholder("Leave blank for no authentication...");
+        _apiKeyInput.OnFocused();
+        _lastFocusedInput = _apiKeyInput;
+
+        // Unlike the required-key path there is no IsNullOrWhiteSpace filter:
+        // a blank submit is the meaningful "run without a credential" answer.
+        _apiKeyInput.Submitted
+            .Subscribe(text =>
+            {
+                if (isFixFlow)
+                {
+                    // Null preserves the stored key; an explicit blank clears it.
+                    // SubmitFixCredentials falls back to the existing credential
+                    // when FixApiKey is null, which is the intended no-op path.
+                    ViewModel.FixApiKey = string.IsNullOrWhiteSpace(text) ? null : text;
+                    ViewModel.SubmitFixCredentials();
+                }
+                else
+                {
+                    ViewModel.NewApiKey = string.IsNullOrWhiteSpace(text) ? null : text;
+                    ViewModel.SubmitOptionalApiKey();
+                }
+            })
+            .DisposeWith(_stepSubs);
+
+        children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_apiKeyInput, "API Key"));
+
+        children.WithChild(new TextNode("").Height(1));
+        children.WithChild(new TextNode($"  Only needed when the {descriptor.DisplayName} endpoint")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode("  sits behind an authenticated gateway. Press [Enter] to skip.")
+            .WithForeground(Color.Gray));
+        children.WithChild(new TextNode("  A supplied key is sent as a Bearer token and stored in secrets.json.")
+            .WithForeground(Color.Gray));
 
         return children;
     }
@@ -834,8 +902,13 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(reAuthList);
         }
-        else if (descriptor.Auth is EndpointOnlyAuth)
+        else if (descriptor.Auth.IsCredentialOptional())
         {
+            // Credential-optional providers edit the endpoint first. Providers that
+            // also take an optional Bearer key continue to AddOptionalApiKey, which
+            // is where the key — and the "leave it blank" answer — is collected.
+            var offersOptionalKey = descriptor.Auth.OffersOptionalApiKey();
+
             children.WithChild(new TextNode("").Height(1));
             children.WithChild(new TextNode("  Endpoint:").WithForeground(Color.White));
 
@@ -850,11 +923,22 @@ public sealed class ProviderManagerPage : ReactivePage<ProviderManagerViewModel>
                     ViewModel.FixEndpoint = string.IsNullOrWhiteSpace(text)
                         ? item.Entry?.Endpoint
                         : text;
-                    ViewModel.SubmitFixCredentials();
+
+                    if (offersOptionalKey)
+                        ViewModel.AdvanceToOptionalApiKey();
+                    else
+                        ViewModel.SubmitFixCredentials();
                 })
                 .DisposeWith(_stepSubs);
 
             children.WithChild(NetclawTuiChrome.BuildTextInputPanel(_endpointInput, "Endpoint"));
+
+            if (offersOptionalKey && item.Entry is not null && !item.Entry.ApiKey.IsNullOrEmpty())
+            {
+                children.WithChild(new TextNode("").Height(1));
+                children.WithChild(new TextNode("  An API key is stored for this provider.")
+                    .WithForeground(Color.Gray));
+            }
         }
         else
         {

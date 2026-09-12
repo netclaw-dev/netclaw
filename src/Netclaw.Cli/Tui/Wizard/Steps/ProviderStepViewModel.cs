@@ -95,8 +95,20 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
         7 => "  Choose whether GitHub Copilot should authenticate through GitHub.com or GitHub Enterprise.",
         8 => "  Enter the GitHub Enterprise web host used for OAuth.",
         9 => "  Enter the GitHub Enterprise API base, or leave blank to use the derived default.",
+        10 => "  Enter an API key if the endpoint requires one, or press Enter to skip.",
         _ => ""
     };
+
+    /// <summary>
+    /// True when the selected provider accepts an optional Bearer key in addition
+    /// to running credential-free. Drives the sub-step 10 prompt and its
+    /// back-navigation, so those surfaces stop matching on the concrete
+    /// endpoint-only auth type.
+    /// </summary>
+    private bool SelectedProviderOffersOptionalApiKey =>
+        !string.IsNullOrWhiteSpace(SelectedProviderType)
+        && _registry.TryGet(SelectedProviderType!, out var descriptor)
+        && descriptor.Auth.OffersOptionalApiKey();
 
     /// <summary>
     /// Set the sub-step directly (used by the View for non-linear transitions like
@@ -144,12 +156,18 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             case 9: // GitHub Enterprise API base → GitHub Enterprise host
                 _currentSubStep = 8;
                 return true;
+            case 10: // Optional API key → endpoint
+                _currentSubStep = 2;
+                return true;
             case 4: // Model selection → credentials
                 _currentSubStep = SelectedAuthMethod switch
                 {
                     AuthMethod.OAuthDevice when GitHubCopilotSetupFlow.IsGitHubCopilot(SelectedProviderType) => 7,
                     AuthMethod.OAuthDevice => 5,
                     AuthMethod.OAuthPkce => 6,
+                    // Optional-key providers land back on the key prompt, not the
+                    // endpoint: that is the last input before validation.
+                    _ when SelectedProviderOffersOptionalApiKey => 10,
                     _ => 2,
                 };
                 return true;
@@ -159,6 +177,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
                 {
                     AuthMethod.OAuthPkce => 6,
                     AuthMethod.OAuthDevice => 5,
+                    _ when SelectedProviderOffersOptionalApiKey => 10,
                     _ => 2
                 };
                 return true;
@@ -449,7 +468,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
             AuthMethod = SelectedAuthMethod,
             Endpoint = !string.IsNullOrWhiteSpace(EndpointInput)
                 ? EndpointInput
-                : _registry.TryGet(providerName, out var desc) && desc.Auth is EndpointOnlyAuth
+                : _registry.TryGet(providerName, out var desc) && desc.Auth.IsCredentialOptional()
                     ? desc.DefaultEndpoint
                     : null,
             VendorOptions = VendorOptions,
@@ -657,7 +676,7 @@ public sealed class ProviderStepViewModel : IWizardStepViewModel, ISectionEditor
 
         var endpoint = !string.IsNullOrWhiteSpace(vm.EndpointInput)
             ? vm.EndpointInput
-            : _registry.TryGet(providerType, out var descriptor) && descriptor.Auth is EndpointOnlyAuth
+            : _registry.TryGet(providerType, out var descriptor) && descriptor.Auth.IsCredentialOptional()
                 ? descriptor.DefaultEndpoint
                 : null;
 
