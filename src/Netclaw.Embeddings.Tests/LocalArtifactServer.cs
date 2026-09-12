@@ -45,7 +45,18 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
             HttpListenerContext ctx;
             try
             {
-                ctx = await _listener.GetContextAsync().ConfigureAwait(false);
+                Task<HttpListenerContext> accept;
+                // HttpListener can register an accept after Close clears its wait queue.
+                // Keep the synchronous registration and shutdown under the same lock.
+                lock (_listener)
+                {
+                    if (_disposed)
+                        return;
+
+                    accept = _listener.GetContextAsync();
+                }
+
+                ctx = await accept.ConfigureAwait(false);
             }
             // On Windows, Stop()/Close() while a GetContextAsync() is pending makes the
             // pending accept throw HttpListenerException ("I/O operation has been aborted").
@@ -131,14 +142,15 @@ internal sealed class LocalArtifactServer : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Idempotent: some tests dispose the server early (mid-test) to prove a later call
-        // makes no network access, then the test class's own DisposeAsync disposes it again.
-        if (_disposed)
-            return;
-        _disposed = true;
-
-        _listener.Stop();
-        _listener.Close();
+        lock (_listener)
+        {
+            if (!_disposed)
+            {
+                _disposed = true;
+                _listener.Stop();
+                _listener.Close();
+            }
+        }
 
         // Network-teardown aborts (HttpListenerException on the pending accept, or
         // ObjectDisposedException on an in-flight response stream) can fault the serve loop
