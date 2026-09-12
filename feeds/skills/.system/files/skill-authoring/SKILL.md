@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.9.0"
+  version: "1.11.0"
 ---
 
 # Skill Authoring
@@ -254,3 +254,40 @@ All skills — regardless of origin — are visible in the skill index and
 available to all sessions. The skill index is a compressed file listing
 injected into the system prompt that points the agent directly at SKILL.md
 files on disk for retrieval-led reasoning.
+
+## GitHub Plugin Sources
+
+Netclaw accepts public `github.com` repositories that use supported plugin formats.
+Private repositories need a later credential feature.
+
+Agent Plugins 1.0.0 is the primary format.
+Its root `plugin.json` must use this schema identifier:
+
+`https://agent-plugins.org/schemas/1.0.0/plugin.schema.json`
+
+The portable manifest requires `name`.
+Its optional `version` can use any string.
+Netclaw discovers skills in direct child directories under `skills/`.
+Netclaw skips an invalid portable skill and keeps each valid sibling.
+
+The Codex compatibility format uses `.codex-plugin/plugin.json`.
+Netclaw reads only these Codex manifest fields:
+
+- `name` is required. It uses lowercase letters, numbers, and hyphens.
+- `version` is optional. A present value must use strict SemVer.
+- `skills` is optional. It must contain one relative directory path.
+
+Netclaw always checks `./skills/`. It also checks the `skills` directory from
+the manifest. Each selected skill is a direct child directory with an exact
+`SKILL.md` filename. Netclaw imports the selected skill files and their safe
+resources only.
+
+Netclaw ignores plugin components that can run code or add authority. These
+components include `agents`, `apps`, `commands`, `hooks`, `mcpServers`, and
+`scripts`. Netclaw reports a notice for each ignored component.
+
+Netclaw rejects the complete candidate after an unsafe path, unsafe link, special file, invalid manifest, or scanner rejection.
+The Codex adapter also rejects the candidate after an invalid skill.
+Netclaw keeps the prior accepted package.
+Netclaw records a rejected commit and skips it during normal sync.
+An explicit retry checks that commit again.
