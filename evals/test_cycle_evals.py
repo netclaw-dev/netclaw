@@ -1,6 +1,7 @@
 """Independent controls for cycle eval evidence and the provider relay."""
 
 import copy
+import contextlib
 import io
 import json
 from pathlib import Path
@@ -8,9 +9,10 @@ import sqlite3
 import subprocess
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from background_fixture import handler_for
-from cycle_evals import CASES, CORRECTION, STOP, CycleFixture, primary_receipts, verdict
+from cycle_evals import CASES, CORRECTION, STOP, CycleFixture, main, primary_receipts, verdict
 
 
 def evidence(case="correction"):
@@ -40,6 +42,7 @@ def evidence(case="correction"):
                       "argumentsJson": recovery["arguments"]})
     snapshot = {"case": case, "effects": expected, "scripted_ids": ids,
                 "main_requests": 6, "sidecar_requests": int(case == "compaction"), "model_requests": 1,
+                "compaction_requests": int(case == "compaction"), "distillation_requests": 0, "context_window": 65536,
                 "handoff": {"tools": [] if case == "terminal" else ["file_read"], "effects": expected,
                             "correction_ids": list(corrections), "stop_instruction": case == "terminal"},
                 "tool_results": tool_results, "observed_calls": observed_calls,
@@ -47,7 +50,7 @@ def evidence(case="correction"):
     answer = {"status": "incomplete" if case == "terminal" else "complete", "completed_attempts": expected,
               "blocked_attempt_executed": False, "last_result": last_result,
               "recovered_value": "" if case == "terminal" else recovery_value}
-    output = {"toolCalls": calls, "response": json.dumps(answer)}
+    output = {"sessionId": "unit-session", "toolCalls": calls, "response": json.dumps(answer)}
     batch = "turn_tool_call_batch count=1 tools=shell_execute\n"
     actor_log = batch + ("Compaction complete (before=8, after=4)\n" if case == "compaction" else "") + batch
     return snapshot, output, actor_log
@@ -156,6 +159,46 @@ class CycleVerdictTests(unittest.TestCase):
                                     "argumentsJson": json.dumps({"Path": "/isolated/attempts.txt",
                                                                  "Content": "attempt\nattempt\n"})})
         self.assert_rejected(snapshot, output, log)
+        result = verdict(snapshot, output, log)
+        self.assertTrue(result["groups"]["runtime_contract"]["passed"])
+        self.assertFalse(result["groups"]["post_handoff_safety"]["passed"])
+
+    def test_later_mutations_do_not_rewrite_the_initial_runtime_score(self):
+        snapshot, output, log = evidence()
+        snapshot["effects"] = 5
+        result = verdict(snapshot, output, log)
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["groups"]["runtime_contract"]["passed"])
+        self.assertFalse(result["groups"]["post_handoff_safety"]["passed"])
+
+    def test_a_second_cycle_is_not_reported_as_an_initial_pair_defect(self):
+        snapshot, output, log = evidence()
+        snapshot["tool_results"]["later-cycle"] = CORRECTION
+        result = verdict(snapshot, output, log)
+        self.assertFalse(result["passed"])
+        self.assertTrue(result["checks"]["initial_correction_pair"])
+        self.assertFalse(result["checks"]["no_additional_cycle_interventions"])
+        self.assertTrue(result["groups"]["runtime_contract"]["passed"])
+        self.assertFalse(result["groups"]["model_task"]["passed"])
+
+    def test_prose_or_an_ambiguous_status_remains_a_strict_model_failure(self):
+        for case, response_change in (("correction", "status"), ("metadata_repair", "prose"),
+                                      ("metadata_repair", "blocked_flag")):
+            with self.subTest(case=case, change=response_change):
+                snapshot, output, log = evidence(case)
+                answer = json.loads(output["response"])
+                if response_change == "status":
+                    answer["status"] = "incomplete"
+                elif response_change == "blocked_flag":
+                    answer["blocked_attempt_executed"] = True
+                output["response"] = json.dumps(answer)
+                if response_change == "prose":
+                    output["response"] = "The value is correct.\n```json\n" + output["response"] + "\n```"
+                result = verdict(snapshot, output, log)
+                self.assertFalse(result["passed"])
+                self.assertTrue(result["groups"]["runtime_contract"]["passed"])
+                self.assertTrue(result["groups"]["post_handoff_safety"]["passed"])
+                self.assertFalse(result["checks"]["strict_completion_report"])
 
     def test_duplicate_or_reordered_script_calls_fail(self):
         for defect in ("duplicate_ids", "reordered_output"):
@@ -204,7 +247,7 @@ class CycleVerdictTests(unittest.TestCase):
                 snapshot, output, _ = evidence("compaction")
                 self.assert_rejected(snapshot, output, log)
         snapshot, output, log = evidence("compaction")
-        snapshot["sidecar_requests"] = 0
+        snapshot["compaction_requests"] = 0
         self.assert_rejected(snapshot, output, log)
 
     def test_other_cases_reject_unplanned_compaction(self):
@@ -238,6 +281,12 @@ class CycleFixtureTests(unittest.TestCase):
         setup = self.fixture.control("cycle", {"case": case})
         return {"messages": [{"role": "user", "content": setup["prompt"]}],
                 "tools": [{"function": {"name": name}} for name in ("load_tool", "shell_execute", "file_read")]}
+
+    def sidecar(self, kind="compaction"):
+        signature = ("You are a session summarizer." if kind == "compaction"
+                     else "You are a session memory distillation sidecar.")
+        return {"messages": [{"role": "system", "content": signature},
+                             {"role": "user", "content": self.fixture.prompt()}], "tools": []}
 
     def acknowledge(self, request, reply, result, effects):
         call = reply["tool_calls"][0]
@@ -337,13 +386,46 @@ class CycleFixtureTests(unittest.TestCase):
     def test_sidecar_does_not_consume_setup_or_real_model_budget(self):
         request = self.start("compaction")
         before = copy.deepcopy(self.fixture.snapshot())
-        sidecar = {"messages": [{"role": "system", "content": "You are a session summarizer."}], "tools": []}
+        sidecar = self.sidecar()
         self.assertIsNone(self.fixture.completion(sidecar))
         after = self.fixture.snapshot()
         for field in ("main_requests", "model_requests", "scripted_ids", "tool_results", "handoff"):
             self.assertEqual(before[field], after[field], field)
         self.assertEqual(before["sidecar_requests"] + 1, after["sidecar_requests"])
         self.assertEqual("load_tool", self.fixture.completion(request)["tool_calls"][0]["function"]["name"])
+
+    def test_memory_distillation_is_forwarded_but_cannot_satisfy_compaction(self):
+        request = self.start("compaction")
+        load = self.fixture.completion(request)
+        self.acknowledge(request, load, "shell_execute", 0)
+        self.fixture.completion(request)
+        self.fixture.counter.write_text("attempt\n")
+        before = copy.deepcopy(self.fixture.snapshot())
+        self.assertIsNone(self.fixture.completion(self.sidecar("distillation")))
+        after = self.fixture.snapshot()
+        for field in ("main_requests", "model_requests", "scripted_ids", "tool_results", "handoff"):
+            self.assertEqual(before[field], after[field], field)
+        self.assertEqual(1, after["distillation_requests"])
+        self.assertEqual(0, after["compaction_requests"])
+        with self.assertRaises(ValueError):
+            self.fixture.completion(request)
+
+    def test_stale_or_tool_enabled_sidecars_fail_before_budget_changes(self):
+        for kind in ("compaction", "distillation"):
+            for defect in ("stale", "missing_marker", "tools"):
+                with self.subTest(kind=kind, defect=defect):
+                    self.start()
+                    request = self.sidecar(kind)
+                    if defect == "stale":
+                        self.start()
+                    elif defect == "missing_marker":
+                        request["messages"].pop()
+                    else:
+                        request["tools"] = [{"function": {"name": "file_read"}}]
+                    before = copy.deepcopy(self.fixture.snapshot())
+                    with self.assertRaises(ValueError):
+                        self.fixture.completion(request)
+                    self.assertEqual(before, self.fixture.snapshot())
 
     def test_script_does_not_advance_without_the_previous_call_result(self):
         request = self.start()
@@ -374,7 +456,7 @@ class CycleFixtureTests(unittest.TestCase):
         first = self.fixture.completion(request)
         first_id = first["tool_calls"][0]["id"]
         self.fixture.counter.write_text("attempt\n")
-        observer = {"messages": [{"role": "system", "content": "You are a session summarizer."}]}
+        observer = self.sidecar()
         self.assertIsNone(self.fixture.completion(observer))
         resumed = {"messages": [{"role": "user", "content": "Compacted observations."}],
                    "tools": request["tools"]}
@@ -387,10 +469,10 @@ class CycleFixtureTests(unittest.TestCase):
             self.fixture.completion(resumed)
 
     def test_compacted_ack_exception_rejects_wrong_case_phase_effect_or_absent_observer(self):
-        observer = {"messages": [{"role": "system", "content": "You are a session summarizer."}]}
         for defect in ("wrong_case", "early_observer", "wrong_effect", "no_observer"):
             with self.subTest(defect=defect):
                 request = self.start("correction" if defect == "wrong_case" else "compaction")
+                observer = self.sidecar()
                 load = self.fixture.completion(request)
                 if defect == "early_observer":
                     self.assertIsNone(self.fixture.completion(observer))
@@ -432,7 +514,7 @@ class CycleFixtureTests(unittest.TestCase):
         self.fixture.main_requests = 16
         with self.assertRaises(ValueError):
             self.fixture.completion(request)
-        sidecar = {"messages": [{"role": "system", "content": "You are a session summarizer."}]}
+        sidecar = self.sidecar()
         self.fixture.sidecar_requests = 8
         with self.assertRaises(ValueError):
             self.fixture.completion(sidecar)
@@ -542,6 +624,123 @@ class PrimaryReceiptTests(unittest.TestCase):
         for log in ("", "".join(records)[:-10], "".join(records).replace("[2026-01-01T00:00:00.0000000+00:00] ", "")):
             with self.subTest(log=log):
                 self.assertFalse(primary_receipts(snapshot, log))
+
+
+class CycleCommandTests(unittest.TestCase):
+    def documents(self, case="correction"):
+        snapshot, output, actor_log = evidence(case)
+        _, receipts = PrimaryReceiptTests().primary_log(case)
+        headless = "".join(receipts) + PrimaryReceiptTests.record("USAGE: context_window=65536")
+        if case == "compaction":
+            headless += PrimaryReceiptTests.record(
+                "COMPACTION: before=8 after=4 tool_results_cleared=False summarized=True "
+                "context_window=65536 input_tokens=52428 keep_count=0")
+        return {"snapshot": json.dumps(snapshot), "output": json.dumps(output),
+                "actor": actor_log, "headless": headless}
+
+    def invoke(self, documents):
+        def read(path):
+            value = documents[str(path)]
+            if isinstance(value, Exception):
+                raise value
+            return value
+
+        capture = io.StringIO()
+        arguments = ["cycle_evals.py", "check", "--snapshot", "snapshot", "--output", "output",
+                     "--actor-log", "actor", "--headless-log", "headless"]
+        with patch("sys.argv", arguments), patch("cycle_evals.Path.read_text", read), \
+                contextlib.redirect_stdout(capture):
+            code = main()
+        return code, json.loads(capture.getvalue())
+
+    def test_cli_composes_primary_receipts_and_context_into_the_runtime_score(self):
+        for case in CASES:
+            with self.subTest(case=case):
+                code, report = self.invoke(self.documents(case))
+                self.assertEqual(0, code)
+                self.assertTrue(report["passed"])
+                self.assertEqual({"runtime_contract", "post_handoff_safety", "model_task"}, set(report["groups"]))
+                self.assertTrue(all(group["passed"] for group in report["groups"].values()))
+                self.assertTrue(report["groups"]["runtime_contract"]["checks"]["primary_receipts"])
+                self.assertTrue(report["groups"]["runtime_contract"]["checks"]["context_window"])
+
+    def test_missing_primary_or_wrong_context_never_passes_the_cli(self):
+        for defect in ("primary", "context", "missing_context"):
+            with self.subTest(defect=defect):
+                documents = self.documents()
+                if defect == "primary":
+                    documents["headless"] = PrimaryReceiptTests.record("USAGE: context_window=65536")
+                elif defect == "context":
+                    documents["headless"] = documents["headless"].replace("65536", "32768")
+                else:
+                    documents["headless"] = documents["headless"].replace(" context_window=65536", "")
+                code, report = self.invoke(documents)
+                self.assertEqual(1, code)
+                self.assertEqual("failed", report["status"])
+                self.assertFalse(report["groups"]["runtime_contract"]["passed"])
+
+    def test_missing_final_json_or_logs_produce_an_explicit_inconclusive_failure(self):
+        for key, value in (("output", ""), ("output", "not-json"), ("output", "{}"),
+                           ("output", FileNotFoundError()), ("snapshot", "null"),
+                           ("actor", FileNotFoundError()), ("headless", "")):
+            with self.subTest(key=key, value=value):
+                documents = self.documents()
+                documents[key] = value
+                code, report = self.invoke(documents)
+                self.assertEqual(1, code)
+                self.assertFalse(report["passed"])
+                self.assertEqual("inconclusive", report["status"])
+                self.assertTrue(report["reason"])
+                self.assertTrue(all(not group["passed"] for group in report["groups"].values()))
+
+    def test_compaction_transport_must_report_the_same_summary_boundary(self):
+        for defect in ("false_summary", "wrong_before", "wrong_after", "duplicate", "missing"):
+            with self.subTest(defect=defect):
+                documents = self.documents("compaction")
+                if defect == "false_summary":
+                    documents["headless"] = documents["headless"].replace("summarized=True", "summarized=False")
+                elif defect == "wrong_before":
+                    documents["headless"] = documents["headless"].replace("before=8", "before=9")
+                elif defect == "wrong_after":
+                    documents["headless"] = documents["headless"].replace("after=4", "after=3")
+                elif defect == "duplicate":
+                    documents["headless"] += documents["headless"].splitlines(keepends=True)[-1]
+                else:
+                    documents["headless"] = "".join(documents["headless"].splitlines(keepends=True)[:-1])
+                code, report = self.invoke(documents)
+                self.assertEqual(1, code)
+                self.assertFalse(report["checks"]["compaction_transport_summary"])
+
+    def test_shell_assertion_retains_an_inconclusive_report_before_path_resolution(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        root = Path(directory.name)
+        script = Path(__file__).resolve().with_name("run-evals.sh")
+        cycle = script.with_name("cycle_evals.sh")
+        _, valid_output, _ = evidence()
+        for defect, reason in (("snapshot", "snapshot_unavailable"), ("output", "invalid_final_cli_json"),
+                               ("actor", "actor_log_unavailable"), ("headless", "headless_log_unavailable")):
+            with self.subTest(defect=defect):
+                output = root / (defect + ".txt")
+                output.write_text("" if defect == "output" else json.dumps(valid_output))
+                command = '''source "$1"
+source "$2"
+STDOUT_FILE="$3"
+CYCLE_CASE=correction
+CYCLE_FIXTURE_PORT=1
+defect="$4"
+curl() { if [[ "$defect" == snapshot ]]; then return 22; fi; printf '%s' '{"case":"correction"}'; }
+stdout_json_session_actor_log_path() { if [[ "$defect" == actor ]]; then return 1; fi; printf '%s' /unused; }
+stdout_json_headless_log_path() { return 1; }
+if assert_cycle_case; then exit 0; else exit 1; fi
+'''
+                result = subprocess.run(["bash", "-c", command, "cycle-test", str(script), str(cycle),
+                                         str(output), defect], capture_output=True, text=True, timeout=10)
+                self.assertEqual(1, result.returncode, result.stderr)
+                report = json.loads(output.with_name(defect + "_cycle-verdict.txt").read_text())
+                self.assertEqual("inconclusive", report["status"])
+                self.assertEqual(reason, report["reason"])
+                self.assertFalse(report["passed"])
 
 
 class SessionActorLogCatalogTests(unittest.TestCase):

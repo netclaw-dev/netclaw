@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Cli.Daemon;
@@ -14,6 +15,51 @@ namespace Netclaw.Cli.Tests.Cli;
 
 public sealed class DaemonClientMappingTests
 {
+    [Theory]
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void Compaction_output_preserves_phase_evidence_through_the_JSON_transport(
+        bool summarized, bool toolResultsCleared)
+    {
+        var original = new CompactionOutput
+        {
+            SessionId = new SessionId("signalr/compaction"),
+            TimestampMs = 123,
+            MessagesBefore = 7,
+            MessagesAfter = 2,
+            ContextWindowTokens = 65536,
+            PreCompactionInputTokens = 52428,
+            KeepCountUsed = 0,
+            Summarized = summarized,
+            ToolResultsCleared = toolResultsCleared
+        };
+
+        var json = JsonSerializer.Serialize(SessionOutputDtoMapper.ToDto(original), JsonSerializerOptions.Web);
+        var dto = JsonSerializer.Deserialize<SessionOutputDto>(json, JsonSerializerOptions.Web);
+        var result = Assert.IsType<CompactionOutput>(DaemonClient.FromDto(Assert.IsType<SessionOutputDto>(dto)));
+
+        Assert.Equal(original, result);
+    }
+
+    [Fact]
+    public void Legacy_compaction_JSON_has_no_positive_phase_evidence()
+    {
+        const string json = """
+            {"type":"compaction","sessionId":"signalr/legacy","timestampMs":123,"messagesBefore":7,"messagesAfter":2}
+            """;
+        var dto = Assert.IsType<SessionOutputDto>(JsonSerializer.Deserialize<SessionOutputDto>(json, JsonSerializerOptions.Web));
+        Assert.Null(dto.Summarized);
+        Assert.Null(dto.ToolResultsCleared);
+
+        var result = Assert.IsType<CompactionOutput>(DaemonClient.FromDto(dto));
+        Assert.Equal(7, result.MessagesBefore);
+        Assert.Equal(2, result.MessagesAfter);
+        Assert.False(result.Summarized);
+        Assert.False(result.ToolResultsCleared);
+    }
+
     [Theory]
     [InlineData("session-signalr/abc123", "signalr/abc123")]
     [InlineData("session-C07ABC/1234567890.123456", "C07ABC/1234567890.123456")]

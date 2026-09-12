@@ -303,6 +303,25 @@ They will preserve production resource limits and use synthetic data only.
 The model probe will measure correction quality in the parent actor. It will not
 replace deterministic detector tests, child actor tests, private replay, or observe-only evidence.
 
+The report separates the initial runtime contract, post-handoff safety, and strict model task checks.
+An initial correction does not prove that all later actions remain safe.
+A different completed action clears the prior block. Changed results can permit further mutations.
+The strict result still requires every check. Absent evidence never counts as a pass.
+The prompt defines completion as recovery-value retrieval and requires `file_read` for that task.
+The original run retains its original score when the prompt or oracle changes.
+
+Compaction phase evidence follows this existing flow:
+
+```text
+LlmSessionActor -> CompactionOutput -> SessionOutputDto -> SignalR JSON -> DaemonClient -> HeadlessChannel
+```
+
+The mapper must preserve `Summarized` and `ToolResultsCleared` in both directions.
+The nullable DTO fields apply only to compaction messages. Older payloads can omit them.
+The existing consumer uses false for absent phase evidence; false does not prove that an older daemon skipped the phase.
+Four JSON round-trip cases verify independent true and false values.
+A true summary flag proves phase execution, not semantic retention of the task goal.
+
 Alternative: start with actor integration tests. They add infrastructure noise
 before the pure comparison contract is stable.
 

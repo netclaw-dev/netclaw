@@ -38,7 +38,8 @@ start_cycle_fixture() {
 
 setup_cycle_case() {
     local case_name="$1"
-    CYCLE_PROMPT=$(curl -fsS -H 'Content-Type: application/json' \
+    CYCLE_CASE="$case_name"
+    CYCLE_PROMPT=$(curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' \
         -d "{\"case\":\"$case_name\"}" "http://127.0.0.1:$CYCLE_FIXTURE_PORT/control/cycle" | jq -er .prompt)
 }
 
@@ -48,16 +49,34 @@ setup_tool_cycle_compaction() { setup_cycle_case compaction; }
 setup_tool_cycle_changed_result() { setup_cycle_case changed_result; }
 setup_tool_cycle_metadata_repair() { setup_cycle_case metadata_repair; }
 
+cycle_inconclusive() {
+    python3 "$REPO_ROOT/evals/cycle_evals.py" inconclusive --case "$CYCLE_CASE" --reason "$1" > "$2"
+    return 1
+}
+
 assert_cycle_case() {
     local snapshot report actor_log headless_log
     snapshot="${STDOUT_FILE%.txt}_cycle-snapshot.json"
     report="${STDOUT_FILE%.txt}_cycle-verdict.txt"
-    curl -fsS -H 'Content-Type: application/json' -d '{}' \
-        "http://127.0.0.1:$CYCLE_FIXTURE_PORT/control/snapshot" > "$snapshot" || return 1
+    if ! curl -fsS --connect-timeout 5 --max-time 10 -H 'Content-Type: application/json' -d '{}' \
+        "http://127.0.0.1:$CYCLE_FIXTURE_PORT/control/snapshot" > "$snapshot"; then
+        cycle_inconclusive snapshot_unavailable "$report"
+        return 1
+    fi
     # A .txt copy puts the synthetic trace into the common stdout archive.
     cp "$snapshot" "${STDOUT_FILE%.txt}_cycle-snapshot.txt"
-    actor_log=$(stdout_json_session_actor_log_path) || return 1
-    headless_log=$(stdout_json_headless_log_path) || return 1
+    if ! stdout_json_envelope_valid; then
+        cycle_inconclusive invalid_final_cli_json "$report"
+        return 1
+    fi
+    if ! actor_log=$(stdout_json_session_actor_log_path); then
+        cycle_inconclusive actor_log_unavailable "$report"
+        return 1
+    fi
+    if ! headless_log=$(stdout_json_headless_log_path); then
+        cycle_inconclusive headless_log_unavailable "$report"
+        return 1
+    fi
     python3 "$REPO_ROOT/evals/cycle_evals.py" check --snapshot "$snapshot" \
         --output "$STDOUT_FILE" --actor-log "$actor_log" --headless-log "$headless_log" \
         > "$report" 2> "${report%.txt}-errors.txt"

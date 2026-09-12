@@ -51,7 +51,10 @@ None.
 
 The change affects `TurnStateTracker`, both actor tool loops, tool-call preparation, result receipts, and compaction state transitions.
 
-The change adds no package, provider, public API, actor, persistence event, or configuration property.
+The change adds no package, provider, actor, persistence event, or configuration property.
+
+An adjacent diagnostic repair adds two phase flags to the existing compaction transport DTO.
+The flags preserve actor evidence through the daemon-to-CLI JSON boundary.
 
 The detector state is actor-local and bounded to six completed iterations.
 
