@@ -11,18 +11,26 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
+[Collection(LegacyModelEnvironmentCollection.Name)]
 public sealed class CliConfigPreflightTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
+    private readonly string? _originalDaemonEndpoint;
 
     public CliConfigPreflightTests()
     {
+        _originalDaemonEndpoint = Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT");
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose() => _dir.Dispose();
+    public void Dispose()
+    {
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", _originalDaemonEndpoint);
+        _dir.Dispose();
+    }
 
     [Fact]
     public void TryWriteMissingConfig_Text_PrintsInitGuidanceAndBlocksCommand()
@@ -43,10 +51,10 @@ public sealed class CliConfigPreflightTests : IDisposable
 
         var blocked = CliConfigPreflight.TryWriteMissingConfig(_paths, jsonOutput: true, writer, out var exitCode);
 
-        var json = JsonNode.Parse(writer.ToString())!.AsObject();
-
         Assert.True(blocked);
         Assert.Equal(1, exitCode);
+
+        var json = JsonNode.Parse(writer.ToString())!.AsObject();
         Assert.Equal("not-configured", json["overall"]!.GetValue<string>());
         Assert.Equal(CliConfigPreflight.MissingConfigMessage, json["message"]!.GetValue<string>());
     }

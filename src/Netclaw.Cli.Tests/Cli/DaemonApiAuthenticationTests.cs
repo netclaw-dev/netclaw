@@ -17,20 +17,24 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
+[Collection(LegacyModelEnvironmentCollection.Name)]
 public sealed class DaemonApiAuthenticationTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
+    private readonly string? _originalDaemonEndpoint;
 
     public DaemonApiAuthenticationTests()
     {
+        _originalDaemonEndpoint = Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT");
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", _originalDaemonEndpoint);
         _dir.Dispose();
     }
 
