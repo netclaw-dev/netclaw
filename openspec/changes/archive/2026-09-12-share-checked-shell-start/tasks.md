@@ -7,7 +7,7 @@
 
 - [x] 2.1 Verify one start, cancellation before launch, process tree exit, output, timeout, and detached lifetime.
 - [x] 2.2 Update operational skill guidance and verify the spec with strict validation.
-- [ ] 2.3 Run integrated tests, Slopwatch, headers, and applicable evals. Record each result and limitation.
+- [x] 2.3 Run integrated tests, Slopwatch, headers, and applicable evals. Record each result and limitation.
 - [x] 2.4 Run an independent aggressive review. Fix all confirmed findings and publish a labeled PR.
 
 Task 2.3 remains open because behavioral evals need a provider type, endpoint, and model ID. CI remains a separate gate.

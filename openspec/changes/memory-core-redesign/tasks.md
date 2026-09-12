@@ -59,7 +59,7 @@ constitution gates (tests, evals where mapped, schema/skill sync, slopwatch).
 - [ ] 5.5 Sidecar distillation prompt: correction-hunting instruction producing tool-lesson proposals
 - [ ] 5.6 Per-tool context injection in the tool-execution pipeline: `[tool-lessons:<name>]` block on first use per session (bounded, once per tool, reset on compaction); remove the dead `verified-tool-finding` +25 recall bonus
 - [ ] 5.7 Tests: searchable-out-of-auto regression, formation default, trace TTL round-trip, lesson capture→injection end-to-end, once-per-session + compaction reset
-- [ ] 5.8 Eval cases: tool-lesson store→new-session→first-tool-use surfaces lesson; must-auto-recall identity facts still auto-recall after rebalance
+- [x] 5.8 Eval cases: tool-lesson store→new-session→first-tool-use surfaces lesson; must-auto-recall identity facts still auto-recall after rebalance
 - [ ] 5.9 Skill sync (`netclaw-memory`: classes table, lessons guidance) + schema sync for any new wire values
 
 ## 6. Maintenance CLI, expiry sweep, subtraction

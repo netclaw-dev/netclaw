@@ -51,6 +51,25 @@ when the memory substrate is unavailable.
 - **THEN** recall proceeds lexical-only within the same latency budget
 - **AND** a structured vector-degradation event is logged for diagnostics
 
+#### Scenario: Floor-surviving candidate that is not useful is gated out
+
+- **GIVEN** a candidate clears the absolute cosine floor but does not help
+  answer the user's message
+- **WHEN** the relevance gate scores that candidate
+- **THEN** the candidate is dropped before injection
+- **AND** no recall context block is added for that candidate alone if it
+  was the only floor survivor
+
+#### Scenario: Relevance gate degradation is loud, not silent
+
+- **GIVEN** the relevance gate is unavailable or exceeds its per-turn
+  sub-budget
+- **WHEN** automatic recall runs with candidates that survived the absolute
+  cosine floor
+- **THEN** those candidates are injected unfiltered by the gate, within the
+  same latency budget
+- **AND** a structured gate-degradation event is logged for diagnostics
+
 #### Scenario: Recall failure degrades without blocking the turn
 
 - **GIVEN** the memory database is temporarily unavailable

@@ -68,7 +68,7 @@
 - [x] 8.4 Strengthen the parent-child handoff eval so it proves a successful existing file-tool call against the returned child path, not a path string or prose claim
 - [x] 8.5 Replace the custom-tool worktree eval with a natural Git CLI case; require successful creation below `worktree_dir` followed by successful `set_working_directory`
 - [x] 8.6 Defer Windows model-pattern evals until sanitized representative traffic exists while keeping Windows contract tests required
-- [ ] 8.7 Report rewritten cases as replacement evidence. Claim direct before-and-after comparison only for identical prompts, tool surfaces, model configuration, and assertion hashes
+- [x] 8.7 Report rewritten cases as replacement evidence. Claim direct before-and-after comparison only for identical prompts, tool surfaces, model configuration, and assertion hashes
 
 ## 9. Documentation and Release Verification
 
@@ -77,7 +77,7 @@
 - [x] 9.3 Remove or correct evidence that used changed prompts or assertions as a locked comparison, remove invalid headless results, and record exact evidence revisions without changing archived evidence
 - [x] 9.4 Run `openspec validate unify-session-storage-and-temp --strict`, focused tests, `dotnet build -c Release`, `dotnet test -c Release`, header verification, and Slopwatch; report existing skipped tests accurately instead of claiming zero skips
 - [ ] 9.5 Upgrade one existing session and restart one newly bound session; verify established and new paths remain usable, active writers remain healthy, paths stay stable, and no data is moved or deleted
-- [ ] 9.6 Harvest sanitized live traffic after the swap and classify remaining temp, log-discovery, worktree, configuration-read, and approval-friction patterns; add evidence to the corpus only after manual PII review
+- [x] 9.6 Harvest sanitized live traffic after the swap and classify remaining temp, log-discovery, worktree, configuration-read, and approval-friction patterns; add evidence to the corpus only after manual PII review
 
 ## 10. Restore restricted session file authority
 
