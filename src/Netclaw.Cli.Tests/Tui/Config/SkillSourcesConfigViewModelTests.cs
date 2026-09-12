@@ -73,7 +73,7 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         File.WriteAllText(
             _paths.NetclawConfigPath,
             """
-            {"configVersion":1,"SkillFeeds":{"Feeds":[{"Name":"custom-feed","Url":"https://feed.example.test","Enabled":true}],"Plugins":[{"Name":"dotnet-skills","Repository":"owner/repository","Format":"codex","Subdirectory":"packages/plugin","ReferenceKind":"Branch","Reference":"main","Enabled":true,"TimeoutSeconds":90}]}}
+            {"configVersion":1,"SkillFeeds":{"Feeds":[{"Name":"custom-feed","Url":"https://feed.example.test","Enabled":true}],"Plugins":[{"Id":"dotnet-skills","Repository":"owner/repository","Format":"agent-plugin","Subdirectory":"packages/plugin","ReferenceKind":"Branch","Reference":"main","Enabled":true,"TimeoutSeconds":90}]}}
             """);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
@@ -83,6 +83,8 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         var section = document.RootElement.GetProperty("SkillFeeds");
         Assert.False(section.GetProperty("Feeds")[0].GetProperty("Enabled").GetBoolean());
         var plugin = Assert.Single(section.GetProperty("Plugins").EnumerateArray());
+        Assert.Equal("dotnet-skills", plugin.GetProperty("Id").GetString());
+        Assert.Equal("agent-plugin", plugin.GetProperty("Format").GetString());
         Assert.Equal("owner/repository", plugin.GetProperty("Repository").GetString());
         Assert.Equal("packages/plugin", plugin.GetProperty("Subdirectory").GetString());
         Assert.Equal("Branch", plugin.GetProperty("ReferenceKind").GetString());
@@ -95,7 +97,7 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         File.WriteAllText(
             _paths.NetclawConfigPath,
             """
-            {"configVersion":1,"SkillFeeds":{"Feeds":[{"Name":"custom-feed","Url":"https://feed.example.test","Enabled":true}],"Plugins":[{"Name":"dotnet-skills","Repository":"owner/repository","Format":"codex","ReferenceKind":"Commit","Reference":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Enabled":false,"TimeoutSeconds":60}]}}
+            {"configVersion":1,"SkillFeeds":{"Feeds":[{"Name":"custom-feed","Url":"https://feed.example.test","Enabled":true}],"Plugins":[{"Id":"dotnet-skills","Repository":"owner/repository","Format":"auto","ReferenceKind":"Commit","Reference":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","Enabled":false,"TimeoutSeconds":60}]}}
             """);
         using var vm = new SkillSourcesConfigViewModel(_paths, new FakeSkillFeedProbe(true));
 
@@ -105,7 +107,8 @@ public sealed class SkillSourcesConfigViewModelTests : IDisposable
         var section = document.RootElement.GetProperty("SkillFeeds");
         Assert.Empty(section.GetProperty("Feeds").EnumerateArray());
         var plugin = Assert.Single(section.GetProperty("Plugins").EnumerateArray());
-        Assert.Equal("dotnet-skills", plugin.GetProperty("Name").GetString());
+        Assert.Equal("dotnet-skills", plugin.GetProperty("Id").GetString());
+        Assert.Equal("auto", plugin.GetProperty("Format").GetString());
         Assert.Equal("Commit", plugin.GetProperty("ReferenceKind").GetString());
         Assert.False(plugin.GetProperty("Enabled").GetBoolean());
     }
