@@ -104,6 +104,6 @@ public sealed class ToolCycleValidationTests
 
     private static CompletedToolCycleIteration Complete(PreparedToolCycleBatch batch, string text)
         => ToolCycleSignatureFactory.Complete(batch, batch.Calls.ToDictionary(
-            call => call.CallId,
+            call => call.CallId.Value,
             _ => new ToolCycleResult(ToolInvocationOutcomeCategory.InvalidInput, text)));
 }

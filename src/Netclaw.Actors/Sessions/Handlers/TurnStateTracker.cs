@@ -49,6 +49,9 @@ internal sealed class TurnStateTracker
     private const string EmptyResponseFailureMessage =
         "I didn't manage to produce a reply. Please try rephrasing or sending your request again.";
 
+    // Keep only six completed action/outcome hash pairs, never raw arguments or results.
+    // ObserveCompleted evicts the oldest excess entry after each append.
+    // New user input clears this history; compaction and empty replies preserve it.
     private readonly List<CompletedToolCycleIteration> _completedToolCycles = [];
     private ToolActionSignature? _lastBlockedAction;
 
@@ -98,6 +101,16 @@ internal sealed class TurnStateTracker
 
     public int CompletedCycleHistoryCount => _completedToolCycles.Count;
 
+    /// <summary>
+    /// Detect two equal, adjacent copies of a completed cycle before its next action executes.
+    /// </summary>
+    /// <remarks>
+    /// A cycle contains one to three batches. Each completed batch includes its action and outcome hashes.
+    /// For example, A B A B followed by candidate A gets one correction if both completed copies match.
+    /// A changed result in either copy prevents that match. The candidate's future result is not known.
+    /// A repeat of the last corrected action stops the turn unless a different action completes first.
+    /// Synthetic corrections do not enter completed history. New user input resets both intervention states.
+    /// </remarks>
     public ToolCycleDecision EvaluateBeforeDispatch(ToolActionSignature candidate)
     {
         if (_lastBlockedAction == candidate)
@@ -255,8 +268,8 @@ internal sealed record CompletedToolCycleIteration(
     string OutcomeValue);
 
 internal sealed record PreparedToolCycleCall(
-    string CallId,
-    string ToolName,
+    ToolCallId CallId,
+    ToolName ToolName,
     string ArgumentsHash);
 
 internal sealed record PreparedToolCycleBatch
@@ -305,6 +318,7 @@ internal static class ToolCycleMessages
 internal static class ToolCycleSignatureFactory
 {
     internal const int MaximumPeriod = 3;
+    // Two complete copies of the longest supported cycle require six entries.
     internal const int MaximumHistory = MaximumPeriod * 2;
 
     public static PreparedToolCycleBatch Prepare(
@@ -319,8 +333,8 @@ internal static class ToolCycleSignatureFactory
             // must differ from a rejected call, even after a cycle correction.
             var arguments = rejection is null ? cleaned.Arguments : call.Arguments;
             return new PreparedToolCycleCall(
-                call.CallId,
-                cleaned.Name,
+                new ToolCallId(call.CallId),
+                new ToolName(cleaned.Name),
                 HashFields([
                     rejection is null ? "accepted" : "rejected",
                     rejection?.DenyReason ?? string.Empty,
@@ -329,7 +343,7 @@ internal static class ToolCycleSignatureFactory
 
         var action = new ToolActionSignature(HashFields(
             OrderedCalls(prepared).SelectMany(static call =>
-                new[] { call.ToolName, call.ArgumentsHash })));
+                new[] { call.ToolName.Value, call.ArgumentsHash })));
         return new PreparedToolCycleBatch(action, prepared);
     }
 
@@ -342,7 +356,7 @@ internal static class ToolCycleSignatureFactory
 
         var outcomes = batch.Calls.Select(call =>
         {
-            if (!results.TryGetValue(call.CallId, out var result))
+            if (!results.TryGetValue(call.CallId.Value, out var result))
                 throw new InvalidOperationException("A completed cycle iteration has an unmatched tool result.");
 
             return new ToolCycleOutcome(
@@ -350,14 +364,14 @@ internal static class ToolCycleSignatureFactory
                 call.ArgumentsHash,
                 result.Category,
                 HashFields([result.ModelVisibleText]));
-        }).OrderBy(static outcome => outcome.ToolName, StringComparer.Ordinal)
+        }).OrderBy(static outcome => outcome.ToolName.Value, StringComparer.Ordinal)
           .ThenBy(static outcome => outcome.ArgumentsHash, StringComparer.Ordinal)
           .ThenBy(static outcome => outcome.Category)
           .ThenBy(static outcome => outcome.ResultHash, StringComparer.Ordinal);
 
         var outcomeHash = HashFields(outcomes.SelectMany(static outcome => new[]
         {
-            outcome.ToolName,
+            outcome.ToolName.Value,
             outcome.ArgumentsHash,
             outcome.Category.ToString(),
             outcome.ResultHash
@@ -367,7 +381,7 @@ internal static class ToolCycleSignatureFactory
 
     private static IOrderedEnumerable<PreparedToolCycleCall> OrderedCalls(
         IEnumerable<PreparedToolCycleCall> calls)
-        => calls.OrderBy(static call => call.ToolName, StringComparer.Ordinal)
+        => calls.OrderBy(static call => call.ToolName.Value, StringComparer.Ordinal)
             .ThenBy(static call => call.ArgumentsHash, StringComparer.Ordinal);
 
     private static string HashCanonicalArguments(IDictionary<string, object?>? arguments)
@@ -390,6 +404,10 @@ internal static class ToolCycleSignatureFactory
         return Convert.ToHexString(SHA256.HashData(stream.ToArray()));
     }
 
+    // This JSON supplies hash input, not a provider payload or a persistence format.
+    // Sort nested object properties so dictionary insertion order cannot hide an equal action.
+    // Preserve array order, duplicate values, scalar types, and numeric text.
+    // Utf8JsonWriter supplies JSON syntax and escapes strings; only property order is custom.
     private static void WriteCanonical(Utf8JsonWriter writer, JsonElement value)
     {
         switch (value.ValueKind)
@@ -433,6 +451,7 @@ internal static class ToolCycleSignatureFactory
 
     private static string HashFields(IEnumerable<string> fields)
     {
+        // Length prefixes keep ["ab", "c"] distinct from ["a", "bc"].
         using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
         Span<byte> length = stackalloc byte[sizeof(int)];
         foreach (var field in fields)
@@ -447,7 +466,7 @@ internal static class ToolCycleSignatureFactory
     }
 
     private readonly record struct ToolCycleOutcome(
-        string ToolName,
+        ToolName ToolName,
         string ArgumentsHash,
         ToolInvocationOutcomeCategory Category,
         string ResultHash);
