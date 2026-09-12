@@ -482,21 +482,23 @@ public sealed class ConfigSchemaDoctorCheckTests
     }
 
     [Fact]
-    public async Task ReturnsPass_WhenGitSkillPluginSourceIsValid()
+    public async Task ReturnsPass_WhenManagedPluginFormatsAreValid()
     {
         var basePath = CreateTempBasePath();
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
 
-        await File.WriteAllTextAsync(paths.NetclawConfigPath,
-            """
+        foreach (var format in new[] { "auto", "agent-plugin", "codex" })
+        {
+            await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            $$"""
             {
               "configVersion": 1,
               "SkillFeeds": {
                 "Plugins": [{
-                  "Name": "dotnet-skills",
+                  "Id": "dotnet-skills",
                   "Repository": "Aaronontheweb/dotnet-skills",
-                  "Format": "codex",
+                  "Format": "{{format}}",
                   "ReferenceKind": "Commit",
                   "Reference": "13e26d39ed01d97ea592235d041304d289f4ba07",
                   "Enabled": true,
@@ -506,10 +508,11 @@ public sealed class ConfigSchemaDoctorCheckTests
             }
             """, TestContext.Current.CancellationToken);
 
-        var check = new ConfigSchemaDoctorCheck(paths);
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+            var check = new ConfigSchemaDoctorCheck(paths);
+            var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+            Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        }
     }
 
     [Fact]

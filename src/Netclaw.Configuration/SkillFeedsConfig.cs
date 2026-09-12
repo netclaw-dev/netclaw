@@ -19,8 +19,8 @@ public sealed class SkillFeedsConfig
     /// </summary>
     public List<SkillFeedSource> Feeds { get; set; } = [];
 
-    /// <summary>Managed public GitHub skill plugins.</summary>
-    public List<GitSkillPluginSource> Plugins { get; set; } = [];
+    /// <summary>Managed plugin packages from public GitHub repositories.</summary>
+    public List<ManagedPluginSource> Plugins { get; set; } = [];
 
     /// <summary>
     /// How often (in minutes) to re-check feeds for updated skills.
@@ -31,28 +31,31 @@ public sealed class SkillFeedsConfig
 }
 
 /// <summary>The type of Git reference that a managed plugin follows.</summary>
-public enum GitSkillPluginReferenceKind
+public enum ManagedPluginReferenceKind
 {
     Branch,
     Commit,
 }
 
-/// <summary>A managed GitHub source for a content-only skill plugin.</summary>
-public sealed class GitSkillPluginSource
+/// <summary>A managed plugin source from a public GitHub repository.</summary>
+public sealed class ManagedPluginSource
 {
-    public string Name { get; set; } = "";
+    public string Id { get; set; } = "";
     public string Repository { get; set; } = "";
-    public string Format { get; set; } = "codex";
+    public string Format { get; set; } = ManagedPluginSourceValidator.AutoFormat;
     public string? Subdirectory { get; set; }
-    public GitSkillPluginReferenceKind ReferenceKind { get; set; }
+    public ManagedPluginReferenceKind ReferenceKind { get; set; }
     public string Reference { get; set; } = "";
     public bool Enabled { get; set; } = true;
     public int TimeoutSeconds { get; set; } = 60;
 }
 
 /// <summary>Validates and canonicalizes managed GitHub plugin source data.</summary>
-public static class GitSkillPluginSourceValidator
+public static class ManagedPluginSourceValidator
 {
+    public const string AgentPluginFormat = "agent-plugin";
+    public const string AutoFormat = "auto";
+    public const string CodexFormat = "codex";
     public const int MaximumSourceCount = 20;
     private static readonly char[] WindowsInvalidPathCharacters = ['<', '>', ':', '"', '|', '?', '*'];
     private static readonly HashSet<string> WindowsReservedPathNames = new(StringComparer.OrdinalIgnoreCase)
@@ -64,7 +67,7 @@ public static class GitSkillPluginSourceValidator
         "LPT¹", "LPT²", "LPT³",
     };
 
-    public static bool TryValidateSources(IReadOnlyList<GitSkillPluginSource> sources, out string error)
+    public static bool TryValidateSources(IReadOnlyList<ManagedPluginSource> sources, out string error)
     {
         error = "";
         if (sources.Count > MaximumSourceCount)
@@ -72,11 +75,11 @@ public static class GitSkillPluginSourceValidator
             error = $"No more than {MaximumSourceCount} GitHub plugins can be configured.";
             return false;
         }
-        var duplicate = sources.GroupBy(source => source.Name, StringComparer.OrdinalIgnoreCase)
+        var duplicate = sources.GroupBy(source => source.Id, StringComparer.OrdinalIgnoreCase)
             .FirstOrDefault(group => group.Count() > 1);
         if (duplicate is not null)
         {
-            error = $"Plugin name '{duplicate.Key}' occurs more than once.";
+            error = $"Plugin source ID '{duplicate.Key}' occurs more than once.";
             return false;
         }
         foreach (var source in sources)
@@ -129,11 +132,11 @@ public static class GitSkillPluginSourceValidator
         return true;
     }
 
-    public static bool TryValidateSource(GitSkillPluginSource source, out string error)
+    public static bool TryValidateSource(ManagedPluginSource source, out string error)
     {
         ArgumentNullException.ThrowIfNull(source);
 
-        if (!TryValidateName(source.Name, out error))
+        if (!TryValidateId(source.Id, out error))
             return false;
         if (!TryNormalizeRepository(source.Repository, out var repository, out error)
             || !string.Equals(repository, source.Repository, StringComparison.Ordinal))
@@ -141,9 +144,9 @@ public static class GitSkillPluginSourceValidator
             error = error.Length > 0 ? error : "The repository is not canonical owner/repository form.";
             return false;
         }
-        if (!string.Equals(source.Format, "codex", StringComparison.Ordinal))
+        if (source.Format is not AutoFormat and not AgentPluginFormat and not CodexFormat)
         {
-            error = "The plugin format must be 'codex'.";
+            error = "The plugin format must be 'auto', 'agent-plugin', or 'codex'.";
             return false;
         }
         if (!TryNormalizeRelativePath(source.Subdirectory, allowEmpty: true, out var subdirectory, out error))
@@ -168,19 +171,30 @@ public static class GitSkillPluginSourceValidator
         return true;
     }
 
-    public static bool TryValidateName(string value, out string error)
+    public static bool TryValidateId(string value, out string error)
     {
         error = "";
         if (string.IsNullOrEmpty(value) || value.Length > 64 || !IsLowerKebab(value))
         {
-            error = "The plugin name must use lowercase letters, numbers, and single hyphens.";
+            error = "The plugin source ID must use lowercase letters, numbers, and single hyphens.";
+            return false;
+        }
+        return true;
+    }
+
+    public static bool TryValidateCodexPackageName(string value, out string error)
+    {
+        error = "";
+        if (string.IsNullOrEmpty(value) || value.Length > 64 || !IsLowerKebab(value))
+        {
+            error = "The Codex package name must use lowercase letters, numbers, and single hyphens.";
             return false;
         }
         return true;
     }
 
     public static bool TryValidateReference(
-        GitSkillPluginReferenceKind kind,
+        ManagedPluginReferenceKind kind,
         string value,
         out string error)
     {
@@ -202,7 +216,7 @@ public static class GitSkillPluginSourceValidator
             error = "The reference is not a safe Git branch or commit.";
             return false;
         }
-        if (kind == GitSkillPluginReferenceKind.Commit
+        if (kind == ManagedPluginReferenceKind.Commit
             && (candidate.Length is not (40 or 64) || !candidate.All(char.IsAsciiHexDigit)))
         {
             error = "A commit reference must be a full 40-character or 64-character hexadecimal identity.";
@@ -260,7 +274,7 @@ public static class GitSkillPluginSourceValidator
         return !WindowsReservedPathNames.Contains(stem);
     }
 
-    public static string Fingerprint(GitSkillPluginSource source)
+    public static string Fingerprint(ManagedPluginSource source)
     {
         var content = string.Join('\n', source.Repository, source.Subdirectory ?? "", source.Format,
             source.ReferenceKind.ToString(), source.Reference);
