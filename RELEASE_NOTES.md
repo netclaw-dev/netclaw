@@ -2,40 +2,61 @@
 
 ## Unreleased
 
-- Validate attachment destinations before directory creation or file copy. Deny linked and write-protected destinations.
+## 0.27.0-beta.3 (2026-09-12)
 
-- System skills now restore from the installed daemon binary before discovery.
-  Startup replaces only the managed `.system` tree and keeps user skills unchanged.
+Follow-up beta to 0.27.0-beta.2. Sessions now live in one versioned storage envelope with a managed temporary directory per process, system skills ship inside the daemon binary, and shell authorization completes in one place. Slack Socket Mode no longer drops silently, and `netclaw skill sync` runs an external source pass on demand.
 
-- `netclaw doctor --fix` removes the retired `SkillSync.DisableSystemSkillSync`
-  property. Private skill feeds remain supported and independent from system skills.
-- Older daemons still use the hosted system-skill feed. Binary releases no longer
-  publish this legacy feed. Maintainers can use the standalone `publish_skills`
-  workflow for legacy updates.
+### Unified session storage
 
-- Public and Team file tools keep access to their current session and exact
-  legacy log. Other sessions require explicit configured roots.
-- Child runs inherit parent roots and restrictions. Legacy cross-run raw logs
-  require explicit authority; child summaries and shared artifacts remain available.
-- Personal file access, existing paths, and session resumption remain unchanged.
+- **One versioned storage envelope per session.** Work files, attachment staging, artifacts, temporary files, worktrees, and logs now live under a single versioned layout ([#2090](https://github.com/netclaw-dev/netclaw/pull/2090)).
+- **Each process gets its own managed temporary directory** through the standard temporary environment variables ([#2090](https://github.com/netclaw-dev/netclaw/pull/2090)).
+- **Child runs inherit parent roots and restrictions.** Successful `spawn_agent` results return child run, log, and artifact paths. Legacy cross-run raw logs require explicit authority; child summaries and shared artifacts remain available ([#2090](https://github.com/netclaw-dev/netclaw/pull/2090)).
+- **Session context announces `worktree_dir`.** Agents compose the existing shell and working-directory tools for Git worktrees ([#2090](https://github.com/netclaw-dev/netclaw/pull/2090)).
+- **File authority stays explicit.** Netclaw validates attachment destinations before directory creation or file copy, and it denies linked and write-protected destinations ([#2145](https://github.com/netclaw-dev/netclaw/pull/2145)). Implicit session file roots follow the audience ([#2143](https://github.com/netclaw-dev/netclaw/pull/2143)), and allowed and denied path results stay separate ([#2144](https://github.com/netclaw-dev/netclaw/pull/2144)).
+- **Tools read within their authority.** Public and Team file tools keep access to their current session and exact legacy log; other sessions need explicit configured roots. The current session envelope and configured trusted roots feed ordinary file and shell authority, and audience and operation permissions still apply. Authorized structured file reads can inspect `netclaw.json`; secret stores and control-plane state stay protected.
+- **Personal access does not change.** Personal file access, existing paths, and session resumption behave as before.
 
-- New sessions keep work files, attachment staging, artifacts, temporary
-  files, worktrees, and logs in one versioned storage envelope.
-- Each parent and child process receives its own managed temporary directory
-  through standard temporary environment variables.
-- The current session envelope and configured trusted roots feed ordinary
-  file and shell authority. Audience and operation permissions still apply.
-- Successful `spawn_agent` results return child run, log, and artifact paths.
-- Session context announces `worktree_dir`. Agents compose existing shell and
-  working-directory tools for Git worktrees.
-- Authorized structured file reads can inspect `netclaw.json`. Secret stores
-  and control-plane state remain protected.
+Existing sessions keep their current paths. Netclaw does not move or rename their data.
 
-Existing sessions keep their current paths. Netclaw does not move or rename
-their data.
+> **Downgrade note:** A pre-feature binary cannot resume a session that has a versioned storage binding.
 
-> **Downgrade note:** A pre-feature binary cannot resume a session that has a
-> versioned storage binding.
+### System skills ship inside the daemon
+
+- **System skills restore from the installed binary.** Startup replaces only the managed `.system` tree and keeps user skills unchanged ([#2138](https://github.com/netclaw-dev/netclaw/pull/2138)).
+- **`netclaw skill sync` starts an external source pass immediately.** The command does not save configuration. Concurrent requests receive the same pass result, Ctrl+C ends only the caller wait, and a partial failure returns exit code 1 ([#2140](https://github.com/netclaw-dev/netclaw/pull/2140)).
+- **The legacy hosted system-skill feed retires.** Binary releases no longer publish it, and maintainers can use the standalone `publish_skills` workflow for legacy updates. `netclaw doctor --fix` removes the retired `SkillSync.DisableSystemSkillSync` property. Private skill feeds remain supported and independent from system skills ([#2138](https://github.com/netclaw-dev/netclaw/pull/2138)).
+
+### Shell authorization
+
+- **One component completes shell authorization.** `ShellPolicyCoordinator` is the only completion path, and closed authorized, tool-validation, and stopped results replace the nullable coordinator tuple ([#2152](https://github.com/netclaw-dev/netclaw/pull/2152)).
+- **Collected shell corrections.** A shell request returns correction facts only when a safer native tool covers the same operation, and a session and its delegated agent return the same response ([#2112](https://github.com/netclaw-dev/netclaw/pull/2112), [#2114](https://github.com/netclaw-dev/netclaw/pull/2114), [#2117](https://github.com/netclaw-dev/netclaw/pull/2117)).
+- **Netclaw rechecks shell authority at shared process startup** ([#2122](https://github.com/netclaw-dev/netclaw/pull/2122)).
+- **Tool denial guidance applies only to the current user turn** ([#2101](https://github.com/netclaw-dev/netclaw/pull/2101)).
+
+### Reliability fixes
+
+- **Host pairing works across exposure modes.** Local pairing commands use a host key-ring proof, and valid codes survive recoverable exchange failures ([#2093](https://github.com/netclaw-dev/netclaw/pull/2093)).
+- **Slack Socket Mode stops dropping silently.** SlackNet 0.18.0 fixes the silent disconnect ([#2151](https://github.com/netclaw-dev/netclaw/pull/2151)).
+- **Exact repeated tool cycles stop** ([#2105](https://github.com/netclaw-dev/netclaw/pull/2105)).
+
+### Internal
+
+- Tool result contracts separate receipt, child run, and Git cases ([#2146](https://github.com/netclaw-dev/netclaw/pull/2146)); the obsolete scalar correction exception API is gone ([#2125](https://github.com/netclaw-dev/netclaw/pull/2125))
+- Slack reconnect and local control redirect tests use explicit completion signals instead of timing ([#2127](https://github.com/netclaw-dev/netclaw/pull/2127), [#2165](https://github.com/netclaw-dev/netclaw/pull/2165))
+- Isolated background launch evals precede the runtime fix ([#2124](https://github.com/netclaw-dev/netclaw/pull/2124))
+
+### Dependency Updates
+
+- **Bump Anthropic** — 12.44.0 → 12.46.0 ([#2113](https://github.com/netclaw-dev/netclaw/pull/2113))
+- **Bump Microsoft.ML.OnnxRuntime** — 1.27.0 → 1.29.0 ([#2108](https://github.com/netclaw-dev/netclaw/pull/2108))
+- **Bump Microsoft.AspNetCore and Microsoft.OpenApi** — 10.0.12 / 2.12.2 ([#2150](https://github.com/netclaw-dev/netclaw/pull/2150))
+- **Bump SkiaSharp** — 4.151.1 → 4.152.0 ([#2120](https://github.com/netclaw-dev/netclaw/pull/2120))
+- **Bump HtmlAgilityPack** — 1.12.4 → 1.13.0 ([#2104](https://github.com/netclaw-dev/netclaw/pull/2104))
+- **Bump Google.Protobuf** — 3.35.1 → 3.36.1 ([#2103](https://github.com/netclaw-dev/netclaw/pull/2103))
+- **Bump Mattermost.NET** — 5.0.7 → 5.0.10 ([#2107](https://github.com/netclaw-dev/netclaw/pull/2107))
+- **Bump Aspire.Hosting.AppHost** — 13.4.6 → 13.5.3 ([#2098](https://github.com/netclaw-dev/netclaw/pull/2098)); **CommunityToolkit.Aspire.Hosting.Ollama** 13.4.0 → 13.5.0 ([#2100](https://github.com/netclaw-dev/netclaw/pull/2100))
+- **Bump Microsoft.SourceLink.GitHub** — 10.0.400 → 10.0.401 ([#2119](https://github.com/netclaw-dev/netclaw/pull/2119)); **Microsoft.NET.Test.Sdk** 18.9.0 → 18.10.0 ([#2130](https://github.com/netclaw-dev/netclaw/pull/2130))
+- **Bump rolfbjarne/autoformat** — 0.5 → 0.6 ([#1899](https://github.com/netclaw-dev/netclaw/pull/1899))
 
 ## 0.27.0-beta.2 (2026-08-30)
 
