@@ -454,6 +454,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         private readonly HttpStatusCode _statusCode;
         private readonly Uri? _redirectTarget;
         private int _receivedRequest;
+        private int _shutdownRequested;
 
         public OneRequestHttpServer(HttpStatusCode statusCode, Uri? redirectTarget = null)
         {
@@ -471,6 +472,8 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
 
         public async ValueTask DisposeAsync()
         {
+            // Close can abort a Windows accept before IsListening reports the stopped state.
+            Interlocked.Exchange(ref _shutdownRequested, 1);
             _listener.Close();
             await _serveTask;
         }
@@ -491,11 +494,11 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
                 await context.Response.OutputStream.WriteAsync(body);
                 context.Response.Close();
             }
-            catch (HttpListenerException) when (!_listener.IsListening)
+            catch (HttpListenerException) when (Volatile.Read(ref _shutdownRequested) == 1)
             {
                 return;
             }
-            catch (ObjectDisposedException) when (!_listener.IsListening)
+            catch (ObjectDisposedException) when (Volatile.Read(ref _shutdownRequested) == 1)
             {
                 return;
             }
