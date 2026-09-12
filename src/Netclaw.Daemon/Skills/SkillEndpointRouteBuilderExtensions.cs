@@ -34,13 +34,16 @@ public static class SkillEndpointRouteBuilderExtensions
             .RequireAuthorization();
 
         app.MapPost("/api/skills/sync", async Task<IResult> (
+                bool? retryRejected,
                 IRequiredActor<ServerFeedSkillSyncActorKey> syncActor,
                 CancellationToken cancellationToken) =>
             {
                 try
                 {
                     var response = await syncActor.ActorRef.Ask<SkillSyncResult.Response>(
-                        ServerFeedSkillSyncActor.Run.Instance,
+                        retryRejected == true
+                            ? ServerFeedSkillSyncActor.Run.RetryRejectedCommits
+                            : ServerFeedSkillSyncActor.Run.Instance,
                         cancellationToken);
                     return TypedResults.Ok(response);
                 }
@@ -56,5 +59,123 @@ public static class SkillEndpointRouteBuilderExtensions
             .WithSummary("Run the configured external skill sync pass.")
             .WithTags("Skills")
             .RequireAuthorization();
+
+        app.MapGet("/api/plugins", async Task<IResult> (
+                GitSkillPluginManagementService service,
+                CancellationToken cancellationToken) =>
+            TypedResults.Ok(await service.ListAsync(cancellationToken)))
+            .WithName("ListPlugins")
+            .WithSummary("List managed plugins and their installed state.")
+            .WithTags("Plugins")
+            .RequireAuthorization();
+
+        app.MapPost("/api/plugins", async Task<IResult> (
+                ManagedPluginApi.InstallRequest request,
+                GitSkillPluginManagementService service,
+                DaemonRestartSignal restartSignal,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    var install = await service.InstallAsync(request, cancellationToken);
+                    return TypedResults.Ok(new ManagedPluginApi.InstallResponse
+                    {
+                        RestartGeneration = install.RestartGeneration,
+                        Plugin = GitSkillPluginManagementService.ToRow(
+                            install.Source,
+                            ManagedPluginApi.PluginStatus.NotInstalled,
+                            null),
+                    });
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    return PluginProblem(ex);
+                }
+            })
+            .WithName("InstallPlugin")
+            .WithSummary("Validate and configure one public GitHub plugin.")
+            .WithTags("Plugins")
+            .RequireAuthorization();
+
+        app.MapPatch("/api/plugins/{sourceId}", IResult (
+                string sourceId,
+                ManagedPluginApi.SetEnabledRequest request,
+                GitSkillPluginManagementService service,
+                DaemonRestartSignal restartSignal) =>
+            {
+                try
+                {
+                    var mutation = service.SetEnabled(sourceId, request.Enabled);
+                    return TypedResults.Ok(new ManagedPluginApi.MutationResponse
+                    {
+                        RestartGeneration = mutation.RestartGeneration,
+                        SourceId = sourceId,
+                        Changed = mutation.Changed,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    return PluginProblem(ex);
+                }
+            })
+            .WithName("SetPluginEnabled")
+            .WithSummary("Enable or disable one managed plugin.")
+            .WithTags("Plugins")
+            .RequireAuthorization();
+
+        app.MapDelete("/api/plugins/{sourceId}", IResult (
+                string sourceId,
+                GitSkillPluginManagementService service,
+                DaemonRestartSignal restartSignal) =>
+            {
+                try
+                {
+                    var mutation = service.Remove(sourceId);
+                    return TypedResults.Ok(new ManagedPluginApi.MutationResponse
+                    {
+                        RestartGeneration = mutation.RestartGeneration,
+                        SourceId = sourceId,
+                        Changed = mutation.Changed,
+                    });
+                }
+                catch (Exception ex)
+                {
+                    return PluginProblem(ex);
+                }
+            })
+            .WithName("RemovePlugin")
+            .WithSummary("Remove one managed plugin.")
+            .WithTags("Plugins")
+            .RequireAuthorization();
+    }
+
+    private static IResult PluginProblem(Exception exception)
+    {
+        var (status, title) = exception switch
+        {
+            GitSkillPluginConfigException { Failure: GitSkillPluginConfigFailure.NotFound }
+                => (StatusCodes.Status404NotFound, "Plugin not found"),
+            GitSkillPluginConfigException { Failure: GitSkillPluginConfigFailure.Conflict }
+                => (StatusCodes.Status409Conflict, "Plugin conflict"),
+            GitSkillPluginConfigException
+                => (StatusCodes.Status400BadRequest, "Plugin configuration rejected"),
+            GitSkillPluginRejectedException
+                => (StatusCodes.Status422UnprocessableEntity, "Plugin candidate rejected"),
+            GitSkillPluginScannerUnavailableException
+                => (StatusCodes.Status503ServiceUnavailable, "Plugin scanner unavailable"),
+            TimeoutException
+                => (StatusCodes.Status504GatewayTimeout, "Plugin request timed out"),
+            HttpRequestException
+                => (StatusCodes.Status502BadGateway, "GitHub request failed"),
+            InvalidDataException
+                => (StatusCodes.Status502BadGateway, "GitHub response rejected"),
+            InvalidOperationException
+                => (StatusCodes.Status400BadRequest, "Plugin request rejected"),
+            _ => (StatusCodes.Status500InternalServerError, "Plugin operation failed"),
+        };
+        var detail = status == StatusCodes.Status500InternalServerError
+            ? "The plugin operation failed. Check the daemon logs."
+            : exception.Message;
+        return TypedResults.Problem(statusCode: status, title: title, detail: detail);
     }
 }
