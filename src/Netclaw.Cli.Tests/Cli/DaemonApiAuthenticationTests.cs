@@ -17,20 +17,24 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Cli;
 
+[Collection(LegacyModelEnvironmentCollection.Name)]
 public sealed class DaemonApiAuthenticationTests : IDisposable
 {
     private readonly DisposableTempDir _dir = new();
     private readonly NetclawPaths _paths;
+    private readonly string? _originalDaemonEndpoint;
 
     public DaemonApiAuthenticationTests()
     {
+        _originalDaemonEndpoint = Environment.GetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT");
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
         _paths = new NetclawPaths(_dir.Path);
         _paths.EnsureDirectoriesExist();
     }
 
     public void Dispose()
     {
-        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", null);
+        Environment.SetEnvironmentVariable("NETCLAW_DAEMON_ENDPOINT", _originalDaemonEndpoint);
         _dir.Dispose();
     }
 
@@ -454,6 +458,7 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
         private readonly HttpStatusCode _statusCode;
         private readonly Uri? _redirectTarget;
         private int _receivedRequest;
+        private int _shutdownRequested;
 
         public OneRequestHttpServer(HttpStatusCode statusCode, Uri? redirectTarget = null)
         {
@@ -471,6 +476,8 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
 
         public async ValueTask DisposeAsync()
         {
+            // Close can abort a Windows accept before IsListening reports the stopped state.
+            Interlocked.Exchange(ref _shutdownRequested, 1);
             _listener.Close();
             await _serveTask;
         }
@@ -491,11 +498,11 @@ public sealed class DaemonApiAuthenticationTests : IDisposable
                 await context.Response.OutputStream.WriteAsync(body);
                 context.Response.Close();
             }
-            catch (HttpListenerException) when (!_listener.IsListening)
+            catch (HttpListenerException) when (Volatile.Read(ref _shutdownRequested) == 1)
             {
                 return;
             }
-            catch (ObjectDisposedException) when (!_listener.IsListening)
+            catch (ObjectDisposedException) when (Volatile.Read(ref _shutdownRequested) == 1)
             {
                 return;
             }

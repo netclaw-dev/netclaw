@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.74.2"
+  version: "2.74.3"
 ---
 
 # Netclaw Operations
@@ -176,6 +176,17 @@ fix and re-issue once, do not retry the same shape:
   "1200ms"`, `_background: "yes"`) rejects instead of falling back to a default.
 - **Ambiguous meta spelling** — supplying two keys that map to the same meta
   field (e.g. both `_timeout_seconds` and `TimeoutSeconds`) rejects; send one.
+
+A repeated action-and-outcome correction means that no requested call ran.
+Choose a different action or finish the task from the available evidence.
+Do not repeat the blocked batch.
+Netclaw disables tools for the turn if the same blocked batch appears again.
+Report incomplete work and do not claim that the blocked operation succeeded.
+If validation rejects metadata, repair the reported value before the retry.
+A valid metadata repair is not the same rejected action. A new user message
+starts a fresh cycle window; compaction alone does not.
+If a text-only response contains tool calls, Netclaw rejects those calls and reports a provider failure.
+This failure does not prove that the turn exhausted its tool budget.
 
 ## Large tool output
 
@@ -524,6 +535,11 @@ Add or switch model providers (including OAuth login) and configure search backe
 `skill_read_resource('netclaw-operations', 'references/providers.md')`.
 
 ## Diagnostics, Kill Switches & Self-Maintenance
+
+Headless `COMPACTION` records expose `summarized` and `tool_results_cleared` phase evidence.
+A true summary flag does not prove that the summary retains every task requirement.
+Older daemon or CLI versions can omit these flags from the transport and report false.
+Check the actor log before you conclude that an older run skipped a phase.
 
 When something is broken, start with `netclaw status`, then `netclaw doctor`. Feature
 kill switches and self-update/health are covered in the reference. Memory embeddings

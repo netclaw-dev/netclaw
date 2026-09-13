@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Event;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Microsoft.Extensions.AI;
@@ -1678,6 +1679,77 @@ public class SubAgentActorTests : TestKit
         Assert.Contains(fakeClient.LastReceivedMessages,
             message => message.Role == ChatRole.User
                        && message.Text.Contains("Do NOT request any more tools", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Exact_tool_cycle_gets_one_correction_then_stops()
+    {
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
+        var executionCount = 0;
+        var fakeTool = new FakeNetclawTool(
+            "mutate_state",
+            "loop result",
+            onExecute: _ => Interlocked.Increment(ref executionCount));
+        var fakeClient = new FakeChatClient
+        {
+            ToolCallsOnFirstCall =
+            [
+                CreateToolCall("call-loop", "mutate_state")
+            ],
+            AlwaysReturnToolCalls = true,
+            ResponseTextsByCall =
+            [
+                "unused",
+                "unused",
+                "unused",
+                "unused",
+                string.Empty,
+                "Final partial report."
+            ]
+        };
+
+        var agent = Sys.ActorOf(SubAgentActor.CreateProps(
+            CreateDefinition([fakeTool]),
+            fakeClient,
+            PermissivePolicy(),
+            maxToolIterations: 10));
+
+        var result = await agent.Ask<SubAgentResult>(
+            new RunSubAgent
+            {
+                Scope = SubAgentTestScope.Create(),
+                Task = "Repeat the same tool.",
+                Timeout = TimeSpan.FromSeconds(10)
+            },
+            TimeSpan.FromSeconds(10),
+            TestContext.Current.CancellationToken);
+
+        Assert.True(result.Success);
+        Assert.Equal(SubAgentRunOutcome.Partial, result.Outcome);
+        Assert.Equal(SubAgentOutcomeReason.ToolCycleStopped, result.OutcomeReason);
+        Assert.Equal(6, fakeClient.CallCount);
+        Assert.Equal(2, executionCount);
+        Assert.Equal("Final partial report.", result.Output);
+        Assert.NotNull(fakeClient.LastReceivedMessages);
+        var toolResults = fakeClient.LastReceivedMessages
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .Select(static toolResult => toolResult.Result?.ToString() ?? string.Empty)
+            .ToList();
+        Assert.Equal(2, toolResults.Count(static text => text == "loop result"));
+        Assert.Single(toolResults, static text =>
+            text.Contains("repeated action-and-outcome cycle", StringComparison.Ordinal));
+        for (var i = 0; i < 2; i++)
+        {
+            var diagnostic = await diagnostics.FishForMessageAsync<Warning>(
+                warning => warning.Message.ToString()!.StartsWith("Subagent tool cycle decision", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(typeof(Netclaw.Actors.Sessions.Handlers.TurnStateTracker), diagnostic.LogClass);
+            Assert.Equal($"TurnStateTracker (akka://{Sys.Name})", diagnostic.LogSource);
+            Assert.DoesNotContain(agent.Path.Name, diagnostic.LogSource, StringComparison.Ordinal);
+            var properties = Assert.IsAssignableFrom<LogMessage>(diagnostic.Message).GetProperties();
+            Assert.Equal(["DecisionKind", "Period", "Repetitions"], properties.Keys.Order(StringComparer.Ordinal));
+        }
     }
 
     [Fact]

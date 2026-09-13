@@ -32,6 +32,7 @@ class Fixture:
         self.released = set()
         self.model_requests = 0
         self.tool_results = {}
+        self.forward_timeout = 300
 
     def control(self, action, data):
         with self.condition:
@@ -151,10 +152,14 @@ def handler_for(fixture):
                 self.send_json(400, {"error": str(error)})
 
         def reply(self, request, message):
+            # Synthetic usage can drive a real daemon context-boundary transition.
+            message = dict(message)
+            usage = message.pop("_fixture_usage", None)
             finish = "tool_calls" if message.get("tool_calls") else "stop"
             base = {"id": "fixture-completion", "created": 0, "model": fixture.model}
             if not request.get("stream"):
-                self.send_json(200, {**base, "object": "chat.completion", "choices": [
+                self.send_json(200, {**base, **({"usage": usage} if usage is not None else {}),
+                    "object": "chat.completion", "choices": [
                     {"index": 0, "message": message, "finish_reason": finish}]})
                 return
             delta = dict(message)
@@ -165,6 +170,9 @@ def handler_for(fixture):
                 {"index": 0, "delta": {}, "finish_reason": finish}]
             content = "".join("data: " + json.dumps({**base, "object": "chat.completion.chunk",
                                                      "choices": [chunk]}) + "\n\n" for chunk in chunks)
+            if usage is not None:
+                content += "data: " + json.dumps({**base, "object": "chat.completion.chunk",
+                                                  "choices": [], "usage": usage}) + "\n\n"
             content = (content + "data: [DONE]\n\n").encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/event-stream")
@@ -178,7 +186,7 @@ def handler_for(fixture):
                 headers["Authorization"] = "Bearer " + fixture.api_key
             request = urllib.request.Request(fixture.upstream, data=json.dumps(body).encode(), headers=headers)
             try:
-                response = urllib.request.urlopen(request, timeout=300)
+                response = urllib.request.urlopen(request, timeout=fixture.forward_timeout)
             except (urllib.error.URLError, TimeoutError):
                 self.send_json(502, {"error": "The configured eval provider request failed."})
                 return

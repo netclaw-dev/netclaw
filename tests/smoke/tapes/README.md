@@ -128,6 +128,12 @@ How it differs from the flow tapes:
 - The harness points `run-native-tape.sh` at them via the `TAPE_PREAMBLE`
   and `TAPE_BODY_DIR` env vars.
 
+The daemon inherits the VHS terminal when `netclaw daemon start` starts it.
+Each screenshot tape that starts the daemon must redirect its output to
+`__NETCLAW_HOME__/logs/daemon-stdio.log`.
+This rule keeps asynchronous native-library messages outside the captured terminal.
+The artifact keeps the redirected output for fault analysis.
+
 Keep the recorder at 60 frames per second. End the tape with `Sleep 250ms` after
 the final state anchor. This recorder barrier produces 15 final-state frames.
 Do not send a terminal key after the final anchor. Use visible state anchors

@@ -76,7 +76,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private readonly ILoggingAdapter _log;
 
     // Transient state (not persisted)
-    private readonly List<SendUserMessage> _buffer = [];
+    private readonly List<(SendUserMessage Message, bool IsReplay)> _buffer = [];
     // In-flight reminder/background-job dedup (transient; rebuilt from journal on recovery).
     private readonly InFlightTurnDedup _inFlightDedup = new();
     private readonly SessionSubscriberManager _subscribers = new();
@@ -116,9 +116,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // Per-turn transient counters (tool budget, duplicate detection, empty-response retries)
     private readonly TurnStateTracker _turnState = new();
 
-    private const string ToolBudgetExhaustedMessage =
-        "I used all available tool iterations for this turn and couldn't produce a final summary. "
-        + "You can ask me to summarize what was done, or rephrase your request.";
+    private const string TextOnlyResponseViolationMessage =
+        "Netclaw rejected tool calls from a response that required text only. "
+        + "No call from that response executed.";
 
     // Delivery retry handler (eligibility tracking, retry counting, nudge builders)
     private readonly DeliveryRetryHandler _deliveryRetry = new();
@@ -504,7 +504,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             _deliveryRetry.Clear();
             _log.Info("Buffering user message (LLM call in progress)");
-            _buffer.Add(cmd);
+            _buffer.Add((cmd, false));
             TryReplyAck();
         });
 
@@ -629,6 +629,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _watchdog.Stop(Timers);
             CancelAndDisposeLlmCts();
 
+            // A failed LLM call invalidates the actor-local exposure set. The
+            // context-overflow path must do this before recovery compaction starts.
+            _discoveredToolCache.EvictAll();
+            TurnLog().Info("turn_discovered_tools_evicted — tool list reset to base tools after LLM call failure");
+
             // Context overflow: roll back the failed turn, buffer the user message,
             // compact the history, and let the normal buffer drain re-deliver it.
             if (IsContextOverflowError(msg.Cause))
@@ -670,11 +675,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // (RetryingChatClient, pre-first-chunk) and is already exhausted by the time
             // the failure reaches here, so a failed turn is terminal.
             TurnLog().Error(msg.Cause, "turn_llm_call_failed");
-
-            // Evict loaded Deferred tools to prevent a poisoned tool set from cascading
-            // across turns (e.g., oversized Notion schemas causing repeated 502s).
-            _discoveredToolCache.EvictAll();
-            TurnLog().Info("turn_discovered_tools_evicted — tool list reset to base tools after LLM call failure");
 
             var errorMessage = ExtractLlmErrorMessage(msg.Cause);
             var category = msg.Cause is TimeoutException ? ErrorCategory.Timeout : ErrorCategory.ProviderFailure;
@@ -772,7 +772,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 _turnState.ToolCallCount,
                 _config.MaxToolIterationsPerTurn);
             FailCurrentTurn(
-                ToolBudgetExhaustedMessage,
+                TextOnlyResponseViolationMessage,
                 new InvalidOperationException("LLM continued requesting tools after tool execution was disabled for this turn."),
                 ErrorCategory.ProviderFailure);
             return;
@@ -917,6 +917,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 throw new InvalidOperationException(
                     $"Tool-result message for tool '{result.Name ?? "unknown"}' has no ToolCallId.");
 
+            msg.ToolReceipts.TryGetValue(toolCallId.Value, out var cycleReceipt);
+            _activeToolBatch.RecordCycleResult(
+                toolCallId.Value,
+                cycleReceipt?.Category ?? ToolInvocationOutcomeCategory.Success,
+                result.Content ?? string.Empty);
+
             var preview = result.Content is { Length: > 200 }
                 ? result.Content[..200] + "..."
                 : result.Content ?? "(null)";
@@ -989,25 +995,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         AddModelInputMediaNudge(msg.ModelInputMediaReferences);
 
         var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolIterationsPerTurn);
-        var dupNudge = _turnState.CheckForDuplicates();
-        if (dupNudge is not null)
-        {
-            TurnLog().Warning(
-                "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
-                dupNudge.ToolName, dupNudge.Count, _turnState.ToolIterationCount);
-            _state = _state.AddSystemNudge(dupNudge.NudgeText);
-        }
-
         if (_buffer.Count > 0)
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
                 _buffer.Count, _turnState.ToolIterationCount);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-            _buffer.Clear();
+            if (DrainBufferedUserMessages())
+                budgetStatus = ToolBudgetStatus.Ok.Instance;
         }
 
         switch (budgetStatus)
@@ -1159,7 +1152,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }
 
             _log.Info("Buffering user message (compaction in progress)");
-            _buffer.Add(cmd);
+            _buffer.Add((cmd, false));
             TryReplyAck();
         });
 
@@ -1279,7 +1272,6 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _lastInputTokenCount = 0;
             _startupContextInjected = false;
             _recallManager.ResetForCompaction();
-            _discoveredToolCache.EvictAll();
 
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId,
@@ -1370,12 +1362,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (SessionState.IsSystemNudge(candidate))
                 continue;
 
-            _buffer.Insert(0, new SendUserMessage
+            _buffer.Insert(0, (new SendUserMessage
             {
                 SessionId = _sessionId,
                 Content = candidate.Content ?? string.Empty,
                 MediaReferences = candidate.MediaReferences
-            });
+            }, true));
             _state = _state with { History = _state.History.GetRange(0, i) };
             return;
         }
@@ -1407,12 +1399,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (hadBufferedMessages)
         {
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-            _buffer.Clear();
+            DrainBufferedUserMessages();
         }
 
         if (resumeToolLoop || hadBufferedMessages)
@@ -1835,7 +1822,28 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // the reverse mapping when re-serializing history to the wire.
         if (_toolRegistry is not null)
         {
-            CanonicalizeToolCallNames(lastMessage, toolCalls, _toolRegistry);
+            _toolRegistry.CanonicalizeToolCalls(lastMessage, toolCalls);
+        }
+
+        var toolExecutor = _toolExecutor
+            ?? throw new InvalidOperationException("A tool-call response requires a tool executor.");
+        var preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, toolExecutor);
+        var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
+        if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
+        {
+            Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
+                "Tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
+                cycleDecision.Kind,
+                cycleDecision.Period,
+                cycleDecision.Repetitions);
+        }
+
+        if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
+        {
+            RecordIntermediateUsage(usage);
+            _state = _state.AddSystemNudge(ToolCycleMessages.Final);
+            FireLlmCall(forceNoTools: true);
+            return;
         }
 
         // Persist tool calls exactly as the executor will interpret them (schema-aware
@@ -1865,51 +1873,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         }, evt =>
         {
             ApplyToolBatchStarted(evt);
-            EmitAndDispatchToolBatch(lastMessage, toolCalls, usage);
+            EmitAndDispatchToolBatch(
+                lastMessage,
+                toolCalls,
+                usage,
+                preparedCycleBatch,
+                cycleDecision);
         });
-    }
-
-    /// <summary>
-    /// Rewrite every <see cref="FunctionCallContent"/> in
-    /// <paramref name="lastMessage"/> and <paramref name="toolCalls"/> to use
-    /// the canonical tool name. The original list is mutated in-place
-    /// because every other consumer in this turn reads from these
-    /// references — including the persisted assistant message that gets
-    /// reconstructed by <see cref="ChatMessageConverter.FromAiMessage"/>.
-    /// Tool calls whose names don't resolve to a registered tool pass
-    /// through unchanged (the executor will reject them downstream).
-    /// </summary>
-    private static void CanonicalizeToolCallNames(
-        AiChatMessage lastMessage,
-        List<FunctionCallContent> toolCalls,
-        Tools.ToolRegistry registry)
-    {
-        for (var i = 0; i < toolCalls.Count; i++)
-        {
-            var tc = toolCalls[i];
-            var canonical = registry.ToCanonicalName(tc.Name);
-            if (string.Equals(canonical, tc.Name, StringComparison.Ordinal))
-                continue;
-
-            toolCalls[i] = new FunctionCallContent(tc.CallId, canonical, tc.Arguments);
-        }
-
-        for (var i = 0; i < lastMessage.Contents.Count; i++)
-        {
-            if (lastMessage.Contents[i] is not FunctionCallContent fc)
-                continue;
-            var canonical = registry.ToCanonicalName(fc.Name);
-            if (string.Equals(canonical, fc.Name, StringComparison.Ordinal))
-                continue;
-
-            lastMessage.Contents[i] = new FunctionCallContent(fc.CallId, canonical, fc.Arguments);
-        }
     }
 
     private void EmitAndDispatchToolBatch(
         AiChatMessage lastMessage,
         List<FunctionCallContent> toolCalls,
-        UsageDetails? usage)
+        UsageDetails? usage,
+        PreparedToolCycleBatch preparedCycleBatch,
+        ToolCycleDecision cycleDecision)
     {
 
         // Surface preamble text immediately before tool execution starts.
@@ -1934,7 +1912,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             EmitOutput(new BufferFlush { SessionId = _sessionId }, OutputFilter.TextStreaming);
         }
 
-        // Emit tool call outputs to subscribers and track for duplicate detection
+        // Emit tool call outputs to subscribers.
         foreach (var tc in toolCalls)
         {
             var argsJson = tc.Arguments is not null
@@ -1947,23 +1925,56 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ToolName = new ToolName(tc.Name),
                 ArgumentsJson = argsJson
             }, OutputFilter.ToolCalls);
-
-            // Duplicate tool call detection: hash tool name + args
-            _turnState.TrackToolCall(tc.Name, argsJson);
         }
 
-        // Emit usage if present (intermediate turn) and track for compaction
-        if (usage is not null)
+        RecordIntermediateUsage(usage);
+
+        if (cycleDecision.Kind == ToolCycleDecisionKind.Correct)
         {
-            EmitUsageOutput(usage);
-
-            if (usage.InputTokenCount is > 0)
-            {
-                _lastInputTokenCount = usage.InputTokenCount.Value;
-            }
+            EmitToolCycleCorrection(toolCalls);
+            return;
         }
 
-        DispatchToolBatch(toolCalls);
+        DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch);
+    }
+
+    private void RecordIntermediateUsage(UsageDetails? usage)
+    {
+        if (usage is null)
+            return;
+
+        EmitUsageOutput(usage);
+        if (usage.InputTokenCount is > 0)
+            _lastInputTokenCount = usage.InputTokenCount.Value;
+    }
+
+    private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)
+    {
+        _activeToolBatch.Start(toolCalls, preparedCycleBatch: null);
+        foreach (var call in toolCalls)
+        {
+            var receipt = new ToolInvocationReceipt.Correction(ToolRemediationCode.BreakToolCycle);
+            var message = ToolRemediationPresenter.Present(
+                new SerializableChatMessage
+                {
+                    Role = Protocol.ChatRole.Tool,
+                    Content = ToolCycleMessages.Correction,
+                    ToolCallId = new ToolCallId(call.CallId),
+                    Name = call.Name
+                },
+                receipt,
+                setWorkingDirectoryAvailable: false);
+            Self.Tell(new ToolExecutionSingleCompleted(new ToolCallResult(
+                message,
+                [],
+                [],
+                [],
+                [],
+                AuthorizationAttemptId.New(),
+                Receipt: receipt)));
+        }
+
+        Self.Tell(new ToolExecutionBatchCompleted());
     }
 
     /// <summary>
@@ -1984,9 +1995,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         IReadOnlyDictionary<string, IReadOnlyList<string>>? oneTimeApprovalPreSeed = null,
         IReadOnlyDictionary<string, ApprovalDecision>? decisionOverride = null,
         IReadOnlyDictionary<string, string>? managedTemporaryDenialDirectories = null,
-        IReadOnlyDictionary<string, AuthorizationAttemptId>? authorizationAttemptIds = null)
+        IReadOnlyDictionary<string, AuthorizationAttemptId>? authorizationAttemptIds = null,
+        PreparedToolCycleBatch? preparedCycleBatch = null,
+        bool recordCompletedCycle = true)
     {
-        _activeToolBatch.Start(toolCalls);
+        if (recordCompletedCycle && preparedCycleBatch is null && _toolExecutor is not null)
+            preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, _toolExecutor);
+        _activeToolBatch.Start(toolCalls, preparedCycleBatch);
 
         // Execute tools async — results come back as ToolExecutionCompleted
         TurnLog().Info("turn_tool_call_batch count={Count} tools={Tools}",
@@ -2162,14 +2177,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_buffer.Count > 0)
         {
             TurnLog().Info("turn_buffer_drain count={BufferCount}", _buffer.Count);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-
-            _buffer.Clear();
-            _recallManager.ResetForNewTurn(); // New user input — resolve recall fresh
+            DrainBufferedUserMessages();
             FireLlmCall();
             // Already in Processing — no transition needed, just fired a new LLM call
             return;
@@ -2177,6 +2185,27 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         ClearApprovalTurnState();
         TransitionTo(SessionPhase.Ready);
+    }
+
+    private bool DrainBufferedUserMessages()
+    {
+        var startsNewTurn = _buffer.Any(static buffered => !buffered.IsReplay);
+        if (startsNewTurn)
+        {
+            // A replay resumes the same turn. New input starts a fresh guard
+            // window only after the prior batch or response completes.
+            _turnState.ResetForNewTurn();
+            _recallManager.ResetForNewTurn();
+        }
+
+        foreach (var (message, _) in _buffer)
+        {
+            var refs = message.MediaReferences.Count > 0 ? message.MediaReferences : null;
+            _state = _state.AddUserMessage(message.Content, refs);
+        }
+
+        _buffer.Clear();
+        return startsNewTurn;
     }
 
     private void HandleDeliveryFailedWhenReady(DeliveryFailed msg)
@@ -2369,7 +2398,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!includeBuffered)
             return false;
 
-        return _buffer.Any(buffered => buffered.Source?.ReminderId == id);
+        return _buffer.Any(buffered => buffered.Message.Source?.ReminderId == id);
     }
 
     private bool IsBackgroundJobDedupHit(BackgroundJobId? bgJobId, bool includeBuffered)
@@ -2386,7 +2415,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (!includeBuffered)
             return false;
 
-        return _buffer.Any(buffered => buffered.Source?.BackgroundJobId == id);
+        return _buffer.Any(buffered => buffered.Message.Source?.BackgroundJobId == id);
     }
 
     private bool ShouldCompact()
@@ -2545,7 +2574,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         foreach (var buffered in _buffer)
         {
-            Self.Tell(buffered);
+            Self.Tell(buffered.Message);
         }
         _buffer.Clear();
         CancelAndDisposeLlmCts();
@@ -2686,7 +2715,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _activeCallId++;
         var workingContextGeneration = ++_workingContextGeneration;
 
-        _turnState.ForceNoToolsActive = forceNoTools;
+        _turnState.ForceNoToolsActive |= forceNoTools;
+        forceNoTools = _turnState.ForceNoToolsActive;
 
         // Recall: only resolve on turn-start calls, reuse cache for tool-loop follow-ups
         if (_recallManager.TurnRecallCache is null)
@@ -4401,7 +4431,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             oneTimeApprovalPreSeed: redrivePlan.OneTimeApprovalPreSeed,
             decisionOverride: redrivePlan.DecisionOverride,
             managedTemporaryDenialDirectories: redrivePlan.ManagedTemporaryDenialDirectories,
-            authorizationAttemptIds: redrivePlan.AuthorizationAttemptIds);
+            authorizationAttemptIds: redrivePlan.AuthorizationAttemptIds,
+            recordCompletedCycle: false);
         return true;
     }
 
@@ -4666,6 +4697,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             throw new InvalidOperationException(
                 $"Tool-result message for tool '{toolMessage.Name ?? "unknown"}' has no ToolCallId.");
 
+        _activeToolBatch.RecordCycleResult(
+            toolCallId.Value,
+            result.Receipt?.Category ?? ToolInvocationOutcomeCategory.Success,
+            toolMessage.Content ?? string.Empty);
+
         _log.Info(
             "Tool authorization attempt result authorizationAttemptId={AuthorizationAttemptId} " +
             "sessionId={SessionId} callId={CallId} toolName={ToolName} " +
@@ -4753,27 +4789,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         AddModelInputMediaNudge(_mediaBuffer.DrainSnapshot());
 
-        var budgetStatus = _turnState.RecordToolCompletion(resultCount, _config.MaxToolIterationsPerTurn);
+        if (_activeToolBatch.GetCompletedCycle() is { } completedCycle)
+            _turnState.ObserveCompleted(completedCycle);
 
-        var dupNudge = _turnState.CheckForDuplicates();
-        if (dupNudge is not null)
-        {
-            TurnLog().Warning(
-                "turn_duplicate_tool_detected tool={ToolName} count={Count} iteration={Iteration}",
-                dupNudge.ToolName, dupNudge.Count, _turnState.ToolIterationCount);
-            _state = _state.AddSystemNudge(dupNudge.NudgeText);
-        }
+        var budgetStatus = _turnState.RecordToolCompletion(resultCount, _config.MaxToolIterationsPerTurn);
 
         if (_buffer.Count > 0)
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
                 _buffer.Count, _turnState.ToolIterationCount);
-            foreach (var buffered in _buffer)
-            {
-                var refs = buffered.MediaReferences.Count > 0 ? buffered.MediaReferences : null;
-                _state = _state.AddUserMessage(buffered.Content, refs);
-            }
-            _buffer.Clear();
+            if (DrainBufferedUserMessages())
+                budgetStatus = ToolBudgetStatus.Ok.Instance;
         }
 
         switch (budgetStatus)

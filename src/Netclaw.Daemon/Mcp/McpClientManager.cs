@@ -481,7 +481,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     {
         var server = new McpServerName(serverName);
         var tool = new ToolName(toolName);
-        return await InvokeSharedAsync(server, tool, arguments, ct);
+        return await InvokeSharedAsync(server, tool, arguments, context, ct);
     }
 
     public async ValueTask<McpPromptSkillLoadResult> LoadAsync(
@@ -583,6 +583,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         McpServerName serverName,
         ToolName toolName,
         IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
         CancellationToken ct)
     {
         var snapshot = TryGetConnectedSnapshot(serverName);
@@ -610,6 +611,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 function,
                 qualifiedToolName,
                 arguments,
+                context,
                 ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -1103,6 +1105,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         AIFunction function,
         string qualifiedToolName,
         IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
         CancellationToken ct)
     {
         var aiArgs = arguments is { Count: > 0 }
@@ -1111,9 +1114,11 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         var result = await _clientRuntime.InvokeAsync(function, aiArgs, ct);
 
         if (McpToolResultFormatter.TryGetErrorDetail(result, out var detail))
+        {
             ReportToolFailure(serverName, qualifiedToolName, detail);
+        }
 
-        return McpToolResultFormatter.Format(result, qualifiedToolName);
+        return McpToolResultFormatter.FormatWithReceipt(result, qualifiedToolName, context);
     }
 
     /// <summary>

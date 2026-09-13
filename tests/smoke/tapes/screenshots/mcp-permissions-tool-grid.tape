@@ -13,7 +13,7 @@ Wait+Screen@10s /TAPE\$/
 Type "netclaw mcp add --transport stdio --grant-all smoke-math -- __NETCLAW_SMOKE_MCP_SERVER__"
 Enter
 Wait+Screen@10s /TAPE\$/
-Type "netclaw daemon start"
+Type "mkdir -p __NETCLAW_HOME__/logs && netclaw daemon start >__NETCLAW_HOME__/logs/daemon-stdio.log 2>&1"
 Enter
 Wait+Screen@20s /TAPE\$/
 Type "until netclaw mcp list 2>/dev/null | grep -q 'connected (4 tools)'; do sleep 2; done"

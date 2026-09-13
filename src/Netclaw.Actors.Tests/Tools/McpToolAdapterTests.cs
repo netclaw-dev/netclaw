@@ -106,6 +106,25 @@ public class McpToolAdapterTests
     }
 
     [Fact]
+    public async Task ExecuteAsync_BoundToolClassifiesTypedProtocolFailure()
+    {
+        var protocolResult = JsonDocument.Parse(
+            """{"content":[{"type":"text","text":"declared failure"}],"isError":true}""")
+            .RootElement.Clone();
+        var fakeTool = AIFunctionFactory.Create(() => protocolResult, "fail_typed");
+        var adapter = new McpToolAdapter(fakeTool, "server", "fail_typed");
+        var context = TestToolExecutionContext.CreateBound(
+            "chan/thread",
+            null,
+            TrustAudience.Personal);
+
+        var result = await adapter.ExecuteAsync(ToolInput.Empty(), context, CancellationToken.None);
+
+        Assert.Contains("declared failure", result);
+        Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
+    }
+
+    [Fact]
     public async Task ExecuteAsync_HandlesException()
     {
         string ThrowingFunc() => throw new InvalidOperationException("connection lost");
