@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Net.Http.Headers;
 
 namespace Netclaw.Configuration.Http;
 
@@ -103,6 +104,12 @@ internal sealed class OAuthClientRejectionHandler : DelegatingHandler
         {
             return await base.SendAsync(request, cancellationToken);
         }
+
+        // MCP SDK 2.2.0 parses successful token responses as JSON. GitHub returns
+        // form data unless the request asks for JSON.
+        if (!request.Headers.Accept.Any(
+                value => string.Equals(value.MediaType, "application/json", StringComparison.OrdinalIgnoreCase)))
+            request.Headers.Accept.Add(new MediaTypeWithQualityHeaderValue("application/json"));
 
         var requestBody = await request.Content.ReadAsStringAsync(cancellationToken);
         var response = await base.SendAsync(request, cancellationToken);
