@@ -190,6 +190,19 @@ persistence. Legacy/new config paradigm changes must have load/round-trip tests
 from the old shape to the runtime-consumed shape. Human manual testing is a
 last-mile confidence check, not a substitute for these gates.
 
+## Focused Mutation Test Rule
+
+Use focused Stryker tests for critical security and authority boundaries.
+Review the mutation scope after each security fix or authority policy change.
+Also review the mutation scope at each minor release.
+Add one small target when deterministic tests reject a specific unsafe mutation.
+Keep each target narrow. Keep the total CI cost within the documented budget.
+CI must fail if an expected mutant survives or does not run.
+Do not use a broad mutation score as a coverage target.
+
+See [TOOLING.md](TOOLING.md#focused-mutation-tests) for the current targets,
+procedure, cost limits, and expansion criteria.
+
 ## Configuration Schema Sync Rule
 
 When adding or changing properties on any `*Config` type in `Netclaw.Configuration`,
