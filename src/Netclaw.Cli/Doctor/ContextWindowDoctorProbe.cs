@@ -33,7 +33,7 @@ internal static class ContextWindowDoctorProbe
                 httpClient,
                 NullLogger<OpenAiCompatibleCapabilityResolver>.Instance,
                 entry.Endpoint,
-                entry.ApiKey?.Value),
+                entry.AuthMethod is AuthMethod.ApiKey ? entry.ApiKey?.Value : null),
             _ => null
         };
 

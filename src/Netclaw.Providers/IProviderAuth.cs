@@ -41,17 +41,15 @@ public sealed class EndpointOnlyAuth : IProviderAuth
 }
 
 /// <summary>
-/// Provider works without authentication but sends an API key as a Bearer
-/// token when the operator supplies one (OpenAI-compatible gateways in front
-/// of a protected vLLM / llama.cpp / SGLang endpoint).
+/// Provider works without authentication but can send an API key as a Bearer
+/// token when the operator selects API-key authentication.
 /// </summary>
 /// <remarks>
 /// <see cref="AuthMethod.None"/> stays first so the default path is unchanged:
 /// an operator who presses Enter through the key prompt gets the same
-/// credential-free configuration they get today. The runtime does not branch on
-/// <c>AuthMethod</c> for these providers — <c>ProviderEntry.ApiKey</c> is sent
-/// whenever it is present — so the key remains optional at probe time and at
-/// chat time.
+/// credential-free configuration. The runtime sends the key only when
+/// <see cref="AuthMethod.ApiKey"/> is selected. The key stays optional at probe
+/// time and at chat time.
 /// </remarks>
 public sealed class OptionalApiKeyAuth : IProviderAuth
 {

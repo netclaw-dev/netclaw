@@ -164,6 +164,24 @@ public sealed class ProviderCommandTests : IDisposable
     {
         // --auth api-key is an explicit request for key auth. Writing a
         // credential-free entry would report success while the gateway answers 401.
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["existing"] = new Dictionary<string, object> { ["Type"] = "ollama" }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["existing"] = new Dictionary<string, object> { ["ApiKey"] = "existing-secret" }
+            }
+        });
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+
         var exitCode = await ProviderCommand.RunAsync(
             ["provider", "add", "my-vllm", "openai-compatible",
                 "--endpoint", "http://my-gpu-server:8000/v1", "--auth", "api-key"],
@@ -175,6 +193,59 @@ public sealed class ProviderCommandTests : IDisposable
             && ReadConfigFile(_paths.NetclawConfigPath).RootElement
                 .TryGetProperty("Providers", out var providers)
             && providers.TryGetProperty("my-vllm", out _));
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Add_WithBlankApiKey_LeavesConfigAndSecretsUnchanged(string apiKey)
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["existing"] = new Dictionary<string, object> { ["Type"] = "ollama" }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["existing"] = new Dictionary<string, object> { ["ApiKey"] = "existing-secret" }
+            }
+        });
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "my-vllm", "openai-compatible", "--api-key", apiKey],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("cannot be empty or whitespace", _output.ToString());
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public async Task Add_EndpointOnlyProviderWithApiKey_ReturnsErrorBeforePersistence()
+    {
+        WriteConfig(new Dictionary<string, object> { ["configVersion"] = 1 });
+        WriteSecrets(new Dictionary<string, object> { ["Providers"] = new Dictionary<string, object>() });
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+
+        var exitCode = await ProviderCommand.RunAsync(
+            ["provider", "add", "local", "ollama", "--api-key", "unexpected-key"],
+            _paths, output: _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("does not support API key auth", _output.ToString());
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     [Fact]
@@ -464,6 +535,110 @@ public sealed class ProviderCommandTests : IDisposable
         Assert.True(providers.ContainsKey("my-anthropic"));
         Assert.Equal("anthropic", providers["my-anthropic"].Type);
         Assert.Equal("sk-ant-test", providers["my-anthropic"].ApiKey?.Value);
+    }
+
+    [Theory]
+    [InlineData(AuthMethod.ApiKey, null)]
+    [InlineData(AuthMethod.ApiKey, "   ")]
+    [InlineData(AuthMethod.None, "unexpected-key")]
+    public void WriteProvider_RejectsInconsistentApiKeyStateBeforePersistence(
+        AuthMethod authMethod,
+        string? apiKey)
+    {
+        WriteConfig(new Dictionary<string, object> { ["configVersion"] = 1 });
+        WriteSecrets(new Dictionary<string, object> { ["Providers"] = new Dictionary<string, object>() });
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+
+        Assert.Throws<ArgumentException>(() => ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "my-vllm",
+            "openai-compatible",
+            authMethod,
+            endpoint: "https://gateway.example.test/v1",
+            oauthResult: null,
+            apiKey));
+
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+    }
+
+    [Fact]
+    public void WriteProvider_AuthenticationChangesRemoveStaleSecrets()
+    {
+        var protector = new NullSecretsProtector();
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "local",
+            "openai-compatible",
+            AuthMethod.ApiKey,
+            endpoint: "https://gateway.example.test/v1",
+            oauthResult: null,
+            apiKey: "old-api-key",
+            protector: protector);
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "local",
+            "openai",
+            AuthMethod.OAuthDevice,
+            endpoint: "https://api.openai.com",
+            oauthResult: new OAuthDeviceFlowResult(
+                new SensitiveString("oauth-token"),
+                null,
+                null,
+                null),
+            apiKey: null,
+            protector: protector);
+
+        using (var oauthSecrets = ReadConfigFile(_paths.SecretsPath))
+        {
+            var provider = oauthSecrets.RootElement.GetProperty("Providers").GetProperty("local");
+            Assert.False(provider.TryGetProperty("ApiKey", out _));
+            Assert.Equal("oauth-token", provider.GetProperty("OAuthAccessToken").GetString());
+        }
+
+        ProviderCredentialWriter.WriteProvider(
+            _paths,
+            "local",
+            "ollama",
+            AuthMethod.None,
+            endpoint: "http://localhost:11434",
+            oauthResult: null,
+            apiKey: null,
+            protector: protector);
+
+        using var noneSecrets = ReadConfigFile(_paths.SecretsPath);
+        Assert.False(noneSecrets.RootElement.GetProperty("Providers").TryGetProperty("local", out _));
+    }
+
+    [Fact]
+    public void LoadProviders_LegacyOpenAiCompatibleApiKey_SelectsApiKeyAuth()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["local"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "https://gateway.example.test/v1"
+                }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["local"] = new Dictionary<string, object> { ["ApiKey"] = "legacy-key" }
+            }
+        });
+
+        var providers = ProviderCommand.LoadProviders(_paths);
+
+        Assert.Equal(AuthMethod.ApiKey, providers["local"].AuthMethod);
+        Assert.Equal("legacy-key", providers["local"].ApiKey?.Value);
     }
 
     [Fact]

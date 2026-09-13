@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Net.Http.Headers;
 using System.Text.Json;
 using Netclaw.Configuration;
 
@@ -28,8 +27,8 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
     public string ModelListingPath => "/v1/models";
     // Endpoint-only by default, but an operator may supply a Bearer key for
     // gateways that sit in front of a protected vLLM / llama.cpp / SGLang
-    // endpoint. ProbeAsync and OpenAiCompatibleChatClient already send the key
-    // when present; this declaration is what lets the setup surfaces collect it.
+    // endpoint. The clients send the key when the operator selects API-key auth.
+    // This declaration lets each setup surface collect the optional key.
     public IProviderAuth Auth { get; } = new OptionalApiKeyAuth();
 
     public Task<ProviderProbeResult> ProbeAsync(
@@ -43,9 +42,9 @@ public sealed class OpenAiCompatibleDescriptor : IProviderDescriptor
             entry.Endpoint,
             request =>
             {
-                var apiKey = entry.ApiKey?.Value;
-                if (!string.IsNullOrWhiteSpace(apiKey))
-                    request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+                OpenAiCompatibleHttp.ApplyBearerAuth(
+                    request,
+                    entry.AuthMethod is AuthMethod.ApiKey ? entry.ApiKey?.Value : null);
             },
             ParseModels,
             ct,

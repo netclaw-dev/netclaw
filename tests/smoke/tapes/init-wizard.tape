@@ -21,9 +21,7 @@ Enter
 
 # ─── Step 1 of 4: Provider ──────────────────────────────────────────
 Wait+Screen@10s /Choose your LLM provider:/
-# Provider list ordering is alphabetical by TypeKey:
-#   anthropic, deepseek, github-copilot, ollama, openai, openai-compatible, openrouter, veniceai
-# Three Downs from the Anthropic default land on Ollama.
+# Provider order is alphabetical by type key. Three Downs select Ollama.
 Down 3
 Enter
 
@@ -35,6 +33,9 @@ Right 32
 Backspace 32
 Type "http://localhost:11434"
 Enter
+
+# Ollama does not offer the optional API-key prompt. The next view is model
+# selection, so this anchor also catches an unexpected prompt stall.
 
 # Wait for connection probe + model discovery. The success message
 # auto-advances to the model list quickly enough that vhs can miss it;

@@ -25,11 +25,26 @@ public static class ProviderConfigurationLoader
             // which decrypts ENC: ciphertext from secrets.json. VendorOptions is excluded
             // from binding via its internal setter (see ProviderEntry) and populated here.
             var entry = providerSection.Get<ProviderEntry>() ?? new ProviderEntry();
+            var authSection = providerSection.GetSection(nameof(ProviderEntry.AuthMethod));
+            ApplyLegacyAuthentication(entry, authSection.Exists());
             entry.VendorOptions = BindVendorOptions(providerSection.GetSection(nameof(ProviderEntry.VendorOptions)));
             providers[providerSection.Key] = entry;
         }
 
         return providers;
+    }
+
+    /// <summary>
+    /// Maps the old OpenAI-compatible key-presence contract to an explicit authentication method.
+    /// </summary>
+    public static void ApplyLegacyAuthentication(ProviderEntry entry, bool authMethodConfigured)
+    {
+        if (!authMethodConfigured
+            && string.Equals(entry.Type, "openai-compatible", StringComparison.OrdinalIgnoreCase)
+            && !entry.ApiKey.IsNullOrEmpty())
+        {
+            entry.AuthMethod = AuthMethod.ApiKey;
+        }
     }
 
     private static JsonObject? BindVendorOptions(IConfigurationSection section)

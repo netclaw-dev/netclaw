@@ -41,6 +41,7 @@ public static class OAuthTokenPersistence
         var providerNode = providers[providerName]?.AsObject() ?? [];
         providers[providerName] = providerNode;
 
+        providerNode.Remove(nameof(ProviderEntry.ApiKey));
         providerNode["OAuthAccessToken"] = result.AccessToken.Value;
 
         // Preserve any previously-stored refresh token / account id when the new

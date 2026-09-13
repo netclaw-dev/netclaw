@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # provider-add.tape post-tape assertion.
 #
-# Validates that the TUI add flow wrote 'smoke-add-ollama' with the
+# Validates that the TUI add flow wrote 'smoke-add-openai-compatible' with the
 # expected Type/Endpoint to netclaw.json, and that `netclaw provider
 # list` shows the new row.
 #
@@ -29,18 +29,19 @@ if ! printf '%s' "$config_json" | jq empty >/dev/null 2>&1; then
   exit 1
 fi
 
-echo "provider-add: checking 'smoke-add-ollama' in config..."
-assert_field '.Providers["smoke-add-ollama"].Type'     'ollama'                 "$config_json" || :
-assert_field '.Providers["smoke-add-ollama"].Endpoint' 'http://localhost:11434' "$config_json" || :
+echo "provider-add: checking 'smoke-add-openai-compatible' in config..."
+assert_field '.Providers["smoke-add-openai-compatible"].Type'     'openai-compatible'      "$config_json" || :
+assert_field '.Providers["smoke-add-openai-compatible"].Endpoint' 'http://localhost:11434' "$config_json" || :
+assert_field '(.Providers["smoke-add-openai-compatible"] | has("AuthMethod"))' 'false' "$config_json" || :
 
 echo "provider-add: cross-checking 'netclaw provider list'..."
 list_output="$("$NETCLAW_SMOKE_CLI" provider list 2>/dev/null | tr -d '\r')"
-if ! echo "$list_output" | grep -qE '^smoke-add-ollama[[:space:]]+Ollama'; then
-  echo "FAIL: 'smoke-add-ollama' row missing or malformed in 'provider list' output." >&2
+if ! echo "$list_output" | grep -qE '^smoke-add-openai-compatible[[:space:]]+OpenAI-compatible'; then
+  echo "FAIL: 'smoke-add-openai-compatible' row missing or malformed in 'provider list' output." >&2
   printf -- '--- provider list ---\n%s\n' "$list_output" >&2
   assert_fail=1
 else
-  echo "  ok  'smoke-add-ollama' present in provider list"
+  echo "  ok  'smoke-add-openai-compatible' present in provider list"
 fi
 
 if (( assert_fail )); then

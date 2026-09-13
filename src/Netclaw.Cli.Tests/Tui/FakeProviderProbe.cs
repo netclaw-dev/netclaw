@@ -62,6 +62,11 @@ public sealed class FakeProviderProbe : IProviderProbe, IConfiguredProviderProbe
     public string? LastApiKey { get; private set; }
 
     /// <summary>
+    /// The endpoint value from the last call.
+    /// </summary>
+    public string? LastEndpoint { get; private set; }
+
+    /// <summary>
     /// Optional gate. When set, <see cref="ProbeAsync(string, string?, string?, CancellationToken)"/>
     /// blocks (observing the cancellation token) until the gate is completed — used to stage
     /// in-flight probes for cancellation/concurrency tests. Null (default) returns immediately.
@@ -74,6 +79,7 @@ public sealed class FakeProviderProbe : IProviderProbe, IConfiguredProviderProbe
     {
         ProbeCallCount++;
         LastProviderType = providerType;
+        LastEndpoint = endpoint;
         LastApiKey = apiKey;
         ProbedTypes.Add(providerType);
 

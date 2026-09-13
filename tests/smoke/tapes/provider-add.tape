@@ -30,20 +30,19 @@ Enter
 Wait+Screen@10s /Ollama/
 Sleep 300ms
 
-# Provider type list (alphabetical by TypeKey): anthropic, deepseek,
-# github-copilot, ollama, openai, openai-compatible, openrouter, veniceai. With
-# Anthropic highlighted by default, three Downs land on Ollama.
-Down 3
+# Provider order is alphabetical by type key. Five Downs select
+# OpenAI-compatible from the Anthropic default.
+Down 5
 Enter
 
 # ─── Step 1: Name your provider (NEW in #997) ────────────────────────
 Wait+Screen@10s /Name your provider/
 Sleep 300ms
-# Default pre-filled is "my-ollama" (9 chars). Cursor is at end
+# Default pre-filled is "my-openai-compatible". Cursor is at end
 # (explicit ConsoleKey.End synth in BuildAddNameView). Backspace
-# clears all 9 chars; 16 backspaces is safely over.
-Backspace 16
-Type "smoke-add-ollama"
+# clears the default; 32 backspaces is safely over.
+Backspace 32
+Type "smoke-add-openai-compatible"
 Enter
 
 # ─── Step 2: Endpoint ────────────────────────────────────────────────
@@ -55,12 +54,18 @@ Backspace 32
 Type "http://localhost:11434"
 Enter
 
-# ─── Step 3: Probe + persisted provider confirmation ─────────────────
+# ─── Step 3: Optional API key ────────────────────────────────────────
+Wait+Screen@10s /API key \(optional\)/
+Sleep 300ms
+# A blank key keeps the endpoint unauthenticated.
+Enter
+
+# ─── Step 4: Probe + persisted provider confirmation ─────────────────
 # Probe is async; with qwen2:0.5b + all-minilm baked into native
 # ollama, this resolves in seconds. The provider is persisted before
 # the success screen renders, so wait directly on the persisted-provider
 # confirmation (skips the transient "Validating..." frame).
-Wait+Screen@45s /Provider 'smoke-add-ollama' added/
+Wait+Screen@45s /Provider 'smoke-add-openai-compatible' added/
 Sleep 300ms
 Enter
 
@@ -68,7 +73,7 @@ Enter
 # The persisted provider row is the durable post-add proof. Avoid anchoring
 # on the status footer: fill-height list changes can legitimately move or
 # truncate footer text on small/OS-specific VHS viewports.
-Wait+Screen@10s /smoke-add-ollama/
+Wait+Screen@10s /smoke-add-openai-compatible/
 Sleep 300ms
 
 # ─── Exit TUI ────────────────────────────────────────────────────────

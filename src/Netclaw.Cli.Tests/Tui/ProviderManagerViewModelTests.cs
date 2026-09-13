@@ -337,6 +337,85 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     }
 
     [Fact]
+    public void OpenAiCompatible_EndpointSubmit_ShowsOptionalApiKeyPrompt()
+    {
+        using var vm = CreateViewModel();
+        vm.StartAddForType("openai-compatible");
+        vm.AdvanceAfterName();
+
+        vm.NewEndpoint = "http://localhost:8000";
+        vm.SubmitEndpoint();
+
+        Assert.Equal(ProviderManagerState.AddOptionalApiKey, vm.CurrentState.Value);
+        Assert.Equal(AuthMethod.None, vm.NewAuthMethod);
+    }
+
+    [Fact]
+    public async Task OpenAiCompatible_BlankOptionalApiKey_AddsWithoutAuthMethod()
+    {
+        using var vm = CreateViewModel();
+        vm.StartAddForType("openai-compatible");
+        vm.AdvanceAfterName();
+        vm.NewEndpoint = "http://localhost:8000";
+        vm.SubmitEndpoint();
+
+        vm.NewApiKey = null;
+        vm.SubmitOptionalApiKey();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderManagerState.AddComplete, vm.CurrentState.Value);
+        Assert.Equal(AuthMethod.None, vm.NewAuthMethod);
+        Assert.Null(vm.NewApiKey);
+        Assert.True(File.Exists(_paths.NetclawConfigPath));
+
+        using var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var provider = config.RootElement.GetProperty("Providers").GetProperty(vm.NewProviderName!);
+        Assert.False(provider.TryGetProperty("AuthMethod", out _));
+    }
+
+    [Fact]
+    public async Task OpenAiCompatible_KeyedOptionalApiKey_PersistsKeyAndAuthMethod()
+    {
+        using var vm = CreateViewModel();
+        vm.StartAddForType("openai-compatible");
+        vm.AdvanceAfterName();
+        vm.NewEndpoint = "http://localhost:8000";
+        vm.SubmitEndpoint();
+
+        vm.NewApiKey = "sk-gateway-test";
+        vm.SubmitOptionalApiKey();
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal(ProviderManagerState.AddComplete, vm.CurrentState.Value);
+        Assert.Equal(AuthMethod.ApiKey, vm.NewAuthMethod);
+
+        using var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var provider = config.RootElement.GetProperty("Providers").GetProperty(vm.NewProviderName!);
+        Assert.Equal("ApiKey", provider.GetProperty("AuthMethod").GetString());
+
+        using var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        Assert.StartsWith("ENC:", secrets.RootElement.GetProperty("Providers")
+            .GetProperty(vm.NewProviderName!).GetProperty("ApiKey").GetString());
+    }
+
+    [Fact]
+    public void OpenAiCompatible_BackFromOptionalApiKey_RetainsEndpointAndKey()
+    {
+        using var vm = CreateViewModel();
+        vm.StartAddForType("openai-compatible");
+        vm.AdvanceAfterName();
+        vm.NewEndpoint = "http://localhost:8000";
+        vm.SubmitEndpoint();
+        vm.NewApiKey = "sk-gateway-test";
+
+        vm.GoBack();
+
+        Assert.Equal(ProviderManagerState.AddCredentials, vm.CurrentState.Value);
+        Assert.Equal("http://localhost:8000", vm.NewEndpoint);
+        Assert.Equal("sk-gateway-test", vm.NewApiKey);
+    }
+
+    [Fact]
     public void TrySetNewProviderName_TrimsAndAcceptsUniqueName()
     {
         using var vm = CreateViewModel();
@@ -671,6 +750,104 @@ public sealed class ProviderManagerViewModelTests : IDisposable
         // the bad key was never written.
         Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
         Assert.DoesNotContain("sk-bad-new-key", File.ReadAllText(_paths.SecretsPath), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task OpenAiCompatibleFix_RemoveKey_ProbesWithoutKeyAndClearsStoredAuth()
+    {
+        WriteOpenAiCompatibleProvider("sk-old-key");
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var item = vm.DisplayProviders.Single(p => p.ConfiguredName == "my-vllm");
+        vm.StartFixCredentials(item);
+        vm.FixEndpoint = "https://new.example.test/v1";
+        vm.AdvanceToFixOptionalApiKeyUpdate();
+        vm.SelectFixOptionalApiKeyUpdate(OptionalApiKeyUpdate.Remove);
+
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://new.example.test/v1", _fakeProbe.LastEndpoint);
+        Assert.Null(_fakeProbe.LastApiKey);
+
+        using var config = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var provider = config.RootElement.GetProperty("Providers").GetProperty("my-vllm");
+        Assert.False(provider.TryGetProperty("AuthMethod", out _));
+
+        using var secrets = JsonDocument.Parse(File.ReadAllText(_paths.SecretsPath));
+        Assert.False(secrets.RootElement.GetProperty("Providers").TryGetProperty("my-vllm", out _));
+    }
+
+    [Fact]
+    public async Task OpenAiCompatibleFix_ReplaceKey_ProbesAndPersistsReplacement()
+    {
+        WriteOpenAiCompatibleProvider("sk-old-key");
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var item = vm.DisplayProviders.Single(p => p.ConfiguredName == "my-vllm");
+        vm.StartFixCredentials(item);
+        vm.AdvanceToFixOptionalApiKeyUpdate();
+        vm.SelectFixOptionalApiKeyUpdate(OptionalApiKeyUpdate.Replace);
+        vm.FixApiKey = "sk-new-key";
+        vm.SubmitFixCredentials();
+
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal("sk-new-key", _fakeProbe.LastApiKey);
+        var providers = ProviderCommand.LoadProviders(_paths);
+        Assert.Equal(AuthMethod.ApiKey, providers["my-vllm"].AuthMethod);
+        Assert.Equal("sk-new-key", providers["my-vllm"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public async Task OpenAiCompatibleFix_KeepKey_UsesStoredKey()
+    {
+        WriteOpenAiCompatibleProvider("sk-old-key");
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var item = vm.DisplayProviders.Single(p => p.ConfiguredName == "my-vllm");
+        vm.StartFixCredentials(item);
+        vm.AdvanceToFixOptionalApiKeyUpdate();
+        vm.SelectFixOptionalApiKeyUpdate(OptionalApiKeyUpdate.KeepCurrent);
+
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await vm.EagerProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal("sk-old-key", _fakeProbe.LastApiKey);
+        var providers = ProviderCommand.LoadProviders(_paths);
+        Assert.Equal(AuthMethod.ApiKey, providers["my-vllm"].AuthMethod);
+        Assert.Equal("sk-old-key", providers["my-vllm"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public async Task OpenAiCompatibleFix_FailedReplacement_DoesNotChangeFiles()
+    {
+        WriteOpenAiCompatibleProvider("sk-old-key");
+        using var vm = CreateViewModel();
+        await ActivateAndProbeAsync(vm);
+
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+        _fakeProbe.NextResult = new ProviderProbeResult(false, "Unauthorized", []);
+
+        var item = vm.DisplayProviders.Single(p => p.ConfiguredName == "my-vllm");
+        vm.StartFixCredentials(item);
+        vm.FixEndpoint = "https://new.example.test/v1";
+        vm.AdvanceToFixOptionalApiKeyUpdate();
+        vm.SelectFixOptionalApiKeyUpdate(OptionalApiKeyUpdate.Replace);
+        vm.FixApiKey = "sk-bad-key";
+        vm.SubmitFixCredentials();
+
+        await vm.ProbeCompletion!.WaitAsync(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        Assert.Equal("https://new.example.test/v1", _fakeProbe.LastEndpoint);
+        Assert.Equal("sk-bad-key", _fakeProbe.LastApiKey);
+        Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+        Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
     }
 
     [Fact]
@@ -1359,6 +1536,30 @@ public sealed class ProviderManagerViewModelTests : IDisposable
     private ProviderManagerViewModel CreateViewModel()
     {
         return new ProviderManagerViewModel(_paths, ProviderCommand.CreateDefaultRegistry(), _fakeProbe);
+    }
+
+    private void WriteOpenAiCompatibleProvider(string apiKey)
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "https://old.example.test/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["ApiKey"] = apiKey }
+            }
+        });
     }
 
     private void WriteConfig(Dictionary<string, object> data)

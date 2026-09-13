@@ -114,6 +114,7 @@ internal static class ProviderCommand
         }
 
         string? apiKey = null;
+        var apiKeyFlagSupplied = false;
         string? endpoint = null;
         string? authFlag = null;
         string? gitHubHost = null;
@@ -123,7 +124,15 @@ internal static class ProviderCommand
         {
             if (args[i] is "--api-key" && i + 1 < args.Length)
             {
+                apiKeyFlagSupplied = true;
                 apiKey = args[++i];
+                continue;
+            }
+
+            if (args[i] is "--api-key")
+            {
+                apiKeyFlagSupplied = true;
+                apiKey = string.Empty;
                 continue;
             }
 
@@ -152,6 +161,12 @@ internal static class ProviderCommand
             }
         }
 
+        if (apiKeyFlagSupplied && string.IsNullOrWhiteSpace(apiKey))
+        {
+            writer.WriteLine("Error: API key cannot be empty or whitespace.");
+            return 1;
+        }
+
         AuthMethod? requestedAuthMethod = null;
         if (authFlag is not null)
         {
@@ -172,6 +187,12 @@ internal static class ProviderCommand
         }
 
         var supportedAuth = descriptor.Auth.SupportedAuthMethods;
+        if (apiKey is not null && !supportedAuth.Contains(AuthMethod.ApiKey))
+        {
+            writer.WriteLine($"Error: Provider '{type}' does not support API key auth.");
+            return 1;
+        }
+
         if (!TryBuildGitHubCopilotVendorOptions(
                 type,
                 gitHubHost,
@@ -210,6 +231,14 @@ internal static class ProviderCommand
         if (requestedAuthMethod == AuthMethod.ApiKey && !supportedAuth.Contains(AuthMethod.ApiKey))
         {
             writer.WriteLine($"Error: Provider '{type}' does not support API key auth.");
+            return 1;
+        }
+
+        if (requestedAuthMethod == AuthMethod.ApiKey && string.IsNullOrWhiteSpace(apiKey))
+        {
+            writer.WriteLine($"Error: Provider '{type}' requires --api-key when using --auth api-key.");
+            if (supportedAuth.Contains(AuthMethod.None))
+                writer.WriteLine("Omit --auth api-key to configure this provider without authentication.");
             return 1;
         }
 
@@ -259,16 +288,6 @@ internal static class ProviderCommand
             }
 
             authMethod = AuthMethod.ApiKey;
-        }
-
-        // An explicit --auth api-key on a credential-optional provider must not
-        // silently write an entry with no key. That would report success while the
-        // gateway keeps answering 401 — a silent fallback, which CLAUDE.md forbids.
-        if (forceApiKey && apiKey is null && supportedAuth.Contains(AuthMethod.None))
-        {
-            writer.WriteLine($"Error: Provider '{type}' requires --api-key when using --auth api-key.");
-            writer.WriteLine("Omit --auth api-key to configure this provider without authentication.");
-            return 1;
         }
 
         ProviderCredentialWriter.WriteProvider(
@@ -479,6 +498,7 @@ internal static class ProviderCommand
         using var secretsDoc = JsonDocument.Parse(secretsText);
 
         var result = new Dictionary<string, ProviderEntry>();
+        var configuredAuthMethods = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         if (configDoc.RootElement.TryGetProperty("Providers", out var configProviders))
         {
@@ -491,6 +511,8 @@ internal static class ProviderCommand
                 {
                     entry.SetVendorOptions(JsonNode.Parse(vendorOptions.GetRawText())?.AsObject());
                 }
+                if (prop.Value.TryGetProperty(nameof(ProviderEntry.AuthMethod), out _))
+                    configuredAuthMethods.Add(prop.Name);
 
                 result[prop.Name] = entry;
             }
@@ -536,6 +558,9 @@ internal static class ProviderCommand
                 }
             }
         }
+
+        foreach (var (name, entry) in result)
+            ProviderConfigurationLoader.ApplyLegacyAuthentication(entry, configuredAuthMethods.Contains(name));
 
         return result;
     }

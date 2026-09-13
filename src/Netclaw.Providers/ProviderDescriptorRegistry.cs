@@ -66,7 +66,8 @@ public sealed class ProviderDescriptorRegistry : IProviderProbe
         {
             Type = providerType,
             Endpoint = endpoint ?? "",
-            ApiKey = apiKey is not null ? new SensitiveString(apiKey) : null,
+            AuthMethod = string.IsNullOrWhiteSpace(apiKey) ? AuthMethod.None : AuthMethod.ApiKey,
+            ApiKey = !string.IsNullOrWhiteSpace(apiKey) ? new SensitiveString(apiKey) : null,
         };
 
         return descriptor.ProbeAsync(entry, ct);

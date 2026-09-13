@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Net.Http.Headers;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
@@ -471,8 +470,7 @@ public sealed class OpenAiCompatibleChatClient : IChatClient
             Content = new StringContent(serializedPayload, Encoding.UTF8, "application/json")
         };
 
-        if (!string.IsNullOrWhiteSpace(_endpoint.ApiKey))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _endpoint.ApiKey);
+        OpenAiCompatibleHttp.ApplyBearerAuth(request, _endpoint.ApiKey);
 
         return request;
     }

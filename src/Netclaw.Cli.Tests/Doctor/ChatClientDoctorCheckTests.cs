@@ -221,6 +221,51 @@ public sealed class ChatClientDoctorCheckTests
     }
 
     [Fact]
+    public async Task ReturnsError_WhenOptionalApiKeyProviderSelectsApiKeyWithoutKey()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-vllm": { "Type": "openai-compatible", "AuthMethod": "ApiKey" }
+              },
+              "Models": {
+                "Main": { "Provider": "local-vllm", "ModelId": "model-a" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+        Assert.Contains("requires ApiKey", result.Message);
+        Assert.DoesNotContain("Real chat client configured", result.Message);
+    }
+
+    [Fact]
+    public async Task ReturnsPass_WhenOptionalApiKeyProviderSelectsNoneWithoutKey()
+    {
+        var paths = CreatePathsWithConfig("""
+            {
+              "configVersion": 1,
+              "Providers": {
+                "local-vllm": { "Type": "openai-compatible", "AuthMethod": "None" }
+              },
+              "Models": {
+                "Main": { "Provider": "local-vllm", "ModelId": "model-a" }
+              }
+            }
+            """);
+
+        var check = CreateCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+        Assert.Contains("Real chat client configured", result.Message);
+    }
+
+    [Fact]
     public async Task ReturnsError_WhenProviderTypeUnknown()
     {
         var paths = CreatePathsWithConfig("""

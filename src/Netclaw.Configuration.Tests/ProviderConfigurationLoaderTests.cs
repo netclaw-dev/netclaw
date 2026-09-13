@@ -106,6 +106,58 @@ public sealed class ProviderConfigurationLoaderTests : IDisposable
     }
 
     [Fact]
+    public void Load_LegacyApiKeyWithoutAuthMethod_SelectsApiKeyAuth()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Providers:local:Type"] = "openai-compatible",
+                ["Providers:local:ApiKey"] = "legacy-key"
+            })
+            .Build();
+
+        var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+
+        Assert.Equal(AuthMethod.ApiKey, providers["local"].AuthMethod);
+        Assert.Equal("legacy-key", providers["local"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public void Load_ExplicitNoneWithStaleApiKey_PreservesNone()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Providers:local:Type"] = "openai-compatible",
+                ["Providers:local:AuthMethod"] = "None",
+                ["Providers:local:ApiKey"] = "stale-key"
+            })
+            .Build();
+
+        var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+
+        Assert.Equal(AuthMethod.None, providers["local"].AuthMethod);
+        Assert.Equal("stale-key", providers["local"].ApiKey?.Value);
+    }
+
+    [Fact]
+    public void Load_EndpointOnlyProviderWithStaleApiKey_PreservesNone()
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["Providers:local:Type"] = "ollama",
+                ["Providers:local:ApiKey"] = "stale-key"
+            })
+            .Build();
+
+        var providers = ProviderConfigurationLoader.Load(configuration.GetSection("Providers"));
+
+        Assert.Equal(AuthMethod.None, providers["local"].AuthMethod);
+        Assert.Equal("stale-key", providers["local"].ApiKey?.Value);
+    }
+
+    [Fact]
     public void Load_DecryptsEncOAuthTokens()
     {
         var paths = new NetclawPaths(_dir.Path);
