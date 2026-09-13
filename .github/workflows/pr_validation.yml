@@ -166,6 +166,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  tool-authorization-mutation:
+    name: Tool Authorization Mutation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Test tool authorization mutants"
+        run: ./scripts/run-tool-authorization-mutations.sh
+
+      - name: "Upload mutation report"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: tool-authorization-mutation-report
+          path: ./artifacts/stryker/tool-authorization
+          if-no-files-found: ignore
+          retention-days: 14
+
   copyright-headers:
     name: Copyright Headers
     runs-on: ubuntu-latest

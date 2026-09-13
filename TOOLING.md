@@ -29,8 +29,8 @@
 
 ## Focused Mutation Tests
 
-The path-access mutation job runs on each pull request, merge group, and `dev` push.
-The Linux job runs in parallel with the normal test matrix.
+The path-access and tool authorization mutation jobs run on each pull request, merge group, and `dev` push.
+Each Linux job runs in parallel with the normal test matrix.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
 change at a security or authority boundary. They do not measure general code
@@ -41,6 +41,8 @@ coverage. They do not replace positive and negative behavior tests.
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
 | `PathAccessPolicy.AddSessionRoots` | Only a Personal context receives shared session roots | 2 killed | `./scripts/run-path-access-mutations.sh` |
+| `ToolAccessPolicy.AuthorizeMcpInvocation` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 
 Run the same check locally:
 
@@ -55,6 +57,38 @@ A cold CI runner should take two to four minutes.
 
 The harness uses xUnit 2 because Stryker's VSTest adapter does not support xUnit 3 correctly.
 The script requires `perl` and `jq`, which the Linux CI image supplies.
+
+### Tool Authorization Gate
+
+Run the tool authorization gate:
+
+```bash
+./scripts/run-tool-authorization-mutations.sh
+```
+
+The script selects three conditions in `ToolAccessPolicy`.
+Each mutant removes a logical negation.
+The script requires one killed mutant at each selected source location and exactly three tested mutants overall.
+The gate fails if a target is absent, survives, exceeds its time limit, or cannot compile.
+Stryker can report unrelated compiler errors before it applies the source filter.
+Those errors do not count as tested mutants.
+
+The tests use the real dispatcher, MCP adapter, and shell policy coordinator.
+Local probe tools count calls without an MCP connection or a host process.
+Public and Team cases cover both MCP grant layers under Auto and one-time approval.
+Personal cases cover shell hard denial under both modes.
+Auto cases test forbidden calls before their permitted controls.
+Approval cases first prove that the same approval keys permit the call.
+Each denial must preserve the probe call count.
+
+These tests preserve PRD-002 SEC-003 and PRD-006 MCP-003.
+See [the ACL contract](openspec/specs/netclaw-acl/spec.md) and
+[the approval contract](openspec/specs/tool-approval-gates/spec.md).
+The gate covers authorization before dispatch. It does not prove MCP transport or native shell containment.
+
+The final local run took 88 seconds after package restore.
+The separate CI job retains a 10-minute timeout and uploads `tool-authorization-mutation-report`.
+Its report directory is `artifacts/stryker/tool-authorization`.
 
 ### Scope Review
 
@@ -85,7 +119,7 @@ long runs, and invalid results from the current xUnit 3 adapter path.
 
 Review these candidate boundaries before lower-risk code:
 
-1. Tool and MCP audience authorization in `ToolAccessPolicy`.
+1. Additional native-tool and structured-path decisions in `ToolAccessPolicy`.
 2. Approval directory containment in `ApprovalPatternMatching`.
 3. Shell hard-deny decisions in `ShellCommandPolicy`.
 4. Slack, Discord, and Mattermost ACL decisions.
