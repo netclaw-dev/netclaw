@@ -22,6 +22,7 @@ namespace Netclaw.Actors.Tests.Tools;
 public class ToolArgumentValidatorTests
 {
     private readonly DispatchingToolExecutor _executor;
+    private readonly ShellTool _shellTool;
 
     public ToolArgumentValidatorTests()
     {
@@ -39,6 +40,7 @@ public class ToolArgumentValidatorTests
 
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
+        _shellTool = Assert.IsType<ShellTool>(registry.GetByName(ShellTool.ToolName));
         _executor = new DispatchingToolExecutor(
             registry,
             new ToolAccessPolicy(new NetclawPaths(),
@@ -52,33 +54,32 @@ public class ToolArgumentValidatorTests
                 pathPolicy));
     }
 
-    private static ToolExecutionContext PersonalContext(string sessionDir)
-        => TestToolExecutionContext.CreateBound("signalr/thread-1", sessionDir, new TestToolExecutionContextOptions
-        {
-            Audience = TrustAudience.Personal,
-            Boundary = TrustBoundary.TrustedInstance,
-            ChannelType = "signalr"
-        });
-
-    private async Task<string> ExecuteShellAsync(IDictionary<string, object?> args)
+    // This suite tests dispatcher and binder contracts. ShellToolTests owns native process coverage.
+    private ToolCallInterpretation InterpretShellCall(IDictionary<string, object?> args)
     {
-        var sessionDir = Path.Combine(Path.GetTempPath(), "nc-val-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(sessionDir);
-        try
-        {
-            var callArgs = new Dictionary<string, object?>(args, StringComparer.Ordinal);
-            if (!callArgs.Keys.Any(key =>
-                    string.Equals(ToolArgumentHelper.ResolveMetaField(key), "_rationale", StringComparison.Ordinal)))
-                callArgs["_rationale"] = "Validate the tool argument contract.";
+        var callArgs = new Dictionary<string, object?>(args, StringComparer.Ordinal);
+        if (!callArgs.Keys.Any(key =>
+                string.Equals(ToolArgumentHelper.ResolveMetaField(key), "_rationale", StringComparison.Ordinal)))
+            callArgs["_rationale"] = "Validate the tool argument contract.";
 
-            var toolCall = new FunctionCallContent("call-1", "shell_execute", callArgs);
-            return await _executor.ExecuteAsync(
-                toolCall, PersonalContext(sessionDir), TestContext.Current.CancellationToken);
-        }
-        finally
-        {
-            Directory.Delete(sessionDir, recursive: true);
-        }
+        return _executor.InterpretToolCall(
+            new FunctionCallContent("call-1", ShellTool.ToolName, callArgs));
+    }
+
+    private (ToolCallMeta? Meta, ShellTool.Params Arguments) InterpretAcceptedShellCall(
+        IDictionary<string, object?> args)
+    {
+        var interpretation = InterpretShellCall(args);
+        Assert.Null(interpretation.Rejection);
+        var cleanedArguments = Assert.IsAssignableFrom<IDictionary<string, object?>>(
+            interpretation.Cleaned.Arguments);
+        return (interpretation.Meta, _shellTool.ParseArguments(cleanedArguments));
+    }
+
+    private string InterpretRejectedShellCall(IDictionary<string, object?> args)
+    {
+        var interpretation = InterpretShellCall(args);
+        return Assert.IsType<ToolArgumentRejection>(interpretation.Rejection).Message;
     }
 
     [Fact]
@@ -118,43 +119,42 @@ public class ToolArgumentValidatorTests
     }
 
     [Fact]
-    public async Task TimeoutSeconds_accepted_and_consumed_as_meta_field()
+    public void TimeoutSeconds_accepted_and_consumed_as_meta_field()
     {
         // The literal arg shape from production session
         // D0AC6CKBK5K_1781115410_840529. ChatGPT-trained models (Qwen) emit the
         // underscore-dropped name; rather than reject (which pushed the model off
         // tools entirely — session D0AC6CKBK5K_1781746527), it now resolves onto
-        // _timeout_seconds and the call runs. Not a silent default: the value is
-        // consumed (see MetaFieldResolutionTests / ToolCallMetaExtractorTests).
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        // _timeout_seconds and the call runs. The dispatcher consumes the value.
+        var (meta, arguments) = InterpretAcceptedShellCall(new Dictionary<string, object?>
         {
             ["Command"] = "echo runs-now",
             ["TimeoutSeconds"] = "1200"
         });
 
-        Assert.DoesNotContain("Unrecognized argument", result);
-        Assert.Contains("runs-now", result);
+        Assert.Equal(1200, meta?.TimeoutHintSeconds);
+        Assert.Equal("echo runs-now", arguments.Command);
     }
 
     [Fact]
-    public async Task Underscore_missing_timeout_seconds_accepted()
+    public void Underscore_missing_timeout_seconds_accepted()
     {
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var (meta, arguments) = InterpretAcceptedShellCall(new Dictionary<string, object?>
         {
             ["Command"] = "echo runs-now",
             ["timeout_seconds"] = 300
         });
 
-        Assert.DoesNotContain("Unrecognized argument", result);
-        Assert.Contains("runs-now", result);
+        Assert.Equal(300, meta?.TimeoutHintSeconds);
+        Assert.Equal("echo runs-now", arguments.Command);
     }
 
     [Fact]
-    public async Task Conflicting_timeout_spellings_rejected_as_ambiguous()
+    public void Conflicting_timeout_spellings_rejected_as_ambiguous()
     {
         // Two distinct keys resolving to the same meta field would force a silent
         // pick-one-drop-the-other — the no-silent-discard invariant rejects it.
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var result = InterpretRejectedShellCall(new Dictionary<string, object?>
         {
             ["Command"] = "echo should-not-run",
             ["_timeout_seconds"] = 120,
@@ -169,25 +169,25 @@ public class ToolArgumentValidatorTests
     [Theory]
     [InlineData("Rationale")]
     [InlineData("rationale")]
-    public async Task Misnamed_rationale_accepted(string key)
+    public void Misnamed_rationale_accepted(string key)
     {
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var (meta, arguments) = InterpretAcceptedShellCall(new Dictionary<string, object?>
         {
             ["Command"] = "echo runs-now",
             [key] = "because"
         });
 
-        Assert.DoesNotContain("Unrecognized argument", result);
-        Assert.Contains("runs-now", result);
+        Assert.Equal("because", meta?.Rationale);
+        Assert.Equal("echo runs-now", arguments.Command);
     }
 
     [Fact]
-    public async Task Misnamed_timeout_with_invalid_value_rejected_loudly()
+    public void Misnamed_timeout_with_invalid_value_rejected_loudly()
     {
         // Spelling tolerance must not become a silent escape hatch: a resolved
         // meta key with an unusable value is still rejected before dispatch,
         // naming the model's own key spelling.
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var result = InterpretRejectedShellCall(new Dictionary<string, object?>
         {
             ["Command"] = "echo should-not-run",
             ["TimeoutSeconds"] = "not-a-number"
@@ -199,37 +199,37 @@ public class ToolArgumentValidatorTests
     }
 
     [Fact]
-    public async Task Lowercase_declared_param_still_accepted()
+    public void Lowercase_declared_param_still_accepted()
     {
         // Deterministic canonicalization for declared params is existing
         // consumption behavior (Qwen text-parser path emits lowercase keys).
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var (_, arguments) = InterpretAcceptedShellCall(new Dictionary<string, object?>
         {
             ["command"] = "echo flexible-ok"
         });
 
-        Assert.DoesNotContain("Unrecognized argument", result);
-        Assert.Contains("flexible-ok", result);
+        Assert.Equal("echo flexible-ok", arguments.Command);
     }
 
     [Fact]
-    public async Task Exact_meta_key_accepted()
+    public void Exact_meta_key_accepted()
     {
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var (meta, arguments) = InterpretAcceptedShellCall(new Dictionary<string, object?>
         {
             ["Command"] = "echo meta-ok",
             ["_timeout_seconds"] = 120,
             ["_rationale"] = "test"
         });
 
-        Assert.DoesNotContain("Unrecognized argument", result);
-        Assert.Contains("meta-ok", result);
+        Assert.Equal(120, meta?.TimeoutHintSeconds);
+        Assert.Equal("test", meta?.Rationale);
+        Assert.Equal("echo meta-ok", arguments.Command);
     }
 
     [Fact]
-    public async Task Wholly_unknown_key_rejected_without_suggestion_lists_valid_args()
+    public void Wholly_unknown_key_rejected_without_suggestion_lists_valid_args()
     {
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var result = InterpretRejectedShellCall(new Dictionary<string, object?>
         {
             ["Command"] = "echo should-not-run",
             ["Banana"] = true
@@ -244,9 +244,9 @@ public class ToolArgumentValidatorTests
     }
 
     [Fact]
-    public async Task Typo_in_declared_param_rejected_with_suggestion()
+    public void Typo_in_declared_param_rejected_with_suggestion()
     {
-        var result = await ExecuteShellAsync(new Dictionary<string, object?>
+        var result = InterpretRejectedShellCall(new Dictionary<string, object?>
         {
             ["Comand"] = "echo should-not-run"
         });
