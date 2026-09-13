@@ -355,7 +355,6 @@ not execute tools.
 ### What Does Not Reload (requires restart)
 
 - Akka actor system configuration
-- Persistence provider
 - Network binding / exposure mode
 
 ### Sources of Config Changes

@@ -6,6 +6,45 @@ Define subagent execution contract, timeout enforcement, observability events,
 model role conventions, and context layer awareness for ephemeral autonomous
 LLM actors.
 ## Requirements
+
+### Requirement: Subagents use progressive tool disclosure
+
+A subagent SHALL begin with the same policy-exposed core tool set as a main
+session, minus tools prohibited by subagent policy. It SHALL NOT eagerly receive
+every discoverable first-party or MCP tool. `search_tools` and `load_tool` SHALL
+activate deferred schemas only in that child actor's ephemeral exposure set.
+
+#### Scenario: Child starts with core rather than full catalog
+
+- **GIVEN** the daemon has more than one hundred visible specialty and MCP tools
+- **WHEN** a subagent starts
+- **THEN** its first model request contains only its allowed core tools
+- **AND** `search_tools` can find allowed deferred capabilities
+
+#### Scenario: Child loads one deferred tool
+
+- **GIVEN** a subagent needs a visible deferred tool
+- **WHEN** it searches for and loads that exact tool
+- **THEN** the next child request contains the core plus that tool
+- **AND** unrelated deferred schemas remain absent
+
+#### Scenario: Child cannot discover recursive delegation
+
+- **GIVEN** `spawn_agent` is registered for the parent session
+- **WHEN** a subagent searches for or attempts to load it
+- **THEN** the response does not confirm or activate `spawn_agent`
+
+### Requirement: Subagent tool exposure is observable without payloads
+
+Subagent diagnostics SHALL report core, deferred-visible, and loaded tool counts
+for each run. Exposure diagnostics SHALL NOT include tool argument values,
+command text, file paths, schema bodies, or hidden tool names.
+
+#### Scenario: Child startup logs bounded counts
+
+- **WHEN** a subagent begins a run
+- **THEN** one structured diagnostic records its three tool counts
+- **AND** the event contains no authored payload or path
 ### Requirement: Subagent execution contract
 
 The system SHALL run subagents as ephemeral actors (`SubAgentActor`) that
@@ -459,3 +498,51 @@ Each subagent SHALL own an ephemeral working context initialized by forking a re
 - **WHEN** the parent handles the failure result
 - **THEN** the outcome contains no mergeable working-context delta
 - **AND** no child file metadata is merged into parent durable working context
+
+### Requirement: Managed server-feed sub-agent discovery
+
+The system SHALL load sub-agent definitions from user-authored top-level files under `~/.netclaw/agents/*.md` and from managed server-feed files under `~/.netclaw/agents/.server-feeds/<feed-name>/*.md`. User-authored top-level sub-agents SHALL take precedence over managed server-feed sub-agents with the same logical name. Shadowed managed sub-agents SHALL NOT be exposed through sub-agent discovery, `spawn_agent`, or routed skill execution.
+
+#### Scenario: Managed sub-agent is loaded when no local conflict exists
+
+- **GIVEN** `~/.netclaw/agents/.server-feeds/team/code-reviewer.md` declares `name: code-reviewer`
+- **AND** no top-level local sub-agent declares `name: code-reviewer`
+- **WHEN** the sub-agent loader refreshes definitions
+- **THEN** `code-reviewer` is registered as an available sub-agent according to its frontmatter visibility
+
+#### Scenario: Local sub-agent shadows managed sub-agent
+
+- **GIVEN** `~/.netclaw/agents/code-reviewer.md` declares `name: code-reviewer`
+- **AND** `~/.netclaw/agents/.server-feeds/team/code-reviewer.md` also declares `name: code-reviewer`
+- **WHEN** the sub-agent loader refreshes definitions
+- **THEN** the top-level local `code-reviewer` definition is registered
+- **AND** the managed feed `code-reviewer` definition is skipped
+- **AND** NetClaw emits a diagnostic identifying the shadowed managed definition
+
+#### Scenario: Shadowed managed sub-agent cannot be spawned by routed skill
+
+- **GIVEN** a top-level local sub-agent shadows a managed server-feed sub-agent with the same name
+- **WHEN** a skill routes execution through `metadata.subagent` using that name
+- **THEN** routed execution resolves to the registered local sub-agent definition
+- **AND** the shadowed managed definition is not used
+
+#### Scenario: Managed feed conflicts are deterministic
+
+- **GIVEN** two configured server feeds both provide a managed sub-agent named `reviewer`
+- **WHEN** the sub-agent loader refreshes definitions
+- **THEN** NetClaw registers only one `reviewer` definition using deterministic configured feed order
+- **AND** skips later managed duplicates with diagnostics
+
+#### Scenario: Managed file changes refresh the registry
+
+- **GIVEN** a managed sub-agent file changes under `~/.netclaw/agents/.server-feeds/team/`
+- **WHEN** the sub-agent loader checks for changes
+- **THEN** the loader detects the managed file change
+- **AND** refreshes the sub-agent registry snapshot
+
+#### Scenario: Missing managed namespace does not block local loading
+
+- **GIVEN** `~/.netclaw/agents/.server-feeds/` does not exist
+- **AND** top-level local sub-agent files exist under `~/.netclaw/agents/`
+- **WHEN** the sub-agent loader refreshes definitions
+- **THEN** local sub-agent loading continues without requiring the managed namespace to exist

@@ -54,6 +54,10 @@ jobs:
       - name: "Restore .NET tools"
         run: dotnet tool restore
 
+      - name: "Validate release notes parser"
+        shell: pwsh
+        run: ./scripts/smoke/release-notes-smoke.ps1
+
       - name: "Update release notes"
         shell: pwsh
         run: |
@@ -61,25 +65,6 @@ jobs:
 
       - name: "dotnet build"
         run: dotnet build -c Release
-
-      # Pre-warm the npm cache so MCP stdio smoke tests don't time out downloading
-      # @modelcontextprotocol/server-everything on the first npx invocation.
-      - name: "Warm npm cache for MCP smoke tests"
-        shell: bash
-        run: npx -y @modelcontextprotocol/server-everything --version || true
-
-      # Pre-warm the PowerShell host probe so cold-start (Defender scan, first-run
-      # init) doesn't push the in-test 5s probe timeout on loaded Windows runners.
-      # Warm both pwsh.exe and the powershell.exe fallback — the resolver probes
-      # the fallback when pwsh is missing or its probe fails. Use -Command "exit 0"
-      # (no interpolated variables) so the outer pwsh shell can't mangle the args.
-      - name: "Warm PowerShell host probe"
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          pwsh -NoLogo -NoProfile -NonInteractive -Command "exit 0"
-          & "$env:SystemRoot\System32\WindowsPowerShell\v1.0\powershell.exe" -NoLogo -NoProfile -NonInteractive -Command "exit 0"
-          exit 0
 
       # .NET Framework tests can't run reliably on Linux, so we only do .NET 8
 
@@ -90,7 +75,13 @@ jobs:
         # 30-min job cap) and is diagnosable from the CI log + the uploaded dump instead of a silent
         # timeout. The full dump carries every thread's stack — needed to confirm the suspected
         # macOS/ARM64 weak-memory-ordering hang in the TUI view-models.
-        run: dotnet test -c Release --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
+        run: dotnet test -c Release --filter "Category!=NativeShell" --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
+
+      - name: "dotnet test (native shell, serial)"
+        if: runner.os == 'Windows'
+        shell: bash
+        # The native PowerShell test needs an isolated Windows host.
+        run: dotnet test -c Release --no-build --filter "Category=NativeShell" --blame-hang-timeout 300s --blame-hang-dump-type full --results-directory ./TestResults
 
       # Diagnostic: surface the blame Sequence file (names the stuck test) in the CI log so a
       # platform-specific hang can be pinpointed even without downloading the dump artifact.
@@ -143,6 +134,37 @@ jobs:
         run: bash scripts/smoke/cli-smoke.sh
         env:
           NETCLAW_CLI: ./install-test/netclaw
+
+  path-access-mutation:
+    name: Path Access Mutation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Test path-access mutants"
+        run: ./scripts/run-path-access-mutations.sh
+
+      - name: "Upload mutation report"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: path-access-mutation-report
+          path: ./artifacts/stryker/path-access-policy
+          if-no-files-found: ignore
+          retention-days: 14
 
   copyright-headers:
     name: Copyright Headers
@@ -214,7 +236,7 @@ jobs:
 
       - name: "Install shell integration test dependencies"
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install --yes fish zsh
+        run: bash scripts/smoke/install-shell-test-dependencies.sh
 
       - name: "install.sh smoke test"
         if: runner.os != 'Windows'
@@ -230,6 +252,22 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: ./scripts/smoke/install-smoke.ps1
+
+  eval-oracles:
+    name: Eval Oracle Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install eval assertion dependencies
+        run: sudo apt-get update && sudo apt-get install -y jq sqlite3
+      - name: Check eval assertions and fixture protocol
+        run: |
+          bash -n evals/run-evals.sh
+          bash -n evals/run-background-evals.sh
+          bash -n evals/cycle_evals.sh
+          python3 -m unittest discover -s evals -p test_background_evals.py -v
+          python3 -m unittest discover -s evals -p test_cycle_evals.py -v
 
   semver-conformance:
     name: SemVer Conformance

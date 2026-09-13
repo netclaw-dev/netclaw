@@ -59,7 +59,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             "interactive-reviewed-safe-allows",
             invocation,
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.SafeVerbInTrustedScope)));
+            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)));
     }
 
     [Fact]
@@ -80,6 +80,39 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                 ToolAllowReason.StoredApproval,
                 1,
                 "persistent:git status")));
+
+    [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The project glob regression defines POSIX behavior.")]
+    [InlineData("grep -rn \"Mode B\" docs/ *.md 2>/dev/null | head -20", true, "grep")]
+    [InlineData("grep -rn \"Mode B\" docs/ *.md 2>/dev/null | head -20", false, "grep|head")]
+    [InlineData("rm *.md", true, "rm")]
+    [InlineData("rm *.md", false, "rm")]
+    public async Task Project_glob_with_in_root_file_alias_remains_approval_gated(
+        string command,
+        bool interactive,
+        string expectedCandidates)
+    {
+        var testCase = new ShellApprovalCase(
+            "project-glob-with-in-root-alias-remains-approval-gated",
+            new ShellApprovalInvocation(
+                command,
+                Interactive: interactive),
+            Approvals.None,
+            ExpectedApproval.Require(expectedCandidates.Split('|')));
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+        harness.CreateProjectDirectory("docs");
+        harness.CreateProjectFileSymlink("CLAUDE.md", "AGENTS.md");
+
+        var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, observed.Outcome);
+        Assert.Equal(expectedCandidates.Split('|'), observed.CandidateVerbs);
+        Assert.False(observed.IsMessy);
+        Assert.Equal(1, harness.ApprovalService.CheckCount);
+    }
 
     [Fact]
     public Task Noninteractive_safe_candidate_does_not_fill_a_partial_grant_gap()
@@ -118,7 +151,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The project-scope correction defines Bash path behavior.")]
-    public async Task Reviewed_safe_external_cwd_exposes_project_scope_correction()
+    public async Task Unavailable_registry_scope_preserves_ordinary_approval()
     {
         var testCase = new ShellApprovalCase(
             "reviewed-safe-external-cwd-suggests-project-scope",
@@ -135,7 +168,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
         var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
 
-        Assert.Equal(context.Cwd, context.SuggestedProjectDirectory);
+        Assert.True(decision.NeedsApproval);
+        Assert.Null(decision.AgentCorrection);
+        Assert.NotNull(context.Cwd);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
@@ -157,7 +192,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
         var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
 
-        Assert.Null(context.SuggestedProjectDirectory);
+        Assert.Null(decision.AgentCorrection);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]

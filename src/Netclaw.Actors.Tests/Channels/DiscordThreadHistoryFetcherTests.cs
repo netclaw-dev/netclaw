@@ -480,6 +480,7 @@ public sealed class DiscordThreadHistoryFetcherTests
         DiscordChannelOptions? options = null,
         NetclawPaths? paths = null)
     {
+        var testPaths = paths ?? new NetclawPaths(Path.GetTempPath());
         return new DiscordThreadHistoryFetcher(
             messageFetcher ?? ((_, _) => Task.FromResult<IReadOnlyList<DiscordThreadHistoryFetcher.HistoricalMessage>>([])),
             options ?? new DiscordChannelOptions(),
@@ -487,8 +488,8 @@ public sealed class DiscordThreadHistoryFetcherTests
             scanner ?? new NullContentScanner(),
             profiles ?? ToolAudienceProfileDefaults.CreateProfiles(),
             modelCapabilities ?? TestDiscordGatewayDeps.DefaultVisionCapableModel,
-            paths ?? new NetclawPaths(Path.GetTempPath()),
-            NullLogger<DiscordThreadHistoryFetcher>.Instance);
+            NullLogger<DiscordThreadHistoryFetcher>.Instance,
+            new Netclaw.Actors.Protocol.TestSessionStorageResolver(testPaths));
     }
 
     private sealed class FakeHttpHandler : HttpMessageHandler

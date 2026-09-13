@@ -4,7 +4,7 @@
 ## Webhook Management
 
 
-Webhooks are gated on `Webhooks.Enabled` in `netclaw.json` (default `true`).
+Webhooks are gated on `Webhooks.Enabled` in `netclaw.json` (default `false` — enable it explicitly before routes serve).
 When disabled, the webhook HTTP endpoint returns 404 for all routes and
 webhook tools are hidden from discovery.
 
@@ -60,6 +60,23 @@ existing values; provide an argument only when changing that setting.
 
 Route files hot-reload without restarting the daemon. If a route file becomes
 invalid, Netclaw removes that route immediately and emits an operational alert.
+
+Route mutations serialize through one daemon-side authority. The daemon also
+exposes an authenticated management resource, separate from the anonymous
+delivery endpoint:
+
+- `GET /api/webhooks` -> list routes (no secrets in responses)
+- `GET /api/webhooks/{route}` -> route detail (no secrets)
+- `PUT /api/webhooks/{route}` -> create or update; requires Operator authority
+- `DELETE /api/webhooks/{route}` -> remove the route
+
+The `netclaw webhooks` CLI manages routes through this resource. `set` and
+`delete` require a running daemon: when the daemon does not answer, when an older
+daemon lacks the resource, or when the daemon rejects the call, the command fails
+and changes no file. The CLI never writes a route file. `list`, `show`, and
+`validate` read the route files on disk, which stay canonical. To author a route
+without a daemon, write the route file to the webhooks directory; the daemon
+loads it at startup.
 
 **Approval gate:** Webhooks run without a human — they cannot prompt for
 approval. The same rules as reminders apply: shell commands must be pre-approved

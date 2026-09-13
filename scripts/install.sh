@@ -456,8 +456,8 @@ if [ "$SKIP_SHELL" = false ]; then
             write_posix_env_script
             modify_posix_rc_file "$RC_FILE"
             echo ""
-            echo "Installation complete! netclaw will be on PATH in new shells."
-            echo "To update this shell, run:"
+            echo "Installation complete! Netclaw will be available in new terminal sessions."
+            echo "To use Netclaw in this terminal now, run:"
             echo ""
             echo "  $SOURCE_LINE"
             ;;
@@ -466,8 +466,8 @@ if [ "$SKIP_SHELL" = false ]; then
                 write_posix_env_script
                 modify_posix_rc_file "$RC_FILE"
                 echo ""
-                echo "Installation complete! netclaw will be on PATH in new shells."
-                echo "To update this shell, run:"
+                echo "Installation complete! Netclaw will be available in new terminal sessions."
+                echo "To use Netclaw in this terminal now, run:"
                 echo ""
                 echo "  $SOURCE_LINE"
             else
@@ -479,11 +479,13 @@ if [ "$SKIP_SHELL" = false ]; then
             ;;
         fish)
             write_fish_config
+            FISH_CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/netclaw.fish"
+            FISH_CONFIG_QUOTED="$(shell_quote "$FISH_CONFIG")"
             echo ""
-            echo "Installation complete! netclaw will be on PATH in new fish shells."
-            echo "To update this shell, run:"
+            echo "Installation complete! Netclaw will be available in new terminal sessions."
+            echo "To use Netclaw in this terminal now, run:"
             echo ""
-            echo "  set -gx PATH $INSTALL_DIR_QUOTED \$PATH"
+            echo "  source $FISH_CONFIG_QUOTED"
             ;;
         *)
             echo "  Shell '$SHELL_NAME' is not supported for automatic PATH setup."

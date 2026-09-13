@@ -66,6 +66,7 @@ public sealed record SessionOutputDto
     public string? ToolName { get; init; }
     public string? ArgumentsJson { get; init; }
     public string? Result { get; init; }
+    public string? ToolFailureCode { get; init; }
 
     // Usage
     public long? InputTokens { get; init; }
@@ -97,6 +98,8 @@ public sealed record SessionOutputDto
     // Compaction
     public int? MessagesBefore { get; init; }
     public int? MessagesAfter { get; init; }
+    public bool? Summarized { get; init; }
+    public bool? ToolResultsCleared { get; init; }
     public long? PreCompactionInputTokens { get; init; }
     public int? KeepCountUsed { get; init; }
 

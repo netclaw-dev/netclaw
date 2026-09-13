@@ -5,14 +5,13 @@
 // -----------------------------------------------------------------------
 using System.Net.Http;
 using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Daemon;
 using Netclaw.Cli.Mcp;
+using Netclaw.Cli.Tests.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Rendering;
 using Termina.Terminal;
@@ -411,34 +410,16 @@ public sealed class McpToolPermissionsPageTests : IDisposable
     private (VirtualTerminal Terminal, TerminaApplication App, McpToolPermissionsViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input, int width = 120, int height = 40)
     {
-        var terminal = new VirtualTerminal(width, height);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        McpToolPermissionsViewModel? capturedVm = null;
-
         var configuration = new ConfigurationBuilder().Build();
         var daemonApi = new DaemonApi(new FailingHttpClientFactory(), configuration, _paths);
 
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/mcp-tools", builder =>
-        {
-            builder.RegisterRoute<McpToolPermissionsPage, McpToolPermissionsViewModel>(
-                "/mcp-tools",
-                _ => new McpToolPermissionsPage(),
-                _ =>
-                {
-                    capturedVm = new McpToolPermissionsViewModel(_paths, daemonApi);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
+        return HeadlessTerminaFixture.Create<McpToolPermissionsPage, McpToolPermissionsViewModel>(
+            "/mcp-tools",
+            () => new McpToolPermissionsPage(),
+            () => new McpToolPermissionsViewModel(_paths, daemonApi),
+            out input,
+            width,
+            height);
     }
 
     private static void AssertLineHasBackground(VirtualTerminal terminal, string text, Color expected)

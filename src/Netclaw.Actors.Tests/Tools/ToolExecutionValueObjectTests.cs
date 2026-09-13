@@ -45,7 +45,12 @@ public sealed class ToolExecutionValueObjectTests
 
     [Fact]
     public void Bound_session_rejects_missing_identity()
-        => Assert.Throws<ArgumentException>(() => new ToolSessionScope.Bound(" ", null));
+        => Assert.Throws<ArgumentException>(() => new ToolSessionScope.Bound(
+            " ",
+            SessionStoragePaths.CreateLegacy(
+                Path.GetFullPath(Path.Combine(Path.GetTempPath(), "session")),
+                Path.GetFullPath(Path.Combine(Path.GetTempPath(), "logs")),
+                "session")));
 
     [Fact]
     public void Context_rejects_missing_semantic_values()
@@ -120,7 +125,12 @@ public sealed class ToolExecutionValueObjectTests
     {
         var runScope = new ToolRunScope
         {
-            Session = new ToolSessionScope.Bound("slack/thread-1", "/tmp/session"),
+            Session = new ToolSessionScope.Bound(
+                "slack/thread-1",
+                SessionStoragePaths.CreateLegacy(
+                    Path.GetFullPath("/tmp/session"),
+                    Path.GetFullPath("/tmp/logs"),
+                    "slack_thread-1")),
             Audience = TrustAudience.Personal,
             InlineOutputBudget = InlineOutputBudget.Default,
             InteractiveApproval = new InteractiveApprovalCapability.Unavailable()

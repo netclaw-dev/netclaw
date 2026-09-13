@@ -180,20 +180,20 @@ public sealed class SessionPipeline : ISessionPipeline
     private readonly ActorSystem _system;
     private readonly IRequiredActor<SessionManagerActorKey> _sessionManagerProvider;
     private readonly ISessionLifecycleObserver? _lifecycleObserver;
-    private readonly NetclawPaths _paths;
+    private readonly ISessionStorageResolver _storageResolver;
     private readonly SessionIngressGate? _ingressGate;
 
     public SessionPipeline(
         ActorSystem system,
         IRequiredActor<SessionManagerActorKey> sessionManagerProvider,
-        NetclawPaths paths,
+        ISessionStorageResolver storageResolver,
         ISessionLifecycleObserver? lifecycleObserver = null,
         SessionIngressGate? ingressGate = null)
     {
         _system = system;
         _sessionManagerProvider = sessionManagerProvider;
         _lifecycleObserver = lifecycleObserver;
-        _paths = paths;
+        _storageResolver = storageResolver;
         _ingressGate = ingressGate;
     }
 
@@ -216,6 +216,7 @@ public sealed class SessionPipeline : ISessionPipeline
         CancellationToken cancellationToken = default)
     {
         _ingressGate?.ThrowIfClosed();
+        var storage = _storageResolver.Resolve(sessionId);
 
         var sessionManager = await _sessionManagerProvider.GetAsync(cancellationToken);
         var killSwitch = KillSwitches.Shared($"session-{sessionId.Value}");
@@ -253,7 +254,7 @@ public sealed class SessionPipeline : ISessionPipeline
         // stage thread), so JoinSession is always processed before the
         // SendUserMessage that follows it.
         var inputSink = Flow.Create<ChannelInput>()
-            .Select(input => MapToCommand(input, sessionId, options, _paths))
+            .Select(input => MapToCommand(input, sessionId, options, storage))
             .Via(killSwitch.Flow<SendUserMessage>())
             .To(Sink.ForEach<SendUserMessage>(cmd =>
             {
@@ -318,7 +319,7 @@ public sealed class SessionPipeline : ISessionPipeline
         ChannelInput input,
         SessionId sessionId,
         SessionPipelineOptions options,
-        NetclawPaths paths)
+        Netclaw.Tools.SessionStoragePaths storage)
     {
         var turnId = new Protocol.TurnId(
             string.IsNullOrWhiteSpace(input.MessageId) ? IdGen.ShortId() : input.MessageId!);
@@ -331,7 +332,7 @@ public sealed class SessionPipeline : ISessionPipeline
         var dataContents = input.Contents.OfType<DataContent>().ToList();
         if (dataContents.Count > 0)
         {
-            var sessionDir = SessionDirectoryHelper.GetSessionDirectory(sessionId, paths.SessionsDirectory);
+            var sessionDir = storage.SessionDirectory.Value;
             foreach (var data in dataContents)
                 content = SessionMediaStore.WriteMediaInto(data, sessionDir, mediaRefs, content);
         }

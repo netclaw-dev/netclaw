@@ -17,6 +17,7 @@
     <PackageReference Include="NSec.Cryptography" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <PackageReference Include="ModelContextProtocol.Core" />
+    <PackageReference Include="Verify.XunitV3" />
     <PackageReference Include="xunit.v3" />
     <PackageReference Include="xunit.runner.visualstudio" />
   </ItemGroup>
@@ -36,6 +37,13 @@
          the deterministic stdio MCP server as a child process. -->
     <ProjectReference Include="../../tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj"
                       ReferenceOutputAssembly="false" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Shared tiny fixture ONNX model (no network downloads in tests) — same physical files
+         Netclaw.Embeddings.Tests uses, linked here for EmbeddingWarmupHostedServiceTests. -->
+    <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.onnx" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="../Netclaw.Embeddings.Tests/Fixtures/*.txt" Link="Fixtures/%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

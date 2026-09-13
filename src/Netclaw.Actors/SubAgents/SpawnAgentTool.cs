@@ -65,7 +65,7 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         if (error is not null)
             return error;
 
-        var result = await _spawner.SpawnAsync(profile!, args.Task, args.Context, context, ct);
+        var result = await _spawner.SpawnRunAsync(profile!, args.Task, args.Context, context, ct, systemPromptOverlay: null, activitySink: null);
         return FormatResult(args.Agent, result);
     }
 
@@ -94,8 +94,8 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         // The spawner writes the sub-agent's activity into this channel and
         // completes it (even on failure) when the run ends.
         var channel = Channel.CreateUnbounded<ToolActivityUpdate>();
-        var spawnTask = _spawner.SpawnAsync(
-            profile!, args!.Task, args.Context, context, ct, activitySink: channel.Writer);
+        var spawnTask = _spawner.SpawnRunAsync(
+            profile!, args!.Task, args.Context, context, ct, systemPromptOverlay: null, activitySink: channel.Writer);
         try
         {
             await foreach (var activity in channel.Reader.ReadAllAsync(ct))
@@ -111,8 +111,9 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         }
     }
 
-    private static string FormatResult(string agent, SubAgentResult result)
+    private static string FormatResult(string agent, EnrichedChildRunResult enriched)
     {
+        var result = enriched.Response;
         var builder = new StringBuilder();
         builder.AppendLine("Subagent run finished.");
         builder.AppendLine($"Agent: {agent}");
@@ -121,8 +122,11 @@ public sealed partial class SpawnAgentTool : NetclawTool<SpawnAgentTool.Params>
         builder.AppendLine($"Outcome: {result.Outcome.ToString().ToLowerInvariant()}");
         if (result.OutcomeReason is { } reason)
             builder.AppendLine($"Reason: {reason.Value}");
-        if (result.ScopeId is { } scopeId)
-            builder.AppendLine($"Diagnostics: session log entries include SubSessionId {scopeId.Value}.");
+        if (enriched is EnrichedChildRunResult.SuccessfulRun success)
+        {
+            builder.AppendLine($"LogPath: {success.Locations.LogPath.Value}");
+            builder.AppendLine($"ArtifactDirectory: {success.Locations.ArtifactDirectory.Value}");
+        }
 
         builder.AppendLine();
         builder.AppendLine(result.Success ? "Summary:" : "Error:");

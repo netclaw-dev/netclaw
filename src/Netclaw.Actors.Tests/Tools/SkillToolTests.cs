@@ -1009,7 +1009,7 @@ public class SkillToolTests : IDisposable
     private static SubAgentSpawner CreateSubAgentSpawner()
     {
         var registry = new ToolRegistry();
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             new ToolConfig(),
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,

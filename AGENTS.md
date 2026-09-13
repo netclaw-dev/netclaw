@@ -113,6 +113,19 @@ If you do need to create or modify files under `openspec/`, use the appropriate
 skill above rather than editing them directly. The only exception is updating
 task checkboxes in `openspec/changes/*/tasks.md` during RALPH iterations.
 
+## Specification Review Contract
+
+- Link [the engineering glossary](docs/spec/GLOSSARY.md) for cross-cutting
+  terms. Do not copy its definitions into each specification.
+- Add a glossary term when two or more capabilities need the same meaning.
+- Show an ordered flow with pseudocode or a small diagram when sequence,
+  authority, state, or persistence affects the design.
+- Give at least one concrete positive example and one negative example for each
+  new policy or security boundary.
+- Name the component that owns each decision. State whether its data is
+  call-local, actor-local, or durable.
+- Label pseudocode as schematic when it omits a security gate or runtime step.
+
 ## Discovery Rules
 
 Before coding a capability, discover in this order:
@@ -142,6 +155,20 @@ Do not treat UI-level save success or schema validity as sufficient when runtime
 behavior depends on provider IDs, canonical names, permissions, or security
 policy keys.
 
+## Tool Composition Rule
+
+Model agent behavior as a composition of existing tools before you add a new
+tool. Return machine-actionable paths or identifiers when the session already
+owns the resource and current policy permits access.
+
+Prefer small tools that agents can combine. For example, an agent must use
+`file_read`, `file_list`, and `file_search` for its own session logs. Do not add
+a special session-log reader for that behavior.
+
+Add a new tool only when existing tools cannot express the operation or its
+authority boundary safely. State the missing contract and explain why tool
+composition cannot satisfy it.
+
 ## Shell Approval Abstraction Rule
 
 Netclaw shell approval code must not parse an executable's private command,
@@ -162,6 +189,19 @@ Dynamic validation must have fake-failure tests proving save is blocked before
 persistence. Legacy/new config paradigm changes must have load/round-trip tests
 from the old shape to the runtime-consumed shape. Human manual testing is a
 last-mile confidence check, not a substitute for these gates.
+
+## Focused Mutation Test Rule
+
+Use focused Stryker tests for critical security and authority boundaries.
+Review the mutation scope after each security fix or authority policy change.
+Also review the mutation scope at each minor release.
+Add one small target when deterministic tests reject a specific unsafe mutation.
+Keep each target narrow. Keep the total CI cost within the documented budget.
+CI must fail if an expected mutant survives or does not run.
+Do not use a broad mutation score as a coverage target.
+
+See [TOOLING.md](TOOLING.md#focused-mutation-tests) for the current targets,
+procedure, cost limits, and expansion criteria.
 
 ## Configuration Schema Sync Rule
 
@@ -323,7 +363,7 @@ Run the behavioral eval suite (`./evals/run-evals.sh`) when changing:
 - Identity file templates (`SOUL.md`, `AGENTS.md`, `TOOLING.md` in init wizard)
 - System prompt assembly (`SystemPromptAssembler`, `FileSystemPromptProvider`)
 - Skill content (any `SKILL.md` under `feeds/skills/.system/files/`)
-- Skill matching logic (`SkillRegistry`, `SystemSkillSyncService` keyword handling)
+- Skill matching logic (`SkillRegistry` keyword handling)
 - Memory pipeline (`SQLiteMemoryRecallCoordinator`, `MemoryProposalGate`,
   checkpoint triggers)
 - Compaction logic (`ObservationPromptBuilder`, `ExtractiveSessionReducer`,
@@ -371,12 +411,12 @@ feature area, the corresponding skill **must** be updated in the same PR.
 **Workflow:**
 1. Edit the skill at `feeds/skills/.system/files/{name}/SKILL.md`
 2. Bump `metadata.version` in the YAML frontmatter
-3. Do NOT run `generate-skill-manifest.sh` locally — CI generates the manifest
-   and publishes to R2 on release tags or manual `workflow_dispatch`
+3. Do NOT run `generate-skill-manifest.sh` locally — the maintenance workflow
+   generates the legacy manifest on manual `workflow_dispatch`
 
 **Publishing:**
-- Skills publish automatically as part of the binary release workflow (on git tags)
-- For hot-patches without a daemon release: `gh workflow run publish_skills.yml`
+- The binary release does not publish system skills.
+- Use `gh workflow run publish_skills.yml` for legacy feed maintenance.
 - Normal dev pushes do NOT publish to the live feed
 
 If a new feature area needs agent guidance, create a new skill file and add a

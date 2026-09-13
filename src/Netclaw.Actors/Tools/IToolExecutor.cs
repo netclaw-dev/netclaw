@@ -22,6 +22,11 @@ public interface IToolExecutor
 
     Task AuthorizeAsync(FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct = default);
 
+    /// <summary>Creates the exact launch that the background actor must reauthorize before process creation.</summary>
+    Task<ShellProcessLaunch> PrepareShellLaunchAsync(
+        FunctionCallContent toolCall, ToolExecutionContext context, CancellationToken ct)
+        => throw new NotSupportedException("This executor does not support checked background shell launches.");
+
     /// <summary>
     /// Pre-dispatch argument validation shared by every caller (main session
     /// pipeline AND sub-agent loop AND any direct caller): provider args-parse
@@ -84,13 +89,10 @@ public interface IToolExecutor
     }
 }
 
-internal interface ISessionScratchRetryAwareExecutor
+/// <summary>Exposes the shell grammar used to compare one managed-temporary correction retry.</summary>
+internal interface IApprovalShellProvider
 {
     ApprovalShell Shell { get; }
-
-    void MarkSessionScratchRetry(
-        ToolExecutionContext context,
-        ToolAgentCorrection.SessionScratchSuggested correction);
 }
 
 /// <summary>

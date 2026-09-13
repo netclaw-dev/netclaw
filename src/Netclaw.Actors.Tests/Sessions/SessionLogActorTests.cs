@@ -12,6 +12,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Routing;
 using Netclaw.Actors.Sessions;
 using Netclaw.Configuration;
+using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
@@ -30,11 +31,17 @@ public sealed class SessionLogActorTests : TestKit
         TimeSpan? idleTimeout = null) =>
         sys.ActorOf(GenericChildPerEntityParent.CreateProps(
             new SessionMessageExtractor(),
-            entityId => SessionLogActor.CreateProps(
+            entityId => SessionLogActor.CreatePropsForPath(
                 new SessionId(entityId),
-                basePath,
+                SessionLogPath.FromLegacyPath(GetLegacyLogPath(new SessionId(entityId), basePath)),
                 timeProvider,
                 idleTimeout)));
+
+    private static string GetLegacyLogPath(SessionId sessionId, string basePath)
+        => Path.Combine(
+            basePath,
+            SessionDirectoryHelper.SanitizeSessionId(sessionId),
+            "session.log");
 
     /// <summary>
     /// Spins on <see cref="Directory.Delete"/> via <see cref="TestKit.AwaitAssertAsync"/>.
@@ -89,7 +96,7 @@ public sealed class SessionLogActorTests : TestKit
 
             await AwaitAssertAsync(async () =>
             {
-                var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
+                var logFile = GetLegacyLogPath(sessionId, basePath);
                 var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
                 Assert.Contains("Thinking delta: step by step", text, StringComparison.Ordinal);
             }, cancellationToken: TestContext.Current.CancellationToken);
@@ -126,7 +133,7 @@ public sealed class SessionLogActorTests : TestKit
 
                 await AwaitAssertAsync(async () =>
                 {
-                    var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
+                    var logFile = GetLegacyLogPath(sessionId, basePath);
                     var text = await ReadLogAsync(logFile, TestContext.Current.CancellationToken);
                     Assert.Contains("Assistant: first", text, StringComparison.Ordinal);
                 }, cancellationToken: TestContext.Current.CancellationToken);
@@ -140,7 +147,7 @@ public sealed class SessionLogActorTests : TestKit
 
                 await AwaitAssertAsync(async () =>
                 {
-                    var logFile = SessionLogFile.GetLogPath(sessionId, basePath);
+                    var logFile = GetLegacyLogPath(sessionId, basePath);
                     Assert.True(File.Exists(logFile));
                     Assert.Single(Directory.GetFiles(Path.GetDirectoryName(logFile)!, "*.log", SearchOption.TopDirectoryOnly));
 
@@ -173,8 +180,8 @@ public sealed class SessionLogActorTests : TestKit
 
             await AwaitAssertAsync(async () =>
             {
-                var pathA = SessionLogFile.GetLogPath(sessionA, basePath);
-                var pathB = SessionLogFile.GetLogPath(sessionB, basePath);
+                var pathA = GetLegacyLogPath(sessionA, basePath);
+                var pathB = GetLegacyLogPath(sessionB, basePath);
                 var textA = await ReadLogAsync(pathA, TestContext.Current.CancellationToken);
                 var textB = await ReadLogAsync(pathB, TestContext.Current.CancellationToken);
 
@@ -211,7 +218,7 @@ public sealed class SessionLogActorTests : TestKit
 
             await AwaitAssertAsync(async () =>
             {
-                var path = SessionLogFile.GetLogPath(sessionId, basePath);
+                var path = GetLegacyLogPath(sessionId, basePath);
                 var text = await ReadLogAsync(path, TestContext.Current.CancellationToken);
                 Assert.Contains("Assistant: audit-line", text, StringComparison.Ordinal);
                 Assert.Contains("Diagnostic: provider sent request", text, StringComparison.Ordinal);
@@ -221,5 +228,55 @@ public sealed class SessionLogActorTests : TestKit
         {
             await TryDeleteDirectoryAsync(basePath);
         }
+    }
+
+    [Fact]
+    public async Task Storage_dispatcher_separates_version_2_parent_and_child_logs()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), $"netclaw-session-log-v2-{Guid.NewGuid():N}");
+        var timeProvider = new FakeTimeProvider(DateTimeOffset.Parse("2026-08-28T00:00:00Z"));
+        var sessionId = new SessionId("signalr/session-1");
+        var storage = SessionStoragePaths.CreateVersion2(new SessionStorageEnvelopeRoot(
+            Path.GetFullPath(Path.Combine(basePath, "sessions", "session-1"))));
+        var childScope = new SubAgentScopeId("signalr/session-1/subagent/test/run-1");
+        var child = storage.ForChild(new SubAgentRunId("run-1"), childScope);
+
+        try
+        {
+            var dispatcher = Sys.ActorOf(Props.Create(() => new SessionLogDispatcher(
+                new FixedSessionStorageResolver(storage),
+                timeProvider)));
+            dispatcher.Tell(new TextOutput("parent audit") { SessionId = sessionId });
+            for (var index = 0; index < 256; index++)
+            {
+                dispatcher.Tell(new SessionLogDiagnostic(
+                    sessionId,
+                    $"child diagnostic {index}",
+                    childScope));
+            }
+
+            await AwaitAssertAsync(async () =>
+            {
+                var parentText = await ReadLogAsync(
+                    storage.LogPath.Value,
+                    TestContext.Current.CancellationToken);
+                var childText = await ReadLogAsync(
+                    child.LogPath.Value,
+                    TestContext.Current.CancellationToken);
+                Assert.Contains("parent audit", parentText, StringComparison.Ordinal);
+                Assert.DoesNotContain("child diagnostic", parentText, StringComparison.Ordinal);
+                Assert.Contains("child diagnostic 255", childText, StringComparison.Ordinal);
+            }, cancellationToken: TestContext.Current.CancellationToken);
+        }
+        finally
+        {
+            await TryDeleteDirectoryAsync(basePath);
+        }
+    }
+
+    private sealed class FixedSessionStorageResolver(SessionStoragePaths storage)
+        : ISessionStorageResolver
+    {
+        public SessionStoragePaths Resolve(SessionId sessionId) => storage;
     }
 }

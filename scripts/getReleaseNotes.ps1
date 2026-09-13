@@ -4,36 +4,24 @@ function Get-ReleaseNotes {
         [string]$MarkdownFile
     )
 
-    # Read markdown file content
     $content = Get-Content -Path $MarkdownFile -Raw
+    $pattern = '(?ms)^##\s+(?<version>\S+)\s+\((?<date>\d{4}-\d{2}-\d{2})\)\s*\r?\n(?<notes>.*?)(?=^##\s+|\z)'
+    $match = [regex]::Match($content, $pattern)
 
-    # Split content based on headers
-    $sections = $content -split "####"
-
-    # Output object to store result
-    $outputObject = [PSCustomObject]@{
-        Version       = $null
-        Date          = $null
-        ReleaseNotes  = $null
+    if (-not $match.Success) {
+        throw "Could not find a release header in '$MarkdownFile'. Expected '## <version> (<yyyy-MM-dd>)'."
     }
 
-    # Check if we have at least 3 sections (1. Before the header, 2. Header, 3. Release notes)
-    if ($sections.Count -ge 3) {
-        $header = $sections[1].Trim()
-        $releaseNotes = $sections[2].Trim()
-
-        # Extract version and date from the header
-        $headerParts = $header -split " ", 2
-        if ($headerParts.Count -eq 2) {
-            $outputObject.Version = $headerParts[0]
-            $outputObject.Date = $headerParts[1]
-        }
-
-        $outputObject.ReleaseNotes = $releaseNotes
+    $releaseNotes = $match.Groups['notes'].Value.Trim()
+    if ([string]::IsNullOrWhiteSpace($releaseNotes)) {
+        throw "Release '$($match.Groups['version'].Value)' in '$MarkdownFile' has no release notes."
     }
 
-    # Return the output object
-    return $outputObject
+    return [PSCustomObject]@{
+        Version      = $match.Groups['version'].Value
+        Date         = $match.Groups['date'].Value
+        ReleaseNotes = $releaseNotes
+    }
 }
 
 # Call function example:

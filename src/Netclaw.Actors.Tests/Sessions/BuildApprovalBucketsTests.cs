@@ -16,7 +16,7 @@ namespace Netclaw.Actors.Tests.Sessions;
 /// The session-scope vs persistent-scope branching is where a bug class lived:
 /// standalone verbs with no anchored path argument (curl https://..., gh pr
 /// list, git status) used to inherit the session_dir as their effective
-/// directory and then get silently dropped by the session-scratch
+/// directory and then get silently dropped by the session-owned
 /// dead-on-arrival guard. The retry would then fail to find the verb in
 /// ToolApprovalActor._sessionApprovals and throw
 /// ToolApprovalRequiredException, surfacing as
@@ -34,7 +34,7 @@ public sealed class BuildApprovalBucketsTests
         // ApprovedSession. Each has candidate.Directory == null (curl URL
         // is not an anchored path). Before the fix, persistence resolved
         // effectiveDirectory = null ?? pending.Cwd = session_dir, the
-        // session-scratch guard fired, the verb never landed in the
+        // session-owned guard fired, the verb never landed in the
         // session approval dict, and the retry threw.
         var candidates = new[]
         {

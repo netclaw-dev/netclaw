@@ -36,11 +36,11 @@ Output "/tmp/tape-tui-cleanup.gif"
 # Seed a couple of providers so the list has multiple rows to
 # arrow-navigate through — multiple rows is what triggered the
 # "duplicate rows on arrow navigation" symptom in Aaron's report.
-Type "netclaw provider add seed-a ollama --endpoint http://localhost:11434"
+Type "netclaw provider add seed-a openai-compatible --endpoint __SMOKE_LLM_ENDPOINT__"
 Enter
 Wait+Screen@10s /Added provider 'seed-a'|TAPE\$/
 
-Type "netclaw provider add seed-b ollama --endpoint http://localhost:11434"
+Type "netclaw provider add seed-b openai-compatible --endpoint __SMOKE_LLM_ENDPOINT__"
 Enter
 Wait+Screen@10s /Added provider 'seed-b'|TAPE\$/
 

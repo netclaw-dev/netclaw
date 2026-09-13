@@ -38,7 +38,6 @@ public sealed class NetclawPaths
     // ── Skills directory (procedural context) ──
     public string SkillsDirectory => Path.Combine(BasePath, "skills");
     public string SystemSkillsDirectory => Path.Combine(SkillsDirectory, ".system");
-    public string SkillSyncStatePath => Path.Combine(SystemSkillsDirectory, ".sync-state.json");
 
     // ── Server feed skills (from private skill-server instances) ──
     public string ServerFeedsDirectory => Path.Combine(SkillsDirectory, ".server-feeds");
@@ -52,9 +51,6 @@ public sealed class NetclawPaths
     // ── Cache directory ──
     public string CacheDirectory => Path.Combine(BasePath, "cache");
     public string RestartManifestPath => Path.Combine(CacheDirectory, "restart-manifest.json");
-
-    // ── Memory ──
-    public string MemorySqliteDbPath => SqliteDbPath;
 
     // ── Binary directory (install location for self-contained binaries) ──
     public string BinDirectory => Path.Combine(BasePath, "bin");
@@ -113,10 +109,9 @@ public sealed class NetclawPaths
     public string LogsDirectory => Path.Combine(BasePath, "logs");
     public string RuntimeDirectory => Path.Combine(BasePath, "runtime");
     /// <summary>
-    /// Per-session log files live at <c>{SessionLogsDirectory}/{sanitized_id}/session.log</c>.
-    /// This tree is deliberately kept outside <see cref="SessionsDirectory"/> so
-    /// the agent's file_read tool (scoped to <c>{session_dir}</c>) cannot observe
-    /// its own audit trail.
+    /// Legacy per-session log files live at
+    /// <c>{SessionLogsDirectory}/{sanitized_id}/session.log</c>. Versioned
+    /// sessions store logs inside their session storage envelope.
     /// </summary>
     public string SessionLogsDirectory => Path.Combine(LogsDirectory, "sessions");
     public string DaemonLogPath => Path.Combine(LogsDirectory, "daemon.log");
@@ -125,6 +120,22 @@ public sealed class NetclawPaths
     public string LockFilePath => Path.Combine(BasePath, "netclaw.lock");
     public string SqliteDbPath => Path.Combine(BasePath, "netclaw.db");
     public string KeysDirectory => Path.Combine(BasePath, "keys");
+
+    // ── Downloaded model artifacts (memory-core-redesign D2: embedding models) ──
+    /// <summary>
+    /// Root directory for downloaded/provisioned model artifacts (currently embedding models;
+    /// <see cref="EmbeddingModelDirectory"/> is the per-model subdirectory). Kept separate from
+    /// <see cref="CacheDirectory"/> because these artifacts are large (tens to hundreds of MB),
+    /// hash-verified, and intentionally never embedded in the application binary.
+    /// </summary>
+    public string ModelsDirectory => Path.Combine(BasePath, "models");
+
+    /// <summary>
+    /// Directory for one embedding model's provisioned files (<c>model.onnx</c>,
+    /// <c>vocab.txt</c>), keyed by allowlist model id so switching
+    /// <c>Memory.Embeddings.ModelId</c> never collides with a previously provisioned model.
+    /// </summary>
+    public string EmbeddingModelDirectory(string modelId) => Path.Combine(ModelsDirectory, modelId);
 
     public NetclawPaths(string? basePath = null, string? workspacesDirectory = null)
     {
@@ -192,6 +203,7 @@ public sealed class NetclawPaths
         yield return KeysDirectory;
         yield return CacheDirectory;
         yield return WorkspacesDirectory;
+        yield return ModelsDirectory;
     }
 }
 

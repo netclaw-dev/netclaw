@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -36,31 +38,38 @@ public sealed class ParentSessionApprovalBridgeTests
             hasThirdPartyAdoptedContext: true,
             adoptedSpeakerIds: ["user-123", "user-456"]);
 
-        var decision = await bridge.RequestApprovalAsync(
-            new ToolCallId("call-1"),
-            "shell_execute",
-            "grep timeout logs/app.log | wc -l",
-            ["grep timeout logs/app.log | wc -l"],
-            ["grep timeout logs/app.log"],
-            [new ParentApprovalCandidate("grep", "/home/user/repos/foo")
-            {
-                Shell = ApprovalShell.Bash,
-                VerbTokens = Array.AsReadOnly(["grep", "timeout"]),
-            }],
-            "/home/user/repos/foo",
-            [
-                new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel),
-                new ParentApprovalOption(ApprovalOptionKeys.ApproveSession, ApprovalOptionKeys.ApproveSessionLabel),
-                new ParentApprovalOption(ApprovalOptionKeys.ApproveAlways, ApprovalOptionKeys.ApproveAlwaysLabel),
-                new ParentApprovalOption(ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.ApproveEverywhereLabel),
-                new ParentApprovalOption(ApprovalOptionKeys.Deny, ApprovalOptionKeys.DenyLabel),
-            ],
-            isMessy: false,
+        var authorizationAttemptId = AuthorizationAttemptId.New();
+        var decision = await ((IAuthorizationAttemptAwareParentApprovalBridge)bridge).RequestApprovalAsync(
+            new ParentApprovalRequest(
+                authorizationAttemptId,
+                new ToolCallId("call-1"),
+                new ToolApprovalContext(
+                    "shell_execute",
+                    "grep timeout logs/app.log | wc -l",
+                    ["grep timeout logs/app.log | wc -l"],
+                    ["grep timeout logs/app.log"],
+                    [
+                        new ToolApprovalOption(new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce), ApprovalOptionKeys.ApproveOnceLabel),
+                        new ToolApprovalOption(new ApprovalOptionKey(ApprovalOptionKeys.ApproveSession), ApprovalOptionKeys.ApproveSessionLabel),
+                        new ToolApprovalOption(new ApprovalOptionKey(ApprovalOptionKeys.ApproveAlways), ApprovalOptionKeys.ApproveAlwaysLabel),
+                        new ToolApprovalOption(new ApprovalOptionKey(ApprovalOptionKeys.ApproveEverywhere), ApprovalOptionKeys.ApproveEverywhereLabel),
+                        new ToolApprovalOption(new ApprovalOptionKey(ApprovalOptionKeys.Deny), ApprovalOptionKeys.DenyLabel),
+                    ],
+                    Cwd: "/home/user/repos/foo",
+                    Candidates:
+                    [
+                        new ApprovalCandidate("grep", "/home/user/repos/foo")
+                        {
+                            Shell = ApprovalShell.Bash,
+                            VerbTokens = Array.AsReadOnly(["grep", "timeout"]),
+                        }
+                    ])),
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ParentApprovalDecision.ApprovedOnce, decision);
         Assert.NotNull(emitted);
-        Assert.Equal("user-123", emitted!.RequesterSenderId?.Value);
+        Assert.Equal(authorizationAttemptId.Value, emitted!.AuthorizationAttemptId);
+        Assert.Equal("user-123", emitted.RequesterSenderId?.Value);
         Assert.Equal(PrincipalClassification.Operator, emitted.RequesterPrincipal);
         Assert.True(emitted.HasAdoptedContext);
         Assert.True(emitted.HasThirdPartyAdoptedContext);

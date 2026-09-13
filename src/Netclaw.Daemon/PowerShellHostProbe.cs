@@ -83,7 +83,7 @@ internal sealed class PowerShellHostProbe(
         CancellationToken cancellationToken,
         TimeSpan attemptTimeout)
     {
-        var started = Stopwatch.GetTimestamp();
+        var started = timeProvider.GetTimestamp();
         var lookup = executableLocator.Locate(executableName);
         if (lookup is PowerShellExecutableLookup.NotFound)
             return new PowerShellHostProbeResult.NotFound();
@@ -125,7 +125,7 @@ internal sealed class PowerShellHostProbe(
             }
             catch (Exception ex)
             {
-                var elapsedMs = (long)((Stopwatch.GetTimestamp() - started) * 1000.0 / Stopwatch.Frequency);
+                var elapsedMs = (long)timeProvider.GetElapsedTime(started).TotalMilliseconds;
                 var probeTimedOut = timeout.IsCancellationRequested;
                 TryCancel(timeout);
                 var terminated = await TerminateAsync(process, stdout, stderr).ConfigureAwait(false);

@@ -33,15 +33,19 @@ public sealed class SlackThreadHistoryFetcherTests
         ToolAudienceProfiles? profiles = null,
         ModelCapabilities? modelCapabilities = null,
         SlackChannelOptions? options = null,
-        NetclawPaths? paths = null) => new(
+        NetclawPaths? paths = null)
+    {
+        var testPaths = paths ?? new NetclawPaths(Path.GetTempPath());
+        return new SlackThreadHistoryFetcher(
             _replies.FetchAsync,
             options ?? _options,
             new HttpClient(handler ?? new FakeHttpHandler()),
             scanner ?? new NullContentScanner(),
-            paths ?? new NetclawPaths(Path.GetTempPath()),
             profiles ?? ToolAudienceProfileDefaults.CreateProfiles(),
             modelCapabilities ?? TestSlackGatewayDeps.DefaultVisionCapableModel,
-            NullLogger<SlackThreadHistoryFetcher>.Instance);
+            NullLogger<SlackThreadHistoryFetcher>.Instance,
+            new Netclaw.Actors.Protocol.TestSessionStorageResolver(testPaths));
+    }
 
     [Fact]
     public async Task Fetches_text_messages_from_thread()

@@ -47,7 +47,19 @@ public sealed class DeterministicCandidateSelector
 
     public sealed record ScoredCandidate(SQLiteMemoryHydratedItem Item, double SelectorScore);
 
-    private static double Score(DeterministicRetrievalRequestPlan plan, SQLiteMemoryHydratedItem document)
+    /// <summary>
+    /// Scores a single candidate against <paramref name="plan"/>'s lexical/facet/anchor/soft-scope
+    /// terms, without <see cref="SelectWithScores"/>'s class/sensitivity filtering or
+    /// <see cref="MinimumSelectorScore"/> gate. Exposed (rather than kept private) so
+    /// memory-core-redesign Slice 4's hybrid recall coordinator can score a vector-sourced
+    /// candidate that never went through the FTS5 lexical search — using the SAME weights this
+    /// class applies to lexical hits, not an independently-maintained approximation — before
+    /// squashing that score into the fusion formula. A candidate with none of the plan's terms
+    /// still returns <see cref="BaselineScore"/> (not zero); callers relying on "no lexical
+    /// evidence" should treat that baseline as effectively negligible after
+    /// <c>squash(s) = s / (s + 8.0)</c>, not literally zero.
+    /// </summary>
+    public static double Score(DeterministicRetrievalRequestPlan plan, SQLiteMemoryHydratedItem document)
     {
         // Baseline: candidates survived SQL pre-filtering (FTS match), so they
         // deserve a non-zero score. Lexical/facet/anchor matches boost above this.

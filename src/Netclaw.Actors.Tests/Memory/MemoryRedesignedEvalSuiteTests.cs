@@ -65,6 +65,8 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            _timeProvider,
             sessionTuning: new SessionTuning());
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
@@ -125,6 +127,8 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            _timeProvider,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
@@ -185,6 +189,8 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            _timeProvider,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await recall.RecallAsync(new AutomaticRecallRequest(
@@ -253,6 +259,8 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            _timeProvider,
             sessionTuning: new SessionTuning());
 
         var auto = await recall.RecallAsync(new AutomaticRecallRequest(
@@ -471,6 +479,8 @@ public sealed class MemoryRedesignedEvalSuiteTests : IAsyncDisposable
         var recall = new SQLiteMemoryRecallCoordinator(
             _store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            _timeProvider,
             sessionTuning: new SessionTuning());
 
         var acceptedFact = proposalGate.Accept(

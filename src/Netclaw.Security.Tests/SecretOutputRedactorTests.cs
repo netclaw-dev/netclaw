@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using Xunit;
 
 namespace Netclaw.Security.Tests;
@@ -48,6 +49,21 @@ public sealed class SecretOutputRedactorTests
         Assert.Contains("API_KEY=***REDACTED***", redacted, StringComparison.Ordinal);
         Assert.Contains("NORMAL=value", redacted, StringComparison.Ordinal);
         Assert.DoesNotContain("secret123", redacted, StringComparison.Ordinal);
+    }
+
+    // A form-urlencoded OAuth token/DCR error body ("client_secret=...&grant_type=...") uses
+    // compound keys whose secret-bearing fragment is not the first word. These must redact the
+    // same way the JSON key form already does.
+    [Theory]
+    [InlineData("client_secret=super-secret-value-123&grant_type=refresh_token", "super-secret-value-123")]
+    [InlineData("access_token=tok-abc-123&token_type=Bearer", "tok-abc-123")]
+    [InlineData("refresh_token=rt-xyz-456", "rt-xyz-456")]
+    public void Redact_masks_env_style_compound_key_secrets(string input, string secretValue)
+    {
+        var redacted = SecretOutputRedactor.Redact(input);
+
+        Assert.Contains("***REDACTED***", redacted, StringComparison.Ordinal);
+        Assert.DoesNotContain(secretValue, redacted, StringComparison.Ordinal);
     }
 
     // ── Authorization header redaction ──
@@ -130,5 +146,36 @@ public sealed class SecretOutputRedactorTests
         var redacted = SecretOutputRedactor.Redact(input);
 
         Assert.Equal(input, redacted);
+    }
+
+    // ── Exception redaction for logging ──
+
+    [Fact]
+    public void RedactForLogging_masks_secret_shaped_exception_text()
+    {
+        var exception = new HttpRequestException(
+            HttpRequestError.Unknown,
+            "invalid_client: client_secret=secret-value token=token-value",
+            null,
+            HttpStatusCode.BadRequest);
+
+        var redacted = SecretOutputRedactor.RedactForLogging(exception);
+
+        Assert.DoesNotContain("secret-value", redacted.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain("token-value", redacted.ToString(), StringComparison.Ordinal);
+        Assert.Contains("HttpRequestException", redacted.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RedactForLogging_keeps_the_original_instance_when_nothing_matches()
+    {
+        // The common case (network errors, cancellations, disposal failures) must keep its
+        // native stack trace and type for diagnostics -- redaction only swaps in a summary
+        // when secret-shaped content is actually detected.
+        var exception = new HttpRequestException("Connection refused");
+
+        var redacted = SecretOutputRedactor.RedactForLogging(exception);
+
+        Assert.Same(exception, redacted);
     }
 }

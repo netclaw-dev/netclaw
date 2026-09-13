@@ -14,6 +14,7 @@ internal sealed class MemoryCurationWorkerService(
     SQLiteMemoryStore store,
     MemoryCurationEngine engine,
     TimeProvider timeProvider,
+    MemoryEmbedderHolder embedderHolder,
     ILogger<MemoryCurationWorkerService> logger,
     ISessionMetrics? metrics = null) : IHostedService, IDisposable
 {
@@ -56,7 +57,14 @@ internal sealed class MemoryCurationWorkerService(
                 {
                     var started = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
                     var operations = await engine.CurateAsync(leased, ct);
-                    await store.ApplyCurationBatchAsync(leased.CheckpointId, operations, ct);
+                    var writtenDocs = await store.ApplyCurationBatchAsync(leased.CheckpointId, operations, ct);
+
+                    // Embed-on-write (memory-core-redesign Slice 2, task 2.8): runs after the
+                    // checkpoint's write has already committed. Vectors are derived data — a
+                    // failure here must never fail or retry this checkpoint;
+                    // MemoryEmbedOnWriteCoordinator isolates and logs per-item failures.
+                    await MemoryEmbedOnWriteCoordinator.EmbedWrittenDocumentsAsync(
+                        embedderHolder, store, writtenDocs, logger, ct);
 
                     var ended = timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
                     logger.LogInformation(

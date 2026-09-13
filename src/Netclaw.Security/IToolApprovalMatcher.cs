@@ -638,7 +638,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 pathStyle,
                 out var coveringDirectory)
             || ShellPathRules.UsesHostPathStyle(pathStyle)
-            && ContainsSymlinkEntry(coveringDirectory))
+            && ContainsUnsafeSymlinkEntry(coveringDirectory))
         {
             return null;
         }
@@ -667,20 +667,35 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return staticPrefix[..separator];
     }
 
-    private static bool ContainsSymlinkEntry(string directory)
+    private static bool ContainsUnsafeSymlinkEntry(string directory)
     {
         if (!Directory.Exists(directory))
             return false;
 
         try
         {
+            var normalizedDirectory = PathUtility.Normalize(directory);
             foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
             {
                 // Netclaw does not reproduce Bash glob rules here. Unicode,
                 // brackets, and escapes differ from .NET wildcard rules.
-                // Any symlink makes the leaf expansion unsafe to persist.
-                if (PathUtility.ContainsSymlinkSegment(directory, entry))
+                // Every link must resolve inside the fixed glob root.
+                var attributes = File.GetAttributes(entry);
+                if ((attributes & FileAttributes.ReparsePoint) == 0)
+                    continue;
+
+                FileSystemInfo link = (attributes & FileAttributes.Directory) != 0
+                    ? new DirectoryInfo(entry)
+                    : new FileInfo(entry);
+                var target = link.ResolveLinkTarget(returnFinalTarget: true);
+                if (target is null
+                    || !target.Exists
+                    || !PathUtility.TryNormalize(target.FullName, out var normalizedTarget)
+                    || !PathUtility.IsNormalizedWithinRoot(normalizedTarget, normalizedDirectory)
+                    || PathUtility.ContainsSymlinkSegment(normalizedDirectory, normalizedTarget))
+                {
                     return true;
+                }
             }
 
             return false;
@@ -813,7 +828,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             var coveringDirectory = pattern.CoveringDirectory;
             return string.IsNullOrWhiteSpace(coveringDirectory)
-                || ContainsSymlinkEntry(coveringDirectory)
+                || ContainsUnsafeSymlinkEntry(coveringDirectory)
                 ? null
                 : [coveringDirectory];
         }

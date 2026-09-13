@@ -26,6 +26,7 @@ internal enum ShellPolicyTraceOutcome
     RequiresApproval = 3,
     Deny = 4,
     TraceTruncated = 5,
+    RequiresAgentCorrection = 6,
 }
 
 internal enum ShellPolicyTraceReason
@@ -49,10 +50,11 @@ internal enum ShellPolicyTraceReason
     InternalPolicyFailure = 16,
     PolicyAuto = 17,
     BackgroundJobLifecycle = 18,
-    SafeVerbInTrustedScope = 19,
+    ReviewedSafePolicy = 19,
     ApprovalExemptShellCandidates = 20,
     TraceLimitReached = 21,
     PolicyDenied = 22,
+    AgentCorrection = 23,
 }
 
 internal enum ShellScopeRelation
@@ -287,6 +289,9 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             ToolAuthorizationOutcome.RequiresApproval => (
                 ShellPolicyTraceOutcome.RequiresApproval,
                 ShellPolicyTraceReason.UncoveredCandidates),
+            ToolAuthorizationOutcome.RequiresAgentCorrection => (
+                ShellPolicyTraceOutcome.RequiresAgentCorrection,
+                ShellPolicyTraceReason.AgentCorrection),
             ToolAuthorizationOutcome.Denied => (
                 ShellPolicyTraceOutcome.Deny,
                 ToTraceReason(decision.DenyReason)),
@@ -338,7 +343,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
     {
         ToolAllowReason.PolicyAuto => ShellPolicyTraceReason.PolicyAuto,
         ToolAllowReason.BackgroundJobLifecycle => ShellPolicyTraceReason.BackgroundJobLifecycle,
-        ToolAllowReason.SafeVerbInTrustedScope => ShellPolicyTraceReason.SafeVerbInTrustedScope,
+        ToolAllowReason.ReviewedSafePolicy => ShellPolicyTraceReason.ReviewedSafePolicy,
         ToolAllowReason.ApprovalExemptShellCandidates => ShellPolicyTraceReason.ApprovalExemptShellCandidates,
         ToolAllowReason.StoredApproval or ToolAllowReason.OneTimeApproval =>
             ShellPolicyTraceReason.AllCandidatesCovered,

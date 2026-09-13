@@ -25,64 +25,11 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
 
     public void Dispose() => _dir.Dispose();
 
-    // ── Pass cases ───────────────────────────────────────────────────────────
+    // ── WriteConfig → optional setup → BuildCheck → RunAsync → severity/message ──
 
-    [Fact]
-    public async Task Local_LoopbackHost_Passes()
+    public static TheoryData<ExposureCase> Cases()
     {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "Host": "127.0.0.1", "ExposureMode": "local" }
-            }
-            """);
-
-        var check = BuildCheck(_ => false); // no processes needed for local
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("local", result.Message);
-        Assert.Contains("127.0.0.1", result.Message);
-    }
-
-    [Fact]
-    public async Task MissingDaemonSection_DefaultsToLocalLoopback_Passes()
-    {
-        WriteConfig("""{ "configVersion": 1 }""");
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("local", result.Message);
-    }
-
-    [Fact]
-    public async Task TailscaleServe_WithTailscaledRunning_Passes()
-    {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "ExposureMode": "tailscale-serve" }
-            }
-            """);
-        WriteMatchingLocalDevice();
-
-        var check = BuildCheck(name => name == "tailscaled");
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("tailscale-serve", result.Message);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithPairedDeviceAndTrustedProxy_Passes()
-    {
-        WriteConfig(
-            """
+        var reverseProxyHeader = """
             {
               "configVersion": 1,
               "Daemon": {
@@ -91,157 +38,162 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
                 "TrustedProxies": ["10.0.0.5"]
               }
             }
-            """);
+            """;
 
-        WriteMatchingLocalDevice();
+        return new TheoryData<ExposureCase>
+        {
+            // ── Pass cases ───────────────────────────────────────────────
+            new ExposureCase("Local_LoopbackHost_Passes",
+                """{ "configVersion": 1, "Daemon": { "Host": "127.0.0.1", "ExposureMode": "local" } }""",
+                null, _ => false, DoctorSeverity.Pass, ["local", "127.0.0.1"], false, false),
+            new ExposureCase("MissingDaemonSection_DefaultsToLocalLoopback_Passes",
+                """{ "configVersion": 1 }""",
+                null, _ => false, DoctorSeverity.Pass, ["local"], false, false),
+            new ExposureCase("TailscaleServe_WithTailscaledRunning_Passes",
+                """{ "configVersion": 1, "Daemon": { "ExposureMode": "tailscale-serve" } }""",
+                t => t.WriteMatchingLocalDevice(), name => name == "tailscaled",
+                DoctorSeverity.Pass, ["tailscale-serve"], false, false),
+            new ExposureCase("ReverseProxy_WithPairedDeviceAndTrustedProxy_Passes",
+                reverseProxyHeader,
+                t => t.WriteMatchingLocalDevice(), _ => false, DoctorSeverity.Pass, ["reverse-proxy"], false, false),
+            new ExposureCase("TailscaleFunnel_WithTailscaledRunning_Passes",
+                """{ "configVersion": 1, "Daemon": { "ExposureMode": "tailscale-funnel" } }""",
+                t => t.WriteMatchingLocalDevice(), name => name == "tailscaled",
+                DoctorSeverity.Pass, ["tailscale-funnel"], false, false),
+            new ExposureCase("CloudflareTunnel_WithCloudflaredRunning_Passes",
+                """{ "configVersion": 1, "Daemon": { "ExposureMode": "cloudflare-tunnel" } }""",
+                t => t.WriteMatchingLocalDevice(), name => name == "cloudflared",
+                DoctorSeverity.Pass, ["cloudflare-tunnel"], false, false),
 
-        var check = BuildCheck(_ => false);
+            // ── Local + non-loopback error cases ────────────────────────
+            new ExposureCase("Local_NonLoopbackHost_IsError",
+                """{ "configVersion": 1, "Daemon": { "Host": "0.0.0.0", "ExposureMode": "local" } }""",
+                null, _ => false, DoctorSeverity.Error, ["0.0.0.0", "loopback"], false, true),
+            new ExposureCase("Local_WithPrivateIp_IsError",
+                """{ "configVersion": 1, "Daemon": { "Host": "192.168.1.100", "ExposureMode": "local" } }""",
+                null, _ => false, DoctorSeverity.Error, ["192.168.1.100"], false, false),
 
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("reverse-proxy", result.Message);
+            // ── Error cases ──────────────────────────────────────────────
+            new ExposureCase("TailscaleServe_WithoutTailscaled_IsError",
+                """{ "configVersion": 1, "Daemon": { "ExposureMode": "tailscale-serve" } }""",
+                null, _ => false, DoctorSeverity.Error,
+                ["tailscale-serve", "tailscaled", "SkipTunnelProcessCheck"], false, true),
+            new ExposureCase("TailscaleFunnel_WithoutTailscaled_IsError",
+                """{ "configVersion": 1, "Daemon": { "ExposureMode": "tailscale-funnel" } }""",
+                null, _ => false, DoctorSeverity.Error,
+                ["tailscale-funnel", "tailscaled", "SkipTunnelProcessCheck"], false, false),
+            new ExposureCase("CloudflareTunnel_WithoutCloudflared_IsError",
+                """{ "configVersion": 1, "Daemon": { "ExposureMode": "cloudflare-tunnel" } }""",
+                null, _ => false, DoctorSeverity.Error,
+                ["cloudflare-tunnel", "cloudflared", "SkipTunnelProcessCheck"], false, false),
+            new ExposureCase("ReverseProxy_WithoutRemoteAuth_IsError",
+                reverseProxyHeader,
+                null, _ => false, DoctorSeverity.Error, ["remote authentication"], true, false),
+            new ExposureCase("ReverseProxy_WithoutRemoteAuth_ButWithBootstrapTokenAndDevice_Passes",
+                reverseProxyHeader,
+                t => t.WriteMatchingLocalDevice("daemon-bootstrap"), _ => false,
+                DoctorSeverity.Pass, [], false, false),
+            new ExposureCase("ReverseProxy_WithMismatchedLocalBootstrapState_IsError",
+                reverseProxyHeader,
+                t =>
+                {
+                    t.WritePairedDevice("daemon-bootstrap");
+                    File.WriteAllText(t._paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"bootstrap-token\"}");
+                },
+                _ => false, DoctorSeverity.Error, ["Bootstrap pairing state is incomplete"], true, false),
+            new ExposureCase("ReverseProxy_WithCompletedBootstrapAndMismatchedLocalToken_Warns",
+                reverseProxyHeader,
+                t =>
+                {
+                    t.WritePairedDevice("daemon-bootstrap");
+                    File.WriteAllText(t._paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"stale-token\"}");
+                    new BootstrapStateStore(t._paths).MarkCompleted(TimeProvider.System);
+                },
+                _ => false, DoctorSeverity.Warning, ["Local control-plane access is misconfigured"], true, false),
+            new ExposureCase("ReverseProxy_WithLoopbackHost_IsError",
+                """
+                {
+                  "configVersion": 1,
+                  "Daemon": {
+                    "Host": "127.0.0.1",
+                    "ExposureMode": "reverse-proxy",
+                    "TrustedProxies": ["10.0.0.5"]
+                  }
+                }
+                """,
+                t => t.WritePairedDevice(), _ => false, DoctorSeverity.Error, ["loopback"], true, false),
+            new ExposureCase("ReverseProxy_WithInvalidTrustedProxy_IsError",
+                """
+                {
+                  "configVersion": 1,
+                  "Daemon": {
+                    "Host": "10.0.0.10",
+                    "ExposureMode": "reverse-proxy",
+                    "TrustedProxies": ["not-an-ip"]
+                  }
+                }
+                """,
+                t => t.WritePairedDevice(), _ => false, DoctorSeverity.Error, ["not-an-ip"], true, false),
+            new ExposureCase("ReverseProxy_WithInvalidTrustedProxyCidr_IsError",
+                """
+                {
+                  "configVersion": 1,
+                  "Daemon": {
+                    "Host": "10.0.0.10",
+                    "ExposureMode": "reverse-proxy",
+                    "TrustedProxies": ["127.0.0.1/999"]
+                  }
+                }
+                """,
+                t => t.WritePairedDevice(), _ => false, DoctorSeverity.Error, ["127.0.0.1/999"], true, false),
+            new ExposureCase("TailscaleServe_WrongProcessRunning_IsError",
+                """{ "configVersion": 1, "Daemon": { "ExposureMode": "tailscale-serve" } }""",
+                null, name => name == "cloudflared", // wrong process
+                DoctorSeverity.Error, ["tailscaled"], false, false),
+        };
     }
 
-    [Fact]
-    public async Task TailscaleFunnel_WithTailscaledRunning_Passes()
+    [Theory]
+    [MemberData(nameof(Cases))]
+    public async Task ExposureMode_MatchesExpectedSeverityAndMessage(ExposureCase testCase)
     {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "ExposureMode": "tailscale-funnel" }
-            }
-            """);
-        WriteMatchingLocalDevice();
+        WriteConfig(testCase.ConfigJson);
+        testCase.ExtraSetup?.Invoke(this);
 
-        var check = BuildCheck(name => name == "tailscaled");
+        var check = BuildCheck(testCase.ProcessPredicate);
 
         var result = await check.RunAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("tailscale-funnel", result.Message);
+        Assert.Equal(testCase.ExpectedSeverity, result.Severity);
+        foreach (var expected in testCase.ExpectedContains)
+        {
+            if (testCase.IgnoreCase)
+            {
+                Assert.Contains(expected, result.Message, StringComparison.OrdinalIgnoreCase);
+            }
+            else
+            {
+                Assert.Contains(expected, result.Message);
+            }
+        }
+
+        if (testCase.ExpectRemediation)
+        {
+            Assert.NotNull(result.Remediation);
+        }
     }
 
-    [Fact]
-    public async Task CloudflareTunnel_WithCloudflaredRunning_Passes()
+    public sealed record ExposureCase(
+        string Name,
+        string ConfigJson,
+        Action<ExposureModeDoctorCheckTests>? ExtraSetup,
+        Func<string, bool> ProcessPredicate,
+        DoctorSeverity ExpectedSeverity,
+        string[] ExpectedContains,
+        bool IgnoreCase,
+        bool ExpectRemediation)
     {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "ExposureMode": "cloudflare-tunnel" }
-            }
-            """);
-        WriteMatchingLocalDevice();
-
-        var check = BuildCheck(name => name == "cloudflared");
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-        Assert.Contains("cloudflare-tunnel", result.Message);
-    }
-
-    // ── Local + non-loopback error cases ────────────────────────────────────
-
-    [Fact]
-    public async Task Local_NonLoopbackHost_IsError()
-    {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "Host": "0.0.0.0", "ExposureMode": "local" }
-            }
-            """);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("0.0.0.0", result.Message);
-        Assert.Contains("loopback", result.Message);
-        Assert.NotNull(result.Remediation);
-    }
-
-    [Fact]
-    public async Task Local_WithPrivateIp_IsError()
-    {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "Host": "192.168.1.100", "ExposureMode": "local" }
-            }
-            """);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("192.168.1.100", result.Message);
-    }
-
-    // ── Error cases ───────────────────────────────────────────────────────────
-
-    [Fact]
-    public async Task TailscaleServe_WithoutTailscaled_IsError()
-    {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "ExposureMode": "tailscale-serve" }
-            }
-            """);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("tailscale-serve", result.Message);
-        Assert.Contains("tailscaled", result.Message);
-        Assert.Contains("SkipTunnelProcessCheck", result.Message);
-        Assert.NotNull(result.Remediation);
-    }
-
-    [Fact]
-    public async Task TailscaleFunnel_WithoutTailscaled_IsError()
-    {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "ExposureMode": "tailscale-funnel" }
-            }
-            """);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("tailscale-funnel", result.Message);
-        Assert.Contains("tailscaled", result.Message);
-        Assert.Contains("SkipTunnelProcessCheck", result.Message);
-    }
-
-    [Fact]
-    public async Task CloudflareTunnel_WithoutCloudflared_IsError()
-    {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "ExposureMode": "cloudflare-tunnel" }
-            }
-            """);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("cloudflare-tunnel", result.Message);
-        Assert.Contains("cloudflared", result.Message);
-        Assert.Contains("SkipTunnelProcessCheck", result.Message);
+        public override string ToString() => Name;
     }
 
     [Theory]
@@ -291,202 +243,6 @@ public sealed class ExposureModeDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Error, result.Severity);
         Assert.Contains("remote authentication", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithoutRemoteAuth_IsError()
-    {
-        WriteConfig(
-            """
-            {
-              "configVersion": 1,
-              "Daemon": {
-                "Host": "10.0.0.10",
-                "ExposureMode": "reverse-proxy",
-                "TrustedProxies": ["10.0.0.5"]
-              }
-            }
-            """);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("remote authentication", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithoutRemoteAuth_ButWithBootstrapTokenAndDevice_Passes()
-    {
-        WriteConfig(
-            """
-            {
-              "configVersion": 1,
-              "Daemon": {
-                "Host": "10.0.0.10",
-                "ExposureMode": "reverse-proxy",
-                "TrustedProxies": ["10.0.0.5"]
-              }
-            }
-            """);
-        WriteMatchingLocalDevice("daemon-bootstrap");
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Pass, result.Severity);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithMismatchedLocalBootstrapState_IsError()
-    {
-        WriteConfig(
-            """
-            {
-              "configVersion": 1,
-              "Daemon": {
-                "Host": "10.0.0.10",
-                "ExposureMode": "reverse-proxy",
-                "TrustedProxies": ["10.0.0.5"]
-              }
-            }
-            """);
-        WritePairedDevice("daemon-bootstrap");
-        File.WriteAllText(_paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"bootstrap-token\"}");
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("Bootstrap pairing state is incomplete", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithCompletedBootstrapAndMismatchedLocalToken_Warns()
-    {
-        WriteConfig(
-            """
-            {
-              "configVersion": 1,
-              "Daemon": {
-                "Host": "10.0.0.10",
-                "ExposureMode": "reverse-proxy",
-                "TrustedProxies": ["10.0.0.5"]
-              }
-            }
-            """);
-        WritePairedDevice("daemon-bootstrap");
-        File.WriteAllText(_paths.SecretsPath, "{\"configVersion\":1,\"DeviceToken\":\"stale-token\"}");
-        new BootstrapStateStore(_paths).MarkCompleted(TimeProvider.System);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Warning, result.Severity);
-        Assert.Contains("Local control-plane access is misconfigured", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithLoopbackHost_IsError()
-    {
-        WriteConfig(
-            """
-            {
-              "configVersion": 1,
-              "Daemon": {
-                "Host": "127.0.0.1",
-                "ExposureMode": "reverse-proxy",
-                "TrustedProxies": ["10.0.0.5"]
-              }
-            }
-            """);
-
-        await File.WriteAllTextAsync(_paths.DevicesPath,
-            """
-            [{"Name":"laptop","TokenHash":"abc","Salt":"def","CreatedAt":"2026-01-01T00:00:00+00:00","LastUsedAt":"2026-01-01T00:00:00+00:00"}]
-            """, TestContext.Current.CancellationToken);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("loopback", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithInvalidTrustedProxy_IsError()
-    {
-        WriteConfig(
-            """
-            {
-              "configVersion": 1,
-              "Daemon": {
-                "Host": "10.0.0.10",
-                "ExposureMode": "reverse-proxy",
-                "TrustedProxies": ["not-an-ip"]
-              }
-            }
-            """);
-
-        await File.WriteAllTextAsync(_paths.DevicesPath,
-            """
-            [{"Name":"laptop","TokenHash":"abc","Salt":"def","CreatedAt":"2026-01-01T00:00:00+00:00","LastUsedAt":"2026-01-01T00:00:00+00:00"}]
-            """, TestContext.Current.CancellationToken);
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("not-an-ip", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task ReverseProxy_WithInvalidTrustedProxyCidr_IsError()
-    {
-        WriteConfig(
-            """
-            {
-              "configVersion": 1,
-              "Daemon": {
-                "Host": "10.0.0.10",
-                "ExposureMode": "reverse-proxy",
-                "TrustedProxies": ["127.0.0.1/999"]
-              }
-            }
-            """);
-
-        WritePairedDevice();
-
-        var check = BuildCheck(_ => false);
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("127.0.0.1/999", result.Message, StringComparison.OrdinalIgnoreCase);
-    }
-
-    [Fact]
-    public async Task TailscaleServe_WrongProcessRunning_IsError()
-    {
-        WriteConfig("""
-            {
-              "configVersion": 1,
-              "Daemon": { "ExposureMode": "tailscale-serve" }
-            }
-            """);
-
-        var check = BuildCheck(name => name == "cloudflared"); // wrong process
-
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
-
-        Assert.Equal(DoctorSeverity.Error, result.Severity);
-        Assert.Contains("tailscaled", result.Message);
     }
 
     // ── Missing config file ───────────────────────────────────────────────────

@@ -70,26 +70,57 @@ public static class CurationPromptBuilder
         CREATE — Genuinely new, OR distinct from the candidates in what it is
         ABOUT (different date, entity, event, or reading).
 
+        For UPDATE and CONSOLIDATE only: after the keyword line, write a line
+        containing only "---", then the complete merged document body — a
+        LOSSLESS union of the proposal and every candidate you named. You are
+        combining, not summarizing: every fact, identifier, number, URL, and date
+        from every source must still appear somewhere in the merged body. State
+        the newest value first; keep a superseded dated value inline rather than
+        deleting it, e.g. "current value is 42 (previously 30 as of 2026-05-13)".
+        SKIP and CREATE never include a body — respond with the keyword alone.
+
         SAME fact, merge: "DB pool size is 20" and "the database connection pool
         max is set to 20".
         DISTINCT, create: a CPU temperature logged at 14:00 vs the same metric at
         15:00; a staging-server config vs a production-server config.
 
-        Respond with ONLY the decision keyword and any required IDs. No explanation.
+        Respond with ONLY the decision keyword, any required IDs, and — for
+        UPDATE/CONSOLIDATE — the merged body after the "---" separator. No other
+        explanation.
 
         Examples:
           SKIP
+
           UPDATE doc-abc123
+          ---
+          Config path is /etc/app/config.yaml (previously /etc/app/config.json as
+          of 2026-06-01). Default timeout is 30s.
+
           CONSOLIDATE doc-abc123 doc-def456
+          ---
+          Akka.NET GitHub repository: https://github.com/akkadotnet/akka.net.
+          Latest stable release is 1.5.62 (previously 1.5.60 as of 2026-04-02).
+
           CREATE
         """;
 
     /// <summary>
     /// Build the user message for a curation evaluation request.
     /// </summary>
+    /// <param name="useFullCandidateContent">
+    /// When false (the legacy default, used by the content-search/fuzzy-anchor candidate
+    /// path), each candidate's content is truncated to <see cref="ContentPreviewMaxChars"/>
+    /// like the proposal's own content always is. When true, candidates are shown in full —
+    /// the decider needs complete bodies to synthesize a lossless merge (memory-core-redesign
+    /// Slice 3 task 3.2). Nothing in this change sets it true yet: the embedding kNN
+    /// nominator that will pass full-content nominated candidates is Stage B (task 3.1),
+    /// still to come — this parameter exists now so that work does not need to touch the
+    /// prompt-building signature again.
+    /// </param>
     public static string BuildUserMessage(
         SQLiteMemoryCurationOperation proposal,
-        IReadOnlyList<ExistingMemoryCandidate> candidates)
+        IReadOnlyList<ExistingMemoryCandidate> candidates,
+        bool useFullCandidateContent = false)
     {
         var sb = new StringBuilder();
 
@@ -111,7 +142,7 @@ public static class CurationPromptBuilder
             {
                 var c = candidates[i];
                 sb.AppendLine($"[{i + 1}] id={c.DocumentId} anchor={c.AnchorCanonicalName}");
-                sb.AppendLine($"    content: {TruncateContent(c.Content)}");
+                sb.AppendLine($"    content: {(useFullCandidateContent ? c.Content : TruncateContent(c.Content))}");
                 sb.AppendLine($"    timestamp: {c.FreshnessAtMs}");
             }
         }
@@ -120,8 +151,10 @@ public static class CurationPromptBuilder
     }
 
     /// <summary>
-    /// Parse a single-keyword LLM response into a curation decision.
-    /// Returns null if the response cannot be parsed.
+    /// Parse an LLM response into a curation decision: a keyword line, optionally (for
+    /// UPDATE/CONSOLIDATE) followed by a "---" separator line and a merged markdown body
+    /// (memory-core-redesign Slice 3 task 3.2). Returns null if the response cannot be
+    /// parsed.
     /// </summary>
     public static CurationDecision? ParseResponse(string response)
     {
@@ -131,7 +164,7 @@ public static class CurationPromptBuilder
         // Reasoning models may inline hidden chain-of-thought wrapped in
         // <think>...</think>; strip it so the bare decision keyword is what we parse.
         // When the serving stack emits reasoning on a separate channel, the text is
-        // already just the keyword and this is a no-op.
+        // already just the keyword (and optional body) and this is a no-op.
         var trimmed = StripThinkBlocks(response).Trim();
         if (trimmed.Length == 0)
             return null;
@@ -139,25 +172,35 @@ public static class CurationPromptBuilder
         // SKIP
         if (trimmed.StartsWith("SKIP", StringComparison.OrdinalIgnoreCase))
         {
-            return new CurationDecision(CurationDecisionKind.Skip, null, null, null, "LLM decision: SKIP");
+            return new CurationDecision(CurationDecisionKind.Skip, null, null, null, "LLM decision: SKIP", FromLlmTier: true);
         }
 
         // CREATE
         if (trimmed.StartsWith("CREATE", StringComparison.OrdinalIgnoreCase))
         {
-            return new CurationDecision(CurationDecisionKind.Create, null, null, null, "LLM decision: CREATE");
+            return new CurationDecision(CurationDecisionKind.Create, null, null, null, "LLM decision: CREATE", FromLlmTier: true);
         }
 
-        // UPDATE <id>
+        // UPDATE <id> [---\n<merged body>]
         var updateMatch = Regex.Match(trimmed, @"^UPDATE\s+(\S+)", RegexOptions.IgnoreCase);
         if (updateMatch.Success)
         {
             var targetId = updateMatch.Groups[1].Value;
-            return new CurationDecision(CurationDecisionKind.Update, targetId, null, null, $"LLM decision: UPDATE {targetId}");
+            return new CurationDecision(
+                CurationDecisionKind.Update,
+                targetId,
+                null,
+                null,
+                $"LLM decision: UPDATE {targetId}",
+                MergedBody: ExtractMergedBody(trimmed),
+                FromLlmTier: true);
         }
 
-        // CONSOLIDATE <id> [<id>...]
-        var consolidateMatch = Regex.Match(trimmed, @"^CONSOLIDATE\s+(.+)$", RegexOptions.IgnoreCase);
+        // CONSOLIDATE <id> [<id>...] [---\n<merged body>]
+        // Captures only the rest of the FIRST line: unlike the pre-Slice-3 shape (always a
+        // single keyword line), a merged body may follow on subsequent lines, and `.`
+        // without RegexOptions.Singleline cannot cross the newline before it.
+        var consolidateMatch = Regex.Match(trimmed, @"^CONSOLIDATE\s+([^\r\n]+)", RegexOptions.IgnoreCase);
         if (consolidateMatch.Success)
         {
             var ids = consolidateMatch.Groups[1].Value
@@ -173,11 +216,32 @@ public static class CurationPromptBuilder
                     ids[0],
                     ids,
                     null,
-                    $"LLM decision: CONSOLIDATE {string.Join(" ", ids)}");
+                    $"LLM decision: CONSOLIDATE {string.Join(" ", ids)}",
+                    MergedBody: ExtractMergedBody(trimmed),
+                    FromLlmTier: true);
             }
         }
 
         return null;
+    }
+
+    private static readonly Regex MergedBodySeparatorPattern = new(@"(?m)^-{3,}\s*$", RegexOptions.Compiled);
+
+    /// <summary>
+    /// Finds the first "---" separator line and returns everything after it, trimmed.
+    /// Returns null when there is no separator, or when the text after it is empty once
+    /// trimmed (a malformed/empty body is treated as absent, per task 3.2) — the caller
+    /// then falls back to the keyword-only decision semantics (task 3.4's append-fallback
+    /// routing for a body-absent LLM UPDATE/CONSOLIDATE).
+    /// </summary>
+    private static string? ExtractMergedBody(string trimmedResponse)
+    {
+        var separator = MergedBodySeparatorPattern.Match(trimmedResponse);
+        if (!separator.Success)
+            return null;
+
+        var body = trimmedResponse[(separator.Index + separator.Length)..].Trim();
+        return body.Length == 0 ? null : body;
     }
 
     private static string StripThinkBlocks(string text)

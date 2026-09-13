@@ -284,8 +284,10 @@ internal static class NetclawProtoMapper
         proto.AdoptedSpeakerIds.AddRange(evt.AdoptedSpeakerIds);
         if (evt.TurnContext is not null)
             proto.TurnContext = ToProto(evt.TurnContext);
-        if (evt.SessionScratchDirectory is not null)
-            proto.SessionScratchDirectory = evt.SessionScratchDirectory;
+        if (evt.AuthorizationAttemptId is not null)
+            proto.AuthorizationAttemptId = evt.AuthorizationAttemptId;
+        if (evt.ManagedTemporaryDirectory is not null)
+            proto.ManagedTemporaryDirectory = evt.ManagedTemporaryDirectory;
         return proto;
     }
 
@@ -313,22 +315,37 @@ internal static class NetclawProtoMapper
         SessionScratchDirectory = proto.HasSessionScratchDirectory
             ? proto.SessionScratchDirectory
             : null,
+        AuthorizationAttemptId = proto.HasAuthorizationAttemptId
+            ? proto.AuthorizationAttemptId
+            : null,
+        ManagedTemporaryDirectory = proto.HasManagedTemporaryDirectory
+            ? proto.ManagedTemporaryDirectory
+            : null,
         RequestedAtMs = proto.RequestedAtMs
     };
 
-    internal static Proto.ToolApprovalResolvedProto ToProto(ToolApprovalResolved evt) => new()
+    internal static Proto.ToolApprovalResolvedProto ToProto(ToolApprovalResolved evt)
     {
-        SessionId = ToProto(evt.SessionId),
-        CallId = evt.CallId,
-        Decision = evt.Decision,
-        ResolvedAtMs = evt.ResolvedAtMs
-    };
+        var proto = new Proto.ToolApprovalResolvedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            CallId = evt.CallId,
+            Decision = evt.Decision,
+            ResolvedAtMs = evt.ResolvedAtMs
+        };
+        if (evt.AuthorizationAttemptId is not null)
+            proto.AuthorizationAttemptId = evt.AuthorizationAttemptId;
+        return proto;
+    }
 
     internal static ToolApprovalResolved FromProto(Proto.ToolApprovalResolvedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
         CallId = proto.CallId,
         Decision = proto.Decision,
+        AuthorizationAttemptId = proto.HasAuthorizationAttemptId
+            ? proto.AuthorizationAttemptId
+            : null,
         ResolvedAtMs = proto.ResolvedAtMs
     };
 
@@ -553,22 +570,22 @@ internal static class NetclawProtoMapper
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord.Types.AdoptedContextSnapshotMessage
         ToAdoptedContextSnapshotMessage(SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage m) => new()
-    {
-        MessageId = m.MessageId,
-        SenderId = m.SenderId.Value,
-        TimestampMs = m.TimestampMs,
-        AuthorityAtInclusion = m.AuthorityAtInclusion
-    };
+        {
+            MessageId = m.MessageId,
+            SenderId = m.SenderId.Value,
+            TimestampMs = m.TimestampMs,
+            AuthorityAtInclusion = m.AuthorityAtInclusion
+        };
 
     private static SessionSnapshot.AdoptedContextSnapshotRecord.AdoptedContextSnapshotMessage
         FromAdoptedContextSnapshotMessage(
             Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord.Types.AdoptedContextSnapshotMessage proto) => new()
-    {
-        MessageId = proto.MessageId,
-        SenderId = new SenderId(proto.SenderId),
-        TimestampMs = proto.TimestampMs,
-        AuthorityAtInclusion = proto.AuthorityAtInclusion
-    };
+            {
+                MessageId = proto.MessageId,
+                SenderId = new SenderId(proto.SenderId),
+                TimestampMs = proto.TimestampMs,
+                AuthorityAtInclusion = proto.AuthorityAtInclusion
+            };
 
     // ── WorkingContext ──
 
@@ -732,21 +749,21 @@ internal static class NetclawProtoMapper
 
     private static Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto ToAdoptedMessageRecord(
         AdoptedContextRecorded.AdoptedMessageRecord m) => new()
-    {
-        MessageId = m.MessageId,
-        SenderId = m.SenderId.Value,
-        TimestampMs = m.TimestampMs,
-        AuthorityAtInclusion = m.AuthorityAtInclusion
-    };
+        {
+            MessageId = m.MessageId,
+            SenderId = m.SenderId.Value,
+            TimestampMs = m.TimestampMs,
+            AuthorityAtInclusion = m.AuthorityAtInclusion
+        };
 
     private static AdoptedContextRecorded.AdoptedMessageRecord FromAdoptedMessageRecord(
         Proto.AdoptedContextRecordedProto.Types.AdoptedMessageRecordProto proto) => new()
-    {
-        MessageId = proto.MessageId,
-        SenderId = new SenderId(proto.SenderId),
-        TimestampMs = proto.TimestampMs,
-        AuthorityAtInclusion = proto.AuthorityAtInclusion
-    };
+        {
+            MessageId = proto.MessageId,
+            SenderId = new SenderId(proto.SenderId),
+            TimestampMs = proto.TimestampMs,
+            AuthorityAtInclusion = proto.AuthorityAtInclusion
+        };
 
     // ── CursorAdvanced ──
 

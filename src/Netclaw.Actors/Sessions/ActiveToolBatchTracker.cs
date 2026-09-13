@@ -5,6 +5,8 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Tools;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -12,6 +14,8 @@ internal sealed class ActiveToolBatchTracker
 {
     private readonly HashSet<string> _expectedCallIds = new(StringComparer.Ordinal);
     private readonly HashSet<string> _completedCallIds = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, ToolCycleResult> _cycleResults = new(StringComparer.Ordinal);
+    private PreparedToolCycleBatch? _preparedCycleBatch;
 
     public int CompletedCount => _completedCallIds.Count;
 
@@ -27,6 +31,8 @@ internal sealed class ActiveToolBatchTracker
         SerializableChatMessage assistantMessage,
         IEnumerable<SerializableChatMessage> existingResults)
     {
+        _preparedCycleBatch = null;
+        _cycleResults.Clear();
         ClearExpectedCallIds();
         foreach (var call in assistantMessage.ToolCalls)
             _expectedCallIds.Add(call.CallId.Value);
@@ -41,8 +47,12 @@ internal sealed class ActiveToolBatchTracker
         ExecutionTaskCompleted = false;
     }
 
-    public void Start(IEnumerable<FunctionCallContent> toolCalls)
+    public void Start(
+        IEnumerable<FunctionCallContent> toolCalls,
+        PreparedToolCycleBatch? preparedCycleBatch)
     {
+        _preparedCycleBatch = preparedCycleBatch;
+        _cycleResults.Clear();
         ClearExpectedCallIds();
         foreach (var call in toolCalls)
             _expectedCallIds.Add(call.CallId);
@@ -54,6 +64,17 @@ internal sealed class ActiveToolBatchTracker
     public void RecordCompleted(string callId)
         => _completedCallIds.Add(callId);
 
+    public void RecordCycleResult(
+        string callId,
+        ToolInvocationOutcomeCategory category,
+        string modelVisibleText)
+        => _cycleResults[callId] = new ToolCycleResult(category, modelVisibleText);
+
+    public CompletedToolCycleIteration? GetCompletedCycle()
+        => _preparedCycleBatch is null
+            ? null
+            : ToolCycleSignatureFactory.Complete(_preparedCycleBatch, _cycleResults);
+
     public void MarkExecutionTaskCompleted()
         => ExecutionTaskCompleted = true;
 
@@ -61,6 +82,8 @@ internal sealed class ActiveToolBatchTracker
     {
         ClearExpectedCallIds();
         ClearCompletedCallIds();
+        _preparedCycleBatch = null;
+        _cycleResults.Clear();
         ExecutionTaskCompleted = false;
     }
 

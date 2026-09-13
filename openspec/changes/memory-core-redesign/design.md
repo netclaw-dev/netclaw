@@ -27,7 +27,7 @@ snowflake-arctic-embed 137M (33M-class models measured inadequate for
 doc-to-doc dedup).
 
 Actor/persistence context: memory lives in the daemon's single SQLite file
-(`NetclawPaths.MemorySqliteDbPath == SqliteDbPath`), whose memory tables are
+(`NetclawPaths.SqliteDbPath`), whose memory tables are
 owned by `SQLiteMemoryStore.InitializeAsync` (idempotent DDL), NOT by the
 daemon's `SchemaMigrator`. Two write pipelines exist today: the inline
 per-session path (`SessionMemoryObserverActor` → `MemoryProposalGate` →
@@ -91,9 +91,10 @@ daemon start when `AutoDownload=true` (atomic temp+rename download, hash
 verify, then one warm-up inference), or the operator runs
 `netclaw memory backfill-embeddings`. The ~90–140 MB artifact is never an
 embedded resource (would bloat every RID publish). Default model:
-snowflake-arctic-embed 137M int8 (May-ratified; mxbai-embed-large 335M is the
-allowlisted fallback). Post-PoC decision deferred: mirroring artifacts into
-the existing R2 feeds channel vs pinned upstream URLs.
+snowflake-arctic-embed-m (~110M params, fp32 ONNX, pinned by hash — int8 is a
+future optimization, not what Stage A shipped; May-ratified), mxbai-embed-large
+335M is the allowlisted fallback. Post-PoC decision deferred: mirroring
+artifacts into the existing R2 feeds channel vs pinned upstream URLs.
 
 ### D3. Vector storage: separate `memory_embeddings` table, owned by the store
 
@@ -163,20 +164,96 @@ deduplicated, **all candidates passing the identical policy gates**
 correctness requirement with its own scenario. Scoring = weighted fusion
 (`VectorWeight` 0.7 × cosine + `LexicalWeight` 0.3 × squashed selector score
 + dampened class prior), then an **absolute floor**: `MinCosineSimilarity`
-(default 0.55, calibrated against the real-traffic gold set
-`gold-prod-2026-07`). Nothing above the floor → inject nothing, and the
-volatile `[memory-recall]` block is omitted entirely (zero tokens). Recency
-decay (`RecencyHalfLifeDays`, floor-bounded multiplier) breaks ties toward
-fresh knowledge. The quick-win char budget and `AutoRecallMaxItems` remain
+(default **0.68**, calibrated 2026-07-05 against the real-traffic gold set
+`gold-prod-2026-07` — calibration summary below). Nothing above the floor →
+inject nothing, and the volatile `[memory-recall]` block is omitted entirely
+(zero tokens). The floor applies only to a candidate the vector index
+actually holds an embedding for; a candidate with no embedding row at all
+(a coverage gap — not yet backfilled, or written before embeddings were
+enabled) has no cosine for the floor to gate, so it degrades to lexical
+scoring instead (its cosine term is 0, ranked purely on the fused
+lexical/class-prior score) with a rate-limited `memory_recall_coverage_gap`
+warning — honoring the Migration Plan's "both paths degrade loudly to
+lexical when coverage is incomplete rather than misbehaving" rather than
+blacking out recall for an un-backfilled corpus while the embedder is
+otherwise healthy. Coverage self-heals via embed-on-write (new/updated
+documents) plus gap repair (backfilling pre-existing ones), so the warning
+is expected to fall off after both complete. Recency decay
+(`RecencyHalfLifeDays`, floor-bounded multiplier) breaks ties toward fresh
+knowledge. The quick-win char budget and `AutoRecallMaxItems` remain
 the outer bounds.
 
 *Alternative considered*: RRF fusion — rejected: rank-only fusion always
 admits the top item even when nothing is relevant; the zero-injection
-behavior requires an absolute score. *Latency risk is explicit*: Ollama
-measurements ran far above the 10–50 ms/query assumption; the ONNX int8
-short-query latency MUST be measured before this slice ships (mitigations:
-raise `RecallTimeoutMs`, pre-warmed session, or skip-vector-under-pressure —
-all loud, none silent).
+behavior requires an absolute score. *Latency measured, not assumed*: Ollama
+measurements ran far above the 10–50 ms/query assumption, and the in-process
+ONNX fp32 measurement (Slice 2 task 2.13; full numbers in Open Questions)
+shows the same problem persists — p95 ≈ 315 ms on the i9-9900K reference box,
+~2× over the 150 ms sub-budget, because the embedder pads every input to a
+fixed 512 tokens regardless of actual length.
+
+**Mitigation, measured (`tools/embed-latency-bench` dynamic-length
+extension)**: the ONNX graph's sequence axis is symbolic
+(`input_ids`/`attention_mask`/`token_type_ids` all declare
+`[batch_size, sequence_length]`, no fixed shape), so padding to the actual
+tokenized length (rounded up to a multiple of 8) instead of a fixed 512 is a
+drop-in change — no re-export needed. On the same reference box: short-query
+p50 **19.0 ms**, p95 **20.9 ms** (was p50 281.9 ms / p95 310.5 ms fixed-512 —
+~15× faster, ~7× under the 150 ms sub-budget); medium (~178 tok) p50
+**84.1 ms** (was 281.7 ms); doc-length (~442 tok) p50 **235.5 ms** (was
+280.3 ms — smaller gain because 442 tokens is already close to 512).
+Correctness parity across 10 fixed sentences (short queries + longer bank
+sentences), fixed-512 vs dynamic-length, cosine similarity: **1.000000 on
+every sentence** (min = mean = 1.000000) — the attention mask fully absorbs
+the padding difference, so this is a pure performance change with no
+retrieval-quality risk. **Decision: Slice 4 adopts dynamic sequence length
+(bucket-of-8 rounding) as the query-embedding mitigation**, not int8
+quantization and not a relaxed budget — the 150 ms sub-budget holds with
+large headroom once padding is length-aware.
+
+**Floor calibration, measured (2026-07-05, `floor_calibration.py`, task
+4.6)**: swept `MinCosineSimilarity` from 0.30 to 0.75 (step 0.01) over the
+same 1,216-doc production snapshot (2026-07-03) and the 93-query
+`gold-prod-2026-07` gold set (33 positive / 60 zero-relevant queries), using
+the fp32 ONNX production-faithful embedder replica and the cached doc/query
+vectors already validated for the quantization eval. LOAD DECISION = inject
+any of the top-3-by-cosine docs that clear the floor; objective = macro F0.5
+against `relevantDocIds`.
+
+| model | optimal τ | F0.5 @ optimum | F0.5 @ 0.55 (old default) | zero-injection acc. @ optimum | plateau shape |
+|---|---:|---:|---:|---:|---|
+| fp32 `snowflake-arctic-embed-m` (**shipped**) | **0.68** | 0.141 | 0.106 | 13.3% (8/60) | moderate, symmetric — robust to ±0.01 drift, ~29% relative F0.5 drop by ±0.03 |
+| uint8 `snowflake-arctic-embed-m-int8` (not shipped, D2) | 0.67 | 0.153 | 0.106 | 16.7% (10/60) | asymmetric knife-edge — flat below the optimum, +0.01 above it costs 35% relative F0.5 |
+
+Production ships fp32 (D2), so **0.68** is the shipped default: +33%
+relative F0.5 over the 0.55 placeholder, while mean injected count *drops*
+(3.00 → 2.53 — fewer, more pertinent items). uint8's optimum sitting 0.01
+lower matches the compression shift already measured for
+`NominatorSimilarityThreshold` (D2/D4); it remains informational only, since
+int8 is not shipped.
+
+**Caveat that must not be dropped**: even at the F0.5 optimum, **83–87% of
+genuinely nothing-relevant `gold-prod-2026-07` queries still get something
+injected** (zero-injection accuracy tops out at 13.3–16.7%). Pushing the
+floor further right buys more zero-accuracy but costs recall steeply on the
+35% of queries where something is relevant (a property of this corpus's
+embedding geometry, not a bug in the calibration). An absolute cosine floor
+alone cannot close the zero-injection gap within the F0.5-preserving range —
+that residual is tracked as the separate `memory-relevance-gate` change, not
+solved here.
+
+**Superseded by `memory-query-prefix` (2026-07-08):** the 0.68 figure above
+was measured with the query embedded RAW — `snowflake-arctic-embed-m`'s
+documented retrieval-query prefix (`Represent this sentence for searching
+relevant passages: `) was never applied. That is a no-prefix historical
+record, kept here for the archive, not the calibration of record. Applying
+the prefix compresses the model's cosine distribution downward (optimal τ
+0.68 → 0.24) and lifts F0.5 at the optimum from 0.141 to 0.239 (+69%
+relative) — see `openspec/changes/memory-query-prefix/design.md` D4 for the
+full prefixed sweep and the atomic prefix+floor recalibration rationale.
+`MemoryRecallConfig.MinCosineSimilarity` no longer defaults to 0.68; it
+defaults to null and follows the active model's manifest-carried
+calibration (0.24 for the shipped prefixed encoding).
 
 ### D7. Taxonomy rebalance: recall modes mean what they say
 
@@ -247,10 +324,17 @@ compatibility; only dead *behavior* is deleted.
 - [Model download unavailable offline at first run] → loud degraded mode:
   doctor Error, daemon status `embeddings: degraded`, rate-limited logs;
   lexical recall keeps serving. Never silent.
-- [Query-embedding latency blows the 300 ms recall budget on CPU] → measured
-  gate before Slice 4 ships; warmup inference at start; per-turn vector
-  sub-budget with logged lexical fallback; `RecallTimeoutMs` already
-  operator-tunable.
+- [Query-embedding latency blows the 300 ms recall budget on CPU] →
+  **confirmed with fixed-512 padding, then resolved by measurement** (Slice 2
+  task 2.13: p95 ≈ 315 ms, ~2× over the 150 ms sub-budget on the reference
+  box). The dynamic-sequence-length experiment (see D6 and Open Questions)
+  confirmed the ONNX graph's sequence axis is symbolic (not a fixed shape)
+  and measured short-query p95 at 20.9 ms once padding matches actual token
+  length — ~7× under budget, with 1.000000 cosine parity against fixed-512
+  across 10 test sentences. Slice 4 ships dynamic-length padding
+  (bucket-of-8) as the mitigation; warmup inference at start and
+  `RecallTimeoutMs` remain in place as defense-in-depth, not as the primary
+  fix.
 - [LLM merge synthesis loses information] → MergeGuard token-retention check
   + structural-append fallback; consolidation applies only via human-ratified
   plan files with a backup taken first.
@@ -288,10 +372,69 @@ compatibility; only dead *behavior* is deleted.
 
 ## Open Questions
 
-- ONNX int8 query-embedding latency on reference hardware (measure in Slice 2;
-  gates Slice 4's sub-budget design).
-- Final `MinCosineSimilarity` default (calibrate against `gold-prod-2026-07`
-  during Slice 4; 0.55 is the working hypothesis).
+- ~~ONNX int8 query-embedding latency on reference hardware (measure in
+  Slice 2; gates Slice 4's sub-budget design)~~ **MEASURED (Slice 2 task
+  2.13, `tools/embed-latency-bench`, batch=1, 200 timed iterations/corpus
+  after 20 warmups)**. Production path is fp32, not int8 (int8 remains a
+  deferred D2 optimization). Reference box: i9-9900K, 8 logical cores,
+  contended condition (load avg 2.0–3.6, ~11/15 GiB RAM in use, live daemon
+  running):
+
+  | corpus                      | tokens (mean) | p50     | p95    |
+  |------------------------------|---------------|---------|--------|
+  | short query                  | 13.8          | 281 ms  | 315 ms |
+  | medium (~180 tok)             | 178.2         | 274 ms  | 298 ms |
+  | doc-length (~440 tok)         | 442.1         | 275 ms  | 294 ms |
+  | short, concurrency=2          | 13.8          | 274 ms  | 291 ms |
+  | cold load (model load + 1st embed) | —        | 1069 ms | —      |
+
+  All three corpora cost nearly the same regardless of length, because
+  `OnnxMemoryEmbedder` always runs a fixed 512-token forward pass (no
+  length-based truncation) — the fp32 matmul, not tokenization, dominates.
+  Concurrency=2 gave no throughput benefit on this contended box (two
+  parallel 100-call loops took as long in aggregate as one sequential
+  200-call stream). **Verdict: the 150 ms query-embedding sub-budget does
+  not hold on this hardware — p95 is ~2.1× over budget (margin ≈ −165 ms)**;
+  the highest-leverage unexplored mitigation is a query-specific max-length
+  (e.g. 64 tokens, not int8 quantization) before Slice 4 ships.
+- ~~Does dynamic (query-specific) sequence length actually work on this ONNX
+  graph, and is it a drop-in change?~~ **MEASURED AND RESOLVED** (same
+  `tools/embed-latency-bench`, dynamic-length extension, same box, same
+  batch=1/200-iteration/20-warmup protocol). Step 1: `InferenceSession
+  .InputMetadata` shows all three inputs (`input_ids`, `attention_mask`,
+  `token_type_ids`) declare shape `[batch_size, sequence_length]` — both
+  dimensions symbolic, not fixed — so the graph accepts any sequence length;
+  no re-export required. Step 2: padding each input to its actual tokenized
+  length (rounded up to a multiple of 8) instead of fixed 512:
+
+  | corpus                | tokens (mean) | fixed-512 p50 | fixed-512 p95 | dynamic-len p50 | dynamic-len p95 |
+  |------------------------|---------------|---------------|---------------|------------------|------------------|
+  | short query            | 13.8          | 281.9 ms      | 310.5 ms      | **19.0 ms**      | **20.9 ms**      |
+  | medium (~178 tok)      | 178.2         | 281.7 ms      | 312.2 ms      | **84.1 ms**      | **93.3 ms**      |
+  | doc-length (~442 tok)  | 442.1         | 280.3 ms      | 304.6 ms      | **235.5 ms**     | **250.1 ms**     |
+
+  Step 3, correctness (not just speed): 10 fixed sentences (5 short queries +
+  5 longer bank sentences), embedded both ways, cosine similarity fixed-512
+  vs dynamic-length — **1.000000 on all 10 (min = mean = 1.000000)**: the
+  attention mask fully accounts for the padding difference, so this is a
+  correctness-neutral, pure-performance change. Contention context: load
+  average 1.40/1.44/2.36 before the ~6-minute run, 4.76/3.63/3.08 after (the
+  run's own CPU load, not external contention). **Verdict: dynamic sequence
+  length is adopted as the Slice 4 mitigation** — short-query p95 lands at
+  ~14% of the 150 ms sub-budget (huge margin), medium and doc-length both
+  drop meaningfully too. Int8 quantization and relaxing the sub-budget are no
+  longer necessary; both remain available as future levers if traffic shifts
+  toward longer queries.
+- ~~Final `MinCosineSimilarity` default (calibrate against
+  `gold-prod-2026-07` during Slice 4; 0.55 is the working hypothesis)~~
+  **MEASURED (Slice 4 task 4.6, `floor_calibration.py`, 2026-07-05)**: fp32
+  optimum is **0.68** (F0.5 0.141 vs 0.106 at 0.55; zero-injection accuracy
+  13.3%, up from 0%; moderate, symmetric plateau, robust to ±0.01 drift).
+  Production ships fp32 (D2), so 0.68 is the shipped default — full
+  calibration summary in D6. uint8's optimum (0.67, knife-edge above the
+  peak) stays informational until int8 ships. The residual 83–87%
+  zero-injection miss rate at the optimum is not solved by the floor alone;
+  tracked under the separate `memory-relevance-gate` change.
 - Whether the R2 feeds channel should mirror model artifacts (post-PoC
   operational decision; allowlist design is unaffected).
 - Trace auto-recall weighting while fresh (small prior vs durable-fact parity)

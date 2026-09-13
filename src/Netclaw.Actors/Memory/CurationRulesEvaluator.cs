@@ -29,6 +29,16 @@ public enum CurationDecisionKind
 /// <summary>
 /// An existing memory document that is a candidate for matching against a proposal.
 /// </summary>
+/// <param name="CosineSimilarity">
+/// The embedding cosine similarity that nominated this candidate via
+/// <see cref="MemoryVectorIndex.TopK"/> (memory-core-redesign Slice 3 Stage B, task 3.1). Null
+/// for candidates sourced only from anchor-name matching or lexical content search — those
+/// carry no embedding evidence. A non-null value here is what
+/// <see cref="MemoryCurationEvaluator.EvaluateAsync"/> uses to force the decision to the LLM
+/// tier: per design D4, cosine similarity is nomination evidence only and must never itself
+/// decide skip/merge/create, so this field is read for "is a nominee present" and then handed
+/// to the curator LLM as context — never compared against a threshold to auto-decide.
+/// </param>
 public sealed record ExistingMemoryCandidate(
     string DocumentId,
     string AnchorId,
@@ -36,17 +46,44 @@ public sealed record ExistingMemoryCandidate(
     string Content,
     long? FreshnessAtMs,
     double Confidence,
-    bool IsExactAnchorMatch);
+    bool IsExactAnchorMatch,
+    double? CosineSimilarity = null);
 
 /// <summary>
 /// Result of curation evaluation for a single proposal.
 /// </summary>
+/// <param name="MergedBody">
+/// The complete, lossless-union markdown body synthesized by the curation LLM for an
+/// UPDATE/CONSOLIDATE decision (memory-core-redesign Slice 3, design D5;
+/// <see cref="CurationPromptBuilder.ParseResponse"/> is the only producer). Null for
+/// SKIP/CREATE, for any decision produced by the deterministic rules tier (which never
+/// synthesizes a body), and for keyword-only LLM UPDATE/CONSOLIDATE responses.
+/// <see cref="MemoryCurationEvaluator.ApplyDecisionAsync"/> validates this against every
+/// source body via <see cref="MergeGuard"/> before writing it; on guard failure or when
+/// this is null for an LLM-tier decision, the write degrades to a structural append
+/// instead of the raw overwrite this field's absence would otherwise imply.
+/// </param>
+/// <param name="FromLlmTier">
+/// True when <see cref="CurationPromptBuilder.ParseResponse"/> produced this decision, as
+/// opposed to the deterministic rules tier (<see cref="CurationRulesEvaluator"/>). Governs
+/// write routing in <see cref="MemoryCurationEvaluator.ApplyDecisionAsync"/>: the
+/// deterministic tier's UPDATE (exact-anchor path) keeps its pre-Slice-3 guarantee — a raw
+/// overwrite that <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> has already
+/// verified is a proposal-preserves-existing-content superset — while every LLM-tier
+/// UPDATE/CONSOLIDATE routes through <see cref="MergeGuard"/>-validated merge or structural
+/// append instead. Deterministic-tier CONSOLIDATE never sets this either, but it flows
+/// through the same guarded path anyway because it never carries a <see cref="MergedBody"/>
+/// (the rules tier does not synthesize one) — see <see cref="MemoryCurationEvaluator"/>'s
+/// remarks for why that unification is safe.
+/// </param>
 public sealed record CurationDecision(
     CurationDecisionKind Kind,
     string? TargetDocumentId,
     IReadOnlyList<string>? ConsolidationTargetIds,
     string? CanonicalAnchorName,
-    string Reason);
+    string Reason,
+    string? MergedBody = null,
+    bool FromLlmTier = false);
 
 /// <summary>
 /// Deterministic rules-based evaluator for memory curation decisions.
@@ -269,11 +306,16 @@ public static class CurationRulesEvaluator
         return NormalizeForContainment(proposed).Contains(existingNorm, StringComparison.Ordinal);
     }
 
-    private static string NormalizeForContainment(string value)
+    /// <summary>
+    /// Lowercase and collapse all whitespace runs to single spaces so formatting differences
+    /// don't hide a genuine containment. Case folding happens here so the <c>Contains</c>
+    /// check above can stay Ordinal. Internal (not private) because
+    /// <see cref="MemoryContentHasher"/> reuses the exact same normalization for its content
+    /// hash — the two "does this content actually differ" judgments in the memory subsystem
+    /// must agree, so this is the one place either can drift from the other.
+    /// </summary>
+    internal static string NormalizeForContainment(string value)
     {
-        // Lowercase and collapse all whitespace runs to single spaces so formatting
-        // differences don't hide a genuine containment. Case folding happens here so
-        // the Contains check can stay Ordinal.
         return string.Join(' ', (value ?? string.Empty)
             .ToLowerInvariant()
             .Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));

@@ -6,8 +6,11 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Akka.Actor;
+using Akka.Hosting;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Services;
 
 namespace Netclaw.Daemon.Skills;
 
@@ -27,6 +30,30 @@ public static class SkillEndpointRouteBuilderExtensions
                     SkillInventory.From(registry.GetAll(), paths)))
             .WithName("ListSkills")
             .WithSummary("List every skill the daemon has loaded, including dynamic MCP prompt skills.")
+            .WithTags("Skills")
+            .RequireAuthorization();
+
+        app.MapPost("/api/skills/sync", async Task<IResult> (
+                IRequiredActor<ServerFeedSkillSyncActorKey> syncActor,
+                CancellationToken cancellationToken) =>
+            {
+                try
+                {
+                    var response = await syncActor.ActorRef.Ask<SkillSyncResult.Response>(
+                        ServerFeedSkillSyncActor.Run.Instance,
+                        cancellationToken);
+                    return TypedResults.Ok(response);
+                }
+                catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+                {
+                    return TypedResults.Problem(
+                        statusCode: StatusCodes.Status503ServiceUnavailable,
+                        title: "Skill sync stopped",
+                        detail: "The daemon stopped the active skill sync pass.");
+                }
+            })
+            .WithName("SyncSkills")
+            .WithSummary("Run the configured external skill sync pass.")
             .WithTags("Skills")
             .RequireAuthorization();
     }

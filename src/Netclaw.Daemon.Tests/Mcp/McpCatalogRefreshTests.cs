@@ -3,9 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Time.Testing;
+using Netclaw.Configuration;
 using Netclaw.Daemon.Mcp;
 using Xunit;
 
@@ -276,6 +278,33 @@ public sealed class McpCatalogRefreshTests
         Assert.False(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
 
         Assert.Equal(McpConnectionState.AwaitingAuth, harness.Manager.GetServerStatuses()[ServerName].State);
+        AssertPublishedTools(harness, "tool_a");
+    }
+
+    [Fact]
+    public async Task AuthorizationFailureDuringRefreshWithoutStoredTokens_MarksAuthFailed()
+    {
+        var runtime = new McpClientManagerLifecycleTests.ControlledMcpClientRuntime();
+        var plan = runtime.Enqueue(new McpClientManagerLifecycleTests.ClientPlan("tool_a"));
+        var time = new FakeTimeProvider(InitialTime);
+        await using var harness = new McpClientManagerLifecycleTests.ManagerHarness(
+            runtime,
+            time,
+            NullNotificationSink.Instance,
+            McpClientManagerLifecycleTests.HttpEntry());
+        await harness.Manager.StartAsync(TestContext.Current.CancellationToken);
+
+        time.Advance(McpClientManager.CatalogRefreshInterval);
+        plan.ListFailure = new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized);
+        Assert.False(await harness.Manager.TryRefreshCatalogAsync(ServerName, TestContext.Current.CancellationToken));
+
+        // Netclaw holds no tokens for this server, so AwaitingAuth would name a remedy the
+        // operator cannot run.
+        var status = harness.Manager.GetServerStatuses()[ServerName];
+        Assert.Equal(McpConnectionState.AuthFailed, status.State);
+        Assert.Contains("credentials or headers", status.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
+        Assert.DoesNotContain("netclaw mcp auth", status.ErrorMessage ?? string.Empty, StringComparison.Ordinal);
+        // The catalog stays visible so the operator sees which server needs the credential.
         AssertPublishedTools(harness, "tool_a");
     }
 

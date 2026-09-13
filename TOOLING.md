@@ -27,6 +27,70 @@
 | `scripts/Add-FileHeaders.ps1 -Verify` | CI: check all files have headers (exit 1 if missing) |
 | `scripts/Add-FileHeaders.ps1 -WhatIf` | Preview which files need headers |
 
+## Focused Mutation Tests
+
+The path-access mutation job runs on each pull request, merge group, and `dev` push.
+The Linux job runs in parallel with the normal test matrix.
+
+Focused mutation tests prove that deterministic tests reject a specific unsafe
+change at a security or authority boundary. They do not measure general code
+coverage. They do not replace positive and negative behavior tests.
+
+### Current Targets
+
+| Target | Protected claim | Expected mutants | Command |
+|--------|-----------------|------------------|---------|
+| `PathAccessPolicy.AddSessionRoots` | Only a Personal context receives shared session roots | 2 killed | `./scripts/run-path-access-mutations.sh` |
+
+Run the same check locally:
+
+```bash
+./scripts/run-path-access-mutations.sh
+```
+
+The script tests two mutants in the shared session-root boundary.
+The job fails unless both mutants die.
+The local prototype took 1 minute 28 seconds after package restore.
+A cold CI runner should take two to four minutes.
+
+The harness uses xUnit 2 because Stryker's VSTest adapter does not support xUnit 3 correctly.
+The script requires `perl` and `jq`, which the Linux CI image supplies.
+
+### Scope Review
+
+Review the target list after each security fix or authority policy change.
+Also review it as part of each minor release.
+
+Add one focused target when all these conditions apply:
+
+- The code controls authorization, isolation, privacy, identity, or destructive access.
+- A plausible mutation represents a specific unsafe behavior.
+- Deterministic tests reject that mutation.
+- A narrow source span contains the relevant decision.
+- Stryker produces stable, meaningful mutants for that span.
+- The total mutation job stays below its 10-minute CI timeout.
+
+Use this procedure:
+
+1. State the protected claim and the unsafe mutation.
+2. Apply the mutation in a disposable worktree.
+3. Confirm that the applicable tests fail for the expected reason.
+4. Configure Stryker for the smallest source span that contains the decision.
+5. Pin the expected mutant count and require each mutant to die.
+6. Record the target, claim, count, command, and measured cost in this section.
+7. Split the target into a parallel job if the total job approaches its timeout.
+
+Do not add a broad project scan. Broad scans can produce equivalent mutants,
+long runs, and invalid results from the current xUnit 3 adapter path.
+
+Review these candidate boundaries before lower-risk code:
+
+1. Tool and MCP audience authorization in `ToolAccessPolicy`.
+2. Approval directory containment in `ApprovalPatternMatching`.
+3. Shell hard-deny decisions in `ShellCommandPolicy`.
+4. Slack, Discord, and Mattermost ACL decisions.
+5. Device bearer token authentication.
+
 ## Interactive CLI Smoke Tests (Tape Harness)
 
 The native smoke harness exercises the interactive Termina TUI surface
@@ -43,6 +107,7 @@ TUI code SHOULD run the harness before declaring a change done.
 | `./scripts/smoke/run-smoke.sh light` | PR-gating subset: all flow tapes + non-interactive scenarios |
 | `./scripts/smoke/run-smoke.sh full` | Full suite (placeholder: identical to light until backfilled) |
 | `./scripts/smoke/run-smoke.sh <name>` | Single tape or scenario, e.g. `init-wizard` (fastest inner loop) |
+| `./scripts/smoke/run-smoke.sh skill-sync` | Live daemon and RFC feed proof for immediate skill updates |
 | `./scripts/smoke/run-smoke.sh screenshots` | Screenshot regression: capture + byte-compare against baselines |
 | `./scripts/smoke/install-vhs.sh` | Idempotent VHS install (Linux/x86_64 + macOS via Homebrew) |
 
@@ -54,6 +119,11 @@ Config-writing flow tapes (`init-wizard`, `provider-add`, `provider-rename`,
 and `config-*`) must have executable semantic assertion scripts under
 `tests/smoke/assertions/`. `run-native-tape.sh` fails these tapes when the
 assertion is missing or non-executable.
+
+The `skill-sync` scenario starts a mutable local RFC feed and the published
+daemon. It runs `netclaw skill sync` twice and changes the feed between passes.
+It checks the exact resource SHA-256, the live `/api/skills` inventory, and an
+unchanged `netclaw.json` file. The scenario does not call a model.
 
 When a tape fails, `smoke-logs/tapes/<name>/` collects: a debug GIF of the
 last frame, the combined tape file, daemon logs, and the produced

@@ -684,7 +684,14 @@ public sealed partial class DaemonManager
         return kill(pid, (int)signal) == 0;
     }
 
-    private async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout, CancellationToken cancellationToken)
+    /// <summary>
+    /// Polls <paramref name="process"/> until it exits or <paramref name="timeout"/> elapses.
+    /// Internal (not private) so tests can drive the up-to-200-second graceful-shutdown wait
+    /// via an injected <see cref="TimeProvider"/> without a real wall-clock sleep: the poll
+    /// delay is scheduled against <see cref="_timeProvider"/> (matching this repo's virtualized-
+    /// timer convention, e.g. <c>ConfigWatcherService</c>), not a bare <c>Task.Delay(ms)</c>.
+    /// </summary>
+    internal async Task<bool> WaitForExitAsync(Process process, TimeSpan timeout, CancellationToken cancellationToken)
     {
         var deadline = _timeProvider.GetUtcNow() + timeout;
         while (_timeProvider.GetUtcNow() < deadline)
@@ -694,7 +701,7 @@ public sealed partial class DaemonManager
             if (process.HasExited)
                 return true;
 
-            await Task.Delay(200, cancellationToken);
+            await Task.Delay(TimeSpan.FromMilliseconds(200), _timeProvider, cancellationToken);
         }
 
         return process.HasExited;

@@ -82,15 +82,22 @@ public class ToolBatchHistoryWedgeTests : LlmSessionTestBase
         var ct = TestContext.Current.CancellationToken;
 
         // Turn 1: two parallel tool calls. call-A executes normally; call-B
-        // throws in InterpretToolCall, which escapes to ToolExecutionFailed ->
-        // FailCurrentTurn. call-A is recorded before the failure (Task.WhenAll
-        // invariant), so the batch fails with A answered and B unanswered.
+        // throws during the execution pipeline preflight. The pipeline reports
+        // ToolExecutionFailed after call-A reports its streamed result.
         _fakeChatClient.ToolCallsOnFirstCall =
         [
             new FunctionCallContent("call-A", "web_search",
-                new Dictionary<string, object?> { ["query"] = "a" }),
+                new Dictionary<string, object?>
+                {
+                    ["query"] = "a",
+                    ["_rationale"] = "Search for the first test result."
+                }),
             new FunctionCallContent("call-B", "web_search",
-                new Dictionary<string, object?> { ["query"] = "b" }),
+                new Dictionary<string, object?>
+                {
+                    ["query"] = "b",
+                    ["_rationale"] = "Search for the second test result."
+                }),
         ];
         _executor.FailInterpretForCallIds.Add("call-B");
 

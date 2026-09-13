@@ -1612,7 +1612,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         // slash but isn't an anchored path token), so before the
         // BashParser rewrite its candidate ended up
         // (git checkout, null) → effective directory fell back to
-        // session_dir at persistence time → the session-scratch guard
+        // session_dir at persistence time → the session-owned guard
         // dropped the grant → retry threw ToolApprovalRequiredException.
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
@@ -1889,6 +1889,64 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         var candidate = Assert.Single(candidates);
         Assert.Equal("tmux ls", candidate.Verb);
         Assert.Equal(workingDirectory, candidate.Directory);
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies POSIX symlink and glob behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Bash_project_read_pipeline_with_in_root_symlink_is_reusable()
+    {
+        var workingDirectory = Path.Combine(
+            CanonicalTemporaryDirectory(),
+            $"netclaw-project-read-{Guid.NewGuid():N}");
+        var instructions = Path.Combine(workingDirectory, "AGENTS.md");
+        var alias = Path.Combine(workingDirectory, "CLAUDE.md");
+        const string command = "grep -rn \"Mode B\" docs/ *.md 2>/dev/null | head -20";
+        Directory.CreateDirectory(Path.Combine(workingDirectory, "docs"));
+        File.WriteAllText(instructions, "# Instructions");
+        File.CreateSymbolicLink(alias, instructions);
+
+        try
+        {
+            var analysis = _matcher.AnalyzeInvocation(
+                new ToolName("shell_execute"),
+                Args(command, workingDirectory));
+
+            Assert.False(analysis.IsMessy);
+            Assert.NotEmpty(analysis.Candidates);
+            Assert.Contains(analysis.Candidates, candidate => candidate.Verb == "grep");
+            Assert.Contains(analysis.Candidates, candidate => candidate.Verb == "head");
+        }
+        finally
+        {
+            Directory.Delete(workingDirectory, recursive: true);
+        }
+    }
+
+    [SlopwatchSuppress("SW001", "This test verifies POSIX symlink and glob behavior, which does not apply to the Windows shell parser.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void Bash_leaf_glob_with_broken_symlink_fails_closed()
+    {
+        var workingDirectory = Path.Combine(
+            CanonicalTemporaryDirectory(),
+            $"netclaw-broken-glob-{Guid.NewGuid():N}");
+        var alias = Path.Combine(workingDirectory, "missing.md");
+        Directory.CreateDirectory(workingDirectory);
+        File.CreateSymbolicLink(alias, Path.Combine(workingDirectory, "absent.md"));
+
+        try
+        {
+            var analysis = _matcher.AnalyzeInvocation(
+                new ToolName("shell_execute"),
+                Args("cat *.md", workingDirectory));
+
+            Assert.True(analysis.IsMessy);
+            Assert.Empty(analysis.Candidates);
+        }
+        finally
+        {
+            File.Delete(alias);
+            Directory.Delete(workingDirectory, recursive: true);
+        }
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
@@ -103,6 +104,17 @@ public sealed class McpToolAdapter : INetclawTool
     public string BareToolName => _toolName;
 
     /// <summary>
+    /// MCP servers are trusted, user-configured integrations — the model can only
+    /// reach them because the operator added and granted them — so their output is
+    /// passed to the model verbatim, matching Claude Code, Cursor, and other MCP
+    /// harnesses. <see cref="Netclaw.Security.SecretOutputRedactor"/> remains on for
+    /// genuinely-untrusted sources (shell, file reads, web fetch, background jobs);
+    /// applying it to MCP results corrupts legitimate payloads such as presigned
+    /// upload URLs, whose signed query parameters look like live credentials.
+    /// </summary>
+    public bool SuppressOutputRedaction => true;
+
+    /// <summary>
     /// Returns the AITool with a sanitized JSON schema for LLM compatibility.
     /// </summary>
     public AITool ToAITool() => _sanitizedTool;
@@ -113,7 +125,7 @@ public sealed class McpToolAdapter : INetclawTool
         CancellationToken ct = default)
     {
         if (_invoker is null)
-            return await ExecuteViaBoundToolAsync(arguments, ct);
+            return await ExecuteViaBoundToolAsync(arguments, context, ct);
 
         try
         {
@@ -139,13 +151,28 @@ public sealed class McpToolAdapter : INetclawTool
         {
             throw;
         }
+        // The adapter completes the receipt here because the exception stops here: the
+        // dispatcher never sees it and completes the receipt as Success. The receipt is
+        // first-writer-wins, so this category is the one the actor reads.
         catch (Exception ex)
         {
-            return $"Error: MCP tool '{Name}' failed: {ex.Message}";
+            var text = $"Error: MCP tool '{Name}' failed: {ex.Message}";
+            return ex switch
+            {
+                HttpRequestException
+                    {
+                        StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
+                    } => context.AccessDenied(text),
+                HttpRequestException { StatusCode: HttpStatusCode.NotFound } => context.NotFound(text),
+                _ => context.TransientFailure(text)
+            };
         }
     }
 
-    private async Task<string> ExecuteViaBoundToolAsync(IDictionary<string, object?>? arguments, CancellationToken ct)
+    private async Task<string> ExecuteViaBoundToolAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        CancellationToken ct)
     {
         if (_mcpTool is not AIFunction func)
             return "Error: MCP tool is not invocable.";
@@ -159,7 +186,7 @@ public sealed class McpToolAdapter : INetclawTool
                 ? new AIFunctionArguments(coerced)
                 : null;
             var result = await func.InvokeAsync(aiArgs, ct);
-            return McpToolResultFormatter.Format(result, Name);
+            return McpToolResultFormatter.FormatWithReceipt(result, Name, context);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {

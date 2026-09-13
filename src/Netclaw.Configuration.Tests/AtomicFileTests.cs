@@ -72,4 +72,26 @@ public sealed class AtomicFileTests : IDisposable
         Assert.NotEqual(path, hardenedPath);     // perms applied to the temp, not the destination
         Assert.False(File.Exists(hardenedPath)); // the temp was renamed away afterward
     }
+
+    [Fact]
+    public async Task WriteAllTextAsync_CancellationBeforeRename_LeavesPriorFileIntactAndCleansTemp()
+    {
+        var path = Path.Combine(_dir.Path, "f.json");
+        File.WriteAllText(path, "ORIGINAL");
+        using var cancellation = new CancellationTokenSource();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            AtomicFile.WriteAllTextAsync(
+                path,
+                "NEW",
+                temp =>
+                {
+                    Assert.Equal("NEW", File.ReadAllText(temp));
+                    cancellation.Cancel();
+                },
+                cancellation.Token));
+
+        Assert.Equal("ORIGINAL", File.ReadAllText(path));
+        Assert.Empty(Directory.GetFiles(_dir.Path, "*.tmp-*"));
+    }
 }

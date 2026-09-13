@@ -13,6 +13,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Xunit;
 
@@ -43,13 +44,17 @@ public sealed class SessionLogPartitionIntegrationTests : TestKit
                 setup.AddLoggerFactory();
                 setup.LogLevel = Akka.Event.LogLevel.DebugLevel;
             })
-            .WithSessionLogDispatcher(SessionsDir, _time);
+            .WithSessionLogDispatcher();
     }
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
         Directory.CreateDirectory(_logDir);
         _provider = new RollingFileLoggerProvider(DaemonPath, _time);
+        var paths = new NetclawPaths(_logDir);
+        services.AddSingleton<TimeProvider>(_time);
+        services.AddSingleton<ISessionStorageResolver>(
+            new TestSessionStorageResolver(paths, SessionsDir));
         // Wire our provider into the host's ILoggerFactory so AddLoggerFactory bridges every
         // Akka actor log to it — the same path production uses.
         services.AddSingleton<ILoggerProvider>(_provider);
@@ -68,7 +73,10 @@ public sealed class SessionLogPartitionIntegrationTests : TestKit
         var probe = Sys.ActorOf(Props.Create(() => new SessionTaggedLogger()), "session-tagged-logger");
         probe.Tell(new LogIt(sessionId.Value, marker));
 
-        var sessionLogPath = SessionLogFile.GetLogPath(sessionId, SessionsDir);
+        var sessionLogPath = Path.Combine(
+            SessionsDir,
+            SessionDirectoryHelper.SanitizeSessionId(sessionId),
+            "session.log");
         await AwaitAssertAsync(
             async () =>
             {

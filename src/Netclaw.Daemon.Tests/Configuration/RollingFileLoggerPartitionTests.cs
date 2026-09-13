@@ -94,7 +94,8 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
                 .Log(LogLevel.Information, new EventId(0), state, null, (_, _) => "sub-agent did work");
 
             var diag = await dispatcher.ExpectMsgAsync<SessionLogDiagnostic>(cancellationToken: TestContext.Current.CancellationToken);
-            Assert.Equal("C1/T1/subagent/summarizer/ab12", diag.SessionId.Value); // sub file, not the parent
+            Assert.Equal("C1/T1", diag.SessionId.Value);
+            Assert.Equal("C1/T1/subagent/summarizer/ab12", diag.SubSessionId?.Value);
             Assert.Contains("sub-agent did work", diag.Line, StringComparison.Ordinal);
         }
 
@@ -119,7 +120,8 @@ public sealed class RollingFileLoggerPartitionTests : TestKit
             logger.LogInformation("sub-agent LLM streaming call completed");
 
         var diag = await dispatcher.ExpectMsgAsync<SessionLogDiagnostic>(cancellationToken: TestContext.Current.CancellationToken);
-        Assert.Equal("C2/T2/subagent/coder/cd34", diag.SessionId.Value);
+        Assert.Equal("C2/T2", diag.SessionId.Value);
+        Assert.Equal("C2/T2/subagent/coder/cd34", diag.SubSessionId?.Value);
         Assert.Contains("sub-agent LLM streaming call completed", diag.Line, StringComparison.Ordinal);
 
         factory.Dispose();

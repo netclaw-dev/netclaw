@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Tools;
 using static Netclaw.Actors.SubAgents.SubAgentProtocol;
@@ -28,12 +29,25 @@ internal static class SubAgentTestScope
             RecentFiles = [.. recentFiles ?? []]
         };
 
+        var childScopeId = new SubAgentScopeId(scopeId);
+        var parentStorage = SessionStoragePaths.CreateLegacy(
+            sessionDirectory ?? Path.Combine(AppContext.BaseDirectory, "netclaw-test-session-workspace"),
+            Path.Combine(AppContext.BaseDirectory, "netclaw-test-session-logs"),
+            "test-session");
+        ToolSessionScope sessionScope = new ToolSessionScope.Bound(scopeId, parentStorage);
+        if (childScopeId.TryGetRunId(out var runId))
+        {
+            sessionScope = new ToolSessionScope.Bound(
+                scopeId,
+                parentStorage.ForChild(runId, childScopeId));
+        }
+
         return new ChildRunScope
         {
-            ScopeId = new SubAgentScopeId(scopeId),
+            ScopeId = childScopeId,
             Authority = new ToolRunScope
             {
-                Session = new ToolSessionScope.Bound(scopeId, sessionDirectory),
+                Session = sessionScope,
                 Audience = audience,
                 InlineOutputBudget = InlineOutputBudget.Default,
                 ModelInputModalities = modelInputModalities,

@@ -3,12 +3,10 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Tui;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -92,31 +90,9 @@ public sealed class IdentityRedoPageTests : IDisposable
 
     private (VirtualTerminal Terminal, TerminaApplication App, IdentityRedoViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        IdentityRedoViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/identity-redo", builder =>
-        {
-            builder.RegisterRoute<IdentityRedoPage, IdentityRedoViewModel>(
-                "/identity-redo",
-                _ => new IdentityRedoPage(),
-                _ =>
-                {
-                    capturedVm = new IdentityRedoViewModel(_paths);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<IdentityRedoPage, IdentityRedoViewModel>(
+            "/identity-redo",
+            () => new IdentityRedoPage(),
+            () => new IdentityRedoViewModel(_paths),
+            out input);
 }

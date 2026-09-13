@@ -50,7 +50,14 @@ internal static class UpdateCommand
         }
     }
 
-    public static async Task<int> RunAsync(string[] args, NetclawPaths paths, bool selfUpdateDisabled = false, UpdateChannel channel = UpdateChannel.Stable)
+    public static async Task<int> RunAsync(
+        string[] args,
+        NetclawPaths paths,
+        bool selfUpdateDisabled,
+        UpdateChannel channel,
+        TextReader input,
+        TextWriter output,
+        TextWriter error)
     {
         var checkOnly = false;
         var force = false;
@@ -69,24 +76,24 @@ internal static class UpdateCommand
                 case "--channel":
                     if (i + 1 >= args.Length)
                     {
-                        Console.Error.WriteLine("--channel requires a value: stable or beta.");
-                        WriteHelp();
+                        error.WriteLine("--channel requires a value: stable or beta.");
+                        WriteHelp(output);
                         return 1;
                     }
                     if (!DaemonConfig.TryParseUpdateChannel(args[++i], out var parsedChannel))
                     {
-                        Console.Error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta.");
-                        WriteHelp();
+                        error.WriteLine($"Unknown channel: '{args[i]}'. Valid values: stable, beta.");
+                        WriteHelp(output);
                         return 1;
                     }
                     channelOverride = parsedChannel;
                     break;
                 case "-h" or "--help" or "help":
-                    WriteHelp();
+                    WriteHelp(output);
                     return 0;
                 default:
-                    Console.WriteLine($"Unknown option: {args[i]}");
-                    WriteHelp();
+                    output.WriteLine($"Unknown option: {args[i]}");
+                    WriteHelp(output);
                     return 1;
             }
         }
@@ -102,7 +109,7 @@ internal static class UpdateCommand
 
             if (checkOnly)
             {
-                Console.WriteLine($"Checking '{channel.ToWireValue()}' channel (run without --check to switch).");
+                output.WriteLine($"Checking '{channel.ToWireValue()}' channel (run without --check to switch).");
             }
             else
             {
@@ -112,11 +119,11 @@ internal static class UpdateCommand
                 }
                 catch (Exception ex)
                 {
-                    Console.Error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
+                    error.WriteLine($"Error: could not save update channel to {paths.NetclawConfigPath}: {ex.Message}");
                     return 1;
                 }
 
-                Console.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
+                output.WriteLine($"Update channel set to '{channel.ToWireValue()}' ({paths.NetclawConfigPath}).");
             }
         }
 
@@ -134,16 +141,16 @@ internal static class UpdateCommand
         {
             if (fetchResult.Status is ManifestFetchStatus.SignatureFailure or ManifestFetchStatus.PlatformUnavailable)
             {
-                Console.Error.WriteLine($"Error: {fetchResult.ErrorMessage}");
-                Console.Error.WriteLine(fetchResult.Status == ManifestFetchStatus.PlatformUnavailable
+                error.WriteLine($"Error: {fetchResult.ErrorMessage}");
+                error.WriteLine(fetchResult.Status == ManifestFetchStatus.PlatformUnavailable
                     ? "The update manifest could not be verified because signature verification is unavailable on this platform."
                     : "The update manifest could not be verified. This may indicate tampering.");
-                Console.Error.WriteLine("If this persists, report the issue at https://github.com/netclaw-dev/netclaw/issues");
+                error.WriteLine("If this persists, report the issue at https://github.com/netclaw-dev/netclaw/issues");
                 return 1;
             }
 
             // Network failure — could be transient
-            Console.Error.WriteLine($"Could not check for updates: {fetchResult.ErrorMessage}");
+            error.WriteLine($"Could not check for updates: {fetchResult.ErrorMessage}");
             return 1;
         }
 
@@ -151,41 +158,41 @@ internal static class UpdateCommand
 
         if (!result.IsUpdateAvailable)
         {
-            Console.WriteLine($"Netclaw is up to date (v{result.CurrentVersion}).");
+            output.WriteLine($"Netclaw is up to date (v{result.CurrentVersion}).");
             return 0;
         }
 
-        Console.WriteLine($"Update available: v{result.CurrentVersion} → v{result.LatestVersion}");
+        output.WriteLine($"Update available: v{result.CurrentVersion} → v{result.LatestVersion}");
         if (result.ReleaseNotesUrl is not null)
-            Console.WriteLine($"Release notes: {result.ReleaseNotesUrl}");
+            output.WriteLine($"Release notes: {result.ReleaseNotesUrl}");
 
         if (checkOnly)
             return 0;
 
         if (selfUpdateDisabled)
         {
-            Console.WriteLine();
-            Console.WriteLine("Self-update is disabled (Daemon.DisableSelfUpdate=true).");
-            Console.WriteLine("Pull a newer container image to upgrade.");
+            output.WriteLine();
+            output.WriteLine("Self-update is disabled (Daemon.DisableSelfUpdate=true).");
+            output.WriteLine("Pull a newer container image to upgrade.");
             return 1;
         }
 
         // Show what will be downloaded
-        Console.WriteLine();
+        output.WriteLine();
         foreach (var asset in result.MatchingAssets)
         {
             var sizeMb = asset.SizeBytes / (1024.0 * 1024.0);
-            Console.WriteLine($"  {asset.Component} ({asset.Rid}) — {sizeMb:F1} MB");
+            output.WriteLine($"  {asset.Component} ({asset.Rid}) — {sizeMb:F1} MB");
         }
 
         if (!force)
         {
-            Console.Write("\nProceed with update? [y/N]: ");
-            var response = Console.ReadLine();
+            output.Write("\nProceed with update? [y/N]: ");
+            var response = input.ReadLine();
             if (!string.Equals(response, "y", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(response, "yes", StringComparison.OrdinalIgnoreCase))
             {
-                Console.WriteLine("Update cancelled.");
+                output.WriteLine("Update cancelled.");
                 return 0;
             }
         }
@@ -636,16 +643,16 @@ internal static class UpdateCommand
         ConfigFileHelper.WriteConfigFile(paths.NetclawConfigPath, config);
     }
 
-    internal static void WriteHelp()
+    internal static void WriteHelp(TextWriter output)
     {
-        Console.WriteLine("Usage: netclaw update [options]");
-        Console.WriteLine();
-        Console.WriteLine("Check for and install Netclaw updates.");
-        Console.WriteLine();
-        Console.WriteLine("Options:");
-        Console.WriteLine("  --check              Check for updates without installing");
-        Console.WriteLine("  --force              Skip confirmation prompt");
-        Console.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta");
+        output.WriteLine("Usage: netclaw update [options]");
+        output.WriteLine();
+        output.WriteLine("Check for and install Netclaw updates.");
+        output.WriteLine();
+        output.WriteLine("Options:");
+        output.WriteLine("  --check              Check for updates without installing");
+        output.WriteLine("  --force              Skip confirmation prompt");
+        output.WriteLine("  --channel <name>     Switch the release channel (saved to netclaw.json): stable or beta");
     }
 
     /// <summary>

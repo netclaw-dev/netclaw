@@ -52,10 +52,11 @@ public sealed class SkillSyncHelpersTests : IDisposable
             syncState.Skills[name] = new SyncedSkillState { Version = "1.0.0", Sha256 = "abc" };
 
         // Server index now advertises only skill-a.
-        var changed = SkillSyncHelpers.PruneRemovedSkills(
+        var result = SkillSyncHelpers.PruneRemovedSkills(
             feedDir, new[] { "skill-a" }, syncState, NullLogger.Instance);
 
-        Assert.True(changed);
+        Assert.Equal(3, result.RemovedCount);
+        Assert.Equal(0, result.FailedCount);
 
         // On disk: skill-a kept, removed skills gone.
         Assert.True(Directory.Exists(Path.Combine(feedDir, "skill-a")));
@@ -86,10 +87,11 @@ public sealed class SkillSyncHelpersTests : IDisposable
             },
         };
 
-        var changed = SkillSyncHelpers.PruneRemovedSkills(
+        var result = SkillSyncHelpers.PruneRemovedSkills(
             feedDir, new[] { "skill-a", "skill-b" }, syncState, NullLogger.Instance);
 
-        Assert.False(changed);
+        Assert.False(result.Changed);
+        Assert.Equal(0, result.FailedCount);
         Assert.True(Directory.Exists(Path.Combine(feedDir, "skill-a")));
         Assert.True(Directory.Exists(Path.Combine(feedDir, "skill-b")));
         Assert.Equal(2, syncState.Skills.Count);
@@ -113,10 +115,10 @@ public sealed class SkillSyncHelpersTests : IDisposable
         };
 
         // Server advertises only skill-a.
-        var changed = SkillSyncHelpers.PruneRemovedSkills(
+        var result = SkillSyncHelpers.PruneRemovedSkills(
             feedDir, new[] { "skill-a" }, syncState, NullLogger.Instance);
 
-        Assert.True(changed); // husk's stale state entry was removed
+        Assert.Equal(1, result.RemovedCount); // husk's stale state entry was removed
 
         // A directory without a SKILL.md is never recursively deleted.
         Assert.True(Directory.Exists(Path.Combine(feedDir, "not-a-skill")));
@@ -136,12 +138,50 @@ public sealed class SkillSyncHelpersTests : IDisposable
         var syncState = new SkillSyncState { Skills = { ["skill-a"] = State() } };
 
         // An empty server index is not authoritative — prune nothing.
-        var changed = SkillSyncHelpers.PruneRemovedSkills(
+        var result = SkillSyncHelpers.PruneRemovedSkills(
             feedDir, Array.Empty<string>(), syncState, NullLogger.Instance);
 
-        Assert.False(changed);
+        Assert.False(result.Changed);
         Assert.True(Directory.Exists(Path.Combine(feedDir, "skill-a")));
         Assert.Single(syncState.Skills);
+    }
+
+    [Fact]
+    public void PruneRemovedSkills_counts_orphan_directories_and_missing_receipts_once_each()
+    {
+        var feedDir = _dir.Path;
+        CreateSkillDir("orphan");
+        var syncState = new SkillSyncState
+        {
+            Skills = { ["missing"] = State() },
+        };
+
+        var result = SkillSyncHelpers.PruneRemovedSkills(
+            feedDir, ["advertised"], syncState, NullLogger.Instance);
+
+        Assert.Equal(2, result.RemovedCount);
+        Assert.Equal(0, result.FailedCount);
+        Assert.False(Directory.Exists(Path.Combine(feedDir, "orphan")));
+        Assert.Empty(syncState.Skills);
+    }
+
+    [Fact]
+    public void PruneRemovedSkills_removes_an_unsafe_receipt_without_touching_an_external_directory()
+    {
+        using var external = new DisposableTempDir();
+        File.WriteAllText(Path.Combine(external.Path, "SKILL.md"), "External skill.");
+        var syncState = new SkillSyncState
+        {
+            Skills = { [Path.GetRelativePath(_dir.Path, external.Path)] = State() },
+        };
+
+        var result = SkillSyncHelpers.PruneRemovedSkills(
+            _dir.Path, ["advertised"], syncState, NullLogger.Instance);
+
+        Assert.Equal(1, result.RemovedCount);
+        Assert.Equal(0, result.FailedCount);
+        Assert.True(File.Exists(Path.Combine(external.Path, "SKILL.md")));
+        Assert.Empty(syncState.Skills);
     }
 
     [Fact]

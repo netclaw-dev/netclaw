@@ -62,7 +62,7 @@ public sealed class ToolIndexUpdaterTests
         paths.EnsureDirectoriesExist();
 
         var config = new ToolConfig();
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Public,
@@ -100,7 +100,8 @@ public sealed class ToolIndexUpdaterTests
         await updater.StartAsync(TestContext.Current.CancellationToken);
 
         var publicIndex = toolIndexLayer.GetContextLayer(TrustAudience.Public);
-        Assert.Contains("file: file_read", publicIndex);
+        Assert.Contains("[deferred first-party tools", publicIndex);
+        Assert.Contains("file_read:", publicIndex);
         Assert.DoesNotContain("set_reminder", publicIndex);
         Assert.DoesNotContain("memorizer", publicIndex);
     }

@@ -9,6 +9,7 @@ using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -18,6 +19,7 @@ using Netclaw.Security.Skills;
 using Netclaw.SkillClient;
 using Netclaw.Tests.Utilities;
 using Xunit;
+using SkillScanResult = Netclaw.Security.Skills.SkillScanResult;
 
 namespace Netclaw.Daemon.Tests.Services;
 
@@ -42,6 +44,59 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
     }
 
     public void Dispose() => _dir.Dispose();
+
+    [Fact]
+    public async Task SyncAsync_with_no_enabled_sources_returns_an_empty_successful_result()
+    {
+        var handler = new ControlledFeedHandler(holdIndex: false);
+        var service = CreateControlledService(handler, syncIntervalMinutes: 0, enabled: false);
+        var result = await service.SyncAsync(TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Sources);
+        Assert.True(result.Inventory.Succeeded);
+        Assert.Equal(0, handler.IndexRequestCount);
+    }
+
+    [Fact]
+    public async Task SyncAsync_reports_a_failed_feed_and_a_healthy_feed()
+    {
+        var handler = new MultiFeedHandler();
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = 0,
+            Feeds =
+            [
+                new SkillFeedSource { Name = "healthy", Url = "https://healthy.test/", TimeoutSeconds = 30 },
+                new SkillFeedSource { Name = "failed", Url = "https://failed.test/", TimeoutSeconds = 30 },
+            ],
+        };
+        var service = CreateService(feeds, handler, new NoOpSkillContentScanner(), new FakeTimeProvider());
+        var result = await service.SyncAsync(TestContext.Current.CancellationToken);
+
+        var healthy = Assert.Single(result.Sources, source => source.Name == "healthy");
+        Assert.Equal(0, healthy.FailedCount);
+        Assert.Equal("absent", healthy.Sidecar);
+        var failed = Assert.Single(result.Sources, source => source.Name == "failed");
+        Assert.Equal(1, failed.FailedCount);
+        Assert.Equal("not-run", failed.Sidecar);
+    }
+
+    [Fact]
+    public async Task SyncAsync_reports_required_index_failure()
+    {
+        var handler = new MultiFeedHandler(failEveryFeed: true);
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = 0,
+            Feeds = [new SkillFeedSource { Name = "failed", Url = "https://failed.test/", TimeoutSeconds = 30 }],
+        };
+        var service = CreateService(feeds, handler, new NoOpSkillContentScanner(), new FakeTimeProvider());
+        var result = await service.SyncAsync(TestContext.Current.CancellationToken);
+
+        var source = Assert.Single(result.Sources);
+        Assert.Equal(1, source.FailedCount);
+        Assert.Equal("not-run", source.Sidecar);
+    }
 
     [Fact]
     public async Task ExtractArchiveAsync_AllowsArbitraryResourcesAndPreservesExecutableMode()
@@ -115,7 +170,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", agentContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         var agentPath = Path.Combine(_paths.ServerFeedAgentDirectory("team"), "code-reviewer.md");
         Assert.True(File.Exists(agentPath));
@@ -155,7 +210,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         handler.AddErrorResponse(BaseUrl + "subagents/v1/index.json", HttpStatusCode.NotFound);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         var skillPath = Path.Combine(_paths.ServerFeedDirectory("team"), "feed-skill", "SKILL.md");
         Assert.True(File.Exists(skillPath));
@@ -198,7 +253,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", deliveredContent, expectedDigest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.Equal(oldContent, File.ReadAllText(Path.Combine(agentDir, "code-reviewer.md")));
         Assert.True(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
@@ -249,7 +304,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", invalidContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.Equal(oldContent, File.ReadAllText(Path.Combine(agentDir, "code-reviewer.md")));
         Assert.True(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
@@ -301,7 +356,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", invalidContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.Equal(oldContent, File.ReadAllText(Path.Combine(agentDir, "code-reviewer.md")));
         Assert.True(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
@@ -336,7 +391,7 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
         AddNativeSubAgentResponses(handler, "code-reviewer", "1.0.0", agentContent, digest);
 
         var service = CreateService(handler);
-        await service.SyncOnceAsync(CancellationToken.None);
+        await RunSyncAsync(service);
 
         Assert.False(File.Exists(Path.Combine(agentDir, "stale-agent.md")));
         Assert.True(File.Exists(Path.Combine(_paths.AgentsDirectory, "stale-agent.md")));
@@ -355,6 +410,9 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             scanner ?? new NoOpSkillContentScanner(),
             NullLogger<ServerFeedSkillSyncService>.Instance,
             []);
+
+    private static Task RunSyncAsync(ServerFeedSkillSyncService service)
+        => service.SyncAsync(TestContext.Current.CancellationToken);
 
     private ServerFeedSkillSyncService CreateService(FakeHttpMessageHandler handler)
     {
@@ -385,6 +443,51 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             });
     }
 
+    private ServerFeedSkillSyncService CreateControlledService(
+        ControlledFeedHandler handler,
+        int syncIntervalMinutes,
+        bool enabled = true)
+    {
+        var feeds = new SkillFeedsConfig
+        {
+            SyncIntervalMinutes = syncIntervalMinutes,
+            Feeds = enabled
+                ? [new SkillFeedSource { Name = "team", Url = BaseUrl, TimeoutSeconds = 30 }]
+                : [],
+        };
+        return new ServerFeedSkillSyncService(
+            feeds,
+            _paths,
+            _skillRegistry,
+            _skillIndexPublisher,
+            new FakeTimeProvider(),
+            new NoOpSkillContentScanner(),
+            NullLogger<ServerFeedSkillSyncService>.Instance,
+            [],
+            feed => new SkillServerClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri(feed.Url),
+            }));
+    }
+
+    private ServerFeedSkillSyncService CreateService(
+        SkillFeedsConfig feeds,
+        HttpMessageHandler handler,
+        ISkillContentScanner scanner,
+        TimeProvider timeProvider) => new(
+            feeds,
+            _paths,
+            _skillRegistry,
+            _skillIndexPublisher,
+            timeProvider,
+            scanner,
+            NullLogger<ServerFeedSkillSyncService>.Instance,
+            [],
+            feed => new SkillServerClient(new HttpClient(handler)
+            {
+                BaseAddress = new Uri(feed.Url),
+            }));
+
     private SkillSyncState ReadAgentSyncState()
     {
         var json = File.ReadAllText(_paths.ServerFeedAgentSyncStatePath("team"));
@@ -401,6 +504,70 @@ public sealed class ServerFeedSkillSyncServiceTests : IDisposable
             }
             """,
             "application/json");
+    }
+
+    private sealed class ControlledFeedHandler : HttpMessageHandler
+    {
+        private readonly TaskCompletionSource _releaseIndex = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly bool _holdIndex;
+        private int _indexRequestCount;
+
+        public ControlledFeedHandler(bool holdIndex) => _holdIndex = holdIndex;
+
+        public TaskCompletionSource FirstIndexRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource SecondIndexRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public int IndexRequestCount => Volatile.Read(ref _indexRequestCount);
+
+        public void ReleaseIndex() => _releaseIndex.TrySetResult();
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.AbsolutePath.EndsWith("/.well-known/agent-skills/index.json", StringComparison.Ordinal))
+            {
+                var requestCount = Interlocked.Increment(ref _indexRequestCount);
+                FirstIndexRequest.TrySetResult();
+                if (requestCount == 2)
+                    SecondIndexRequest.TrySetResult();
+                if (_holdIndex)
+                    await _releaseIndex.Task.WaitAsync(cancellationToken);
+
+                return JsonResponse("{\"skills\":[]}");
+            }
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/subagents/v1/index.json", StringComparison.Ordinal))
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+
+            return new HttpResponseMessage(HttpStatusCode.NotFound);
+        }
+
+        internal static HttpResponseMessage JsonResponse(string json) => new(HttpStatusCode.OK)
+        {
+            Content = new StringContent(json, Encoding.UTF8, "application/json"),
+        };
+    }
+
+    private sealed class MultiFeedHandler : HttpMessageHandler
+    {
+        private readonly bool _failEveryFeed;
+
+        public MultiFeedHandler(bool failEveryFeed = false) => _failEveryFeed = failEveryFeed;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.RequestUri!.Host == "failed.test" || _failEveryFeed)
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
+
+            if (request.RequestUri.AbsolutePath.EndsWith("/.well-known/agent-skills/index.json", StringComparison.Ordinal))
+                return Task.FromResult(ControlledFeedHandler.JsonResponse("{\"skills\":[]}"));
+
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
+        }
     }
 
     private static void AddNativeSubAgentResponses(

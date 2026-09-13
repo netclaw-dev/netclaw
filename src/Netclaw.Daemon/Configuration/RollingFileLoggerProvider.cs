@@ -9,6 +9,7 @@ using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Configuration;
 
@@ -122,10 +123,12 @@ internal sealed class RollingFileLoggerProvider : ILoggerProvider, ISupportExter
         // Partition the LOCAL file: a sub-agent's lines (which carry a SubSessionId) get their own
         // session.log keyed by the sub-session; everything else goes to its session's file. The
         // line still carries the parent SessionId, so OTEL groups it under the parent regardless.
-        var routingId = subSessionId ?? sessionId;
-        if (!string.IsNullOrWhiteSpace(routingId) && Volatile.Read(ref _sessionDispatcher) is { } dispatcher)
+        if (!string.IsNullOrWhiteSpace(sessionId) && Volatile.Read(ref _sessionDispatcher) is { } dispatcher)
         {
-            dispatcher.Tell(new SessionLogDiagnostic(new SessionId(routingId), line));
+            var childScope = string.IsNullOrWhiteSpace(subSessionId)
+                ? (SubAgentScopeId?)null
+                : new SubAgentScopeId(subSessionId);
+            dispatcher.Tell(new SessionLogDiagnostic(new SessionId(sessionId), line, childScope));
             return;
         }
 

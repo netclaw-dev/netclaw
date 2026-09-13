@@ -637,7 +637,7 @@ public class ChatMessageConverterTests
     }
 
     [Fact]
-    public void ToAiMessage_reinjectMeta_restores_hint_for_redrive_but_not_outbound()
+    public void ToAiMessage_replays_rationale_and_limits_execution_hints_to_redrive()
     {
         // Persist a near-miss call: the meta key is stripped into MetaJson.
         var persisted = ChatMessageConverter.FromAiMessage(
@@ -646,6 +646,7 @@ public class ChatMessageConverterTests
                 new FunctionCallContent("c1", "shell_execute", new Dictionary<string, object?>
                 {
                     ["Command"] = "long-task",
+                    ["_rationale"] = "Run the long task for the user.",
                     ["TimeoutSeconds"] = 1800
                 })
             }),
@@ -659,12 +660,14 @@ public class ChatMessageConverterTests
         var redriven = ChatMessageConverter.ToAiMessage(persisted, reinjectMeta: true);
         var redrivenCall = redriven.Contents.OfType<FunctionCallContent>().Single();
         Assert.True(redrivenCall.Arguments!.ContainsKey("_timeout_seconds"));
+        Assert.Equal("Run the long task for the user.", redrivenCall.Arguments["_rationale"]);
         var (meta, _) = ToolCallMeta.ExtractFrom(redrivenCall.Arguments, ToolArgumentHelper.ResolveMetaField);
         Assert.Equal(1800, meta?.TimeoutHintSeconds);
 
-        // Outbound provider history (the default) must NOT carry meta keys.
+        // Outbound history keeps the required rationale. It omits execution hints.
         var outbound = ChatMessageConverter.ToAiMessage(persisted);
         var outboundCall = outbound.Contents.OfType<FunctionCallContent>().Single();
+        Assert.Equal("Run the long task for the user.", outboundCall.Arguments!["_rationale"]);
         Assert.False(outboundCall.Arguments?.ContainsKey("_timeout_seconds") ?? false);
     }
 

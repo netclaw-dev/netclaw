@@ -58,6 +58,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
@@ -103,6 +105,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
@@ -148,6 +152,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
@@ -231,6 +237,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning
             {
                 DeterministicRetrievalEnabled = true,
@@ -289,6 +297,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var budgeted = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning { MaxRecallInjectedChars = 700 });
         var budgetedResult = await budgeted.RecallAsync(request, TestContext.Current.CancellationToken);
 
@@ -300,6 +310,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var unbounded = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning { MaxRecallInjectedChars = 0 });
         var unboundedResult = await unbounded.RecallAsync(request, TestContext.Current.CancellationToken);
         Assert.Equal(3, unboundedResult.Items.Count);
@@ -337,6 +349,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(
@@ -381,6 +395,8 @@ public sealed class DeterministicRetrievalPlanningTests
         var coordinator = new SQLiteMemoryRecallCoordinator(
             store,
             NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            TimeProvider.System,
             sessionTuning: new SessionTuning { DeterministicRetrievalEnabled = true });
 
         var result = await coordinator.RecallAsync(new AutomaticRecallRequest(

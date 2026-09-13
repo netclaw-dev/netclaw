@@ -1,0 +1,17 @@
+{
+  "stryker-config": {
+    "project": "Netclaw.Actors.csproj",
+    "configuration": "Release",
+    "coverage-analysis": "off",
+    "reporters": [
+      "progress",
+      "json",
+      "html"
+    ],
+    "thresholds": {
+      "high": 100,
+      "low": 100,
+      "break": 100
+    }
+  }
+}

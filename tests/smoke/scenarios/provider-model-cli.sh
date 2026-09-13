@@ -7,22 +7,20 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../scripts/smoke/lib/common.sh
 . "${SCRIPT_DIR}/../../../scripts/smoke/lib/common.sh"
 
-ALT_MODEL="${SMOKE_OLLAMA_ALT_MODEL:-all-minilm:latest}"
-
-log "Testing provider add (local-ollama)..."
-nc provider add local-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
+log "Testing provider add (local-smoke)..."
+nc provider add local-smoke openai-compatible --endpoint "$SMOKE_LLM_ENDPOINT"
 
 log "Testing provider list..."
 provider_list="$(nc provider list 2>/dev/null || true)"
 echo "$provider_list"
-if [[ "$provider_list" == *"local-ollama"* ]]; then
-  pass "provider list: includes local-ollama"
+if [[ "$provider_list" == *"local-smoke"* ]]; then
+  pass "provider list: includes local-smoke"
 else
-  fail "provider list: expected local-ollama"
+  fail "provider list: expected local-smoke"
 fi
 
 log "Testing model set (main to $SMOKE_MODEL)..."
-nc model set main local-ollama "$SMOKE_MODEL"
+nc model set main local-smoke "$SMOKE_MODEL"
 
 log "Testing model list..."
 model_list="$(nc model list 2>/dev/null || true)"
@@ -34,7 +32,7 @@ else
 fi
 
 log "Testing model discover..."
-discover_output="$(nc model discover local-ollama 2>/dev/null || true)"
+discover_output="$(nc model discover local-smoke 2>/dev/null || true)"
 echo "$discover_output"
 if [[ "$discover_output" == *"$SMOKE_MODEL"* ]]; then
   pass "model discover: includes $SMOKE_MODEL"
@@ -42,55 +40,36 @@ else
   fail "model discover: expected $SMOKE_MODEL"
 fi
 
-log "Testing model switch to alternate model ($ALT_MODEL)..."
-nc model set main local-ollama "$ALT_MODEL"
-switched_list="$(nc model list 2>/dev/null || true)"
-echo "$switched_list"
-if [[ "$switched_list" == *"$ALT_MODEL"* ]]; then
-  pass "model switch: list shows $ALT_MODEL"
-else
-  fail "model switch: expected $ALT_MODEL after switch"
-fi
-
-log "Testing model switch back to original ($SMOKE_MODEL)..."
-nc model set main local-ollama "$SMOKE_MODEL"
-restored_list="$(nc model list 2>/dev/null || true)"
-echo "$restored_list"
-if [[ "$restored_list" == *"$SMOKE_MODEL"* ]]; then
-  pass "model switch back: list shows $SMOKE_MODEL"
-else
-  fail "model switch back: expected $SMOKE_MODEL"
-fi
-
 log "Testing provider add (second provider)..."
-nc provider add test-ollama ollama --endpoint "$OLLAMA_ENDPOINT"
+nc provider add test-smoke openai-compatible --endpoint "$SMOKE_LLM_ENDPOINT"
 added_list="$(nc provider list 2>/dev/null || true)"
 echo "$added_list"
-if [[ "$added_list" == *"test-ollama"* ]]; then
-  pass "provider add: list includes test-ollama"
+if [[ "$added_list" == *"test-smoke"* ]]; then
+  pass "provider add: list includes test-smoke"
 else
-  fail "provider add: expected test-ollama"
+  fail "provider add: expected test-smoke"
 fi
 
 log "Testing provider remove..."
-nc provider remove test-ollama
+nc provider remove test-smoke
 removed_list="$(nc provider list 2>/dev/null || true)"
 echo "$removed_list"
-if [[ "$removed_list" == *"test-ollama"* ]]; then
-  fail "provider remove: test-ollama still present"
+if [[ "$removed_list" == *"test-smoke"* ]]; then
+  fail "provider remove: test-smoke still present"
 else
-  pass "provider remove: test-ollama removed"
+  pass "provider remove: test-smoke removed"
 fi
 
 log "Testing model set fallback then clear..."
-nc model set fallback local-ollama "$ALT_MODEL"
+nc model set fallback local-smoke "$SMOKE_MODEL"
 nc model clear fallback
 cleared_list="$(nc model list 2>/dev/null || true)"
 echo "$cleared_list"
-if [[ "$cleared_list" == *"$ALT_MODEL"* ]]; then
-  fail "model clear: $ALT_MODEL still present in fallback"
+fallback_line="$(printf '%s\n' "$cleared_list" | awk '$1 == "Fallback" { print; exit }')"
+if [[ "$fallback_line" == *"(not set)"* ]]; then
+  pass "model clear: fallback is not set"
 else
-  pass "model clear: $ALT_MODEL cleared from fallback"
+  fail "model clear: fallback remains configured"
 fi
 
 log "Testing legacy migration failures are clean model errors..."
@@ -99,14 +78,14 @@ cat >"$config_path" <<JSON
 {
   "configVersion": 1,
   "Providers": {
-    "local-ollama": {
-      "Type": "ollama",
-      "Endpoint": "${OLLAMA_ENDPOINT}"
+    "local-smoke": {
+      "Type": "openai-compatible",
+      "Endpoint": "${SMOKE_LLM_ENDPOINT}"
     }
   },
   "Models": {
     "Main": {
-      "Provider": "local-ollama",
+      "Provider": "local-smoke",
       "ModelId": "${SMOKE_MODEL}"
     }
   }
@@ -118,7 +97,7 @@ crash_count_before="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log
 migration_status=0
 migration_output="$(
   NETCLAW_Models__Main__ContextWindow=65536 run_timed \
-    "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" model set main local-ollama "$ALT_MODEL" 2>&1
+    "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" model set main local-smoke "$SMOKE_MODEL" 2>&1
 )" || migration_status=$?
 echo "$migration_output"
 crash_count_after="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"
@@ -140,19 +119,19 @@ cat >"$config_path" <<JSON
 {
   "configVersion": 1,
   "Providers": {
-    "local-ollama": {
-      "Type": "ollama",
-      "Endpoint": "${OLLAMA_ENDPOINT}"
+    "local-smoke": {
+      "Type": "openai-compatible",
+      "Endpoint": "${SMOKE_LLM_ENDPOINT}"
     }
   },
   "Models": {
     "Main": {
-      "Provider": "local-ollama",
+      "Provider": "local-smoke",
       "ModelId": "${SMOKE_MODEL}",
       "ContextWindow": 32768
     },
     "Fallback": {
-      "Provider": "local-ollama",
+      "Provider": "local-smoke",
       "ModelId": "${SMOKE_MODEL}",
       "ContextWindow": 65536
     }
@@ -164,7 +143,7 @@ conflict_crash_count_before="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'cr
 conflict_status=0
 conflict_output="$(
   run_timed "$STEP_TIMEOUT_SECONDS" "$NETCLAW_SMOKE_CLI" \
-    model set compaction local-ollama "$SMOKE_MODEL" 2>&1
+    model set compaction local-smoke "$SMOKE_MODEL" 2>&1
 )" || conflict_status=$?
 echo "$conflict_output"
 conflict_crash_count_after="$(find "${NETCLAW_HOME}/logs" -maxdepth 1 -name 'crash-*.log' 2>/dev/null | wc -l | tr -d ' ')"

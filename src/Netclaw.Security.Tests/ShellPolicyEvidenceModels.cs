@@ -106,6 +106,12 @@ internal sealed record PolicyAdversarialCase
 
     public bool UseBundledSafeCatalog { get; init; }
 
+    public bool UsePhysicalHarnessScope { get; init; }
+
+    public List<PolicyFileSystemFact>? FileSystemFacts { get; init; }
+
+    public List<string>? DeniedPaths { get; init; }
+
     public required PolicyAdversarialExpected Expected { get; init; }
 }
 
@@ -124,6 +130,26 @@ internal sealed record PolicyAdversarialExpected
     public List<string>? OptionKeys { get; init; }
 
     public required int ActorCheckCount { get; init; }
+
+    public List<PolicyExpectedCandidateCoverage>? CandidateCoverage { get; init; }
+
+    public List<PolicyTraceRow>? Trace { get; init; }
+}
+
+internal sealed record PolicyExpectedCandidateCoverage
+{
+    public required int CandidateId { get; init; }
+
+    public required string Coverage { get; init; }
+}
+
+internal sealed record PolicyFileSystemFact
+{
+    public required string Kind { get; init; }
+
+    public required string Path { get; init; }
+
+    public required string Target { get; init; }
 }
 
 internal sealed record PolicyFixtureEnvironment

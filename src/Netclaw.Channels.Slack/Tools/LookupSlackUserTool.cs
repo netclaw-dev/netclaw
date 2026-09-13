@@ -104,7 +104,7 @@ public sealed partial class LookupSlackUserTool : NetclawTool<LookupSlackUserToo
         if (request.AddressKind == ChannelAddressKind.DirectMessage && !_options.AllowDirectMessages)
             return ChannelAddressResolutionResult.Unsupported("Slack direct-message resolution is disabled in configuration.");
 
-        var query = NormalizeUserQuery(request.Query);
+        var query = UserQueryNormalizer.StripLeadingAt(request.Query);
         if (IsSlackUserId(query))
         {
             var userId = new SlackUserId(query);
@@ -157,12 +157,6 @@ public sealed partial class LookupSlackUserTool : NetclawTool<LookupSlackUserToo
             return user.Name;
 
         return user.Id;
-    }
-
-    private static string NormalizeUserQuery(string query)
-    {
-        var normalized = query.Trim();
-        return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
     }
 
     private static bool IsSlackUserId(string value)

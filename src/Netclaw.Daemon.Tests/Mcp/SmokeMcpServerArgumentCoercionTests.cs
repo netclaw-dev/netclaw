@@ -21,6 +21,7 @@ namespace Netclaw.Daemon.Tests.Mcp;
 /// this test proves the wire: that a reconstructed argument actually serializes
 /// over JSON-RPC and is accepted by a real MCP server.
 /// </summary>
+[Collection(McpSmokeChildProcessCollection.Name)]
 public sealed class SmokeMcpServerArgumentCoercionTests(ITestOutputHelper output)
 {
     [Fact]
@@ -60,7 +61,7 @@ public sealed class SmokeMcpServerArgumentCoercionTests(ITestOutputHelper output
             ["reference"] = "00713",
         };
 
-        var result = await recordTasks!.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), ct);
+        var result = await recordTasks!.ExecuteAsync(args, TestToolExecutionContext.CreateUnboundWithoutApproval(), ct);
 
         // count=2 (with the trailing delimiter) proves the stringified array was
         // reconstructed before the server bound it to `object[]` — a raw string

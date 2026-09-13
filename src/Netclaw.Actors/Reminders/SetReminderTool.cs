@@ -24,6 +24,9 @@ namespace Netclaw.Actors.Reminders;
     "The time zone id must be an IANA identifier without spaces (e.g. 'Europe/Brussels', 'America/New_York'); " +
     "Windows names like 'Eastern Standard Time' are not supported.",
     Grant = "scheduling")]
+[ToolArgumentVariant("DeliveryKind", "current_session", Forbidden = ["DeliveryTransport", "DeliveryAddress"])]
+[ToolArgumentVariant("DeliveryKind", "channel", Required = ["DeliveryTransport", "DeliveryAddress"])]
+[ToolArgumentVariant("DeliveryKind", "none", Forbidden = ["DeliveryTransport", "DeliveryAddress"])]
 public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params>
 {
     private readonly IActorRef _reminderManager;
@@ -42,7 +45,7 @@ public sealed partial class SetReminderTool : NetclawTool<SetReminderTool.Params
         string ScheduleType,
         [property: Description("Schedule value: relative time, ISO 8601 datetime, interval duration, or cron expression (optional 'CRON_TZ=<IANA-time-zone-id>' prefix for timezone-aware cron, e.g. 'CRON_TZ=Europe/Brussels 0 9 * * *').")]
         string Schedule,
-        [property: Description("How to deliver results: 'current_session' (reply in this conversation), 'channel' (post to a specific target), or 'none' (silent execution). Required unless `delivery.kind` is provided.")]
+        [property: Description("How to deliver results: 'current_session' (reply here), 'channel' (post to a target), or 'none' (silent execution).")]
         string? DeliveryKind = null,
         [property: Description("Transport for channel delivery (e.g., 'slack' or 'discord'). Required when delivery_kind='channel'.")]
         string? DeliveryTransport = null,

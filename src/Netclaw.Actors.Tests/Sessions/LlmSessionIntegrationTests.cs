@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Event;
 using Akka.Hosting;
 using Akka.Streams;
 using System.Text.Json;
@@ -17,6 +18,8 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Sessions.Handlers;
+using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -36,6 +39,8 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     private readonly FakeTimeProvider _timeProvider = new(DateTimeOffset.Parse("2026-03-21T12:00:00Z"));
     private readonly RecordingSessionLifecycleObserver _lifecycleObserver = new();
     private readonly ControllableWorkingContextSnapshotProvider _workingContextSnapshots = new();
+    private ToolRegistry _toolRegistry = null!;
+    private ToolConfig _toolConfig = null!;
 
     protected override bool VerifySerialization => true;
 
@@ -69,17 +74,28 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         services.AddSingleton<SQLiteMemoryStore>(sp => new SQLiteMemoryStore(Path.Combine(Path.GetTempPath(), $"netclaw-sidecar-tests-{Guid.NewGuid():N}.db"), TimeProvider.System));
         services.AddSingleton<IMemoryRecallCoordinator>(sp => new SQLiteMemoryRecallCoordinator(
             sp.GetRequiredService<SQLiteMemoryStore>(),
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteMemoryRecallCoordinator>.Instance));
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
+            new MemoryConfig(),
+            sp.GetRequiredService<TimeProvider>()));
 
         var registry = new ToolRegistry();
+        _toolRegistry = registry;
         registry.Register(new McpToolAdapter(
             AIFunctionFactory.Create((string url) => "ok", "navigate_page", "Navigate to URL"),
             "browser_chrome_devtools",
             "navigate_page"));
-        registry.Register(new SearchToolsTool(registry));
-        registry.Register(new LoadToolTool(registry));
+        _toolConfig = new ToolConfig();
+        _toolConfig.AudienceProfiles.Public.AllowedMcpServers.Add("browser_chrome_devtools");
+        _toolConfig.AudienceProfiles.Public.McpServerToolGrants = new Dictionary<string, List<string>>
+        {
+            ["browser_chrome_devtools"] = ["navigate_page"]
+        };
+        var toolAccessPolicy = TestToolAccessPolicy.Create(_toolConfig);
+        registry.RegisterCore(new SearchToolsTool(registry, toolAccessPolicy));
+        registry.RegisterCore(new LoadToolTool(registry, toolAccessPolicy));
 
         services.AddSingleton(registry);
+        services.AddSingleton(toolAccessPolicy);
         services.AddSingleton<IToolExecutor>(_fakeToolExecutor);
         services.AddSingleton<TimeProvider>(_timeProvider);
         services.AddSingleton<ISessionLifecycleObserver>(_lifecycleObserver);
@@ -117,6 +133,55 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Equal(sessionId, joined.SessionId);
         Assert.Equal(0, joined.TurnCount);
         Assert.Null(joined.Title);
+    }
+
+    [Fact]
+    public async Task Session_emits_one_payload_free_tool_exposure_diagnostic()
+    {
+        var sessionId = new SessionId("signalr/tool-exposure-test");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("tool-exposure-probe");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await EventFilter.Info(
+                message: "Session tool exposure core=2 deferredVisible=1 loaded=0")
+            .ExpectAsync(1, async () =>
+            {
+                await sessionManager.Ask<CommandAck>(new SendUserMessage
+                {
+                    SessionId = sessionId,
+                    Content = "private-payload-marker",
+                    Source = new MessageSource
+                    {
+                        ChannelType = ChannelType.SignalR,
+                        SenderId = new SenderId("synthetic-operator"),
+                        ChannelId = "synthetic-channel",
+                        MessageId = "synthetic-message",
+                        TurnId = new Netclaw.Actors.Protocol.TurnId("synthetic-turn"),
+                        Audience = TrustAudience.Personal,
+                        Boundary = TrustBoundary.Personal,
+                        Principal = PrincipalClassification.Operator,
+                        Provenance = new SourceProvenance(
+                            TransportAuthenticity.Verified,
+                            PayloadTaint.Trusted),
+                        ReceivedAt = _timeProvider.GetUtcNow()
+                    }
+                }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+                await subscriber.ExpectMsgAsync<TextOutput>(
+                    TimeSpan.FromSeconds(3),
+                    cancellationToken: TestContext.Current.CancellationToken);
+                await subscriber.ExpectMsgAsync<TurnCompleted>(
+                    TimeSpan.FromSeconds(3),
+                    cancellationToken: TestContext.Current.CancellationToken);
+            }, cancellationToken: TestContext.Current.CancellationToken);
     }
 
     [Fact]
@@ -349,12 +414,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("delivery-retry-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -391,12 +451,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("stale-delivery-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -435,12 +490,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("processing-delivery-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -484,12 +534,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("delivery-budget-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -534,12 +579,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("transport-failure-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -586,12 +626,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
         var subscriber = CreateTestProbe("unknown-failure-sub");
 
-        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
-        {
-            SessionId = sessionId,
-            Filter = OutputFilter.TextOnly
-        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
-        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await JoinSessionAsync(sessionManager, subscriber, sessionId);
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {
@@ -784,6 +819,500 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         Assert.Equal(2, _fakeChatClient.CallCount);
 
         await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Initial_model_call_contains_core_tools_but_not_deferred_tools()
+    {
+        var sessionId = new SessionId("channel-discovery/core-contract");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("core-contract-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use the initial tool set"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<TextOutput>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(TimeSpan.FromSeconds(6), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.NotEmpty(_fakeChatClient.ReceivedToolNames);
+        Assert.Equal(
+            ["load_tool", "search_tools"],
+            _fakeChatClient.ReceivedToolNames[0].OrderBy(static name => name, StringComparer.Ordinal));
+        Assert.DoesNotContain("browser_chrome_devtools__navigate_page", _fakeChatClient.ReceivedToolNames[0]);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution(bool violatesTextOnly)
+    {
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "cycle-call",
+                "search_tools",
+                new Dictionary<string, object?> { ["query"] = "browser" })
+        ];
+        _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeChatClient.IgnoreToolAvailability = violatesTextOnly;
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+
+        var sessionId = new SessionId("channel-cycle/exact-stop");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("exact-cycle-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Repeat the same search."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var results = new List<ToolResultOutput>();
+        for (var i = 0; i < 3; i++)
+        {
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken);
+            results.Add(await subscriber.ExpectMsgAsync<ToolResultOutput>(
+                TimeSpan.FromSeconds(3),
+                cancellationToken: TestContext.Current.CancellationToken));
+        }
+
+        if (violatesTextOnly)
+        {
+            var error = await subscriber.ExpectMsgAsync<ErrorOutput>(
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(ErrorCategory.ProviderFailure, error.Category);
+            Assert.Contains("required text only", error.Message, StringComparison.Ordinal);
+            Assert.DoesNotContain("used all available tool iterations", error.Message, StringComparison.Ordinal);
+        }
+        else
+        {
+            await subscriber.ExpectMsgAsync<TextOutput>(
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        }
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("same result", results[0].Result);
+        Assert.Equal("same result", results[1].Result);
+        Assert.Contains("repeated action-and-outcome cycle", results[2].Result, StringComparison.Ordinal);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+        Assert.Equal(5, _fakeChatClient.CallCount);
+        for (var i = 0; i < 2; i++)
+        {
+            var diagnostic = await diagnostics.FishForMessageAsync<Warning>(
+                warning => warning.Message.ToString()!.StartsWith("Tool cycle decision", StringComparison.Ordinal),
+                TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(typeof(TurnStateTracker), diagnostic.LogClass);
+            Assert.DoesNotContain(sessionId.Value, diagnostic.LogSource, StringComparison.Ordinal);
+            Assert.Equal($"TurnStateTracker (akka://{Sys.Name})", diagnostic.LogSource);
+            var properties = Assert.IsAssignableFrom<LogMessage>(diagnostic.Message).GetProperties();
+            Assert.Equal(["DecisionKind", "Period", "Repetitions"], properties.Keys.Order(StringComparer.Ordinal));
+        }
+    }
+
+    [Fact]
+    public async Task Parallel_cycle_correction_preserves_every_call_result_pair()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("cycle-a", "search_tools",
+                new Dictionary<string, object?> { ["query"] = "alpha" }),
+            new FunctionCallContent("cycle-b", "search_tools",
+                new Dictionary<string, object?> { ["query"] = "beta" }),
+            new FunctionCallContent("cycle-c", "search_tools",
+                new Dictionary<string, object?> { ["query"] = "gamma" })
+        ];
+        _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+
+        var sessionId = new SessionId("channel-cycle/parallel-pairs");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("parallel-cycle-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Repeat the parallel search."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var correctionResults = new List<ToolResultOutput>();
+        for (var batch = 0; batch < 3; batch++)
+        {
+            for (var call = 0; call < 3; call++)
+                await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            for (var call = 0; call < 3; call++)
+            {
+                var toolResult = await subscriber.ExpectMsgAsync<ToolResultOutput>(
+                    cancellationToken: TestContext.Current.CancellationToken);
+                if (batch == 2)
+                    correctionResults.Add(toolResult);
+            }
+        }
+
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(
+            ["cycle-a", "cycle-b", "cycle-c"],
+            correctionResults.Select(static result => result.CallId.Value)
+                .OrderBy(static callId => callId, StringComparer.Ordinal));
+        Assert.All(correctionResults, static result =>
+            Assert.Contains("No requested call executed", result.Result, StringComparison.Ordinal));
+        Assert.Equal(6, _fakeToolExecutor.CallCount);
+    }
+
+    [Fact]
+    public async Task Text_only_cycle_stop_survives_overflow_compaction_and_empty_retry()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "cycle-call",
+                "search_tools",
+                new Dictionary<string, object?> { ["query"] = "browser" })
+        ];
+        _fakeChatClient.AlwaysReturnToolCalls = true;
+        _fakeChatClient.AfterToolCallResponse = callCount =>
+        {
+            if (callCount == 4)
+            {
+                _fakeChatClient.PlannedExceptions.Enqueue(new ProviderException(
+                    "maximum context length exceeded",
+                    "HTTP 400: maximum context length exceeded",
+                    statusCode: 400));
+            }
+        };
+        _fakeChatClient.PlannedResponses.Enqueue([]);
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("Final partial report.")]);
+        _fakeToolExecutor.Results["search_tools"] = "same result";
+
+        var sessionId = new SessionId("channel-cycle/text-only-retry");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("text-only-retry-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Repeat the same search and then report."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        for (var i = 0; i < 3; i++)
+        {
+            await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+            await subscriber.ExpectMsgAsync<ToolResultOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        }
+
+        await subscriber.ExpectMsgAsync<ErrorOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var text = await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("Final partial report.", text.Text);
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+        Assert.Equal(6, _fakeChatClient.CallCount);
+        Assert.All(_fakeChatClient.ReceivedToolNames.TakeLast(2), Assert.Empty);
+    }
+
+    [Fact]
+    public async Task Native_correction_exposes_deferred_tool_on_next_request_but_not_after_recovery()
+    {
+        const string deferredToolName = "deferred_native_probe";
+        _toolRegistry.Register(new DeferredTestTool(deferredToolName));
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-native-correction",
+                "shell_execute",
+                new Dictionary<string, object?> { ["command"] = $"{deferredToolName} --inspect" })
+        ];
+        _fakeToolExecutor.Corrections["shell_execute"] =
+            new ToolCorrection.NativeToolSuggested(new ToolName(deferredToolName));
+
+        var sessionId = new SessionId("channel-discovery/native-correction-recovery");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("native-correction-recovery-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Inspect with the native tool."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var correction = await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(deferredToolName, _fakeChatClient.ReceivedToolNames[0]);
+        Assert.Contains(deferredToolName, _fakeChatClient.ReceivedToolNames[1]);
+        Assert.Contains(deferredToolName, correction.Result, StringComparison.Ordinal);
+        var recordedCorrection = _fakeChatClient.ReceivedMessages[1]
+            .SelectMany(static message => message.Contents.OfType<FunctionResultContent>())
+            .Single(result => result.CallId == "call-native-correction");
+        Assert.Equal(correction.Result, recordedCorrection.Result?.ToString());
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Watch(child);
+        Sys.Stop(child);
+        await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
+
+        var recoveredSubscriber = CreateTestProbe("native-correction-recovered-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(recoveredSubscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await recoveredSubscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Continue after recovery."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await recoveredSubscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await recoveredSubscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(deferredToolName, _fakeChatClient.ReceivedToolNames[^1]);
+    }
+
+    [Fact]
+    public async Task Context_overflow_evicts_a_loaded_deferred_tool_before_retry()
+    {
+        const string deferredToolName = "browser_chrome_devtools__navigate_page";
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-load-overflow", "load_tool",
+                new Dictionary<string, object?> { ["Name"] = "browser_chrome_devtools/navigate_page" })
+        ];
+        _fakeToolExecutor.Results["load_tool"] = "browser_chrome_devtools/navigate_page";
+
+        var sessionId = new SessionId("channel-discovery/overflow-eviction");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("overflow-eviction-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Load the browser tool."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Contains(deferredToolName, _fakeChatClient.ReceivedToolNames[^1]);
+
+        _fakeChatClient.PlannedExceptions.Enqueue(new ProviderException(
+            "maximum context length exceeded",
+            "HTTP 400: maximum context length exceeded",
+            statusCode: 400));
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Continue after the overflow."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ErrorOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<CompactionOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(deferredToolName, _fakeChatClient.ReceivedToolNames[^1]);
+    }
+
+    [Fact]
+    public async Task Native_correction_for_core_tool_does_not_duplicate_schema()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-core-correction",
+                "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "load_tool --help" })
+        ];
+        _fakeToolExecutor.Corrections["shell_execute"] =
+            new ToolCorrection.NativeToolSuggested(new ToolName("load_tool"));
+
+        var sessionId = new SessionId("channel-discovery/native-core-noop");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("native-core-noop-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Inspect the loader."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, _fakeChatClient.ReceivedToolNames.Count);
+        Assert.Equal(_fakeChatClient.ReceivedToolNames[0], _fakeChatClient.ReceivedToolNames[1]);
+        Assert.Single(_fakeChatClient.ReceivedToolNames[1], static name => name == "load_tool");
+    }
+
+    [Fact]
+    public async Task Native_correction_does_not_expose_tool_denied_before_activation()
+    {
+        const string deferredToolName = "deferred_native_denied_before_activation";
+        _toolRegistry.Register(new DeferredTestTool(deferredToolName));
+        _fakeToolExecutor.BeforeCorrection = () =>
+        {
+            foreach (var profile in _toolConfig.AudienceProfiles.GetAllProfiles())
+            {
+                profile.ApprovalPolicy ??= new ToolApprovalConfig();
+                profile.ApprovalPolicy.ToolOverrides[deferredToolName] = ToolApprovalMode.Deny;
+            }
+        };
+
+        var nextRequestTools = await RunNativeCorrectionTurnAsync(
+            "native-correction-policy-change",
+            deferredToolName);
+
+        Assert.DoesNotContain(deferredToolName, nextRequestTools);
+    }
+
+    [Fact]
+    public async Task Native_correction_does_not_expose_missing_registration()
+    {
+        const string missingToolName = "missing_native_registration";
+
+        var nextRequestTools = await RunNativeCorrectionTurnAsync(
+            "native-correction-missing-registration",
+            missingToolName);
+
+        Assert.DoesNotContain(missingToolName, nextRequestTools);
+    }
+
+    private async Task<IReadOnlyList<string>> RunNativeCorrectionTurnAsync(
+        string sessionSuffix,
+        string toolName)
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(
+                "call-" + sessionSuffix,
+                "shell_execute",
+                new Dictionary<string, object?> { ["command"] = toolName })
+        ];
+        _fakeToolExecutor.Corrections["shell_execute"] =
+            new ToolCorrection.NativeToolSuggested(new ToolName(toolName));
+
+        var sessionId = new SessionId("channel-discovery/" + sessionSuffix);
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe(sessionSuffix + "-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use the named native tool."
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, _fakeChatClient.ReceivedToolNames.Count);
+        return _fakeChatClient.ReceivedToolNames[1];
     }
 
     [Fact]
@@ -1768,6 +2297,23 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     };
 }
 
+internal sealed class DeferredTestTool(string name) : INetclawTool
+{
+    private readonly AIFunction _function = AIFunctionFactory.Create(() => "ok", name, "Deferred test tool");
+
+    public string Name { get; } = name;
+    public LlmFacingToolName LlmFacingName { get; } = LlmFacingToolName.FromCanonical(name);
+    public string Description => "Deferred test tool";
+    public string GrantCategory => "builtin";
+    public JsonElement ParameterSchema => default;
+    public AITool ToAITool() => _function;
+
+    public Task<string> ExecuteAsync(
+        IDictionary<string, object?>? arguments,
+        ToolInvocationContext context,
+        CancellationToken ct = default) => Task.FromResult("ok");
+}
+
 /// <summary>
 /// Fake IChatClient that returns canned responses for testing.
 /// Supports configurable thinking tokens, usage data, and tool calls.
@@ -1900,6 +2446,8 @@ internal sealed class FakeChatClient : IChatClient
     /// </summary>
     public Queue<IReadOnlyList<AIContent>> PlannedResponses { get; } = new();
 
+    public Action<int>? AfterToolCallResponse { get; set; }
+
     /// <summary>
     /// When populated, exceptions are dequeued and thrown before processing the
     /// response. Used to simulate provider errors (502, 400 context overflow, etc.).
@@ -1918,7 +2466,7 @@ internal sealed class FakeChatClient : IChatClient
         // call and can be non-trivial to enumerate; only the shared-list appends need guarding.
         var messageList = messages.ToList();
         var toolNames = options?.Tools?
-            .Select(t => t is AIFunction f ? f.Name : t.GetType().Name)
+            .Select(t => t is AIFunctionDeclaration f ? f.Name : t.GetType().Name)
             .ToList()
             ?? [];
 
@@ -2034,6 +2582,7 @@ internal sealed class FakeChatClient : IChatClient
                 var toolResponse = new ChatResponse(toolCallMessage);
                 if (usageOverride is not null)
                     toolResponse.Usage = usageOverride;
+                AfterToolCallResponse?.Invoke(_callCount);
                 return toolResponse;
             }
         }

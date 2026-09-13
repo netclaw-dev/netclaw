@@ -116,38 +116,7 @@ public partial class ChatViewModel : ReactiveViewModel
 
     protected virtual Task InitializeSessionAsync()
     {
-        _daemonOutputSubscription = _daemonClient.SessionOutput
-            .Subscribe(output =>
-            {
-                _outputSubject.OnNext(output);
-
-                if (output is UsageOutput usage)
-                {
-                    AppendUsageLog(usage);
-                }
-
-                switch (output)
-                {
-                    case ToolInteractionRequest interaction:
-                        _pendingInteractions.Enqueue(interaction);
-                        RefreshApprovalOptions();
-                        IsGenerating.Value = false;
-                        StatusMessage.Value = "Approval required";
-                        break;
-                    case TurnCompleted:
-                        _pendingInteractions.Clear();
-                        RefreshApprovalOptions();
-                        IsGenerating.Value = false;
-                        break;
-                    case ErrorOutput:
-                        _pendingInteractions.Clear();
-                        RefreshApprovalOptions();
-                        IsGenerating.Value = false;
-                        break;
-                }
-
-                RequestRedraw();
-            });
+        _daemonOutputSubscription = _daemonClient.SessionOutput.Subscribe(ProcessOutput);
 
         _daemonConnectionSubscription = _daemonClient.ConnectionEvents
             .Subscribe(evt =>
@@ -396,6 +365,8 @@ public partial class ChatViewModel : ReactiveViewModel
         RequestRedraw();
     }
 
+    internal void ProcessOutputForTesting(SessionOutput output) => ProcessOutput(output);
+
     /// <summary>
     /// Opens the per-session USAGE log file if not already open. Matches
     /// HeadlessChannel's filename and append semantics so a single session
@@ -500,6 +471,38 @@ public partial class ChatViewModel : ReactiveViewModel
                 await Task.Delay(delays[idx]);
             }
         }
+    }
+
+    private void ProcessOutput(SessionOutput output)
+    {
+        _outputSubject.OnNext(output);
+
+        if (output is UsageOutput usage)
+            AppendUsageLog(usage);
+
+        switch (output)
+        {
+            case ToolInteractionRequest interaction:
+                _pendingInteractions.Enqueue(interaction);
+                RefreshApprovalOptions();
+                IsGenerating.Value = false;
+                StatusMessage.Value = "Approval required";
+                break;
+            case TurnCompleted:
+                _pendingInteractions.Clear();
+                RefreshApprovalOptions();
+                IsGenerating.Value = false;
+                break;
+            case ErrorOutput:
+                _pendingInteractions.Clear();
+                RefreshApprovalOptions();
+                IsGenerating.Value = false;
+                IsInputEnabled.Value = true;
+                StatusMessage.Value = "Last request failed. Ready to retry.";
+                break;
+        }
+
+        RequestRedraw();
     }
 
     private async Task EnsureSessionAndFlushAsync()

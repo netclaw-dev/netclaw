@@ -3,13 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Termina;
-using Termina.Hosting;
 using Termina.Input;
 using Termina.Terminal;
 using Xunit;
@@ -86,31 +84,9 @@ public sealed class ExposureModeConfigPageTests : IDisposable
 
     private (VirtualTerminal Terminal, TerminaApplication App, ExposureModeConfigViewModel Vm)
         CreateHeadlessApp(out VirtualInputSource input)
-    {
-        var terminal = new VirtualTerminal(120, 40);
-        var virtualInput = new VirtualInputSource();
-        input = virtualInput;
-
-        ExposureModeConfigViewModel? capturedVm = null;
-
-        var services = new ServiceCollection();
-        services.AddSingleton<IAnsiTerminal>(terminal);
-        services.AddTerminaVirtualInput(virtualInput);
-        services.AddTermina("/exposure", builder =>
-        {
-            builder.RegisterRoute<ExposureModeConfigPage, ExposureModeConfigViewModel>(
-                "/exposure",
-                _ => new ExposureModeConfigPage(),
-                _ =>
-                {
-                    capturedVm = new ExposureModeConfigViewModel(_paths);
-                    return capturedVm;
-                });
-        });
-
-        var sp = services.BuildServiceProvider();
-        var app = sp.GetRequiredService<TerminaApplication>();
-
-        return (terminal, app, capturedVm!);
-    }
+        => HeadlessTerminaFixture.Create<ExposureModeConfigPage, ExposureModeConfigViewModel>(
+            "/exposure",
+            () => new ExposureModeConfigPage(),
+            () => new ExposureModeConfigViewModel(_paths),
+            out input);
 }

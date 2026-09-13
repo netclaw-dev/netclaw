@@ -281,14 +281,14 @@ internal static class SlackApprovalBlockBuilder
                 _ => "Resolved"
             }
             : selectedKey switch
-        {
-            ApprovalOptionKeys.ApproveAlways => "Saved: always here",
-            ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
-            ApprovalOptionKeys.ApproveSession => "Saved for this chat",
-            ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
-            ApprovalOptionKeys.Deny => "Denied",
-            _ => "Resolved"
-        };
+            {
+                ApprovalOptionKeys.ApproveAlways => "Saved: always here",
+                ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
+                ApprovalOptionKeys.ApproveSession => "Saved for this chat",
+                ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
+                ApprovalOptionKeys.Deny => "Denied",
+                _ => "Resolved"
+            };
 
     /// <summary>
     /// Builds the prompt's header line. Single-verb invocations collapse the
@@ -305,7 +305,7 @@ internal static class SlackApprovalBlockBuilder
     /// <c>/repo</c>).</item>
     /// <item><c>cwd</c> if no path arguments are present.</item>
     /// <item><c>this session</c> when the cwd is the per-session ephemeral
-    /// scratch directory — that path won't recur, so calling it out by name
+    /// managed temporary directory — that path won't recur, so calling it out by name
     /// would be misleading.</item>
     /// </list>
     /// </remarks>
@@ -337,15 +337,15 @@ internal static class SlackApprovalBlockBuilder
             return $"{distinctDirs.Count} directories";
 
         // No path arguments — fall back to cwd, but prefer "this session" when
-        // the cwd is the session's ephemeral scratch directory so operators
+        // the cwd is the session-owned workspace so operators
         // know an "Always here" grant would be a no-op.
         if (string.IsNullOrWhiteSpace(request.Cwd))
             return "(no working directory)";
 
-        return IsSessionScratchPath(request.Cwd) ? "this session" : request.Cwd;
+        return IsSessionOwnedPath(request.Cwd) ? "this session" : request.Cwd;
     }
 
-    private static bool IsSessionScratchPath(string cwd)
+    private static bool IsSessionOwnedPath(string cwd)
     {
         // Session directories live under "{netclaw-home}/sessions/{id}/" with
         // {id} of the form "<channelId>_<unix-ts>_<random>" or a uuid. We use

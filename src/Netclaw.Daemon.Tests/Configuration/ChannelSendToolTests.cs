@@ -179,12 +179,12 @@ public sealed class ChannelSendToolTests
         };
 
         return context is null
-            ? tool.ExecuteAsync(arguments, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken)
+            ? tool.ExecuteAsync(arguments, TestToolExecutionContext.CreateUnboundWithoutApproval(), TestContext.Current.CancellationToken)
             : tool.ExecuteAsync(arguments, context, TestContext.Current.CancellationToken);
     }
 
     private static ToolExecutionContext TriggerContext(ChannelDeliveryTargetInfo? requestedTarget)
-        => TestToolExecutionContext.CreateBound(
+        => TestToolExecutionContext.CreateBoundWithoutApproval(
             "reminder/test",
             null,
             TrustAudience.Team,

@@ -176,9 +176,15 @@ public sealed class DiscordAddressResolver(
             normalized = normalized[2..^1];
             if (normalized.StartsWith('!'))
                 normalized = normalized[1..];
+
+            // A mention tag never carries stray whitespace, so the shared
+            // strip-at helper's extra Trim() would be a no-op here. Kept
+            // inline (not delegated) so a malformed tag with embedded
+            // whitespace still matches today's untrimmed fallback exactly.
+            return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
         }
 
-        return normalized.StartsWith('@') ? normalized[1..].Trim() : normalized;
+        return UserQueryNormalizer.StripLeadingAt(normalized);
     }
 
     private static string NormalizeDestinationQuery(string query)

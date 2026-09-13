@@ -52,6 +52,12 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private readonly ActiveExecutionTracker _activeExecutions = new();
     private readonly Dictionary<ReminderId, int> _skipCounts = [];
 
+    // Uniqueness source for execution child actor names. A wall-clock
+    // millisecond suffix collided when two fires for one reminder landed in
+    // the same millisecond and threw InvalidActorNameException. The actor is
+    // single-threaded, so a plain counter is collision-free for its lifetime.
+    private long _executionSequence;
+
     public ReminderManagerActor(
         ISessionPipeline pipeline,
         EffectivePolicyDefaults defaults,
@@ -1251,7 +1257,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         var startedAt = _timeProvider.GetUtcNow();
         _activeExecutions.Add(definition.Id, executionId, envelope, startedAt);
 
-        var actorName = $"exec-{SanitizeActorName(definition.Id.Value)}-{startedAt.ToUnixTimeMilliseconds()}";
+        var actorName = $"exec-{SanitizeActorName(definition.Id.Value)}-{++_executionSequence}";
         var executionActor = Context.ActorOf(
             ReminderExecutionActor.CreateProps(
                 executionId,

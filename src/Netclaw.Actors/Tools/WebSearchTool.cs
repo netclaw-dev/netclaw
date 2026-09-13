@@ -15,7 +15,7 @@ namespace Netclaw.Actors.Tools;
 /// Delegates to a configured <see cref="ISearchBackend"/> for the actual search.
 /// </summary>
 [NetclawTool("web_search",
-    "Search the web and return a list of results with titles, URLs, and snippets",
+    "Use for external discovery. Search the web and return results with titles, URLs, and snippets. Do not use shell HTTP clients for discovery.",
     Grant = "web")]
 public sealed partial class WebSearchTool : NetclawTool<WebSearchTool.Params>
 {

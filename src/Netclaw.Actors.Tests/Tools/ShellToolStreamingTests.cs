@@ -17,6 +17,21 @@ public class ShellToolStreamingTests
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly ShellTool _tool = CreateTool();
 
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    private static ToolExecutionContext CreateExecutionContext()
+    {
+        var sessionDirectory = Path.Combine(
+            Path.GetTempPath(),
+            "netclaw-shell-stream-tests",
+            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        Directory.CreateDirectory(sessionDirectory);
+        return TestToolExecutionContext.CreateBound(
+            "test/shell-stream",
+            sessionDirectory,
+            TrustAudience.Personal);
+    }
+
     private static ShellTool CreateTool(ToolConfig? config = null)
     {
         var commandPolicy = new ShellCommandPolicy(ShellEnvironment);
@@ -57,7 +72,7 @@ public class ShellToolStreamingTests
         var activities = new List<ToolActivityUpdate>();
         ToolCompletedUpdate? completion = null;
 
-        await foreach (var update in tool.ExecuteStreamAsync(args, context ?? TestToolExecutionContext.CreateUnbound(), ct))
+        await foreach (var update in tool.ExecuteStreamAsync(args, context ?? CreateExecutionContext(), ct))
         {
             switch (update)
             {
@@ -82,6 +97,9 @@ public class ShellToolStreamingTests
         Assert.NotNull(completion);
         Assert.Contains("Exit code: 0", completion.Result);
         Assert.Contains("hello", completion.Result);
+        // A normal command reaches EOF cleanly. The result must not carry a
+        // grace-cut marker that tells the agent the capture is incomplete.
+        Assert.DoesNotContain("background process", completion.Result);
 
         // At least one activity item should carry the output
         Assert.NotEmpty(activities);
@@ -138,6 +156,37 @@ public class ShellToolStreamingTests
         Assert.Contains("timed out after", completion.Result);
     }
 
+    [SlopwatchSuppress("SW001", "Reproduces a backgrounded child holding the pipe open; the case needs POSIX `&` semantics.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Requires POSIX background-job (`&`) semantics.")]
+    public async Task Direct_process_exit_with_backgrounded_child_holding_pipe_open_streams_promptly()
+    {
+        // Same reproduction as the non-streaming test: the direct bash
+        // process exits at once, but the backgrounded sleep inherits
+        // stdout/stderr and holds the pipe write end open for its own life
+        // span. The streaming path must complete once bash exits.
+        var args = ToolInput.Create("Command", "sleep 20 & exit 0");
+        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+            ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(90))
+        });
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var (_, completion) = await CollectStreamAsync(_tool, args, context, ct: TestContext.Current.CancellationToken);
+        stopwatch.Stop();
+
+        Assert.NotNull(completion);
+        Assert.Contains("Exit code: 0", completion.Result);
+        Assert.True(
+            stopwatch.Elapsed < TimeSpan.FromSeconds(5),
+            $"The tool must return soon after the direct process exits. It took {stopwatch.Elapsed}.");
+
+        // The grace window cut the drain before EOF. The backgrounded sleep
+        // process still holds the pipe open. The result must show this cut,
+        // not a capture that looks complete.
+        Assert.Contains("background process", completion.Result);
+    }
+
     [Fact]
     public async Task Output_clamping_preserved_in_completion_result()
     {
@@ -186,7 +235,7 @@ public class ShellToolStreamingTests
     {
         var args = ToolInput.Create("Command", TestShellEnvironment.TwoOutputLinesCommand);
 
-        var nonStreaming = await _tool.ExecuteAsync(args, TestToolExecutionContext.CreateUnbound(), TestContext.Current.CancellationToken);
+        var nonStreaming = await _tool.ExecuteAsync(args, CreateExecutionContext(), TestContext.Current.CancellationToken);
         var (_, completion) = await CollectStreamAsync(_tool, args, ct: TestContext.Current.CancellationToken);
 
         Assert.NotNull(completion);

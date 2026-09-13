@@ -57,6 +57,58 @@ public static class AtomicFile
         }
     }
 
+    /// <summary>
+    /// Write <paramref name="contents"/> to <paramref name="path"/> atomically.
+    /// The method observes cancellation before it replaces the destination.
+    /// </summary>
+    public static async Task WriteAllTextAsync(
+        string path,
+        string contents,
+        Action<string> hardenTempPermissions,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(hardenTempPermissions);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var dir = Path.GetDirectoryName(path);
+        if (!string.IsNullOrEmpty(dir))
+            Directory.CreateDirectory(dir);
+
+        var temp = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            var streamOptions = new FileStreamOptions
+            {
+                Mode = FileMode.CreateNew,
+                Access = FileAccess.Write,
+                Share = FileShare.None,
+                BufferSize = 4096,
+                Options = FileOptions.Asynchronous,
+            };
+            if (!OperatingSystem.IsWindows())
+                streamOptions.UnixCreateMode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+
+            await using (var stream = new FileStream(temp, streamOptions))
+            await using (var writer = new StreamWriter(stream))
+            {
+                await writer.WriteAsync(contents.AsMemory(), cancellationToken);
+                await writer.FlushAsync(cancellationToken);
+                cancellationToken.ThrowIfCancellationRequested();
+                stream.Flush(flushToDisk: true);
+            }
+
+            cancellationToken.ThrowIfCancellationRequested();
+            hardenTempPermissions(temp);
+            cancellationToken.ThrowIfCancellationRequested();
+            File.Move(temp, path, overwrite: true);
+        }
+        catch
+        {
+            TryDeleteTemp(temp);
+            throw;
+        }
+    }
+
     // Deletes a leftover temp file, returning whether it succeeded. The expected IO/access failures
     // are turned into a false result rather than propagating, so a failed cleanup never masks a more
     // important exception that is already in flight at the call site.

@@ -31,7 +31,7 @@ public static class CliArgsParser
     public static readonly IReadOnlySet<string> KnownCommands = new HashSet<string>(StringComparer.Ordinal)
     {
         "chat", "sessions", "init", "doctor", "status", "stats",
-        "daemon", "mcp", "provider", "model", "reminder",
+        "daemon", "mcp", "provider", "model", "reminder", "memory",
         "secrets", "config", "update", "pair", "skill", "webhooks",
         "approvals",
     };
@@ -39,6 +39,29 @@ public static class CliArgsParser
     /// <summary>Returns <c>true</c> if the token is a help flag (<c>help</c>, <c>-h</c>, <c>--help</c>).</summary>
     public static bool IsHelpToken(string token)
         => token is "help" or "-h" or "--help";
+
+    /// <summary>
+    /// Returns <c>true</c> if any argument at or after <paramref name="startIndex"/> is a help
+    /// token. Subcommand dispatchers whose action verbs take no further positional arguments
+    /// (e.g. <c>daemon stop</c>, <c>memory backfill-embeddings</c>, <c>webhooks list</c>) must
+    /// not just check the subcommand slot itself for "help"/"-h"/"--help" — a trailing help
+    /// token elsewhere in the args was otherwise silently ignored and the verb executed for
+    /// real instead of printing help (production canary: <c>netclaw memory backfill-embeddings
+    /// --help</c> ran a real provision-and-embed pass; <c>netclaw daemon stop --help</c> would
+    /// have actually stopped the daemon). Callers that DO have their own more specific
+    /// <c>--help</c> handling for a subcommand (e.g. <c>webhooks set</c>) should exclude that
+    /// subcommand from this check so the more specific help text is not shadowed.
+    /// </summary>
+    public static bool HasTrailingHelpToken(string[] args, int startIndex)
+    {
+        for (var i = startIndex; i < args.Length; i++)
+        {
+            if (IsHelpToken(args[i]))
+                return true;
+        }
+
+        return false;
+    }
 
     public static CliParseResult Parse(string[] args)
     {

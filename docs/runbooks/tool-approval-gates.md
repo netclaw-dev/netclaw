@@ -7,20 +7,33 @@ channel.
 
 ## Overview
 
-Tool invocations pass through four layers:
+The current source checks shell requests in this order:
 
-1. **Operation hard deny** — shell commands that are always blocked
-   (e.g., `netclaw daemon stop`, `rm -rf /`). Never approvable. Checked first.
-2. **Resource hard deny** — protected files and directories (secrets, keys,
-   lifecycle/control-plane files) that are blocked for file tools and shell
-   path references. Never approvable.
-3. **Tool access** — per-audience allowlists (`AllowedTools`,
-   `AllowedMcpServers`). Binary: the tool is available or it isn't.
-4. **Approval gate** — for tools that pass layers 1-3, does this specific
-   invocation need user sign-off?
+1. **Tool access and shell capability** — the audience must expose the tool.
+   The shell must be enabled and the caller must use the Personal audience.
+2. **Shell operation controls** — `check_background_job` can control only a
+   job that has the same session, audience, and trust boundary.
+3. **Operation and resource hard deny** — blocked shell operations and
+   protected shell paths never receive approval authority.
+4. **Mode and channel controls** — `Deny` stops the call. Non-interactive
+   calls must pass the trust-zone policy before `Auto` can allow the call.
+5. **Correction or approval** — an `Approval` call can request prior-grant
+   evidence, reviewed-safe coverage, or an interactive approval.
 
-The approval gate is transparent to the LLM — it never knows approval is
-happening. It calls `shell_execute`, gets either a result or a denial.
+The approval gate does not execute a call or grant authority by itself. A shell
+call can return a result, a denial, or a recoverable correction to the model.
+
+`ShellPolicyCoordinator` asks `ToolAccessPolicy` to analyze the request and
+apply synchronous access checks. The coordinator collects compatible native,
+temporary, and project advice from existing invocation facts and policy.
+Native advice precedes stored grants. Temporary-only and project-only advice
+retain existing stored-grant and exact one-time approval precedence.
+Corrections precede an `Auto` allow. Hard denials precede all advice.
+Reviewed diagnostics without file output retain their requested temporary directory. Normal authorization still applies.
+A redirect that writes a file or an additional unclassified command can still require relocation advice.
+Parent and child deliver the common result and retain their state and transport duties.
+Project advice requires a visible declaration tool that accepts the exact directory.
+That advice can apply without an approval bridge; temporary advice retains its interactive capability requirement.
 
 ## Approval Modes
 
@@ -28,7 +41,7 @@ Each tool can be in one of three modes per audience:
 
 | Mode | Behavior |
 |------|----------|
-| `Auto` | No approval needed. Tool executes immediately. This is the default. |
+| `Auto` | No approval prompt. Shell corrections and hard denials still apply before execution. |
 | `Approval` | User must approve before execution. Unapproved commands pause and prompt. |
 | `Deny` | Always blocked. No approval prompt offered. |
 
@@ -76,7 +89,7 @@ commands must run without approval.
 ### Headless mode
 
 Headless mode (`netclaw chat -p "prompt"`) cannot ask for approval — there is no
-interactive user. Netclaw still applies hard deny, path policy, trust zones, and
+interactive user. Netclaw still applies hard deny, path access decisions, and
 stored grants. If any candidate remains uncovered and would need a
 prompt, the call is denied. The reviewed-safe catalog alone does not grant a
 headless call; approval-exempt side effects can still pass. For unrestricted
@@ -129,8 +142,8 @@ When the agent calls a tool in `Approval` mode:
    - **Deny** — the call returns "Command denied by user" to the LLM
 
 The policy can remove reusable choices when a command has no clean phrase. It
-also removes `Always here` for a shallow root, session scratch, and non-shell
-tools that have no directory scope. See [When the prompt offers fewer
+also removes `Always here` for a shallow root, a session-owned directory, and
+non-shell tools that have no directory scope. See [When the prompt offers fewer
 buttons](#when-the-prompt-offers-fewer-buttons).
 
 ### When the prompt offers fewer buttons
@@ -192,10 +205,10 @@ path-scoped patterns (for example,
 
 ### Reviewed diagnostic phrases skip the prompt
 
-In an interactive session, reviewed diagnostic phrases auto-run inside a
-trusted zone. Personal and Team use `session_dir` or `project_dir`. In a
-headless session, this catalog does not grant authority. The call still needs
-an exact one-time, session, or persistent grant. The bundled safe-policy
+In an interactive session, reviewed diagnostic phrases can auto-run below an
+applicable trusted root. Personal and Team use `session_dir` or `project_dir`.
+In a headless session, this catalog does not grant authority. The call still
+needs an exact one-time, session, or persistent grant. The bundled safe-policy
 catalogs (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover
 file readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
 `Get-Content`, and `Select-String` on PowerShell), system/info phrases
@@ -203,16 +216,17 @@ file readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
 (`git status`, `git rev-parse`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
 command-prefixing verbs (`env`, `xargs`, `sudo`), network-writing verbs
 (`gh api`, `curl`), and environment/process-inspection verbs (`printenv`,
-`ps`) are never auto-allowed — the trusted-zone gate scopes verbs that act on
-a path, so it cannot contain a verb that dumps the process environment or the
-process table. Each entry stores canonical shell tokens and a proof category.
+`ps`) are never auto-allowed. The path access decision limits where these verbs
+can act. Thus, the catalog cannot contain a verb that dumps the process
+environment or process table. Each entry stores canonical shell tokens and a
+proof category.
 `ReviewedDiagnostic` classifies the shell-authored invocation. It does not
 claim that Netclaw sandboxes the executable.
 
 The reviewed phrase cannot accept an authored helper command, output file,
 destructive state request, or remote mutation. Netclaw also rejects an
 argument before the phrase completes. A possible local path must stay beneath
-the eligible safe root.
+an applicable trusted root.
 
 Ambient executable configuration is outside this claim. Tool-private cache or
 metadata refresh is also outside this claim. The same limit applies to paths
@@ -230,11 +244,12 @@ authority, if any, covers each command occurrence.
 
 | Step | Input | Output | Owner |
 |------|-------|--------|-------|
-| Preflight and syntax analysis | Original tool call, shell environment, initial cwd, audience, and run scope | ShellSyntaxTree facts followed by hard deny, path deny, approval mode, or auto allow | ShellSyntaxTree and Netclaw |
+| Preflight and syntax analysis | Original tool call, shell environment, initial cwd, audience, and run scope | Canonical analysis and access, hard-denial, mode, and channel checks | `ToolAccessPolicy` |
+| Correction collection | Canonical analysis, exposed tools, and invocation facts | Compatible advice; applicable corrections precede an Auto allow | `ShellPolicyCoordinator` |
 | Policy projection | Syntax facts plus the unchanged approval context | Stable call-local candidate IDs and immutable scope facts | Netclaw |
 | Grant match | Candidates plus one session/persistent store snapshot | One typed match or one bounded near miss per candidate | Approval actor |
 | Coverage | Grant matches, reviewed-safe policy, and an exact one-time retry | One coverage result per candidate | Netclaw |
-| Completion | All candidate coverage results | `Allowed`, `RequiresApproval`, or `Denied` | Netclaw |
+| Completion | Coverage results and applicable advice | `Allowed`, `RequiresApproval`, `RequiresAgentCorrection`, or `Denied` | `ShellPolicyCoordinator` |
 
 The coordinator does not rewrite the original command. A prompt and an eventual
 execution still refer to the exact tool call the model authored. Candidate IDs
@@ -246,6 +261,7 @@ The coordinator returns one closed result shape:
 |---------|---------------|-------------|
 | `Allowed` | One allow reason and any stored matches that helped cover the call | Execute the original tool call |
 | `RequiresApproval` | A narrowed approval context plus any partial stored matches | Prompt only for the uncovered candidates |
+| `RequiresAgentCorrection` | The complete compatible collection and any prior approval matches | Deliver the advice without execution, a prompt, or a new grant |
 | `Denied` | One stable deny reason | Return the denial without execution or prompt |
 
 The important value-domain rules are:
@@ -257,7 +273,7 @@ The important value-domain rules are:
   repository slug, URL segment, image name, or other data, so shape alone never
   creates filesystem authority.
 - `IntegerRange` and `Concatenation` can prove bounded scalar data. They cannot
-  select an executable, justify a redirect, or create path authority.
+  select an executable, justify a redirect, or grant file access.
 - `Unknown`, incomplete control flow, a dynamic executable, an unresolved path,
   or an unresolved redirect stays strict.
 
@@ -391,6 +407,80 @@ Suppose the store has a Bash token-prefix grant for `git status` under
 an `OutsideDirectory` near miss. The candidate remains uncovered, so the final
 output is `RequiresApproval`. A same-verb grant is diagnostic evidence, not
 authority for a peer directory.
+
+### Checked process startup
+
+The dispatcher keeps the exact authorized command and directory in `ShellProcessLaunch`.
+It copies the approval state for that invocation and retains the child environment.
+The launch requires an absolute directory; its callers select that directory before construction.
+
+The launch follows this sequence:
+
+1. Check cancellation and current command and path policy.
+2. Prepare the managed temporary directory and the child environment.
+3. Capture known path targets and check current authority.
+4. Repeat the hard checks and reject changed path targets.
+5. Start one process without another await or actor message.
+
+A queued command with a valid grant can start once.
+A queued command whose grant was revoked fails without a process.
+These checks narrow filesystem races; they do not provide an OS sandbox.
+
+The foreground caller owns cancellation and process disposal.
+The background start task owns the process until the job actor adopts it.
+Actor stop cancels startup and reclaims a process that was not adopted.
+The job actor retains timeout, cancellation, output capture, and completion duties.
+It drains stdout and stderr to a bounded log while the process runs.
+`check_background_job` returns the current output tail and log path.
+Capture waits for complete lines, so output without a newline can remain buffered until EOF.
+
+### Maintainer boundaries
+
+Use [the engineering glossary](../spec/GLOSSARY.md) for shared terms.
+The coordinator owns shell correction selection.
+`TemporaryPathCorrectionPolicy` supplies directory eligibility and target facts.
+`ToolCorrectionDelivery` creates the common response, receipt, and proposed retry-state change.
+Parent and child callers deliver that result and apply their own lifecycle state.
+Their correction exception requires the complete collection; it has no single-correction adapter.
+
+The non-shell approval path still needs a single temporary-directory fact before stored grants are checked.
+`ToolAuthorizationDecision.AgentCorrection` serves that path and validates that exactly one fact exists.
+The single-fact decision factories and shared grant-evidence adapter therefore remain in use.
+The direct `ShellTool` API also retains its hard-policy contract for host callers.
+These consumers prevent blanket removal of every adapter or direct-call entry point.
+
+#### The same policy change before and after consolidation
+
+The comparison uses baseline `99cee4d2` and integrated source `03de93d5`.
+The fixed exercise redirects platform-temporary advice to the host's run-local managed directory.
+The session-storage implementation arrived separately in #2090; this comparison does not credit consolidation for that storage change.
+
+| Component | Baseline responsibility | Current responsibility for the same change |
+|-----------|-------------------------|--------------------------------------------|
+| Temporary-path policy | Select the session-directory target | Read the managed target from `ToolInvocationContext.SessionStorage` |
+| `ToolAccessPolicy` | Attach shell directory advice to an approval request | Supply deterministic shell facts; retain non-shell approval policy |
+| Shell coordinator | Complete shell approval after separate advice paths | Collect advice and select the terminal shell result |
+| Parent and child callers | Select advice within approval-exception branches | Deliver the common result and apply exact retry state |
+| Remediation presenter | Render the selected next action | Render the selected next action; it grants no authority |
+
+Changing the host's target now needs no new parent or child selection branch.
+The temporary-path policy owns target eligibility; the coordinator composes its result with other advice.
+A new correction kind still needs an explicit delivery shape and meaningful caller tests.
+This result demonstrates fewer independent decision sites, not unrestricted extension through configuration.
+
+The source inventory gives these concrete changes:
+
+- Parent and child components that select correction policy: two to zero.
+- Process-creation sites across foreground, stream, and background shell modes: three to one.
+- `ShellPolicyAuthorization` and `ToolAccessDecision` wrappers disappear; `ToolAuthorizationDecision` carries the common terminal result.
+- No old/new evaluator selector or comparison-only production implementation remains in these paths.
+- The five coordinator support files grow from 1,701 to 1,908 physical lines; this is not a code-size reduction.
+
+The count includes comments and blank lines at those exact revisions.
+It covers `ShellPolicyCoordinator`, `ShellPolicyEvaluation`, `ShellPolicyProjection`, `ShellPolicyDecisionTrace`, and `ShellApprovalEvidence`.
+It excludes callers, startup, tests, and docs and does not attribute every intervening edit to this project.
+Keep merged PR history for detailed changes and test evidence.
+Rollout, old-binary recovery checks, and real-model usability evidence remain separate from this source inventory.
 
 ### Persistent approvals
 

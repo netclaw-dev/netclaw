@@ -20,6 +20,12 @@ public sealed class ApprovalsCommandTests : IDisposable
     private readonly FakeTimeProvider _time = new(new DateTimeOffset(2026, 5, 1, 12, 0, 0, TimeSpan.Zero));
     private readonly ToolApprovalStore _store;
 
+    public static TheoryData<string[], string> FlagWithoutValueCases { get; } = new()
+    {
+        { ["approvals", "list", "--audience"], "--audience requires a value" },
+        { ["approvals", "revoke", "git push", "--tool"], "--tool requires a value" }
+    };
+
     public ApprovalsCommandTests()
     {
         _paths = new NetclawPaths(_dir.Path);
@@ -312,26 +318,14 @@ public sealed class ApprovalsCommandTests : IDisposable
         Assert.Contains("Unknown audience 'foo'", _output.ToString());
     }
 
-    [Fact]
-    public async Task Audience_flag_without_value_exits_one_with_specific_message()
+    [Theory]
+    [MemberData(nameof(FlagWithoutValueCases))]
+    public async Task Flag_without_value_exits_one_with_specific_message(string[] args, string expectedMessage)
     {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "list", "--audience"],
-            _paths, _output);
+        var exit = await ApprovalsCommand.RunAsync(args, _paths, _output);
 
         Assert.Equal(1, exit);
-        Assert.Contains("--audience requires a value", _output.ToString());
-    }
-
-    [Fact]
-    public async Task Tool_flag_without_value_exits_one_with_specific_message()
-    {
-        var exit = await ApprovalsCommand.RunAsync(
-            ["approvals", "revoke", "git push", "--tool"],
-            _paths, _output);
-
-        Assert.Equal(1, exit);
-        Assert.Contains("--tool requires a value", _output.ToString());
+        Assert.Contains(expectedMessage, _output.ToString());
     }
 
     [Fact]

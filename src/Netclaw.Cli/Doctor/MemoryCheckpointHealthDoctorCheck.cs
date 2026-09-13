@@ -23,7 +23,7 @@ public sealed class MemoryCheckpointHealthDoctorCheck(NetclawPaths paths) : IDoc
 
         try
         {
-            var store = new SQLiteMemoryStore(paths.MemorySqliteDbPath, TimeProvider.System);
+            var store = new SQLiteMemoryStore(paths.SqliteDbPath, TimeProvider.System);
             await store.InitializeAsync(cancellationToken);
             var pending = await store.GetPendingCheckpointCountAsync(cancellationToken);
 
@@ -44,7 +44,7 @@ public sealed class MemoryCheckpointHealthDoctorCheck(NetclawPaths paths) : IDoc
             return DoctorCheckResult.Error(
                 CheckName,
                 $"Unable to inspect SQLite memory health: {ex.Message}",
-                "Run `netclaw doctor`, verify ~/.netclaw/memory permissions, and restart the daemon.");
+                $"Run `netclaw doctor`, verify permissions for {paths.SqliteDbPath}, and restart the daemon.");
         }
     }
 

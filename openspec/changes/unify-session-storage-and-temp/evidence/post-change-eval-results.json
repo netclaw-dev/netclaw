@@ -1,0 +1,88 @@
+{
+  "schemaVersion": 1,
+  "phase": "post-change",
+  "acceptanceRole": "behavioral-evidence-only",
+  "binary": {
+    "version": "0.27.0-beta.1",
+    "baseCommit": "26370df23728c204fdefe1ebc67ccf93f40ae831",
+    "sourceState": "working-tree",
+    "imageDigest": "sha256:ea826935cd0c2ff06c882ba12b18cb3f9ffb47a86dcae166f18c2c9563ddd259"
+  },
+  "configuration": {
+    "providerType": "openai-compatible",
+    "model": "configured-eval-model",
+    "runsPerCase": 5,
+    "threshold": 0.8,
+    "timeoutSeconds": 180,
+    "providerEndpointRecorded": false
+  },
+  "cases": [
+    {
+      "name": "subagent_session_scratch_disposable",
+      "passedRuns": 5,
+      "totalRuns": 5,
+      "runId": "3b2fa1d6-0ade-4b94-96d6-95209659330b",
+      "status": "superseded",
+      "observation": "The storage layout and log-discovery assertion changed. A replacement run is required."
+    },
+    {
+      "name": "approval_managed_temp_disposable",
+      "previousName": "approval_session_scratch_disposable",
+      "passedRuns": 5,
+      "totalRuns": 5,
+      "runId": "c8d6ab7e-0fbd-4ad9-880c-06c3e6824279",
+      "status": "superseded",
+      "observation": "The physical envelope naming and exact-path assertion changed. A replacement run is required."
+    },
+    {
+      "name": "approval_shell_working_directory_argument",
+      "passedRuns": 5,
+      "totalRuns": 5,
+      "runId": "68e8499e-c529-4f96-8a7b-99bdc44c8d77"
+    },
+    {
+      "name": "approval_inline_cd_semantics",
+      "passedRuns": 5,
+      "totalRuns": 5,
+      "runId": "5d22632c-40fb-4135-a668-6009fc388908"
+    },
+    {
+      "name": "approval_natural_directory_change",
+      "passedRuns": 3,
+      "totalRuns": 5,
+      "runId": "d4e98b66-3900-4522-bcec-03e095f9736f"
+    },
+    {
+      "name": "approval_managed_temp_correction_recovery",
+      "passedRuns": 0,
+      "totalRuns": 5,
+      "runId": "82d4011d-2294-4075-910c-8de4c2c02b11",
+      "status": "superseded",
+      "observation": "The headless channel cannot exercise the interactive correction contract. This result is not acceptance evidence."
+    },
+    {
+      "name": "parent_child_log_handoff",
+      "passedRuns": 5,
+      "totalRuns": 5,
+      "runId": "14b3173c-e729-4224-bf1e-0d54175b0fff",
+      "status": "superseded",
+      "observation": "The earlier assertion did not prove that the file-tool result succeeded. A replacement run is required."
+    },
+    {
+      "name": "managed_worktree_creation",
+      "passedRuns": 4,
+      "totalRuns": 5,
+      "runId": "28b818fc-9f4c-4b37-9318-aaae9b2dbce1",
+      "status": "superseded",
+      "observation": "This result used the removed custom worktree tool. It is not evidence for the composed shell and working-directory workflow."
+    }
+  ],
+  "deterministicAcceptance": {
+    "status": "separate",
+    "statement": "Automated contract tests decide runtime acceptance. These scores measure model behavior only."
+  },
+  "piiAudit": {
+    "providerEndpointRecorded": false,
+    "result": "pass"
+  }
+}

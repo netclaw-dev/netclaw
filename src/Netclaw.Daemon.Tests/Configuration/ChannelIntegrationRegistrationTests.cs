@@ -134,7 +134,9 @@ public sealed class ChannelIntegrationRegistrationTests
         services.AddSingleton<IContentScanner>(new NullContentScanner());
         services.AddSingleton(new ToolConfig());
         services.AddSingleton(new ModelCapabilities());
-        services.AddSingleton(new NetclawPaths(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())));
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()));
+        services.AddSingleton(paths);
+        services.AddSingleton<ISessionStorageResolver>(new TestSessionStorageResolver(paths));
 
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(settings)

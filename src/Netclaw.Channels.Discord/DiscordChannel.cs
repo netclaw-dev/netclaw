@@ -9,6 +9,7 @@ using Akka.Pattern;
 using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
+using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
 using Netclaw.Channels.Discord.Transport;
 using Netclaw.Configuration;
@@ -34,7 +35,7 @@ public sealed class DiscordChannel : IChannel
     private readonly ILogger<DiscordChannel> _logger;
     private readonly ToolAudienceProfiles _audienceProfiles;
     private readonly ModelCapabilities _modelCapabilities;
-    private readonly NetclawPaths _paths;
+    private readonly ISessionStorageResolver _storageResolver;
 
     private readonly object _connectionSetupLock = new();
     private volatile IActorRef? _gateway;
@@ -57,7 +58,7 @@ public sealed class DiscordChannel : IChannel
         ILogger<DiscordChannel> logger,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
-        NetclawPaths paths)
+        ISessionStorageResolver storageResolver)
     {
         _system = system;
         _pipeline = pipeline;
@@ -79,7 +80,7 @@ public sealed class DiscordChannel : IChannel
         _logger = logger;
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
-        _paths = paths;
+        _storageResolver = storageResolver;
 
         _gatewayClient.CleanReconnectRequired += HandleCleanReconnectRequiredAsync;
         _gatewayClient.ConnectionRestored += HandleConnectionRestoredAsync;
@@ -190,7 +191,7 @@ public sealed class DiscordChannel : IChannel
                 ContentScanner: _contentScanner,
                 AudienceProfiles: _audienceProfiles,
                 ModelCapabilities: _modelCapabilities,
-                Paths: _paths,
+                StorageResolver: _storageResolver,
                 BotUserId: botUserId,
                 PromptInjectionDetector: _promptInjectionDetector,
                 ThreadHistoryFetcher: _threadHistoryFetcher,
@@ -287,7 +288,21 @@ public sealed class DiscordChannel : IChannel
             _gateway = null;
         }
 
-        await _gatewayClient.DisconnectAsync(cancellationToken);
+        // The disconnect is best-effort during shutdown. On SIGTERM, Akka's CLR
+        // shutdown hook can terminate the actor system before host shutdown
+        // reaches this channel, so the disconnect Ask dead-letters and times out
+        // after its full ask budget. That teardown race is normal — the process
+        // is going down either way — so log and continue rather than letting the
+        // failure surface as a false daemon-main crash (#2035).
+        try
+        {
+            await _gatewayClient.DisconnectAsync(cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogDebug(ex, "Gateway disconnect failed during shutdown; the actor system is already terminating.");
+        }
+
         if (_gatewayClient is IDisposable disposable)
             disposable.Dispose();
     }

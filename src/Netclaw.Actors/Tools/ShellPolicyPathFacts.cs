@@ -29,6 +29,12 @@ internal sealed record ShellPolicySourcePathFact(
     ShellValueDomain Domain,
     ShellPathShape AuthoredPathShape)
 {
+    /// <summary>
+    /// Gets the consumer-resolved compatibility path when ShellSyntaxTree has
+    /// already applied shell-specific path semantics.
+    /// </summary>
+    internal string? ParserResolvedPath { get; init; }
+
     internal FileRedirectMode? RedirectMode { get; init; }
 
     internal bool RedirectIsComplete { get; init; } = true;
@@ -59,6 +65,43 @@ internal sealed record ShellPolicyCandidatePathFacts(
 
 internal static class ShellPolicyPathFacts
 {
+    internal static IReadOnlyList<ShellPolicyResolvedPathView> CreateExecutionViews(
+        ShellCommandAnalysis analysis)
+    {
+        ArgumentNullException.ThrowIfNull(analysis);
+
+        var pathStyle = analysis.Environment.PathStyle;
+        var shell = analysis.Environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        var views = analysis.Commands
+            .Select(occurrence =>
+            {
+                var resolutionBase = occurrence.WorkingDirectory is ShellValueDomain.Exact exact
+                    ? exact.Value
+                    : analysis.WorkingDirectory;
+                return ShellPolicyOccurrencePathFacts.Create(occurrence)
+                    .Resolve(resolutionBase, pathStyle, shell);
+            })
+            .ToArray();
+        return Array.AsReadOnly(views);
+    }
+
+    internal static IReadOnlyList<ShellPolicyCandidatePathFacts> Create(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        ShellPathStyle pathStyle)
+    {
+        ArgumentNullException.ThrowIfNull(candidates);
+
+        var projected = candidates
+            .Select((candidate, index) => new ShellPolicyCandidate(
+                new ShellPolicyCandidateId(index),
+                candidate,
+                candidate.SourceOccurrence))
+            .ToArray();
+        return Create(Array.AsReadOnly(projected), pathStyle);
+    }
+
     internal static IReadOnlyList<ShellPolicyCandidatePathFacts> Create(
         IReadOnlyList<ShellPolicyCandidate> candidates,
         ShellPathStyle pathStyle)
@@ -203,7 +246,14 @@ internal sealed class ShellPolicyOccurrencePathFacts
                 facts.Add(CreateFact(
                     ShellPolicyPathOrigin.EffectiveArgument,
                     argument.Value,
-                    ShellPathShape.Unknown));
+                    ShellPathShape.Unknown) with
+                {
+                    // The compatibility projection applies consumer semantics,
+                    // such as PowerShell FileSystem provider qualification. Use
+                    // that resolved path instead of interpreting its source text
+                    // again in Netclaw.
+                    ParserResolvedPath = argument.Argument.Resolved
+                });
             }
 
             if (!hasBoundedNonFileSystemValue
@@ -290,42 +340,58 @@ internal sealed class ShellPolicyOccurrencePathFacts
             ShellValueDomain.PathPattern pattern => [pattern.CoveringDirectory],
             _ => null
         };
-        if (values is null)
+        if (values is { Count: > 0 })
         {
-            return new ShellPolicyResolvedPathFact(
-                fact,
-                ShellPolicyPathResolutionState.UnknownDynamic,
-                []);
-        }
+            var paths = new CanonicalShellPath[values.Count];
+            var resolvedAll = true;
+            for (var index = 0; index < values.Count; index++)
+            {
+                if (TryResolveCanonicalPath(
+                        values[index],
+                        resolutionBase,
+                        pathStyle,
+                        out paths[index]))
+                {
+                    continue;
+                }
 
-        if (values.Count == 0)
-        {
-            return new ShellPolicyResolvedPathFact(
-                fact,
-                ShellPolicyPathResolutionState.InvalidKnownValue,
-                []);
-        }
+                resolvedAll = false;
+                break;
+            }
 
-        var paths = new CanonicalShellPath[values.Count];
-        for (var index = 0; index < values.Count; index++)
-        {
-            if (!TryResolveCanonicalPath(
-                    values[index],
-                    resolutionBase,
-                    pathStyle,
-                    out paths[index]))
+            if (resolvedAll)
             {
                 return new ShellPolicyResolvedPathFact(
                     fact,
-                    ShellPolicyPathResolutionState.InvalidKnownValue,
-                    []);
+                    ShellPolicyPathResolutionState.Known,
+                    Array.AsReadOnly(paths));
             }
+        }
+
+        // ShellSyntaxTree's compatibility projection can prove one effective
+        // path after it applies consumer semantics that raw shell path rules do
+        // not own. Use that proof only as a fallback: relative source values
+        // must still rebase for causal intent and fallback views.
+        if (values is not { Count: > 1 }
+            && !string.IsNullOrWhiteSpace(fact.ParserResolvedPath)
+            && TryResolveCanonicalPath(
+                fact.ParserResolvedPath,
+                resolutionBase,
+                pathStyle,
+                out var parserResolvedPath))
+        {
+            return new ShellPolicyResolvedPathFact(
+                fact,
+                ShellPolicyPathResolutionState.Known,
+                Array.AsReadOnly([parserResolvedPath]));
         }
 
         return new ShellPolicyResolvedPathFact(
             fact,
-            ShellPolicyPathResolutionState.Known,
-            Array.AsReadOnly(paths));
+            values is null
+                ? ShellPolicyPathResolutionState.UnknownDynamic
+                : ShellPolicyPathResolutionState.InvalidKnownValue,
+            []);
     }
 
     internal static bool TryResolveCanonicalPath(

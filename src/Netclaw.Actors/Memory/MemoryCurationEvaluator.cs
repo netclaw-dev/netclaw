@@ -17,9 +17,11 @@ namespace Netclaw.Actors.Memory;
 
 /// <summary>
 /// Minimal logging seam so <see cref="MemoryCurationEvaluator"/> emits one set of log
-/// markers (<c>curation_dual_search</c>, <c>curation_llm_decision</c>,
-/// <c>curation_llm_no_decision</c>, <c>curation_llm_timeout</c>, <c>curation_llm_error</c>,
-/// <c>curation_ambiguous_auto_resolved</c>, <c>curation_ambiguous_create_fallback</c>,
+/// markers (<c>curation_dual_search</c>, <c>curation_nominated</c>,
+/// <c>curation_nominator_degraded</c>, <c>curation_nominee_no_llm_decision</c>,
+/// <c>curation_llm_decision</c>, <c>curation_llm_no_decision</c>, <c>curation_llm_timeout</c>,
+/// <c>curation_llm_error</c>, <c>curation_ambiguous_auto_resolved</c>,
+/// <c>curation_ambiguous_create_fallback</c>, <c>curation_guard_fallthrough</c>,
 /// <c>curation_skip</c>/<c>_update</c>/<c>_consolidate</c>/<c>_create</c>,
 /// <c>curation_reanchor</c>, <c>curation_tombstone_anchor</c>) regardless of which of the
 /// two callers is driving the evaluator: the inline per-session actor
@@ -75,23 +77,76 @@ internal sealed class MicrosoftCurationLog(ILogger log) : ICurationLog
 /// slice (finding D14) and the daemon path performed no relationship evaluation at all.
 ///
 /// Decision flow (<see cref="EvaluateAsync"/>): immutable records bypass evaluation; fuzzy
-/// anchor candidates are queried, then content-term candidates are added when there is no
-/// exact anchor match; <see cref="CurationRulesEvaluator.Evaluate"/> runs the deterministic
-/// tier; an Ambiguous result escalates to the LLM tier (when available) followed by
-/// <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>, or else falls back to
-/// <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> and finally a Create default.
-/// <see cref="ApplyDecisionAsync"/> maps the resulting decision to the operation that should
-/// be written (or nothing, for Skip), executing Consolidate's re-anchor/tombstone side
+/// anchor candidates are queried; on an exact anchor match, the deterministic fast path
+/// (<see cref="CurationRulesEvaluator.Evaluate"/>'s <c>EvaluateExactMatch</c>) decides Skip/Update
+/// with no further evidence gathering — UNLESS that Update is downgraded by
+/// <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> (see "Guard fall-through" below),
+/// in which case evidence gathering resumes rather than terminating. Otherwise, the embedding
+/// kNN nominator (memory-core-redesign Slice 3 Stage B, task 3.1, design D4) queries
+/// <see cref="MemoryVectorIndex.TopK"/> when the embedder is available: <b>any nominee forces the
+/// decision to the LLM tier</b>, regardless of what the lexical rules tier would have decided —
+/// the May 2026 measurement (<c>docs/research/memory-recall-findings-2026-05.md</c>; corroborated
+/// at corpus scale in <c>docs/research/memory-audit-2026-07.md</c> §5) found no cosine threshold
+/// that separates true duplicates from merely-related siblings, so cosine similarity is
+/// nomination evidence ONLY — it never auto-merges and never auto-skips. When no nominee fires
+/// (or the embedder is unavailable, in which case the pre-Slice-3 lexical content-term search
+/// runs instead as an explicitly-logged degraded path), <see cref="CurationRulesEvaluator.Evaluate"/>
+/// runs the deterministic tier as before; an Ambiguous result escalates to the LLM tier (when
+/// available) followed by <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>, or else
+/// falls back to <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> and finally a Create
+/// default. <see cref="ApplyDecisionAsync"/> maps the resulting decision to the operation that
+/// should be written (or nothing, for Skip), executing Consolidate's re-anchor/tombstone side
 /// effects — this mapping is unified too, since a second, hand-copied switch statement per
 /// caller is exactly the kind of divergence this slice removes.
+///
+/// <para>
+/// <b>Guard fall-through (memory-core-redesign, July 2026 audit finding, eval run
+/// <c>ad9a2312</c>):</b> when the exact-anchor deterministic path picks Update and
+/// <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> downgrades it to Skip because the
+/// proposal would not preserve the target's content, that Skip must NOT be returned as the final
+/// decision — an explicit <c>store_memory</c> proposal silently ending as a no-op (no write, no
+/// further evidence gathering) is a silent-fallback violation, observed when an LLM-emitted junk
+/// anchor (e.g. the bare stopword <c>the</c>) collided with an unrelated existing document sharing
+/// the same junk anchor text. The guard's protective effect is correct and must be kept — the
+/// mismatched target must never be overwritten — but the correct response to "this anchor match
+/// doesn't apply" is to re-run evaluation exactly as if there had been no exact anchor match at
+/// all: every candidate that carried <c>IsExactAnchorMatch</c> is demoted to an ordinary fuzzy
+/// candidate (so the rules tier cannot re-derive the same Update/guard-reject pair and loop), then
+/// the embedding nominator / lexical content-term search that the exact-match fast path had
+/// short-circuited runs for the first time, followed by the usual rules-tier/LLM-tier/auto-resolve
+/// chain with a Create default. This is deliberately NOT a fix to anchor-name hygiene — junk
+/// anchors like <c>the</c> should arguably never be stored or fuzzy-matched at all, but filtering
+/// them is a broader behavior change to anchor matching left as a follow-up; this fall-through
+/// fixes the narrower "explicit store becomes a silent no-op" failure regardless of why the guard
+/// rejected the match.
+/// </para>
+///
+/// Guard-validated write routing (memory-core-redesign Slice 3, design D5): an LLM-tier
+/// UPDATE/CONSOLIDATE decision (<see cref="CurationDecision.FromLlmTier"/>) never overwrites
+/// a target's raw body. When it carries a synthesized <see cref="CurationDecision.MergedBody"/>,
+/// <see cref="ApplyDecisionAsync"/> validates it with <see cref="MergeGuard"/> against every
+/// source body and writes it only on a pass; on guard failure, or when no merged body was
+/// produced, the write degrades to a structural append (<see cref="ApplyGuardedMergeOrAppend"/>)
+/// so information is never silently dropped. The deterministic tier's UPDATE (the exact-anchor
+/// path in <see cref="CurationRulesEvaluator"/>) is the one decision shape that keeps its
+/// pre-Slice-3 behavior unchanged: <see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/>
+/// already proves the proposal is a content superset of the target before that decision can
+/// reach Update, so its raw overwrite is provably non-lossy on its own terms — appending there
+/// too would just bloat documents that are legitimately single-value replacements (e.g. a
+/// version bump) for no safety benefit. GuardDestructiveUpdate is therefore no longer applied
+/// to LLM-tier decisions in <see cref="EvaluateAsync"/>: its raw-proposal containment check
+/// would reject a legitimate reworded merge (the unmerged proposal rarely contains the
+/// target's exact wording verbatim), and the write-time guard above supersedes it for that
+/// tier anyway.
 /// </summary>
 public sealed class MemoryCurationEvaluator
 {
-    private static readonly TimeSpan LlmTimeout = TimeSpan.FromSeconds(10);
-
     private readonly SQLiteMemoryStore _store;
     private readonly IChatClient? _llmClient;
     private readonly ICurationLog _log;
+    private readonly MemoryCurationConfig _curationConfig;
+    private readonly MemoryEmbedderHolder? _embedderHolder;
+    private readonly MemoryVectorIndexHolder? _vectorIndexHolder;
 
     /// <summary>
     /// Constructs an evaluator that logs through Akka's actor logging (the inline
@@ -101,8 +156,27 @@ public sealed class MemoryCurationEvaluator
     /// which case Ambiguous decisions resolve via
     /// <see cref="CurationRulesEvaluator.TryAutoResolveAmbiguous"/> only.
     /// </summary>
-    public MemoryCurationEvaluator(SQLiteMemoryStore store, ILoggingAdapter log, IChatClient? llmClient = null)
-        : this(store, (ICurationLog)new AkkaCurationLog(log), llmClient)
+    /// <param name="embedderHolder">
+    /// Resolves the process's <see cref="IMemoryEmbedder"/> for the kNN nominator
+    /// (memory-core-redesign Slice 3 Stage B). Optional like <paramref name="llmClient"/>: a
+    /// null holder is a genuine operating mode (a test harness, or a build with the embedding
+    /// subsystem not wired up at all) — <see cref="EvaluateAsync"/> treats it identically to an
+    /// unavailable embedder and runs the lexical degraded path.
+    /// </param>
+    /// <param name="vectorIndexHolder">
+    /// Resolves the process's <see cref="MemoryVectorIndex"/> for the same nominator. Optional
+    /// for the same reason as <paramref name="embedderHolder"/> — the two are provided together
+    /// in production (see <c>Netclaw.Daemon.Program</c>), but each is independently nullable so
+    /// a caller missing one still degrades safely rather than throwing.
+    /// </param>
+    public MemoryCurationEvaluator(
+        SQLiteMemoryStore store,
+        ILoggingAdapter log,
+        MemoryCurationConfig curationConfig,
+        IChatClient? llmClient = null,
+        MemoryEmbedderHolder? embedderHolder = null,
+        MemoryVectorIndexHolder? vectorIndexHolder = null)
+        : this(store, (ICurationLog)new AkkaCurationLog(log), curationConfig, llmClient, embedderHolder, vectorIndexHolder)
     {
     }
 
@@ -110,24 +184,48 @@ public sealed class MemoryCurationEvaluator
     /// Constructs an evaluator that logs through Microsoft.Extensions.Logging (the daemon
     /// checkpoint-worker path). The daemon worker has no LLM client to give this evaluator
     /// today — that absence is intentional and permanent for this call site, not a
-    /// placeholder to be filled in later in this slice.
+    /// placeholder to be filled in later in this slice. <paramref name="embedderHolder"/> and
+    /// <paramref name="vectorIndexHolder"/> ARE wired here (memory-core-redesign Slice 3 Stage
+    /// B): the nominator runs on both write pipelines even though only the inline pipeline has
+    /// an LLM client — a nominee found with no LLM available still forces the conservative
+    /// no-auto-merge Create outcome documented on <see cref="EvaluateAsync"/>.
     /// </summary>
-    public MemoryCurationEvaluator(SQLiteMemoryStore store, ILogger log, IChatClient? llmClient = null)
-        : this(store, (ICurationLog)new MicrosoftCurationLog(log), llmClient)
+    public MemoryCurationEvaluator(
+        SQLiteMemoryStore store,
+        ILogger log,
+        MemoryCurationConfig curationConfig,
+        IChatClient? llmClient = null,
+        MemoryEmbedderHolder? embedderHolder = null,
+        MemoryVectorIndexHolder? vectorIndexHolder = null)
+        : this(store, (ICurationLog)new MicrosoftCurationLog(log), curationConfig, llmClient, embedderHolder, vectorIndexHolder)
     {
     }
 
-    private MemoryCurationEvaluator(SQLiteMemoryStore store, ICurationLog log, IChatClient? llmClient)
+    private MemoryCurationEvaluator(
+        SQLiteMemoryStore store,
+        ICurationLog log,
+        MemoryCurationConfig curationConfig,
+        IChatClient? llmClient,
+        MemoryEmbedderHolder? embedderHolder,
+        MemoryVectorIndexHolder? vectorIndexHolder)
     {
         _store = store;
         _log = log;
+        _curationConfig = curationConfig;
         _llmClient = llmClient;
+        _embedderHolder = embedderHolder;
+        _vectorIndexHolder = vectorIndexHolder;
     }
 
     /// <summary>
-    /// Evaluate a single curation proposal against existing memories and return a decision.
+    /// Evaluate a single curation proposal against existing memories and return a decision
+    /// together with the candidates it was evaluated against — <see cref="ApplyDecisionAsync"/>
+    /// needs those same candidate bodies (memory-core-redesign Slice 3) to validate or build a
+    /// merged/appended write, and re-querying the store at apply time could see a different
+    /// (possibly stale-in-the-other-direction) snapshot than the one the decision was actually
+    /// made against.
     /// </summary>
-    public async Task<CurationDecision> EvaluateAsync(
+    public async Task<CurationEvaluation> EvaluateAsync(
         SQLiteMemoryCurationOperation operation,
         SessionId sessionId,
         CancellationToken ct = default)
@@ -136,7 +234,9 @@ public sealed class MemoryCurationEvaluator
         if (MemoryDomainEnumExtensions.TryFromWireValue(operation.Kind, out MemoryKind kind)
             && kind == MemoryKind.Record)
         {
-            return new CurationDecision(CurationDecisionKind.Create, null, null, null, "immutable record bypass");
+            return new CurationEvaluation(
+                new CurationDecision(CurationDecisionKind.Create, null, null, null, "immutable record bypass"),
+                []);
         }
 
         // Query existing anchors for matches (by name)
@@ -145,44 +245,170 @@ public sealed class MemoryCurationEvaluator
         // Build a mutable candidate list — content search may add more candidates below.
         var candidates = new List<ExistingMemoryCandidate>(anchorCandidates);
 
-        // Run content-based search when there is no exact anchor match.
-        // This catches semantically identical content under very different anchor names
-        // (e.g., "netclaw-github-repo" vs "netclaw-source-location" — different names, same info).
-        var hasExactAnchorMatch = anchorCandidates.Any(c => c.IsExactAnchorMatch);
-        if (!hasExactAnchorMatch && !string.IsNullOrWhiteSpace(operation.Content))
+        return await EvaluateCandidatesAsync(
+            operation, sessionId, candidates, anchorCandidates.Any(c => c.IsExactAnchorMatch), ct);
+    }
+
+    /// <summary>
+    /// The evaluation body proper, factored out of <see cref="EvaluateAsync"/> so the guard
+    /// fall-through case (see this class's remarks) can re-run the same evidence-gathering and
+    /// decision chain a second time with <paramref name="hasExactAnchorMatch"/> forced false —
+    /// exactly as if the anchor query at the top of <see cref="EvaluateAsync"/> had found no
+    /// exact match — without re-querying the store for anchors a second time.
+    /// </summary>
+    private async Task<CurationEvaluation> EvaluateCandidatesAsync(
+        SQLiteMemoryCurationOperation operation,
+        SessionId sessionId,
+        List<ExistingMemoryCandidate> candidates,
+        bool hasExactAnchorMatch,
+        CancellationToken ct)
+    {
+        // Embedding kNN nomination (memory-core-redesign Slice 3 Stage B, task 3.1, design D4)
+        // vs. the pre-Slice-3 lexical content-term search: these are alternatives, not additive.
+        // An exact anchor match already resolves deterministically below with no further
+        // evidence gathering (the "existing exact-anchor deterministic fast path" design D4
+        // calls out as unchanged), so neither runs in that case — unless the guard fall-through
+        // below re-invokes this method with hasExactAnchorMatch forced false, in which case this
+        // runs for the first time for this proposal.
+        //
+        // Captured before any mutation below: on the first (normal) call this is exactly the
+        // anchor-name-fuzzy-match hit count `curation_dual_search` below reports; on a guard
+        // fall-through re-entry it is that same anchor-hit count with the rejected match(es)
+        // demoted rather than removed, which is the correct "anchor_hits" figure for this pass
+        // either way (no nomination/content-search candidates have been merged in yet).
+        var anchorHitCount = candidates.Count;
+        if (!hasExactAnchorMatch)
         {
-            var contentTerms = operation.Content
-                .Split([' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '"', '\''],
-                    StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
-                .Where(t => t.Length >= 3)
-                .Select(t => t.ToLowerInvariant())
-                .Distinct(StringComparer.OrdinalIgnoreCase)
-                .Take(8)
-                .ToArray();
-
-            if (contentTerms.Length > 0)
+            var embedder = _embedderHolder?.Current;
+            if (embedder is not null && embedder.IsAvailable && _vectorIndexHolder is not null)
             {
-                var contentCandidates = await _store.FindCandidatesByContentAsync(contentTerms, ct: ct);
-
-                // Merge content candidates with anchor candidates, deduplicating by DocumentId.
-                if (contentCandidates.Count > 0)
+                var (nominees, topCosine) = await NominateAsync(embedder, operation, ct);
+                if (nominees.Count > 0)
                 {
-                    var existingDocIds = new HashSet<string>(
-                        candidates.Select(c => c.DocumentId), StringComparer.OrdinalIgnoreCase);
-                    foreach (var cc in contentCandidates)
+                    // Merge like the content-term path below: dedup by DocumentId, but a nominee
+                    // that is ALSO already present (e.g. it also fuzzy-matched by anchor name)
+                    // must keep its cosine tag rather than being dropped as a duplicate.
+                    var byDocId = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+                    for (var i = 0; i < candidates.Count; i++)
+                        byDocId[candidates[i].DocumentId] = i;
+
+                    foreach (var nominee in nominees)
                     {
-                        if (!existingDocIds.Contains(cc.DocumentId))
-                            candidates.Add(cc);
+                        if (byDocId.TryGetValue(nominee.DocumentId, out var existingIndex))
+                            candidates[existingIndex] = candidates[existingIndex] with { CosineSimilarity = nominee.CosineSimilarity };
+                        else
+                            candidates.Add(nominee);
                     }
 
-                    _log.Debug(
-                        "curation_dual_search anchor={0} anchor_hits={1} content_hits={2} merged={3}",
+                    _log.Info(
+                        "curation_nominated anchor={0} count={1} topCosine={2}",
                         operation.AnchorCanonicalName,
-                        anchorCandidates.Count,
-                        contentCandidates.Count,
-                        candidates.Count);
+                        nominees.Count,
+                        topCosine.ToString("F4", System.Globalization.CultureInfo.InvariantCulture));
                 }
             }
+            else
+            {
+                // Degraded path (design D4 point 4): no healthy embedder/index, so fall back to
+                // the lexical content-term search exactly as before Slice 3 — this catches
+                // semantically identical content under very different anchor names (e.g.,
+                // "netclaw-github-repo" vs "netclaw-source-location") when there is no embedding
+                // evidence available to do better. Logged unconditionally in this branch (not
+                // gated on content being non-blank) so the degraded condition itself is always
+                // observable, independent of whether a search ends up running. Debug level, not
+                // Warning: "embedder unavailable" is the default operating mode while
+                // Memory.Embeddings.Enabled is false (task 3.1's target default), so this would
+                // otherwise be Warning-level spam on every single curation evaluation in the
+                // common case — the loud, once-per-transition signal already exists at startup
+                // (EmbeddingWarmupHostedService's memory_embedding_unavailable /
+                // memory_embedding_disabled) and in doctor/status, matching
+                // MemoryEmbedOnWriteCoordinator's identical reasoning for its own
+                // embedder-unavailable skip log.
+                _log.Debug(
+                    "curation_nominator_degraded anchor={0} reason={1}",
+                    operation.AnchorCanonicalName,
+                    embedder is null ? "no_embedder_configured" : !embedder.IsAvailable ? "embedder_unavailable" : "vector_index_unavailable");
+
+                if (!string.IsNullOrWhiteSpace(operation.Content))
+                {
+                    var contentTerms = operation.Content
+                        .Split([' ', '\t', '\n', '\r', '.', ',', ':', ';', '!', '?', '"', '\''],
+                            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                        .Where(t => t.Length >= 3)
+                        .Select(t => t.ToLowerInvariant())
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .Take(8)
+                        .ToArray();
+
+                    if (contentTerms.Length > 0)
+                    {
+                        var contentCandidates = await _store.FindCandidatesByContentAsync(contentTerms, ct: ct);
+
+                        // Merge content candidates with anchor candidates, deduplicating by DocumentId.
+                        if (contentCandidates.Count > 0)
+                        {
+                            var existingDocIds = new HashSet<string>(
+                                candidates.Select(c => c.DocumentId), StringComparer.OrdinalIgnoreCase);
+                            foreach (var cc in contentCandidates)
+                            {
+                                if (!existingDocIds.Contains(cc.DocumentId))
+                                    candidates.Add(cc);
+                            }
+
+                            _log.Debug(
+                                "curation_dual_search anchor={0} anchor_hits={1} content_hits={2} merged={3}",
+                                operation.AnchorCanonicalName,
+                                anchorHitCount,
+                                contentCandidates.Count,
+                                candidates.Count);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Any nominee forces the LLM tier, regardless of what the lexical rules tier below would
+        // have decided (design D4: "no cosine threshold separates duplicates from siblings," so
+        // similarity nominates only — it never auto-merges or auto-skips on its own).
+        var hasNominee = candidates.Any(c => c.CosineSimilarity.HasValue);
+        if (hasNominee)
+        {
+            if (_llmClient is not null)
+            {
+                var nomineeLlmDecision = await TryLlmEvaluationAsync(
+                    _llmClient, sessionId, operation, candidates, _log, _curationConfig, useFullCandidateContent: true);
+                if (nomineeLlmDecision is not null)
+                {
+                    // GuardDestructiveUpdate is deliberately NOT applied here — see this class's
+                    // remarks; write-time MergeGuard/structural-append routing supersedes it for
+                    // every LLM-tier decision.
+                    _log.Info(
+                        "curation_llm_decision anchor={0} decision={1} reason={2}",
+                        operation.AnchorCanonicalName,
+                        nomineeLlmDecision.Kind,
+                        nomineeLlmDecision.Reason);
+                    return new CurationEvaluation(nomineeLlmDecision, candidates);
+                }
+
+                // LLM failed to produce a parseable decision — fall through to the conservative
+                // no-LLM handling below rather than a second (Jaccard-based) attempt.
+            }
+
+            // No LLM available, or the LLM call failed: a nominee is semantic-near evidence that
+            // TryAutoResolveAmbiguous's Jaccard heuristics cannot safely adjudicate (that is
+            // exactly the ambiguity the May 2026 measurement showed deterministic logic cannot
+            // resolve), so this does NOT call TryAutoResolveAmbiguous — doing so risks an
+            // auto-Skip driven by cosine-adjacent content that is actually a distinct sibling.
+            // The conservative outcome is Create: the cost is a possible duplicate document,
+            // recoverable by a future curation pass; a wrong auto-merge is not.
+            _log.Warning(
+                "curation_nominee_no_llm_decision anchor={0} llm_available={1} — conservative create",
+                operation.AnchorCanonicalName,
+                _llmClient is not null);
+            return new CurationEvaluation(
+                new CurationDecision(CurationDecisionKind.Create, null, null, null,
+                    "nominee present but no LLM decision available: conservative create (no auto-merge on cosine alone)"),
+                candidates);
         }
 
         // Apply rules tier
@@ -191,16 +417,21 @@ public sealed class MemoryCurationEvaluator
         // If rules tier is ambiguous and LLM is available, escalate
         if (rulesDecision.Kind == CurationDecisionKind.Ambiguous && _llmClient is not null)
         {
-            var llmDecision = await TryLlmEvaluationAsync(_llmClient, sessionId, operation, candidates, _log);
+            var llmDecision = await TryLlmEvaluationAsync(
+                _llmClient, sessionId, operation, candidates, _log, _curationConfig);
             if (llmDecision is not null)
             {
-                var guarded = CurationRulesEvaluator.GuardDestructiveUpdate(llmDecision, operation, candidates);
+                // GuardDestructiveUpdate is deliberately NOT applied here — see this class's
+                // remarks. LLM-tier UPDATE/CONSOLIDATE write safety is now the write-time
+                // MergeGuard/structural-append routing in ApplyDecisionAsync, which handles
+                // both the has-a-merged-body and no-merged-body cases without needing this
+                // decision downgraded first.
                 _log.Info(
                     "curation_llm_decision anchor={0} decision={1} reason={2}",
                     operation.AnchorCanonicalName,
-                    guarded.Kind,
-                    guarded.Reason);
-                return guarded;
+                    llmDecision.Kind,
+                    llmDecision.Reason);
+                return new CurationEvaluation(llmDecision, candidates);
             }
 
             // LLM failed — fall through to deterministic auto-resolution below
@@ -217,16 +448,121 @@ public sealed class MemoryCurationEvaluator
                     operation.AnchorCanonicalName,
                     autoResolved.Kind,
                     autoResolved.Reason);
-                return autoResolved;
+                return new CurationEvaluation(autoResolved, candidates);
             }
 
             _log.Warning("curation_ambiguous_create_fallback anchor={0} llm_available={1}",
                 operation.AnchorCanonicalName, _llmClient is not null);
-            return new CurationDecision(CurationDecisionKind.Create, null, null, null,
-                "ambiguous: auto-resolve insufficient, defaulting to create");
+            return new CurationEvaluation(
+                new CurationDecision(CurationDecisionKind.Create, null, null, null,
+                    "ambiguous: auto-resolve insufficient, defaulting to create"),
+                candidates);
         }
 
-        return CurationRulesEvaluator.GuardDestructiveUpdate(rulesDecision, operation, candidates);
+        var guardedDecision = CurationRulesEvaluator.GuardDestructiveUpdate(rulesDecision, operation, candidates);
+
+        // Guard fall-through (see this class's remarks): the ONLY decision shape
+        // GuardDestructiveUpdate ever changes is Update -> Skip, and Update can only be
+        // produced by the exact-anchor deterministic fast path (CurationRulesEvaluator's fuzzy
+        // tier never returns Update) — so this downgrade is only reachable when
+        // hasExactAnchorMatch was true for this call. Terminating on that Skip would silently
+        // drop an explicit proposal with no further evidence gathering (the July 2026 audit
+        // bug); instead, demote every exact-anchor-matched candidate to an ordinary fuzzy
+        // candidate and re-run the full evaluation chain as if there had been no exact anchor
+        // match at all. The demotion is what keeps this from looping: with no candidate left
+        // claiming IsExactAnchorMatch, CurationRulesEvaluator.Evaluate cannot re-derive the same
+        // Update decision on the re-run, so this branch cannot fire twice for one proposal.
+        if (hasExactAnchorMatch
+            && rulesDecision.Kind == CurationDecisionKind.Update
+            && guardedDecision.Kind == CurationDecisionKind.Skip)
+        {
+            _log.Warning(
+                "curation_guard_fallthrough anchor={0} rejectedTarget={1}",
+                operation.AnchorCanonicalName,
+                guardedDecision.TargetDocumentId ?? "(unknown)");
+
+            for (var i = 0; i < candidates.Count; i++)
+            {
+                if (candidates[i].IsExactAnchorMatch)
+                    candidates[i] = candidates[i] with { IsExactAnchorMatch = false };
+            }
+
+            return await EvaluateCandidatesAsync(operation, sessionId, candidates, hasExactAnchorMatch: false, ct);
+        }
+
+        return new CurationEvaluation(guardedDecision, candidates);
+    }
+
+    /// <summary>
+    /// Embedding kNN nomination step (memory-core-redesign Slice 3 Stage B, task 3.1). Embeds
+    /// the proposal's <c>"{title}\n{content}"</c> text — the exact concatenation
+    /// <see cref="MemoryEmbedOnWriteCoordinator"/> embeds a written document with, so a proposal
+    /// and its eventual stored form land in the same region of embedding space — queries
+    /// <paramref name="embedder"/>'s current <see cref="MemoryVectorIndex"/> for up to
+    /// <see cref="MemoryCurationConfig.NominatorK"/> neighbors at or above
+    /// <see cref="MemoryCurationConfig.NominatorSimilarityThreshold"/>, then hydrates the
+    /// matched document ids into full-content candidates tagged with their cosine.
+    ///
+    /// <para>
+    /// <b>Cost:</b> curation runs off the interactive turn path (checkpoint/session-boundary
+    /// triggered, via the daemon worker or the inline actor's post-turn write phase) — unlike
+    /// the sub-150ms recall-query budget (design D6), there is no per-turn latency budget here,
+    /// so the ~210ms median / ~280ms mean single-embed cost measured for the nominator model
+    /// (<c>docs/research/memory-audit-2026-07.md</c> §4, snowflake-arctic-embed 137M) is
+    /// acceptable — it does not block a user-visible response.
+    /// </para>
+    ///
+    /// <para>
+    /// <b>Known limitation (intra-batch nomination):</b> a proposal is nominated against the
+    /// store's already-committed embeddings only — it cannot nominate itself (it has not been
+    /// written yet), which is correct. But when a caller evaluates several proposals as one
+    /// batch (both write pipelines evaluate a checkpoint's candidates in a loop before any of
+    /// them commits), two mutually-near-duplicate proposals within that SAME batch will not see
+    /// each other, because neither is in the index yet when the other is nominated. This is an
+    /// accepted gap for this slice, not a design goal: cross-batch and steady-state dedup (the
+    /// overwhelming majority of write traffic) both work correctly, and closing the intra-batch
+    /// case would require either serializing writes mid-batch or a second batch-local similarity
+    /// pass — deferred until evidence shows same-batch near-duplicates are common enough to
+    /// justify the added complexity.
+    /// </para>
+    /// </summary>
+    private async Task<(IReadOnlyList<ExistingMemoryCandidate> Nominees, double TopCosine)> NominateAsync(
+        IMemoryEmbedder embedder,
+        SQLiteMemoryCurationOperation operation,
+        CancellationToken ct)
+    {
+        var vectorIndex = await _vectorIndexHolder!.GetCurrentAsync(embedder, ct);
+        if (vectorIndex is null)
+            return ([], 0);
+
+        var queryVector = await embedder.EmbedAsync($"{operation.Title}\n{operation.Content}", EmbeddingPurpose.Passage, ct);
+        var matches = vectorIndex.TopK(
+            queryVector.Span, _curationConfig.NominatorK, _curationConfig.NominatorSimilarityThreshold);
+        if (matches.Count == 0)
+            return ([], 0);
+
+        // Only "document" items are ever embedded (MemoryEmbedOnWriteCoordinator.DocumentItemKind)
+        // — immutable records bypass curation and are never embedded — but filter defensively
+        // rather than assume, since a future item kind sharing this model's embedding table
+        // would otherwise be silently mis-hydrated as a document candidate.
+        var documentIds = matches
+            .Where(m => string.Equals(m.ItemKind, MemoryEmbedOnWriteCoordinator.DocumentItemKind, StringComparison.Ordinal))
+            .Select(m => m.ItemId)
+            .ToArray();
+        if (documentIds.Length == 0)
+            return ([], 0);
+
+        var hydrated = await _store.GetCandidatesByIdsAsync(documentIds, ct);
+        if (hydrated.Count == 0)
+            return ([], 0);
+
+        var cosineByDocId = matches.ToDictionary(m => m.ItemId, m => m.Cosine, StringComparer.Ordinal);
+        var tagged = hydrated
+            .Select(c => cosineByDocId.TryGetValue(c.DocumentId, out var cosine) ? c with { CosineSimilarity = cosine } : c)
+            .ToArray();
+
+        // matches is already sorted descending by cosine (MemoryVectorIndex.TopK's contract).
+        return (tagged, matches[0].Cosine);
     }
 
     internal static async Task<CurationDecision?> TryLlmEvaluationAsync(
@@ -234,16 +570,18 @@ public sealed class MemoryCurationEvaluator
         SessionId sessionId,
         SQLiteMemoryCurationOperation operation,
         IReadOnlyList<ExistingMemoryCandidate> candidates,
-        ICurationLog log)
+        ICurationLog log,
+        MemoryCurationConfig curationConfig,
+        bool useFullCandidateContent = false)
     {
         try
         {
-            using var cts = new CancellationTokenSource(LlmTimeout);
+            using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(curationConfig.LlmTimeoutSeconds));
 
             var messages = new List<ChatMessage>
             {
                 new(ChatRole.System, CurationPromptBuilder.SystemPrompt),
-                new(ChatRole.User, CurationPromptBuilder.BuildUserMessage(operation, candidates))
+                new(ChatRole.User, CurationPromptBuilder.BuildUserMessage(operation, candidates, useFullCandidateContent))
             };
 
             // SessionScopedChatOptions carries the session id so this sidecar's chat-client
@@ -255,17 +593,16 @@ public sealed class MemoryCurationEvaluator
                 // Token cap is the THIRD line of defense, so it must never be the
                 // binding constraint. Layering: (1) reasoning suppression below is
                 // the primary fix — suppressed/non-reasoning models emit just the
-                // keyword and never approach any cap; (2) the 10s call timeout
+                // keyword and never approach any cap; (2) the call timeout above
                 // bounds wall-clock when a model ignores suppression and thinks at
                 // length. The cap only matters in the remaining window — suppression
                 // ignored but thinking finishes inside the timeout — where a tight
                 // cap truncates mid-think and reproduces the measured
                 // responseLength=0 empty-reply failure (July 2026 audit: at 512, a
                 // Qwen3.6-class model produced 0 successful curation decisions
-                // ever). Unemitted tokens cost nothing, so size this generously;
-                // it becomes the Memory.Curation.LlmMaxOutputTokens config knob in
-                // the memory-core-redesign change.
-                MaxOutputTokens = 4096,
+                // ever). Unemitted tokens cost nothing, so this is sized generously by
+                // default — see Memory.Curation.LlmMaxOutputTokens (MemoryCurationConfig).
+                MaxOutputTokens = curationConfig.LlmMaxOutputTokens,
                 // Belt: ask the serving stack not to think at all for this
                 // keyword-classification call. This expresses intent only — the raw
                 // provider-dialect field name (vLLM/llama.cpp/SGLang's
@@ -309,7 +646,10 @@ public sealed class MemoryCurationEvaluator
         }
         catch (OperationCanceledException)
         {
-            log.Warning("curation_llm_timeout anchor={0}", operation.AnchorCanonicalName);
+            log.Warning(
+                "curation_llm_timeout anchor={0} timeoutSeconds={1}",
+                operation.AnchorCanonicalName,
+                curationConfig.LlmTimeoutSeconds);
             return null;
         }
         catch (Exception ex)
@@ -327,9 +667,16 @@ public sealed class MemoryCurationEvaluator
     /// mapping is identical from both the actor's write phase and the daemon's
     /// checkpoint-apply phase — before this slice only the actor performed it at all.
     /// </summary>
+    /// <param name="candidates">
+    /// The exact candidate set <paramref name="decision"/> was evaluated against
+    /// (<see cref="EvaluateAsync"/>'s <see cref="CurationEvaluation.Candidates"/>) — the
+    /// source of the target/consolidation-target bodies that guard-validated write routing
+    /// (memory-core-redesign Slice 3) merges or appends against.
+    /// </param>
     public async Task<SQLiteMemoryCurationOperation?> ApplyDecisionAsync(
         SQLiteMemoryCurationOperation operation,
         CurationDecision decision,
+        IReadOnlyList<ExistingMemoryCandidate> candidates,
         CancellationToken ct = default)
     {
         switch (decision.Kind)
@@ -342,15 +689,7 @@ public sealed class MemoryCurationEvaluator
                 return null;
 
             case CurationDecisionKind.Update:
-                _log.Info(
-                    "curation_update anchor={0} targetDoc={1} reason={2}",
-                    operation.AnchorCanonicalName,
-                    decision.TargetDocumentId!,
-                    decision.Reason);
-
-                // Set the operation's MemoryId to the existing document ID
-                // so the ON CONFLICT UPDATE fires
-                return operation with { MemoryId = decision.TargetDocumentId };
+                return ApplyUpdate(operation, decision, candidates);
 
             case CurationDecisionKind.Consolidate:
                 _log.Info(
@@ -361,14 +700,7 @@ public sealed class MemoryCurationEvaluator
                     decision.Reason);
 
                 await ExecuteConsolidationAsync(operation, decision, ct);
-                // After consolidation, write the proposal INTO the primary consolidated
-                // document (explicit target => the store's overwrite path, like Update):
-                // Consolidate means near-duplicate content, so the designed outcome is a
-                // collapse, not an append. A null TargetDocumentId (no construction site
-                // should produce one) flows through with MemoryId null and lands on the
-                // store's lossless dedup-append path, which logs curation_dedup_append.
-                var canonicalAnchor = decision.CanonicalAnchorName ?? operation.AnchorCanonicalName;
-                return operation with { AnchorCanonicalName = canonicalAnchor, MemoryId = decision.TargetDocumentId };
+                return ApplyConsolidate(operation, decision, candidates);
 
             case CurationDecisionKind.Create:
                 _log.Info(
@@ -383,6 +715,171 @@ public sealed class MemoryCurationEvaluator
                 _log.Warning("curation_unexpected_ambiguous anchor={0}, defaulting to create", operation.AnchorCanonicalName);
                 return operation;
         }
+    }
+
+    /// <summary>
+    /// Write routing for an Update decision. The deterministic tier (exact-anchor path,
+    /// <see cref="CurationDecision.FromLlmTier"/> false) keeps its pre-Slice-3 raw overwrite —
+    /// see this class's remarks for why that is still provably non-lossy. Every LLM-tier
+    /// Update routes through <see cref="ApplyGuardedMergeOrAppend"/> instead.
+    /// </summary>
+    private SQLiteMemoryCurationOperation ApplyUpdate(
+        SQLiteMemoryCurationOperation operation,
+        CurationDecision decision,
+        IReadOnlyList<ExistingMemoryCandidate> candidates)
+    {
+        _log.Info(
+            "curation_update anchor={0} targetDoc={1} reason={2}",
+            operation.AnchorCanonicalName,
+            decision.TargetDocumentId!,
+            decision.Reason);
+
+        if (!decision.FromLlmTier)
+        {
+            // Deterministic exact-anchor path: GuardDestructiveUpdate has already verified
+            // (in EvaluateAsync) that the proposal preserves the target's content, so this
+            // overwrite cannot drop information. Set MemoryId so the ON CONFLICT UPDATE fires
+            // against the existing document.
+            return operation with { MemoryId = decision.TargetDocumentId };
+        }
+
+        var target = candidates.FirstOrDefault(
+            c => string.Equals(c.DocumentId, decision.TargetDocumentId, StringComparison.Ordinal));
+        if (target is null)
+        {
+            // The LLM named a document id outside the evaluated candidate set — there is no
+            // known existing body to merge with or safely append to. Rather than trust an
+            // unverified id for an overwrite, fall through as a plain create.
+            _log.Warning(
+                "curation_update_target_unknown anchor={0} targetId={1} — creating instead",
+                operation.AnchorCanonicalName,
+                decision.TargetDocumentId ?? "(null)");
+            return operation;
+        }
+
+        return ApplyGuardedMergeOrAppend(
+            operation, decision.MergedBody, target.DocumentId, target.Content, [target.Content, operation.Content]);
+    }
+
+    /// <summary>
+    /// Write routing for a Consolidate decision, after <see cref="ExecuteConsolidationAsync"/>'s
+    /// re-anchor/tombstone side effects. Both tiers flow through
+    /// <see cref="ApplyGuardedMergeOrAppend"/> uniformly: the deterministic tier (fuzzy match
+    /// ≥80% overlap, no LLM call) never produces a <see cref="CurationDecision.MergedBody"/>,
+    /// so it always takes that method's append branch — the only lossless option available
+    /// without an LLM-synthesized merge. This also fixes the pre-Slice-3 gap where a
+    /// deterministic Consolidate reached the store with no guard at all
+    /// (<see cref="CurationRulesEvaluator.GuardDestructiveUpdate"/> is a no-op for Consolidate).
+    /// </summary>
+    private SQLiteMemoryCurationOperation ApplyConsolidate(
+        SQLiteMemoryCurationOperation operation,
+        CurationDecision decision,
+        IReadOnlyList<ExistingMemoryCandidate> candidates)
+    {
+        var canonicalAnchor = decision.CanonicalAnchorName ?? operation.AnchorCanonicalName;
+        var operationWithAnchor = operation with { AnchorCanonicalName = canonicalAnchor };
+
+        var consolidationTargets = decision.ConsolidationTargetIds is null
+            ? []
+            : candidates
+                .Where(c => decision.ConsolidationTargetIds.Contains(c.DocumentId, StringComparer.Ordinal))
+                .ToArray();
+
+        if (consolidationTargets.Length == 0)
+        {
+            // No known candidate content to merge/append against (e.g. an id the LLM invented,
+            // or a decision with no target ids at all) — nothing to preserve, so the store's
+            // own anchor-based lookup resolves the target document as it did before this slice.
+            return operationWithAnchor;
+        }
+
+        // Deterministic pick of the primary consolidation target: same ordering
+        // CurationRulesEvaluator uses for "best" (confidence, then freshness). Pinning the
+        // write to this SAME document — rather than trusting the store's separate
+        // updated_at-based anchor lookup — guarantees the write lands on the document
+        // MergeGuard actually validated content against.
+        var primary = consolidationTargets
+            .OrderByDescending(c => c.Confidence)
+            .ThenByDescending(c => c.FreshnessAtMs ?? 0)
+            .First();
+
+        var allSourceBodies = consolidationTargets.Select(c => c.Content).Append(operation.Content).ToArray();
+
+        return ApplyGuardedMergeOrAppend(
+            operationWithAnchor, decision.MergedBody, primary.DocumentId, primary.Content, allSourceBodies);
+    }
+
+    /// <summary>
+    /// Shared write routing for LLM-tier Update and deterministic/LLM-tier Consolidate
+    /// (memory-core-redesign Slice 3, design D5): validates a synthesized
+    /// <paramref name="mergedBody"/> against every source body via <see cref="MergeGuard"/>;
+    /// on pass, writes the merged body with MergeDocument semantics (the existing merge path).
+    /// On guard failure, or when no merged body was produced at all, falls back to a
+    /// structural append (existing target body + dated separator + proposal) with
+    /// AppendDocument semantics — unconditionally lossless because it is concatenation, unlike
+    /// an overwrite. This is what makes <see cref="MemoryUpdateSemantics.AppendDocument"/> a
+    /// real, reachable write path for the first time.
+    /// </summary>
+    private SQLiteMemoryCurationOperation ApplyGuardedMergeOrAppend(
+        SQLiteMemoryCurationOperation operation,
+        string? mergedBody,
+        string targetDocumentId,
+        string targetBody,
+        IReadOnlyList<string> allSourceBodies)
+    {
+        if (!string.IsNullOrWhiteSpace(mergedBody))
+        {
+            var guardResult = MergeGuard.Validate(allSourceBodies, mergedBody);
+            if (guardResult.Passed)
+            {
+                _log.Info(
+                    "curation_merge_guard_passed anchor={0} targetDoc={1} reason={2}",
+                    operation.AnchorCanonicalName,
+                    targetDocumentId,
+                    guardResult.Reason);
+
+                return operation with
+                {
+                    MemoryId = targetDocumentId,
+                    Content = mergedBody,
+                    UpdateSemantics = MemoryUpdateSemantics.MergeDocument.ToWireValue()
+                };
+            }
+
+            _log.Warning(
+                "curation_merge_guard_failed anchor={0} targetDoc={1} missingTokens=[{2}] reason={3}",
+                operation.AnchorCanonicalName,
+                targetDocumentId,
+                string.Join(",", guardResult.MissingTokens),
+                guardResult.Reason);
+        }
+
+        var appendedBody = BuildAppendedBody(targetBody, operation.Content);
+        _log.Info(
+            "curation_append_fallback anchor={0} targetDoc={1} hadMergedBody={2}",
+            operation.AnchorCanonicalName,
+            targetDocumentId,
+            !string.IsNullOrWhiteSpace(mergedBody));
+
+        return operation with
+        {
+            MemoryId = targetDocumentId,
+            Content = appendedBody,
+            UpdateSemantics = MemoryUpdateSemantics.AppendDocument.ToWireValue()
+        };
+    }
+
+    /// <summary>
+    /// Builds the structural-append body: the existing content, a dated provenance separator,
+    /// then the proposal — plain concatenation, so no source content can be lost. The date
+    /// comes from the store's own <see cref="TimeProvider"/> (<see cref="SQLiteMemoryStore.TimeProvider"/>)
+    /// rather than a second injected clock, so it stays consistent with the row's own
+    /// persisted timestamps and stays virtualizable in tests via the same seam.
+    /// </summary>
+    private string BuildAppendedBody(string existingBody, string proposalContent)
+    {
+        var isoDate = _store.TimeProvider.GetUtcNow().ToString("yyyy-MM-dd", System.Globalization.CultureInfo.InvariantCulture);
+        return $"{existingBody}\n\n---\n_[merged {isoDate}]_\n{proposalContent}";
     }
 
     private async Task ExecuteConsolidationAsync(
@@ -431,3 +928,13 @@ public sealed class MemoryCurationEvaluator
         }
     }
 }
+
+/// <summary>
+/// A curation decision paired with the exact candidate set it was evaluated against — see
+/// <see cref="MemoryCurationEvaluator.EvaluateAsync"/>'s remarks for why
+/// <see cref="MemoryCurationEvaluator.ApplyDecisionAsync"/> needs the same candidates rather
+/// than re-querying the store.
+/// </summary>
+public sealed record CurationEvaluation(
+    CurationDecision Decision,
+    IReadOnlyList<ExistingMemoryCandidate> Candidates);

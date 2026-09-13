@@ -54,6 +54,9 @@ public sealed class SkillCommandTests : IDisposable
     private Task<int> RunListAsync(DaemonApi? daemonApi)
         => SkillCommand.RunAsync(["skill", "list"], _paths, daemonApi, output: _output);
 
+    private Task<int> RunSyncAsync(DaemonApi? daemonApi)
+        => SkillCommand.RunAsync(["skill", "sync"], _paths, daemonApi, output: _output);
+
     // ── Success paths ─────────────────────────────────────────────────
 
     [Fact]
@@ -117,6 +120,131 @@ public sealed class SkillCommandTests : IDisposable
         var text = _output.ToString();
         Assert.Contains("No skills found", text);
         Assert.DoesNotContain(UnavailableMarker, text);
+    }
+
+    [Fact]
+    public async Task Sync_posts_to_the_daemon_and_reports_a_successful_pass()
+    {
+        var daemonApi = CreateDaemonApi(request =>
+        {
+            Assert.Equal(HttpMethod.Post, request.Method);
+            Assert.Equal("/api/skills/sync", request.RequestUri!.AbsolutePath);
+            Assert.Contains("Waiting for the daemon's skill sync pass", _output.ToString());
+            Assert.Contains("Ctrl+C", _output.ToString());
+            return FakeHttpMessageHandler.JsonResponse(new
+            {
+                passId = "pass-1",
+                sources = new[]
+                {
+                    new { name = "team", changedCount = 1, unchangedCount = 0, rejectedCount = 0, failedCount = 0, sidecar = "absent" },
+                },
+                inventory = new { succeeded = true, acceptedCount = 1, rejectedCount = 0 },
+            });
+        });
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(0, exit);
+        Assert.Contains("pass-1", _output.ToString());
+        Assert.Contains("team: ok", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Sync_returns_nonzero_for_a_partial_source_failure()
+    {
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            passId = "pass-2",
+            sources = new[]
+            {
+                new { name = "team", changedCount = 0, unchangedCount = 0, rejectedCount = 0, failedCount = 1, sidecar = "failed" },
+            },
+            inventory = new { succeeded = true, acceptedCount = 0, rejectedCount = 0 },
+        }));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("team: failed", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Sync_returns_nonzero_for_a_rejected_source_item()
+    {
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            passId = "pass-rejected",
+            sources = new[]
+            {
+                new { name = "team", changedCount = 0, unchangedCount = 0, rejectedCount = 1, failedCount = 0, sidecar = "complete", error = "The scanner rejected a skill." },
+            },
+            inventory = new { succeeded = true, acceptedCount = 0, rejectedCount = 0 },
+        }));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("The scanner rejected a skill.", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Sync_returns_nonzero_for_a_malformed_result()
+    {
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            passId = "",
+            sources = new[] { new { name = "", sidecar = "" } },
+            inventory = new { succeeded = true },
+        }));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("unreadable result", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Sync_explains_a_version_skewed_daemon_on_404()
+    {
+        var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(HttpStatusCode.NotFound));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Restart the daemon", _output.ToString());
+    }
+
+    [Theory]
+    [InlineData(HttpStatusCode.ServiceUnavailable, "cannot run the pass now (HTTP 503)")]
+    [InlineData(HttpStatusCode.InternalServerError, "returned HTTP 500")]
+    [InlineData(HttpStatusCode.Forbidden, "returned HTTP 403")]
+    public async Task Sync_distinguishes_an_http_failure_from_a_connection_failure(
+        HttpStatusCode status, string expected)
+    {
+        var daemonApi = CreateDaemonApi(_ => new HttpResponseMessage(status));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains(expected, _output.ToString());
+        Assert.DoesNotContain("could not reach", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Sync_returns_nonzero_when_only_the_inventory_refresh_fails()
+    {
+        var daemonApi = CreateDaemonApi(_ => FakeHttpMessageHandler.JsonResponse(new
+        {
+            passId = "pass-inventory-failure",
+            sources = Array.Empty<object>(),
+            inventory = new { succeeded = false, error = "The skill inventory refresh failed." },
+        }));
+
+        var exit = await RunSyncAsync(daemonApi);
+
+        Assert.Equal(1, exit);
+        Assert.Contains("Inventory: failed", _output.ToString());
+        Assert.Contains("The skill inventory refresh failed.", _output.ToString());
     }
 
     // ── Daemon-unavailable paths: report + exit 1, never a stack trace ──

@@ -36,12 +36,13 @@ public static class ChatMessageConverter
     /// lookup.
     /// </param>
     /// <param name="reinjectMeta">
-    /// Re-drive only. When true, the per-call meta hints persisted in
+    /// When true, the execution hints persisted in
     /// <c>SerializableToolCall.MetaJson</c> (stripped from <c>ArgumentsJson</c> at
     /// persistence) are re-injected as their canonical keys into the reconstructed
-    /// tool-call arguments, so a re-dispatched call reapplies the timeout/background/
-    /// rationale instead of silently falling back to defaults. Must stay false for
-    /// outbound provider history — the model must never receive meta keys.
+    /// tool-call arguments. A re-dispatched call then reapplies the timeout and
+    /// background hints instead of silently using defaults. The converter always
+    /// restores the rationale because provider history must show the required field.
+    /// Keep this value false for outbound provider history.
     /// </param>
     /// <param name="supportedModalities">
     /// When set, media references whose modality is not in this mask are dropped
@@ -89,19 +90,18 @@ public static class ChatMessageConverter
                     args = JsonSerializer.Deserialize<Dictionary<string, object?>>(tc.ArgumentsJson);
                 }
 
-                // Re-drive only: re-inject the persisted meta hints (stripped from
-                // ArgumentsJson at persistence) as canonical keys, so the re-dispatched
-                // call's extraction reapplies the timeout/background/rationale. Outbound
-                // provider history leaves them out — the model must not see meta keys.
-                if (reinjectMeta && ToolCallMeta.Parse(tc.MetaJson) is { } meta)
+                if (ToolCallMeta.Parse(tc.MetaJson) is { } meta)
                 {
                     args ??= new Dictionary<string, object?>(StringComparer.Ordinal);
                     if (meta.Rationale is not null)
                         args["_rationale"] = meta.Rationale;
-                    if (meta.TimeoutHintSeconds is { } timeoutSeconds)
-                        args["_timeout_seconds"] = timeoutSeconds;
-                    if (meta.Background)
-                        args["_background"] = true;
+                    if (reinjectMeta)
+                    {
+                        if (meta.TimeoutHintSeconds is { } timeoutSeconds)
+                            args["_timeout_seconds"] = timeoutSeconds;
+                        if (meta.Background)
+                            args["_background"] = true;
+                    }
                 }
 
                 var wireName = toolNameResolver?.Invoke(tc.Name.Value) ?? tc.Name.Value;

@@ -316,7 +316,7 @@ public sealed class DiscordGatewayActorTests(ITestOutputHelper output) : TestKit
             ContentScanner: new NullContentScanner(),
             AudienceProfiles: TestDiscordGatewayDeps.DefaultAudienceProfiles,
             ModelCapabilities: TestDiscordGatewayDeps.DefaultVisionCapableModel,
-            Paths: TestDiscordGatewayDeps.NewTestPaths(),
+                        StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
             ConversationPropsFactory: conversationPropsFactory,
             PromptInjectionDetector: SafePromptInjectionDetector.Instance);
     }

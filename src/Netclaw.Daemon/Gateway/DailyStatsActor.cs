@@ -33,10 +33,21 @@ public sealed class DailyStatsActor : ReceiveActor, IWithTimers
     private long _totalMemoriesRecalled;
     private long _totalSkillsLoaded;
 
+    /// <inheritdoc />
     public ITimerScheduler Timers { get; set; } = null!;
 
-    public DailyStatsActor(NetclawPaths paths, TimeProvider timeProvider, ILogger<DailyStatsActor> logger)
+    /// <summary>Creates an actor backed by the selected daemon database.</summary>
+    /// <param name="paths">The daemon filesystem paths.</param>
+    /// <param name="timeProvider">The clock used to group daily statistics.</param>
+    /// <param name="logger">The statistics logger.</param>
+    public DailyStatsActor(
+        NetclawPaths paths,
+        TimeProvider timeProvider,
+        ILogger<DailyStatsActor> logger)
     {
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(logger);
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = paths.SqliteDbPath,

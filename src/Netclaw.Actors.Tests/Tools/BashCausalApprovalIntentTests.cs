@@ -111,7 +111,7 @@ public sealed class BashCausalApprovalIntentTests
 
         try
         {
-            var policy = new PlatformTemporaryScopePolicy(
+            var policy = new TemporaryPathCorrectionPolicy(
                 BashEnvironment,
                 authoredTemp,
                 HostPlatformTemporaryPathInspector.Instance);
@@ -120,15 +120,19 @@ public sealed class BashCausalApprovalIntentTests
             var otherCommand =
                 $"cd {otherAlias} && inspect > result.log 2>&1; head result.log";
 
+            Assert.True(policy.IsEligiblePlatformTemporaryPath(authoredTemp));
+            Assert.True(policy.IsEligiblePlatformTemporaryPath(canonicalTemp));
+            Assert.True(policy.IsEligiblePlatformTemporaryPath(Path.Combine(authoredTemp, "result.log")));
+
             Assert.True(TryProject(
                 BashEnvironment,
                 allowedCommand,
-                policy.IsSafePlatformTemporaryPath,
+                policy.IsEligiblePlatformTemporaryPath,
                 out _));
             Assert.False(TryProject(
                 BashEnvironment,
                 otherCommand,
-                policy.IsSafePlatformTemporaryPath,
+                policy.IsEligiblePlatformTemporaryPath,
                 out _));
         }
         finally
@@ -150,7 +154,7 @@ public sealed class BashCausalApprovalIntentTests
         => TryProject(
             environment,
             command,
-            PlatformTemporaryScopePolicy.Create(environment).IsSafePlatformTemporaryPath,
+            TemporaryPathCorrectionPolicy.Create(environment).IsEligiblePlatformTemporaryPath,
             out projected);
 
     private static bool TryProject(

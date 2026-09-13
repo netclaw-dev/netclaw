@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Protocol;
+using Netclaw.Tools;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Security;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -19,11 +20,7 @@ namespace Netclaw.Actors.Sessions;
 /// audit messages (<see cref="SendUserMessage"/>, <see cref="SessionOutput"/>)
 /// and pre-formatted diagnostic lines (<see cref="SessionLogDiagnostic"/>)
 /// from the MEL logger provider, and is the sole writer to the file path
-/// computed by <see cref="SessionLogFile"/>.
-///
-/// Log files live at <c>{sessionLogsBase}/{sanitized_id}/session.log</c> — a
-/// tree deliberately separate from the agent-visible session working
-/// directory so the LLM cannot read its own audit trail via the file_read tool.
+/// computed from the resolved session storage paths.
 ///
 /// File handle lifecycle:
 /// - Open once in <see cref="PreStart"/> with append mode + read-share.
@@ -44,7 +41,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
     private static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
 
     private readonly SessionId _sessionId;
-    private readonly string _sessionLogsBasePath;
+    private readonly SessionLogPath _logPath;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _idleTimeout;
     private readonly ILoggingAdapter _log = Context.GetLogger();
@@ -54,13 +51,36 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
 
     public ITimerScheduler Timers { get; set; } = null!;
 
-    public static Props CreateProps(SessionId sessionId, string sessionLogsBasePath, TimeProvider timeProvider, TimeSpan? idleTimeout = null) =>
-        Props.Create(() => new SessionLogActor(sessionId, sessionLogsBasePath, timeProvider, idleTimeout ?? TimeSpan.FromMinutes(10)));
+    /// <summary>Creates a writer for one already resolved session log path.</summary>
+    /// <param name="sessionId">The owning session.</param>
+    /// <param name="logPath">The canonical path resolved for this writer.</param>
+    /// <param name="timeProvider">The clock used for audit timestamps.</param>
+    /// <param name="idleTimeout">The optional writer passivation timeout.</param>
+    /// <returns>Actor properties for the resolved writer.</returns>
+    public static Props CreatePropsForPath(
+        SessionId sessionId,
+        SessionLogPath logPath,
+        TimeProvider timeProvider,
+        TimeSpan? idleTimeout = null) =>
+        Props.Create(() => new SessionLogActor(
+            sessionId,
+            logPath,
+            timeProvider,
+            idleTimeout ?? TimeSpan.FromMinutes(10)));
 
-    public SessionLogActor(SessionId sessionId, string sessionLogsBasePath, TimeProvider timeProvider, TimeSpan idleTimeout)
+    /// <summary>Creates the sole writer for <paramref name="logPath"/>.</summary>
+    /// <param name="sessionId">The owning session.</param>
+    /// <param name="logPath">The canonical path resolved for this writer.</param>
+    /// <param name="timeProvider">The clock used for audit timestamps.</param>
+    /// <param name="idleTimeout">The writer passivation timeout.</param>
+    public SessionLogActor(
+        SessionId sessionId,
+        SessionLogPath logPath,
+        TimeProvider timeProvider,
+        TimeSpan idleTimeout)
     {
         _sessionId = sessionId;
-        _sessionLogsBasePath = sessionLogsBasePath;
+        _logPath = logPath;
         _timeProvider = timeProvider;
         _idleTimeout = idleTimeout;
 
@@ -84,7 +104,7 @@ public sealed class SessionLogActor : ReceiveActor, IWithTimers
         base.PreStart();
         Context.SetReceiveTimeout(_idleTimeout);
 
-        var logPath = SessionLogFile.GetLogPath(_sessionId, _sessionLogsBasePath);
+        var logPath = _logPath.Value;
         Directory.CreateDirectory(Path.GetDirectoryName(logPath)!);
 
         // Open once: append mode + read-share so concurrent readers (tail, diagnostics, tests)

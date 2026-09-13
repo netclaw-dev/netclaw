@@ -7,11 +7,11 @@
 Output "/tmp/tape-model-manager.gif"
 
 # ─── Seed configured roles ───────────────────────────────────────────
-Type "netclaw provider add alpha-models ollama --endpoint http://localhost:11434"
+Type "netclaw provider add alpha-models openai-compatible --endpoint __SMOKE_LLM_ENDPOINT__"
 Enter
 Wait+Screen@10s /Added provider 'alpha-models'/
 
-Type "netclaw provider add bravo-models ollama --endpoint http://localhost:11434"
+Type "netclaw provider add bravo-models openai-compatible --endpoint __SMOKE_LLM_ENDPOINT__"
 Enter
 Wait+Screen@10s /Added provider 'bravo-models'/
 

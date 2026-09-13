@@ -296,6 +296,28 @@ public sealed class ChatPageTests
     }
 
     [Fact]
+    public void ErrorOutput_EndsGenerationAndShowsRetryReadyState()
+    {
+        var vm = new TestChatViewModel(seed: null);
+        vm.SeedPendingInteractionForTesting(BuildApproval("pending approval"));
+        vm.IsGenerating.Value = true;
+        vm.IsInputEnabled.Value = false;
+        vm.StatusMessage.Value = "Generating...";
+
+        vm.ProcessOutputForTesting(new ErrorOutput
+        {
+            SessionId = new SessionId("tui/test"),
+            Message = "Provider rejected tools."
+        });
+
+        Assert.False(vm.IsGenerating.Value);
+        Assert.True(vm.IsInputEnabled.Value);
+        Assert.False(vm.HasPendingInteraction);
+        Assert.Empty(vm.ApprovalOptions);
+        Assert.Equal("Last request failed. Ready to retry.", vm.StatusMessage.Value);
+    }
+
+    [Fact]
     public async Task NarrowTerminal_PreservesCtrlOHint()
     {
         // 60-col terminal — narrower than the previous hard-coded 76-col
@@ -452,7 +474,7 @@ public sealed class ChatPageTests
                 ["Dropbox"] = ToolApprovalMode.Approval
             }
         };
-        var policy = new ToolAccessPolicy(
+        var policy = new ToolAccessPolicy(new NetclawPaths(),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -464,7 +486,12 @@ public sealed class ChatPageTests
         var executionContext = new ToolExecutionContext(
             new ToolRunScope
             {
-                Session = new ToolSessionScope.Bound("test-session", null),
+                Session = new ToolSessionScope.Bound(
+                    "test-session",
+                    SessionStoragePaths.CreateLegacy(
+                        Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-chat-page-session")),
+                        Path.GetFullPath(Path.Combine(Path.GetTempPath(), "netclaw-chat-page-logs")),
+                        "test-session")),
                 Audience = TrustAudience.Personal,
                 InlineOutputBudget = InlineOutputBudget.Default,
                 InteractiveApproval = new InteractiveApprovalCapability.Unavailable()

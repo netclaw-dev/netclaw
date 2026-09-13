@@ -16,26 +16,29 @@ public class BoundedOutputReaderTests
     public async Task DrainToWindow_short_output_returned_verbatim()
     {
         var input = "hello world";
-        var (text, truncated) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 100, CancellationToken.None);
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 100, CancellationToken.None);
         Assert.Equal(input, text);
         Assert.False(truncated);
+        Assert.False(cancelled);
     }
 
     [Fact]
     public async Task DrainToWindow_empty_input_returns_empty()
     {
-        var (text, truncated) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(""), 100, CancellationToken.None);
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(""), 100, CancellationToken.None);
         Assert.Equal("", text);
         Assert.False(truncated);
+        Assert.False(cancelled);
     }
 
     [Fact]
     public async Task DrainToWindow_output_exactly_at_cap_not_truncated()
     {
         var input = new string('a', 100);
-        var (text, truncated) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 100, CancellationToken.None);
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 100, CancellationToken.None);
         Assert.Equal(input, text);
         Assert.False(truncated);
+        Assert.False(cancelled);
     }
 
     [Fact]
@@ -47,9 +50,10 @@ public class BoundedOutputReaderTests
         var tail = new string('T', 100);
         var input = head + middle + tail;
 
-        var (text, truncated) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 200, CancellationToken.None);
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 200, CancellationToken.None);
 
         Assert.True(truncated);
+        Assert.False(cancelled); // budget cut, not a cancelled/grace cut
         Assert.StartsWith(new string('H', 100), text);  // head preserved
         Assert.EndsWith(new string('T', 100), text);    // tail preserved
         Assert.Contains("...", text);                    // separator present
@@ -61,9 +65,10 @@ public class BoundedOutputReaderTests
     {
         // budget=10 → headCap=5, tailCap=5
         var input = "AAAAAXXXXXXBBBBB"; // 16 chars: 5 head, 6 overflow discard, 5 tail
-        var (text, truncated) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 10, CancellationToken.None);
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 10, CancellationToken.None);
 
         Assert.True(truncated);
+        Assert.False(cancelled);
         Assert.StartsWith("AAAAA", text);
         Assert.EndsWith("BBBBB", text);
     }
@@ -72,9 +77,10 @@ public class BoundedOutputReaderTests
     public async Task DrainToWindow_disabled_cap_returns_full_output()
     {
         var input = new string('x', 10_000);
-        var (text, truncated) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 0, CancellationToken.None);
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(new StringReader(input), 0, CancellationToken.None);
         Assert.Equal(input, text);
         Assert.False(truncated);
+        Assert.False(cancelled);
     }
 
     [Fact]
@@ -86,10 +92,27 @@ public class BoundedOutputReaderTests
         // budget=10 → headCap=5 ("ABCDE"), tailCap=5; last 5 of "FGHIJKLMNO" = "KLMNO".
         var reader = new ChunkedReader("ABCDEFGHIJKLMNO", chunkSize: 3);
 
-        var (text, truncated) = await BoundedOutputReader.DrainToWindowAsync(reader, 10, CancellationToken.None);
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(reader, 10, CancellationToken.None);
 
         Assert.True(truncated);
+        Assert.False(cancelled);
         Assert.Equal($"ABCDE{Environment.NewLine}...{Environment.NewLine}KLMNO", text);
+    }
+
+    [Fact]
+    public async Task DrainToWindow_cancelled_before_eof_reports_cancelled_true()
+    {
+        // A source that never reaches EOF, like a pipe that a background child
+        // still holds open. The token must end the read before the source does.
+        // The return value must show this cut, not report a clean read, so a
+        // caller can flag a capture that might be partial.
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(50));
+
+        var (text, truncated, cancelled) = await BoundedOutputReader.DrainToWindowAsync(
+            new NeverEndingReader(), 100, cts.Token);
+
+        Assert.True(cancelled);
+        Assert.Equal("", text);
     }
 
     // ── Window (pure string head+tail) ──
@@ -160,7 +183,7 @@ public class BoundedOutputReaderTests
         var input = new string('H', 100) + new string('M', 5000) + new string('T', 100);
         const int budget = 200;
 
-        var (drainText, drainTruncated) = await BoundedOutputReader.DrainToWindowAsync(
+        var (drainText, drainTruncated, _) = await BoundedOutputReader.DrainToWindowAsync(
             new StringReader(input), budget, CancellationToken.None);
 
         var acc = new BoundedOutputAccumulator(budget);
@@ -188,6 +211,18 @@ public class BoundedOutputReaderTests
             data.AsSpan(_pos, n).CopyTo(buffer.Span);
             _pos += n;
             return ValueTask.FromResult(n);
+        }
+    }
+
+    // Stands in for a pipe that a background child still holds open: it never
+    // returns and never reaches EOF. Only the caller's token can end a read.
+    private sealed class NeverEndingReader : TextReader
+    {
+        [SlopwatchSuppress("SW004", "Infinite delay is the test fixture, not a timing guess: it stands in for a pipe that never reaches EOF, and only the caller's token can end the read.")]
+        public override async ValueTask<int> ReadAsync(Memory<char> buffer, CancellationToken cancellationToken = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            return 0; // unreachable: Task.Delay throws once cancellationToken fires
         }
     }
 }

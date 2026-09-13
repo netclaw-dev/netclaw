@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Embeddings;
 using Netclaw.Providers;
 
 namespace Netclaw.Cli.Doctor;
@@ -15,6 +16,11 @@ public static class DoctorRegistrationExtensions
         services.AddProviderDescriptors();
         services.AddSingleton<DoctorRunner>();
         services.AddSingleton<DoctorFixService>();
+        // Real allowlist for production; MemoryEmbeddingDoctorCheckTests supplies a small
+        // fixture-pointed allowlist directly to the type instead of using this registration.
+        services.AddSingleton<IReadOnlyDictionary<string, EmbeddingModelManifestEntry>>(EmbeddingModelProvisioner.Allowlist);
+        // Same pattern for the relevance-model manifest kind (memory-relevance-gate D3).
+        services.AddSingleton<IReadOnlyDictionary<string, RelevanceModelManifestEntry>>(EmbeddingModelProvisioner.RelevanceAllowlist);
         services.AddSingleton<IDoctorCheck, ConfigSchemaDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ToolAudienceProfilesDoctorCheck>();
         services.AddSingleton<IDoctorCheck, SecurityPolicyDoctorCheck>();
@@ -27,6 +33,8 @@ public static class DoctorRegistrationExtensions
         services.AddSingleton<IDoctorCheck, DaemonCrashDoctorCheck>();
         services.AddSingleton<IDoctorCheck, MemoryCheckpointHealthDoctorCheck>();
         services.AddSingleton<IDoctorCheck, MemoryCurationLlmDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, MemoryEmbeddingDoctorCheck>();
+        services.AddSingleton<IDoctorCheck, MemoryRelevanceGateDoctorCheck>();
         services.AddSingleton<IDoctorCheck, McpServersDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ChatClientDoctorCheck>();
         services.AddSingleton<IDoctorCheck, ContextWindowDoctorCheck>();

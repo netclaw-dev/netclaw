@@ -297,12 +297,6 @@ public sealed class WizardConfigBuilder
             }
         }
 
-        // Skill sync
-        config["SkillSync"] = new Dictionary<string, object>
-        {
-            ["DisableSystemSkillSync"] = false
-        };
-
         // External skills
         if (ExternalSkillSources is { Count: > 0 })
         {

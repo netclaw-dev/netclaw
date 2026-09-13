@@ -28,8 +28,10 @@ Log split — one stream, partitioned locally by session:
   id — nothing is duplicated locally.
 - `daemon.log` holds only sessionless, daemon-wide lines: startup/config, session
   start/stop, and operational **alerts** (e.g. the `provider.unreachable` /
-  `provider.failover` alert raised when an inference provider goes down — surfaced
-  here, and to webhooks, by the notification sink). Note the *per-call* failover/retry
+  `provider.failover` alert raised when an inference provider goes down, or
+  `memory.embedding_model.unavailable` / `memory.relevance_model.unavailable` when a
+  memory ONNX model fails to provision or load — surfaced here, and to webhooks, by
+  the notification sink). Note the *per-call* failover/retry
   log lines emitted while serving a specific session carry that session's id, so they
   partition into its `session.log`; the daemon-wide outage signal is the alert in
   `daemon.log`. Rolled daily, capped at 10 MB per file.
@@ -74,11 +76,17 @@ debugging a daemon-wide problem → read `daemon.log`.
 |---------|-------|
 | No LLM responses | `netclaw doctor`; verify provider credentials |
 | Missing tools | `netclaw mcp list`; check MCP connection state |
+| An MCP tool call fails | Grep `<NETCLAW_HOME>/logs/daemon-*.log` for `MCP tool '` and `invocation failed`. Each failed call writes one Warning that names the server, the tool, and the HTTP status when the server sent one. The tool-result text gives the kind: `reported a failure:` is an error the tool declared, and `failed:` is an exception from the server or the transport. |
 | Memory recall degraded | `netclaw status` memory section |
+| Memory embedding/relevance model unavailable | Fires a `memory.embedding_model.unavailable` / `memory.relevance_model.unavailable` operational alert (once per model per daemon run) naming the model, failure reason, and consequence when `Memory.Embeddings.Enabled=true` and either ONNX model fails to provision or load; see `netclaw-memory`'s Embeddings section and `netclaw doctor`'s Memory Embeddings / Memory Relevance Gate checks |
 | Daemon won't start | crash logs at `<NETCLAW_HOME>/logs/crash-*.log` (`NETCLAW_HOME` defaults to `~/.netclaw`) |
 | Docker daemon cannot create `/home/netclaw/.netclaw/*` | Official image entrypoint repairs writable bind mounts to UID/GID `1654:1654`; if bypassed or read-only, run `sudo chown -R 1654:1654 <host-data-dir>` or use a Docker named volume |
 | Discord/Slack channel offline | `netclaw status` shows the channel `disconnected` with a reason. Discord may also report `degraded` when Discord.Net says the socket is connected but the gateway is not ready, such as after a resumed session that Netclaw is replacing with a clean reconnect. A misconfigured channel (bad token, missing Discord Message Content intent) degrades only that channel — the daemon keeps running and other channels are unaffected. A transient network failure retries automatically; a config/permission failure stays offline until the operator fixes the config and restarts the daemon. |
 | `command not found` for `netclaw`/`dotnet`/a user tool from the shell tool when the daemon runs as a systemd service | The systemd `--user` service does not inherit your login-shell `PATH`; `netclaw daemon install` captures it into `~/.netclaw/config/daemon.env`. Run `netclaw doctor` (the **Systemd Unit PATH** check flags a missing/stale/legacy env file), then `netclaw doctor --fix` to rehydrate `PATH` from your current shell (or re-run `netclaw daemon install`), and finally `systemctl --user restart netclaw`. Installed a new tool after install? Its dir won't be seen until you re-run one of those and restart. Per-directory managers (`mise`/`asdf`/`direnv`) are not captured. |
+
+Slack health reads the live Socket Mode state. The connection supervisor checks this state every five seconds.
+A disconnect emits `channel.disconnected`. The supervisor retries with exponential backoff up to five minutes.
+A successful recovery emits `channel.reconnected`.
 
 If webhook notifications are configured, daemon crash paths emit
 `daemon.crashing` operational alerts with context (PID, reason, and latest known

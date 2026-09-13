@@ -39,7 +39,7 @@ public sealed class McpClientManagerStatusTests
             entry,
             challenge,
             hasCachedTokens: false,
-            hasOAuthRuntimeHints: true,
+            oauthChallenge: true,
             ErrorAt);
 
         Assert.Equal(McpConnectionState.AwaitingAuth, status.State);
@@ -48,7 +48,7 @@ public sealed class McpClientManagerStatusTests
     }
 
     [Fact]
-    public void BuildConnectionFailureStatus_ForNonOAuth403_ReturnsTransportErrorNotAwaitingAuth()
+    public void BuildConnectionFailureStatus_ForNonOAuth403_ReturnsAuthFailedNotAwaitingAuth()
     {
         var entry = new McpServerEntry
         {
@@ -57,9 +57,10 @@ public sealed class McpClientManagerStatusTests
         };
 
         // A plain 403 with no OAuth challenge (no WWW-Authenticate: Bearer, no discoverable
-        // protected-resource metadata) reaches us as a bare transport HttpRequestException --
-        // e.g. a Host-header allowlist rejection. Even with OAuth runtime hints and no cached
-        // tokens, this must surface as the real transport error, never "awaiting auth".
+        // protected-resource metadata) reaches us as a bare transport HttpRequestException.
+        // The server rejected the credential, so the status is AuthFailed and the message
+        // names the credential the operator configured. "Awaiting auth" would send them to
+        // `netclaw mcp auth`, which cannot repair a server that runs no OAuth flow.
         var status = McpClientManager.BuildConnectionFailureStatus(
             new McpServerName("playwright"),
             entry,
@@ -70,12 +71,13 @@ public sealed class McpClientManagerStatusTests
                 null,
                 HttpStatusCode.Forbidden),
             hasCachedTokens: false,
-            hasOAuthRuntimeHints: true,
+            oauthChallenge: false,
             ErrorAt);
 
         Assert.NotEqual(McpConnectionState.AwaitingAuth, status.State);
-        Assert.Equal(McpConnectionState.Unreachable, status.State);
+        Assert.Equal(McpConnectionState.AuthFailed, status.State);
         Assert.Contains("403 Forbidden", status.ErrorMessage);
+        Assert.Contains("credentials or headers", status.ErrorMessage);
         Assert.DoesNotContain("netclaw mcp auth", status.ErrorMessage);
         Assert.Equal(ErrorAt, status.LastErrorAt);
     }
@@ -94,7 +96,7 @@ public sealed class McpClientManagerStatusTests
             entry,
             new HttpRequestException(httpRequestError: HttpRequestError.Unknown, "Forbidden", null, HttpStatusCode.Forbidden),
             hasCachedTokens: true,
-            hasOAuthRuntimeHints: true,
+            oauthChallenge: false,
             ErrorAt);
 
         Assert.Equal(McpConnectionState.AuthFailed, status.State);
@@ -117,7 +119,7 @@ public sealed class McpClientManagerStatusTests
             entry,
             new HttpRequestException("Connection refused"),
             hasCachedTokens: false,
-            hasOAuthRuntimeHints: false,
+            oauthChallenge: false,
             ErrorAt);
 
         Assert.Equal(McpConnectionState.Unreachable, status.State);
@@ -150,7 +152,7 @@ public sealed class McpClientManagerStatusTests
             entry,
             spawnFailure,
             hasCachedTokens: false,
-            hasOAuthRuntimeHints: false,
+            oauthChallenge: false,
             ErrorAt);
 
         Assert.Equal(McpConnectionState.Unreachable, status.State);
@@ -179,7 +181,7 @@ public sealed class McpClientManagerStatusTests
             entry,
             exception,
             hasCachedTokens: false,
-            hasOAuthRuntimeHints: false,
+            oauthChallenge: false,
             ErrorAt);
         var oauthError = McpClientManager.CreateSafeOAuthError(exception, "connection initialization");
 

@@ -29,7 +29,7 @@ public class CaptureBenchmarks
     public async Task<int> Capture_then_inline_window()
     {
         var reader = new SyntheticCharReader(TotalChars);
-        var (captured, _) = await BoundedOutputReader.DrainToWindowAsync(reader, CaptureMax, CancellationToken.None);
+        var (captured, _, _) = await BoundedOutputReader.DrainToWindowAsync(reader, CaptureMax, CancellationToken.None);
         var inline = BoundedOutputReader.Window(captured, InlineBudget);
         return inline.Length;
     }

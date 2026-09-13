@@ -46,7 +46,7 @@ jobs:
         run: dotnet restore Netclaw.slnx
 
       - name: "Autoformat"
-        uses: rolfbjarne/autoformat@6651f9ce43cbbc99f74186f20fe17b8e9f8001a3 # v0.5
+        uses: rolfbjarne/autoformat@1eb5901b4133d6f137dfc19b2b12d0706aa49cce # v0.6
         with:
           script: 'dotnet format Netclaw.slnx --no-restore'
           onlyFilesModifiedInPullRequest: true

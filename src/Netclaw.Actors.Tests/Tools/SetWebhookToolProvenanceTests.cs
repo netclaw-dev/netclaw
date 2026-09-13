@@ -3,7 +3,11 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Akka.Actor;
+using Akka.Hosting;
+using Akka.Hosting.TestKit;
 using Netclaw.Actors.Tools;
+using Netclaw.Actors.Webhooks;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
@@ -16,26 +20,33 @@ namespace Netclaw.Actors.Tests.Tools;
 /// audience (transitive provenance, matching <c>set_reminder</c>) and cannot be
 /// minted above the creator's authority (downgrade-only escalation guard).
 /// </summary>
-public sealed class SetWebhookToolProvenanceTests : IDisposable
+public class SetWebhookToolProvenanceTests : TestKit, IDisposable
 {
     private readonly DisposableTempDir _dir = new();
-    private readonly WebhookRouteStore _store;
+    private WebhookRouteStore _store = null!;
+    private IActorRef _routeActor = null!;
 
-    public SetWebhookToolProvenanceTests()
+    public SetWebhookToolProvenanceTests(ITestOutputHelper output) : base(output: output) { }
+
+    protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
         var paths = new NetclawPaths(_dir.Path);
         paths.EnsureDirectoriesExist();
         _store = new WebhookRouteStore(paths);
+        builder.StartActors((system, _, _) =>
+        {
+            _routeActor = system.ActorOf(WebhookRouteActor.CreateProps(_store), "webhook-routes");
+        });
     }
 
-    public void Dispose() => _dir.Dispose();
+    void IDisposable.Dispose() => _dir.Dispose();
 
     private static ToolExecutionContext Context(TrustAudience audience)
         => TestToolExecutionContext.CreateUnbound(new TestToolExecutionContextOptions { Audience = audience });
 
     private async Task<string> CreateRouteAsync(string routeName, TrustAudience creator, string? requestedAudience)
     {
-        var tool = new SetWebhookTool(_store);
+        var tool = new SetWebhookTool(_routeActor);
         var args = new Dictionary<string, object?>
         {
             ["RouteName"] = routeName,
@@ -84,7 +95,7 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     [Fact]
     public async Task Notify_instructions_require_notification_target()
     {
-        var tool = new SetWebhookTool(_store);
+        var tool = new SetWebhookTool(_routeActor);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -103,7 +114,7 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     [Fact]
     public async Task Timestamped_hmac_settings_are_persisted()
     {
-        var tool = new SetWebhookTool(_store);
+        var tool = new SetWebhookTool(_routeActor);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -131,7 +142,7 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     [Fact]
     public async Task Timestamp_settings_are_rejected_for_body_hmac()
     {
-        var tool = new SetWebhookTool(_store);
+        var tool = new SetWebhookTool(_routeActor);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -149,7 +160,7 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     [Fact]
     public async Task Update_preserves_omitted_route_and_verification_settings()
     {
-        var tool = new SetWebhookTool(_store);
+        var tool = new SetWebhookTool(_routeActor);
         var createResult = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
             ["RouteName"] = "stripe-events",
@@ -210,7 +221,7 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     {
         var createResult = await CreateRouteAsync("team-route", TrustAudience.Team, requestedAudience: null);
         Assert.DoesNotContain("Error", createResult);
-        var tool = new SetWebhookTool(_store);
+        var tool = new SetWebhookTool(_routeActor);
 
         var updateResult = await tool.ExecuteAsync(new Dictionary<string, object?>
         {
@@ -234,7 +245,7 @@ public sealed class SetWebhookToolProvenanceTests : IDisposable
     [InlineData("téstamp")]
     public async Task Unusable_timestamp_field_names_are_rejected_before_save(string timestampField)
     {
-        var tool = new SetWebhookTool(_store);
+        var tool = new SetWebhookTool(_routeActor);
 
         var result = await tool.ExecuteAsync(new Dictionary<string, object?>
         {

@@ -31,24 +31,35 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
     }
 
     private readonly string _connectionString;
-    private readonly NetclawPaths _paths;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<SessionCatalogService> _logger;
+    private readonly ISessionStorageResolver _storageResolver;
     private readonly ISessionMetrics? _metrics;
 
+    /// <summary>Creates a catalog backed by the selected daemon database.</summary>
+    /// <param name="paths">The daemon filesystem paths.</param>
+    /// <param name="timeProvider">The clock used for catalog timestamps.</param>
+    /// <param name="storageResolver">The source of immutable session storage paths.</param>
+    /// <param name="logger">The catalog logger.</param>
+    /// <param name="metrics">Optional session metrics.</param>
     public SessionCatalogService(
         NetclawPaths paths,
         TimeProvider timeProvider,
+        ISessionStorageResolver storageResolver,
         ILogger<SessionCatalogService> logger,
         ISessionMetrics? metrics = null)
     {
-        _paths = paths;
+        ArgumentNullException.ThrowIfNull(paths);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(storageResolver);
+        ArgumentNullException.ThrowIfNull(logger);
         _connectionString = new SqliteConnectionStringBuilder
         {
             DataSource = paths.SqliteDbPath,
             Mode = SqliteOpenMode.ReadWriteCreate
         }.ToString();
         _timeProvider = timeProvider;
+        _storageResolver = storageResolver;
         _logger = logger;
         _metrics = metrics;
     }
@@ -61,7 +72,7 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
 
         try
         {
-            var logPath = SessionLogFile.GetLogPath(sessionId, _paths.SessionLogsDirectory);
+            var logPath = _storageResolver.Resolve(sessionId).LogPath.Value;
 
             using var conn = new SqliteConnection(_connectionString);
             conn.Open();
@@ -104,8 +115,8 @@ public sealed class SessionCatalogService : ISessionLifecycleObserver
             EnsureSchemaUpToDate(conn, _logger);
 
             using var cmd = conn.CreateCommand();
-                cmd.CommandText =
-                    """
+            cmd.CommandText =
+                """
                     UPDATE sessions SET
                     status = 'inactive'
                 WHERE persistence_id = $pid

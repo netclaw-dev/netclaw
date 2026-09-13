@@ -53,7 +53,7 @@ public class ShellDrainBenchmarks
     public async Task<int> BoundedDrain()
     {
         var reader = new SyntheticCharReader(TotalChars);
-        var (text, _) = await BoundedOutputReader.DrainToWindowAsync(reader, Cap, CancellationToken.None);
+        var (text, _, _) = await BoundedOutputReader.DrainToWindowAsync(reader, Cap, CancellationToken.None);
         return text.Length;
     }
 }

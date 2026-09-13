@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Collect failure artifacts from the native smoke harness — per-scenario
-# NETCLAW_HOME logs + config, the Ollama serve log, tape GIFs/PNGs, and
+# NETCLAW_HOME logs + config, the smoke LLM log and request record, tape GIFs/PNGs, and
 # harness stdout into a destination directory.
 #
 # Usage:
@@ -26,10 +26,10 @@ for f in /tmp/tape-*.gif /tmp/tape-*.png; do
 done
 
 if [[ -n "$RUN_ROOT" && -d "$RUN_ROOT" ]]; then
-  # Ollama serve log.
-  if [[ -f "$RUN_ROOT/ollama-serve.log" ]]; then
-    cp -v "$RUN_ROOT/ollama-serve.log" "$DEST_DIR/" 2>/dev/null || true
-  fi
+  # Smoke LLM diagnostics contain bounded metadata only.
+  for f in "$RUN_ROOT/smoke-llm.log" "$RUN_ROOT/smoke-llm-requests.jsonl"; do
+    [[ -f "$f" ]] && cp -v "$f" "$DEST_DIR/" 2>/dev/null || true
+  done
 
   # Harness stdout, if the run captured it.
   for f in "$RUN_ROOT"/*.log; do
@@ -55,7 +55,7 @@ if [[ -n "$RUN_ROOT" && -d "$RUN_ROOT" ]]; then
     done
   fi
 else
-  echo "    (no run root supplied; skipped NETCLAW_HOME + ollama log collection)" >&2
+  echo "    (no run root supplied; skipped NETCLAW_HOME and smoke-server diagnostics)" >&2
 fi
 
 echo "==> Artifacts gathered: $(ls "$DEST_DIR" 2>/dev/null | tr '\n' ' ')"

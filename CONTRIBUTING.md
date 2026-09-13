@@ -210,7 +210,7 @@ Prereleases ship to opt-in testers without touching any stable surface.
    Use the **dotted** `beta.N` form (`beta.1`, `beta.2`, … `beta.10`) — never `beta1`.
    A non-dotted identifier compares lexically (so `beta10` would rank below `beta2`), and
    the release version gate rejects it.
-2. Add a `RELEASE_NOTES.md` section for `0.23.0-beta.1`.
+2. Add a `RELEASE_NOTES.md` section for `0.23.0-beta.1` (`## 0.23.0-beta.1 (YYYY-MM-DD)`).
 3. Commit, then tag and push the full version (prefix `-` suffix):
    ```bash
    git tag 0.23.0-beta.1 && git push origin 0.23.0-beta.1

@@ -85,7 +85,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         CancellationToken ct,
         TimeProvider? timeProvider = null,
         ShellApprovalHarnessScope? scope = null,
-        SafeVerbList? safeVerbs = null)
+        SafeVerbList? safeVerbs = null,
+        IReadOnlyList<string>? deniedPaths = null)
     {
         var rootDirectory = Path.Combine(
             CanonicalTemporaryDirectory(),
@@ -93,7 +94,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             Guid.NewGuid().ToString("N"));
         var projectDirectory = Path.Combine(rootDirectory, "project");
         var sessionDirectory = Path.Combine(rootDirectory, "session");
-        var externalDirectory = Path.Combine(rootDirectory, "external");
+        var externalDirectory = Path.Combine(rootDirectory, "workspaces", "external");
         Directory.CreateDirectory(projectDirectory);
         Directory.CreateDirectory(sessionDirectory);
         Directory.CreateDirectory(externalDirectory);
@@ -107,7 +108,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             var windowsRoot = $"C:/netclaw-approval-matrix/{Guid.NewGuid():N}";
             approvalProjectDirectory = $"{windowsRoot}/project";
             approvalSessionDirectory = $"{windowsRoot}/session";
-            approvalExternalDirectory = $"{windowsRoot}/external";
+            approvalExternalDirectory = $"{windowsRoot}/workspaces/external";
         }
 
         var approvalShell = environment.Grammar == ShellGrammar.Bash
@@ -124,24 +125,44 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var persistentSeeds = approvals.Seeds
             .Where(seed => seed.Source == ApprovalSeedSource.Persistent)
             .ToList();
-        foreach (var seed in persistentSeeds)
+        // Seed all persistent grants in ONE Ask per audience instead of one Ask
+        // per grant. The actor's RecordStructuredToolApproval handler persists a
+        // whole grant list in a single locked, atomic write (ToolApprovalStore.AddApprovals
+        // -> one SaveLocked), so the resulting store state is equivalent to N sequential seed
+        // messages (the only divergence is per-entry CreatedAt stamping under a real clock,
+        // which is unobservable here: fixture tests run on a frozen FakeTimeProvider and no
+        // harness test asserts seed timestamps). It removes N-1 synchronous WriteThrough +
+        // Flush(flushToDisk: true) file
+        // rewrites from the test's critical path: the Ask deadline is a hard 5s wall clock,
+        // and under full-suite parallel load on Windows CI (Defender scanning each new
+        // tool-approvals.json in a fresh %TEMP% tree) per-write latency of the heaviest case
+        // (D10, 5 seeds) occasionally exceeded it. Grouping by audience preserves the
+        // per-seed audience semantics for every harness caller.
+        foreach (var audienceGroup in persistentSeeds.GroupBy(seed => seed.Audience))
         {
             await approvalService.RecordApprovalCandidatesAsync(
                 (ToolApprovalSessionId)"seed/persistent",
-                seed.Audience,
+                audienceGroup.Key,
                 new ToolName(ShellTool.ToolName),
-                [CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
-                    seed.Directory,
-                    approvalProjectDirectory,
-                    approvalSessionDirectory,
-                    approvalExternalDirectory))],
+                audienceGroup
+                    .Select(seed => CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
+                        seed.Directory,
+                        approvalProjectDirectory,
+                        approvalSessionDirectory,
+                        approvalExternalDirectory)))
+                    .ToList(),
                 persistent: true,
                 ct);
         }
 
         if (persistentSeeds.Count > 0)
         {
-            await approvalActor.GracefulStop(TimeSpan.FromSeconds(5));
+            // The stop waits for a persistence flush and the actor teardown.
+            // The budget bounds a multi-hop shutdown under a starved CI
+            // scheduler. It does not measure correctness. Every shell-approval
+            // test goes through this shared harness, so a short budget makes a
+            // whole suite flake at once.
+            await approvalActor.GracefulStop(TimeSpan.FromSeconds(15));
             approvalActor = CreateApprovalActor(actorSystem, store);
             approvalService = CreateApprovalService(approvalActor);
         }
@@ -162,18 +183,15 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var countingApprovalService = new CountingApprovalService(approvalService);
         var config = CreateConfig();
         var commandPolicy = new ShellCommandPolicy(environment);
-        var deniedPaths = environment.Platform == ShellPlatform.Windows
-            ? new[] { @"C:\protected\config" }
-            : [];
-        var pathPolicy = new ToolPathPolicy(environment, deniedPaths);
+        var effectiveDeniedPaths = deniedPaths ?? (environment.Platform == ShellPlatform.Windows
+            ? [@"C:\protected\config"]
+            : []);
+        var pathPolicy = new ToolPathPolicy(environment, effectiveDeniedPaths);
         var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(
-            config,
-            new NetclawPaths(),
-            pathPolicy,
-            commandPolicy);
+        registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config, commandPolicy, pathPolicy));
 
         var policy = new ToolAccessPolicy(
+            new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces")),
             config,
             new EffectivePolicyDefaults(
                 DeploymentPosture.Personal,
@@ -182,9 +200,6 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 UsedStrictFallback: false),
             shellCommandPolicy: commandPolicy,
             toolPathPolicy: pathPolicy,
-            shellTrustZonePolicy: new ShellTrustZonePolicy(
-                config,
-                new NetclawPaths(rootDirectory, Path.Combine(rootDirectory, "workspaces"))),
             safeVerbs: safeVerbs ?? SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows));
         var executor = new DispatchingToolExecutor(registry, policy, countingApprovalService);
 
@@ -284,9 +299,19 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         File.CreateSymbolicLink(Path.Combine(_projectDirectory, relativePath), externalFile);
     }
 
+    public void CreateProjectFileSymlink(string linkPath, string targetPath)
+    {
+        File.WriteAllText(Path.Combine(_projectDirectory, targetPath), "synthetic test data");
+        File.CreateSymbolicLink(
+            Path.Combine(_projectDirectory, linkPath),
+            Path.Combine(_projectDirectory, targetPath));
+    }
+
     public async ValueTask DisposeAsync()
     {
-        await _approvalActor.GracefulStop(TimeSpan.FromSeconds(5));
+        // Same reason as the seed-phase stop above: the budget bounds a
+        // multi-hop teardown under a starved CI scheduler, not correctness.
+        await _approvalActor.GracefulStop(TimeSpan.FromSeconds(15));
         if (Directory.Exists(_rootDirectory))
             Directory.Delete(_rootDirectory, recursive: true);
     }
