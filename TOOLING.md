@@ -29,7 +29,7 @@
 
 ## Focused Mutation Tests
 
-The path-access, tool authorization, and approval directory jobs run on each pull request, merge group, and `dev` push.
+The path-access, tool authorization, approval directory, and reminder execution jobs run on each pull request, merge group, and `dev` push.
 Each Linux job runs in parallel with the normal test matrix.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
@@ -44,6 +44,8 @@ coverage. They do not replace positive and negative behavior tests.
 | `ToolAccessPolicy.AuthorizeMcpInvocation` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ApprovalPatternMatching.EvaluateApprovalScope` | Folder grants require containment and reject link escape | 4 killed | `./scripts/run-approval-directory-mutations.sh` |
+| `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
+| `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 
 Run the same check locally:
 
@@ -129,6 +131,54 @@ The final local run took 41 seconds after package restore.
 The separate CI job retains a 10-minute timeout and uploads `approval-directory-mutation-report`.
 Its report directory is `artifacts/stryker/approval-directory`.
 
+### Reminder Execution Gate
+
+Run the reminder execution gate:
+
+```bash
+./scripts/run-reminder-execution-mutations.sh
+```
+
+The script reuses the xUnit 2 harness and selects four mutations:
+
+| Boundary | Expected mutant |
+|----------|-----------------|
+| Manager outcome ownership | Reverse the execution-ID comparison |
+| Manager acceptance reply | Remove the reply from `finally` |
+| Tracker removal ownership | Reverse the execution-ID comparison |
+| Tracker guard cleanup | Remove the dictionary removal |
+
+Each location must produce one killed mutant. The report must contain exactly four tested mutants.
+The gate fails if a target is absent, ignored, survives, exceeds its time limit, or cannot compile.
+The selector rejects absent or duplicate source markers before Stryker starts.
+Unrelated compiler errors do not count as tested mutants.
+
+Seven cases use the real manager, execution tracker, actor mailbox, definition store, and history store.
+An isolated host supplies the local Akka.Reminders scheduler with an in-memory store.
+The fixture observes execution IDs through the existing dispatch event and holds the session pipeline on a task.
+Actor replies provide barriers. The tests use no delay or sleep to wait for state.
+
+The stale-message cases complete attempt A, start attempt B, and replay A's completion or termination.
+They require B's guard, history, failure count, and alerts to remain unchanged.
+A current-termination control must record the failure and release its guard.
+Success and failure cases require the correct acceptance ID, history, failure count, and subsequent dispatch.
+A directory at the atomic-write path causes a real save failure; cleanup and the acceptance reply must still occur.
+
+These tests preserve PRD-008 SCHED-005 and SCHED-007.
+See [the execution and settlement contract](openspec/specs/netclaw-scheduling/spec.md) and
+[the history contract](openspec/specs/reminder-execution-history/spec.md).
+The fixture injects internal outcome messages and synthetic envelopes.
+It does not prove the child outcome producer, durable scheduler settlement, restart recovery, or external delivery.
+
+Stryker 5.0.0 omits statement removal when the statement contains an `out` keyword.
+It also filters the complete `finally` deletion when the acceptance-reply mutant exists.
+Thus, the cleanup mutant targets the tracker dictionary, not the manager's `TryRemove` call.
+An explicit local deletion of that call must also make the cleanup cases fail before this gate changes.
+
+The final local run took 95 seconds after package restore.
+The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
+Its report directory is `artifacts/stryker/reminder-execution`.
+
 ### Scope Review
 
 Review the target list after each security fix or authority policy change.
@@ -136,7 +186,7 @@ Also review it as part of each minor release.
 
 Add one focused target when all these conditions apply:
 
-- The code controls authorization, isolation, privacy, identity, or destructive access.
+- The code controls authorization, isolation, privacy, identity, destructive access, or execution ownership and cleanup.
 - A plausible mutation represents a specific unsafe behavior.
 - Deterministic tests reject that mutation.
 - A narrow source span contains the relevant decision.
