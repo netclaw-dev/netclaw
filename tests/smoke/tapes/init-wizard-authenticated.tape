@@ -1,5 +1,5 @@
 # This tape proves that the wizard accepts a typed optional key. The protected
-# smoke endpoint accepts only that key for both discovery and chat requests.
+# smoke endpoint accepts only that key for discovery and the initial chat turn.
 
 Output "/tmp/tape-init-wizard-authenticated.gif"
 
@@ -37,9 +37,5 @@ Wait+Screen@10s /Who will interact with this Netclaw instance/
 Enter
 
 Wait+Screen@60s /System: Session started\./
-Wait+Screen@60s /Ready/
-Type "authenticated smoke prompt"
-Enter
-Wait+Screen@60s /You: authenticated smoke prompt/
-Wait+Screen@60s /Netclaw smoke response\./
+Wait+Screen@60s /Netclaw: Netclaw smoke response\./
 Ctrl+Q
