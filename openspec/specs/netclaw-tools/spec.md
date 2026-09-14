@@ -4,6 +4,7 @@
 
 Define Netclaw's first-party and integrated tool execution behavior, including
 authorization, approval, and filesystem tooling.
+
 ## Requirements
 
 ### Requirement: First-party tool outcomes are machine-actionable
@@ -150,6 +151,7 @@ matching branches before tool execution.
 - **GIVEN** `file_list` has one argument shape
 - **WHEN** its schema is generated
 - **THEN** its existing object schema and accepted calls remain unchanged
+
 ### Requirement: Policy-gated tool invocation
 
 The system SHALL check ACL grants and approval policy before every tool
@@ -815,3 +817,107 @@ These checks do not prevent another process from replacing a directory after val
 - **GIVEN** an output directory that the protected-path policy denies for writes
 - **WHEN** the tool receives a response
 - **THEN** it returns `AccessDenied` without creating that directory or an output file
+
+### Requirement: Attachment tool accepts an authorized source path directly
+
+The parent-session model-visible `attach_file` definition SHALL tell the agent
+to pass the existing authorized source path directly. The agent SHALL NOT need
+to copy the file into managed temporary storage first.
+
+Netclaw SHALL retain the existing audience, read-deny, proximity, and safe-copy
+behavior. Subagents SHALL NOT receive this tool until an internal attachment
+handoff can deliver child attachments to the parent invocation.
+
+Example:
+
+```text
+interactive Personal parent model calls:
+  attach_file(Path = "/workspace/project/report.pdf")
+
+Netclaw:
+  authorizes the source path
+  copies it to the session attachment directory when required
+  returns the attachment through the parent invocation
+
+subagent:
+  does not receive, find, load, or dispatch attach_file
+  can report a saved path to the parent instead
+```
+
+Authority examples and counterexamples:
+
+| Caller and source | Required result |
+|---|---|
+| Interactive Personal parent with an authorized project file | Attach it directly. Copy it into the session when required. |
+| Parent with a protected credential path | Deny it. Core exposure does not bypass the read deny. |
+| Team or non-interactive parent with a source outside the session tree | Deny it through the existing proximity rule. |
+| Subagent with any source | Do not expose, find, load, or dispatch `attach_file`. |
+
+#### Scenario: Interactive Personal agent attaches an existing project file directly
+
+- **GIVEN** an interactive Personal parent session can attach an existing project file under current policy
+- **WHEN** the model needs to send that file to the user
+- **THEN** the initial tool set contains `attach_file`
+- **AND** its definition accepts the source path directly
+- **AND** Netclaw performs any required copy into the session attachments directory
+- **AND** no shell copy is required
+
+#### Scenario: Core exposure does not widen attachment reach
+
+- **GIVEN** the path access decision denies an attachment source
+- **WHEN** `attach_file` is present in the registered core
+- **THEN** the model-visible set still filters the tool by audience policy
+- **AND** the tool still rejects the denied source when invoked
+
+### Requirement: MCP tool outcomes are machine-actionable
+
+An MCP tool call that ends in an exception SHALL produce a tool receipt under the same rules as the requirement "First-party tool outcomes are machine-actionable". The category SHALL follow the failure kind: an HTTP 401 or 403 is `access_denied`, an HTTP 404 is `not_found`, and every other exception is `transient_failure`. The tool result SHALL stay a factual error string that names the tool. A tool-declared error is not an exception and SHALL keep its current result path. The receipt SHALL NOT grant authority, retry the call, or replay it.
+
+#### Scenario: HTTP 500 becomes a transient failure receipt
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 500
+- **WHEN** the adapter returns the tool result
+- **THEN** the outcome category is `transient_failure`
+- **AND** the tool result names the tool and the HTTP status
+- **AND** the receipt records no file activity
+
+#### Scenario: HTTP 403 becomes an access-denied receipt
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 403
+- **WHEN** the adapter returns the tool result
+- **THEN** the outcome category is `access_denied`
+- **AND** no authority changes
+
+#### Scenario: Tool-declared error keeps the result path
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 200 and a tool-declared error, for example `{"content":[{"type":"text","text":"Internal Server Error"}],"isError":true}`
+- **WHEN** the adapter returns the tool result
+- **THEN** the tool result carries the error text the tool declared
+- **AND** no exception outcome is produced
+- **AND** no reconnect occurs
+
+### Requirement: Tool execution telemetry carries authorization correlation
+
+Every local and MCP tool execution SHALL carry the call's PII-free authorization-attempt identifier into structured start and terminal-result telemetry. The identifier SHALL be internal execution metadata and SHALL NOT appear in model-visible tool definitions, tool arguments, or tool results. A tool implementation SHALL NOT be able to set approval state or use the identifier to change authorization.
+
+#### Scenario: Local tool execution is correlated
+
+- **WHEN** an authorized local tool starts and completes
+- **THEN** its structured start and terminal-result events use the same `AuthorizationAttemptId` as its authorization policy events
+
+#### Scenario: MCP tool execution is correlated
+
+- **WHEN** an authorized MCP tool starts and completes
+- **THEN** its structured start and terminal-result events use the same `AuthorizationAttemptId` as its authorization policy events
+- **AND** no MCP request or response field is added solely for this identifier
+
+#### Scenario: Model contract is unchanged
+
+- **WHEN** the runtime builds tool schemas or model-visible tool results
+- **THEN** the authorization-attempt identifier is absent from those contracts
+
+#### Scenario: Tool cannot grant itself access
+
+- **GIVEN** a tool implementation executes with its normal invocation context
+- **WHEN** it runs
+- **THEN** it cannot replace the authorization-attempt identifier or use it to seed an approval

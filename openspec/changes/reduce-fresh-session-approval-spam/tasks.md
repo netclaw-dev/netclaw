@@ -94,10 +94,10 @@
 - [x] 10.14 Add a seeded-project eval for declaration-before-tools, unrelated negative control, and rejected-path recovery.
 - [x] 10.15 Align always-loaded, subagent, tool-schema, and bundled-skill guidance without changing shell authority.
 - [x] 10.16 Run five final-image trials per case: project 5/5, negative 5/5, and rejected-path recovery 5/5.
-- [ ] 10.17 Deliver issue #1892, swap the exact merged binary, and validate new live project sessions.
+- [x] 10.17 Deliver issue #1892, swap the exact merged binary, and validate new live project sessions.
 - [x] 10.18 Freeze sanitized post-#1990 batching evidence and a strict five-run 3/5 behavior baseline.
 - [x] 10.19 Strengthen generic independent-operation guidance and rerun the unchanged five-session eval.
-- [ ] 10.20 Deliver, swap the exact merged binary, and validate multiple new live sessions.
+- [x] 10.20 Deliver, swap the exact merged binary, and validate multiple new live sessions.
 - [x] 10.21 Preserve the no-requester loop guard and limit user-denial guidance to the current user turn.
 
 ## 11. Completion Audit
