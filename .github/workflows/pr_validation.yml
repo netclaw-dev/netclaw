@@ -197,6 +197,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  approval-directory-mutation:
+    name: Approval Directory Mutation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Test approval directory mutants"
+        run: ./scripts/run-approval-directory-mutations.sh
+
+      - name: "Upload mutation report"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: approval-directory-mutation-report
+          path: ./artifacts/stryker/approval-directory
+          if-no-files-found: ignore
+          retention-days: 14
+
   copyright-headers:
     name: Copyright Headers
     runs-on: ubuntu-latest
