@@ -1,10 +1,29 @@
 # NetClaw Release Notes
 
-## Unreleased
+## 0.27.0-beta.4 (2026-09-14)
+
+Follow-up beta to 0.27.0-beta.3. Shell authorization is safer and less noisy on Windows, openai-compatible providers accept an optional API key, and OAuth token exchanges stay aligned with the MCP SDK.
+
+### Shell authorization
+
+- **Less Windows approval fatigue.** Netclaw reuses proven facts across similar PowerShell reviews and reduces the number of prompts you face ([#2177](https://github.com/netclaw-dev/netclaw/pull/2177)).
+- **Unsafe partial PowerShell analyses are denied.** Netclaw blocks PowerShell syntax it cannot analyze safely instead of guessing, and it keeps legacy deny patterns ([#2176](https://github.com/netclaw-dev/netclaw/pull/2176)).
+
+### Providers
+
+- **openai-compatible providers accept an optional API key.** Connect to endpoints that do not require a key ([#2148](https://github.com/netclaw-dev/netclaw/pull/2148)).
 
 ### MCP reliability
 
-- **OAuth token exchanges request JSON responses.** This keeps GitHub-compatible token endpoints aligned with the MCP SDK decoder ([#2141](https://github.com/netclaw-dev/netclaw/issues/2141)).
+- **OAuth token exchanges request JSON responses.** This keeps GitHub-compatible token endpoints aligned with the MCP SDK decoder ([#2141](https://github.com/netclaw-dev/netclaw/issues/2141), [#2167](https://github.com/netclaw-dev/netclaw/pull/2167)).
+
+### Security
+
+- **Path access mutation gate.** Netclaw blocks file-tool writes that mutate a path outside approved authority ([#2155](https://github.com/netclaw-dev/netclaw/pull/2155)).
+
+### Internal
+
+- Approval directory and tool authorization mutation gates plus focused smoke isolation tighten the test surface ([#2168](https://github.com/netclaw-dev/netclaw/pull/2168), [#2170](https://github.com/netclaw-dev/netclaw/pull/2170), [#2171](https://github.com/netclaw-dev/netclaw/pull/2171), [#2172](https://github.com/netclaw-dev/netclaw/pull/2172)).
 
 ## 0.27.0-beta.3 (2026-09-12)
 
