@@ -36,6 +36,7 @@ internal static class Program
     {
         int? port = null;
         string? requestRecordPath = null;
+        string? protectedApiKey = null;
 
         for (var index = 0; index < args.Length; index++)
         {
@@ -47,6 +48,9 @@ internal static class Program
                 case "--request-record" when index + 1 < args.Length:
                     requestRecordPath = args[++index];
                     break;
+                case "--protected-api-key" when index + 1 < args.Length:
+                    protectedApiKey = args[++index];
+                    break;
                 default:
                     throw new ArgumentException($"Unknown or incomplete argument '{args[index]}'.");
             }
@@ -56,14 +60,21 @@ internal static class Program
             throw new ArgumentException("The --port argument is required.");
         if (string.IsNullOrWhiteSpace(requestRecordPath))
             throw new ArgumentException("The --request-record argument is required.");
+        if (string.IsNullOrWhiteSpace(protectedApiKey))
+            throw new ArgumentException("The --protected-api-key argument is required.");
 
-        return new SmokeLlmServerOptions(port.Value, requestRecordPath);
+        return new SmokeLlmServerOptions(port.Value, requestRecordPath, protectedApiKey);
     }
 }
 
-public sealed record SmokeLlmServerOptions(int Port, string RequestRecordPath, IPAddress? Address = null)
+public sealed record SmokeLlmServerOptions(
+    int Port,
+    string RequestRecordPath,
+    string ProtectedApiKey,
+    IPAddress? Address = null)
 {
     public const string ModelId = "netclaw-smoke-tool-model";
+    public const string ProtectedRoutePrefix = "/test/protected";
 
     public IPAddress BindAddress => Address ?? IPAddress.Loopback;
 }
@@ -81,6 +92,8 @@ public static class SmokeLlmServerHost
             throw new ArgumentException("The smoke LLM server must bind to 127.0.0.1.", nameof(options));
         if (string.IsNullOrWhiteSpace(options.RequestRecordPath))
             throw new ArgumentException("The request record path is required.", nameof(options));
+        if (string.IsNullOrWhiteSpace(options.ProtectedApiKey))
+            throw new ArgumentException("The protected API key is required.", nameof(options));
 
         var requestRecorder = new RequestRecorder(options.RequestRecordPath);
         var builder = WebApplication.CreateBuilder();
@@ -90,21 +103,14 @@ public static class SmokeLlmServerHost
         var app = builder.Build();
         var skillFeed = new SkillFeedFixture();
         app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
-        app.MapGet("/v1/models", () => Results.Ok(new
-        {
-            @object = "list",
-            data = new[]
-            {
-                new
-                {
-                    id = SmokeLlmServerOptions.ModelId,
-                    @object = "model",
-                    created = 0,
-                    owned_by = "netclaw-smoke"
-                }
-            }
-        }));
-        app.MapPost("/v1/chat/completions", context => HandleCompletionAsync(context, requestRecorder));
+        app.MapGet("/v1/models", context => HandleModelsAsync(context, requestRecorder, null));
+        app.MapGet(
+            $"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/models",
+            context => HandleModelsAsync(context, requestRecorder, options.ProtectedApiKey));
+        app.MapPost("/v1/chat/completions", context => HandleCompletionAsync(context, requestRecorder, null));
+        app.MapPost(
+            $"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/chat/completions",
+            context => HandleCompletionAsync(context, requestRecorder, options.ProtectedApiKey));
         app.MapPost("/test/skill-feed/phase/{phase}", (string phase) =>
             skillFeed.SetPhase(phase)
                 ? Results.NoContent()
@@ -129,8 +135,59 @@ public static class SmokeLlmServerHost
         return addresses?.SingleOrDefault() ?? throw new InvalidOperationException("The smoke LLM server did not publish a listening address.");
     }
 
-    private static async Task HandleCompletionAsync(HttpContext context, RequestRecorder requestRecorder)
+    private static async Task HandleModelsAsync(
+        HttpContext context,
+        RequestRecorder requestRecorder,
+        string? protectedApiKey)
     {
+        var bearerAuthorized = IsBearerAuthorized(context.Request, protectedApiKey);
+        await requestRecorder.RecordAsync(
+            new SmokeRequestRecord(context.Request.Path, null, false, false, bearerAuthorized),
+            context.RequestAborted);
+
+        if (protectedApiKey is not null && !bearerAuthorized)
+        {
+            await WriteErrorAsync(
+                context.Response,
+                StatusCodes.Status401Unauthorized,
+                "A valid Bearer API key is required.");
+            return;
+        }
+
+        await context.Response.WriteAsJsonAsync(new
+        {
+            @object = "list",
+            data = new[]
+            {
+                new
+                {
+                    id = SmokeLlmServerOptions.ModelId,
+                    @object = "model",
+                    created = 0,
+                    owned_by = "netclaw-smoke"
+                }
+            }
+        }, cancellationToken: context.RequestAborted);
+    }
+
+    private static async Task HandleCompletionAsync(
+        HttpContext context,
+        RequestRecorder requestRecorder,
+        string? protectedApiKey)
+    {
+        var bearerAuthorized = IsBearerAuthorized(context.Request, protectedApiKey);
+        if (protectedApiKey is not null && !bearerAuthorized)
+        {
+            await requestRecorder.RecordAsync(
+                new SmokeRequestRecord(context.Request.Path, null, false, false, false),
+                context.RequestAborted);
+            await WriteErrorAsync(
+                context.Response,
+                StatusCodes.Status401Unauthorized,
+                "A valid Bearer API key is required.");
+            return;
+        }
+
         JsonDocument document;
         try
         {
@@ -154,7 +211,9 @@ public static class SmokeLlmServerHost
             var model = GetStringProperty(root, "model");
             var stream = root.TryGetProperty("stream", out var streamValue) && streamValue.ValueKind is JsonValueKind.True;
             var toolsPresent = root.TryGetProperty("tools", out var toolsValue) && toolsValue.ValueKind is JsonValueKind.Array;
-            await requestRecorder.RecordAsync(new SmokeRequestRecord("/v1/chat/completions", model, stream, toolsPresent), context.RequestAborted);
+            await requestRecorder.RecordAsync(
+                new SmokeRequestRecord(context.Request.Path, model, stream, toolsPresent, bearerAuthorized),
+                context.RequestAborted);
 
             if (model is not { } knownModel || !string.Equals(knownModel, SmokeLlmServerOptions.ModelId, StringComparison.Ordinal))
             {
@@ -239,6 +298,17 @@ public static class SmokeLlmServerHost
         => root.TryGetProperty(name, out var value) && value.ValueKind is JsonValueKind.String
             ? value.GetString()
             : null;
+
+    private static bool IsBearerAuthorized(HttpRequest request, string? protectedApiKey)
+    {
+        if (protectedApiKey is null)
+            return false;
+
+        return string.Equals(
+            request.Headers.Authorization,
+            $"Bearer {protectedApiKey}",
+            StringComparison.Ordinal);
+    }
 }
 
 internal sealed class SkillFeedFixture
@@ -304,7 +374,12 @@ internal sealed class SkillFeedFixture
         Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content))).ToLowerInvariant();
 }
 
-public sealed record SmokeRequestRecord(string Route, string? Model, bool Stream, bool ToolsPresent);
+public sealed record SmokeRequestRecord(
+    string Route,
+    string? Model,
+    bool Stream,
+    bool ToolsPresent,
+    bool BearerAuthorized);
 
 internal sealed class RequestRecorder
 {

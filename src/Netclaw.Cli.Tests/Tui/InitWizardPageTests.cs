@@ -149,6 +149,45 @@ public sealed class InitWizardPageTests : IDisposable
         Assert.Equal("https://api.ghe.example.com", vm.ProviderStep.VendorOptions["GitHubApiBase"]);
     }
 
+    [Fact]
+    public async Task OpenAiCompatibleInputs_AcceptTypedOptionalApiKey()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != "openai-compatible"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        foreach (var _ in _registry.Get("openai-compatible").DefaultEndpoint)
+            input.EnqueueKey(ConsoleKey.RightArrow);
+        foreach (var _ in _registry.Get("openai-compatible").DefaultEndpoint)
+            input.EnqueueKey(ConsoleKey.Backspace);
+        input.EnqueuePaste("http://gateway.example.com");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("sk-gateway-key");
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(cts.Token);
+        try
+        {
+            await WaitForConditionAsync(
+                () => vm.ProviderStep.ProbeCompletion?.IsCompleted == true,
+                cts.Token);
+
+            Assert.Equal("openai-compatible", vm.ProviderStep.SelectedProviderType);
+            Assert.Equal("http://gateway.example.com", vm.ProviderStep.EndpointInput);
+            Assert.Equal(AuthMethod.ApiKey, vm.ProviderStep.SelectedAuthMethod);
+            Assert.Equal("sk-gateway-key", vm.ProviderStep.ApiKeyInput);
+            Assert.NotNull(_fakeProbe.LastEntry);
+            Assert.Equal(AuthMethod.ApiKey, _fakeProbe.LastEntry.AuthMethod);
+            Assert.Equal("sk-gateway-key", _fakeProbe.LastEntry.ApiKey?.Value);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(cts.Token);
+        }
+    }
 
     // ── Config integrity: wizard choices must match written config ──────────
 
@@ -284,6 +323,15 @@ public sealed class InitWizardPageTests : IDisposable
         for (var i = 0; i < 30 && vm.Orchestrator.CurrentStep?.StepId != stepId; i++)
             vm.Orchestrator.GoNext();
         Assert.Equal(stepId, vm.Orchestrator.CurrentStep?.StepId);
+    }
+
+    private static async Task WaitForConditionAsync(Func<bool> predicate, CancellationToken ct)
+    {
+        while (!predicate())
+        {
+            ct.ThrowIfCancellationRequested();
+            await Task.Yield();
+        }
     }
 
     // Resolving TerminaApplication triggers NavigateTo("/init"), which calls the

@@ -8,10 +8,10 @@ It is test infrastructure. It is not a production inference provider.
 
 ## Run it
 
-The server requires a port and a request-record path.
+The server requires a port, a request-record path, and a protected API key.
 
 ```bash
-Netclaw.SmokeLlmServer --port 0 --request-record /tmp/smoke-requests.jsonl
+Netclaw.SmokeLlmServer --port 0 --request-record /tmp/smoke-requests.jsonl --protected-api-key test-key
 ```
 
 Port `0` asks Kestrel to select a free port.
@@ -27,7 +27,8 @@ OpenAI-compatible provider with that address.
 ## Safety boundary
 
 The server binds only to `127.0.0.1`.
-It has no authentication because only the local smoke harness can reach it.
+The base OpenAI-compatible routes require no authentication.
+The protected test routes require the configured Bearer key.
 Startup fails if a caller supplies another bind address.
 
 The server records only request metadata.
@@ -41,13 +42,16 @@ The record has at most 128 JSON lines.
 | `GET /health` | Returns `{ "status": "ok" }`. |
 | `GET /v1/models` | Returns the single `netclaw-smoke-tool-model` model. |
 | `POST /v1/chat/completions` | Returns a fixed assistant response. |
+| `GET /test/protected/v1/models` | Requires the configured Bearer key and returns the smoke model. |
+| `POST /test/protected/v1/chat/completions` | Requires the configured Bearer key and returns a fixed response. |
 
 The completion route accepts both normal JSON and streaming SSE requests.
 It rejects missing or unknown model identifiers with HTTP 400.
 
-For each completion request, the server records:
+The server records the route and Bearer result for each model or completion request.
 
-- The route.
+For each completion request, the server also records:
+
 - The requested model identifier.
 - The stream flag.
 - Whether the request contains a `tools` array.

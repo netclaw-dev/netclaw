@@ -17,6 +17,8 @@ Backspace 32
 Type "__SMOKE_LLM_ENDPOINT__"
 Enter
 
+Wait+Screen@10s /API key \(optional\)/
+Enter
 Wait+Screen@45s /Select a model/
 Enter
 Wait+Screen@10s /Agent name:/
