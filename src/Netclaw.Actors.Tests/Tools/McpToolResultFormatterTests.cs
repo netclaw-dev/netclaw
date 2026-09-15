@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tools;
@@ -134,4 +135,48 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Null_result_is_empty()
         => Assert.Equal(string.Empty, McpToolResultFormatter.Format(null, "srv/tool"));
+
+    [Fact]
+    public void Multi_content_AIContent_array_projects_text_and_image_marker()
+    {
+        var chartJson = """{"title":"Example title","series":[]}""";
+        var result = new AIContent[]
+        {
+            new DataContent(new byte[] { 1, 2, 3 }, "image/png"),
+            new TextContent(chartJson),
+        };
+
+        var message = McpToolResultFormatter.Format(result, "srv/chart");
+
+        Assert.Equal($"[image: image/png]\n{chartJson}", message);
+        Assert.DoesNotContain("AIContent", message);
+    }
+
+    [Fact]
+    public void Image_only_AIContent_array_projects_marker_only()
+    {
+        var result = new AIContent[] { new DataContent(Array.Empty<byte>(), "image/jpeg") };
+
+        Assert.Equal("[image: image/jpeg]", McpToolResultFormatter.Format(result, "srv/tool"));
+    }
+
+    [Fact]
+    public void Text_only_AIContent_array_projects_text()
+    {
+        var result = new AIContent[] { new TextContent("hello world") };
+
+        Assert.Equal("hello world", McpToolResultFormatter.Format(result, "srv/tool"));
+    }
+
+    [Fact]
+    public void Single_TextContent_is_passed_through()
+        => Assert.Equal("done", McpToolResultFormatter.Format(new TextContent("done"), "srv/tool"));
+
+    [Fact]
+    public void Non_image_DataContent_projects_attachment_marker()
+    {
+        var result = new AIContent[] { new DataContent(new byte[] { 4, 5 }, "application/pdf") };
+
+        Assert.Equal("[attachment: application/pdf]", McpToolResultFormatter.Format(result, "srv/tool"));
+    }
 }
