@@ -908,7 +908,10 @@ public sealed class McpClientManagerLifecycleTests
         var cache = harness.Credentials.CreateTokenCache(
             ServerName,
             entry.Url!,
-            "static-client",
+            new McpOAuthClientIdentity(
+                "static-client",
+                clientSecret: null,
+                dynamicClientRegistration: false),
             explicitAuthorization: true);
         await cache.StoreTokensAsync(
             new TokenContainer

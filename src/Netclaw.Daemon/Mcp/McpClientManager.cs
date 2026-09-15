@@ -1251,7 +1251,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             oauthCache = _credentialStore.CreateTokenCache(
                 name,
                 entry.Url!,
-                entry.OAuthClientId,
+                CreateConfiguredOAuthIdentity(name, entry),
                 authorizationFlow is not null);
         }
 
@@ -1263,7 +1263,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // client records for servers the operator never opted into.
             if (oauthCache is not null
                 && authorizationFlow is not null
-                && _credentialStore.GetIdentity(oauthCache).ClientId is null)
+                && _credentialStore.GetIdentity(oauthCache) is null)
             {
                 var registered = await _registrar.TryRegisterAsync(
                     name,
@@ -1416,8 +1416,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         return new ClientOAuthOptions
         {
             RedirectUri = BuildRedirectUri(),
-            ClientId = entry.OAuthClientId ?? identity.ClientId,
-            ClientSecret = entry.OAuthClientId is null ? identity.ClientSecret : null,
+            ClientId = identity?.ClientId,
+            ClientSecret = identity?.ClientSecret?.Value,
             Scopes = ParseScopes(entry.OAuthScope),
             TokenCache = cache,
 
@@ -1428,6 +1428,27 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             // register against public-client-only servers (csharp-sdk#1611). A non-null
             // ClientId here short-circuits the SDK's registration path entirely.
         };
+    }
+
+    private static McpOAuthClientIdentity? CreateConfiguredOAuthIdentity(
+        McpServerName serverName,
+        McpServerEntry entry)
+    {
+        if (entry.OAuthClientId is { } clientId)
+        {
+            return new McpOAuthClientIdentity(
+                clientId,
+                entry.OAuthClientSecret,
+                dynamicClientRegistration: false);
+        }
+
+        if (entry.OAuthClientSecret is not null)
+        {
+            throw new InvalidOperationException(
+                $"MCP server '{serverName.Value}' has an OAuth client secret without a client ID.");
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -1705,12 +1726,15 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 return;
             }
 
+            var hasConfiguredClientSecret = _serverEntries.TryGetValue(serverName, out var entry)
+                                            && !string.IsNullOrWhiteSpace(entry.OAuthClientId)
+                                            && !entry.OAuthClientSecret.IsNullOrEmpty();
             var missing = new List<string>();
             if (string.IsNullOrWhiteSpace(record.AuthorizationServer))
                 missing.Add("AuthorizationServer");
             if (string.IsNullOrWhiteSpace(record.ClientId))
                 missing.Add("ClientId");
-            if (record.ClientSecret is null)
+            if (record.ClientSecret is null && !hasConfiguredClientSecret)
                 missing.Add("ClientSecret");
             if (string.IsNullOrWhiteSpace(record.TokenEndpointAuthMethod))
                 missing.Add("TokenEndpointAuthMethod");
@@ -1722,7 +1746,8 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             _logger.LogWarning(
                 "OAuth refresh failure diagnostics for MCP server '{Name}': stored record has refreshToken={HasRefresh}, " +
                 "accessToken={HasAccess}, expiresAt={ExpiresAt:o}, dynamicClientRegistration={Dcr}, " +
-                "bindingFieldsMissing=[{Missing}], authorizationServer={AuthServer}. " +
+                "configuredClientSecret={HasConfiguredClientSecret}, bindingFieldsMissing=[{Missing}], " +
+                "authorizationServer={AuthServer}. " +
                 "The SDK 2.0 refresh gate requires AuthorizationServer, ClientId, ClientSecret, and " +
                 "TokenEndpointAuthMethod to all match the live provider; missing fields mean refresh is " +
                 "never attempted and every expiration falls through to interactive auth (the 'null " +
@@ -1732,6 +1757,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
                 hasAccessToken,
                 expiresAt,
                 record.DynamicClientRegistration,
+                hasConfiguredClientSecret,
                 string.Join(", ", missing),
                 record.AuthorizationServer ?? "<null>");
         }

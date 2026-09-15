@@ -829,6 +829,7 @@
           "Enabled": { "type": "boolean", "default": true },
           "GrantCategory": { "type": ["string", "null"] },
           "OAuthClientId": { "type": ["string", "null"] },
+          "OAuthClientSecret": false,
           "OAuthScope": { "type": ["string", "null"] }
         },
         "additionalProperties": false

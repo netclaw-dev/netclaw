@@ -6,6 +6,7 @@
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 
 namespace Netclaw.Daemon.Mcp;
@@ -145,7 +146,10 @@ internal sealed class McpOAuthClientRegistrar(
             authMethod,
             issuer);
 
-        return new McpOAuthClientIdentity(clientId, clientSecret, DynamicClientRegistration: true);
+        return new McpOAuthClientIdentity(
+            clientId,
+            clientSecret is null ? null : new SensitiveString(clientSecret),
+            dynamicClientRegistration: true);
     }
 
     private async Task<(string Issuer, string? RegistrationEndpoint, IReadOnlyList<string> AuthMethods)?>

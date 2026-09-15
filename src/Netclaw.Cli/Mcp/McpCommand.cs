@@ -68,9 +68,10 @@ internal static class McpCommand
         TextWriter writer,
         DaemonApi? daemonApi = null)
     {
-        // Parse: netclaw mcp add [--transport <type>] [--client-id <id>] [--scope <scopes>] [--env KEY=VALUE]... [--header "Key: Value"]... [--grant-all] [--auth] <name> [command/url] [-- args...]
+        // Parse the add options and positional server data.
         string? transport = null;
         string? oauthClientId = null;
+        string? oauthClientSecret = null;
         string? oauthScope = null;
         var envVars = new Dictionary<string, string>();
         var headers = new Dictionary<string, string>();
@@ -121,6 +122,12 @@ internal static class McpCommand
                 continue;
             }
 
+            if (args[i] == "--client-secret" && i + 1 < args.Length)
+            {
+                oauthClientSecret = args[++i];
+                continue;
+            }
+
             if (args[i] == "--scope" && i + 1 < args.Length)
             {
                 oauthScope = args[++i];
@@ -146,6 +153,18 @@ internal static class McpCommand
             }
 
             positional.Add(args[i]);
+        }
+
+        if (oauthClientSecret is not null && string.IsNullOrWhiteSpace(oauthClientSecret))
+        {
+            writer.WriteLine("Error: --client-secret requires a non-empty value.");
+            return 1;
+        }
+
+        if (oauthClientSecret is not null && string.IsNullOrWhiteSpace(oauthClientId))
+        {
+            writer.WriteLine("Error: --client-secret requires --client-id.");
+            return 1;
         }
 
         if (positional.Count < 1)
@@ -219,24 +238,57 @@ internal static class McpCommand
 
         ApplySecureDefaultsForNewServer(config, serverName, grantAll);
 
+        var configBefore = File.Exists(paths.NetclawConfigPath)
+            ? File.ReadAllText(paths.NetclawConfigPath)
+            : null;
         WriteConfigFile(paths.NetclawConfigPath, config);
 
-        // Write sensitive values to secrets.json
-        if (envVars.Count > 0 || headers.Count > 0)
+        try
         {
-            UpdateSecretsFile(paths, secrets =>
+            // Replace this profile's sensitive values in secrets.json.
+            var hasServerSecrets = envVars.Count > 0 || headers.Count > 0 || oauthClientSecret is not null;
+            ConfigFileHelper.UpdateSecretsFile(paths, (secrets, fileExisted) =>
             {
+                if (!fileExisted && !hasServerSecrets)
+                    return false;
+
                 var secretMcp = GetOrCreateSection(secrets, "McpServers");
+                if (!hasServerSecrets)
+                    return secretMcp.Remove(serverName.Value);
+
                 var serverSecrets = new Dictionary<string, object>();
 
                 if (envVars.Count > 0)
                     serverSecrets["EnvironmentVariables"] = envVars;
                 if (headers.Count > 0)
                     serverSecrets["Headers"] = headers;
+                if (oauthClientSecret is not null)
+                    serverSecrets["OAuthClientSecret"] = oauthClientSecret;
 
                 secretMcp[serverName.Value] = JsonSerializer.SerializeToElement(serverSecrets);
                 return true;
             });
+        }
+        catch (Exception secretError)
+        {
+            try
+            {
+                if (configBefore is null)
+                    File.Delete(paths.NetclawConfigPath);
+                else
+                    AtomicFile.WriteAllText(paths.NetclawConfigPath, configBefore);
+            }
+            catch (Exception rollbackError)
+            {
+                throw new AggregateException(
+                    "The MCP secret update and configuration rollback both failed.",
+                    secretError,
+                    rollbackError);
+            }
+
+            throw new IOException(
+                "The MCP secret update failed. Netclaw restored the prior configuration.",
+                secretError);
         }
 
         writer.WriteLine($"Added MCP server '{serverName.Value}' ({transport})");
@@ -762,6 +814,8 @@ internal static class McpCommand
 
         if (entry.OAuthClientId is not null)
             writer.WriteLine($"Client ID:  {entry.OAuthClientId}");
+        if (entry.OAuthClientSecret is not null)
+            writer.WriteLine("Client secret: configured");
         if (entry.OAuthScope is not null)
             writer.WriteLine($"Scope:      {entry.OAuthScope}");
 
@@ -959,9 +1013,6 @@ internal static class McpCommand
     private static void WriteConfigFile(string path, Dictionary<string, object> data)
         => ConfigFileHelper.WriteConfigFile(path, data);
 
-    private static void UpdateSecretsFile(NetclawPaths paths, Func<Dictionary<string, object>, bool> update)
-        => ConfigFileHelper.UpdateSecretsFile(paths, (secrets, _) => update(secrets));
-
     internal static Dictionary<string, McpServerEntry> LoadMcpServers(NetclawPaths paths)
     {
         // Merge netclaw.json and secrets.json McpServers sections
@@ -1010,6 +1061,15 @@ internal static class McpCommand
                         var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, h.Value.GetString());
                         entry.Headers[h.Name] = new SensitiveString(decrypted);
                     }
+                }
+
+                if (prop.Value.TryGetProperty("OAuthClientSecret", out var clientSecret))
+                {
+                    var storedSecret = clientSecret.GetString()
+                        ?? throw new InvalidDataException(
+                            $"MCP server '{prop.Name}' has an invalid OAuthClientSecret value.");
+                    var decrypted = ConfigFileHelper.DecryptIfEncrypted(paths, storedSecret);
+                    entry.OAuthClientSecret = new SensitiveString(decrypted);
                 }
             }
         }
@@ -1503,6 +1563,11 @@ internal static class McpCommand
         writer.WriteLine("  --auth       Start the OAuth flow immediately after adding (HTTP/SSE only).");
         writer.WriteLine("  --client-id  Pre-registered OAuth client ID for servers that do not support");
         writer.WriteLine("               dynamic client registration.");
+        writer.WriteLine("  --client-secret  Secret for a pre-registered confidential OAuth client.");
+        writer.WriteLine("                   The CLI stores this value in encrypted configuration.");
+        writer.WriteLine("                   This option requires --client-id.");
+        writer.WriteLine("                   Caution: shell history and process inspection can expose");
+        writer.WriteLine("                   this value. Use this option only on a trusted host.");
         writer.WriteLine();
         writer.WriteLine("On add, HTTP/SSE servers without an Authorization header print a hint to run");
         writer.WriteLine("`netclaw mcp auth` first. The daemon detects OAuth requirements at auth time.");
@@ -1510,6 +1575,7 @@ internal static class McpCommand
         writer.WriteLine("Examples:");
         writer.WriteLine("  netclaw mcp add --transport stdio memorizer -- npx -y @memorizer/mcp-server");
         writer.WriteLine("  netclaw mcp add --transport http --header \"Authorization: Bearer tok-...\" myapi https://api.example.com/mcp");
+        writer.WriteLine("  netclaw mcp add --transport http --client-id CLIENT_ID --client-secret CLIENT_SECRET confidential https://mcp.example.com");
         writer.WriteLine("  netclaw mcp add --transport http textforge https://textforge.net/mcp");
         writer.WriteLine("  netclaw mcp add --grant-all --transport stdio trusted -- /usr/local/bin/trusted");
         writer.WriteLine("  netclaw mcp auth forge");

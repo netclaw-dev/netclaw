@@ -99,6 +99,37 @@ public sealed class ConfigSchemaDoctorCheckTests
         Assert.Equal(DoctorSeverity.Pass, result.Severity);
     }
 
+    [Theory]
+    [InlineData("plaintext-client-secret")]
+    [InlineData("ENC:encrypted-client-secret")]
+    public async Task ReturnsError_WhenMcpOAuthClientSecretAppearsInPublicConfig(string clientSecret)
+    {
+        var basePath = CreateTempBasePath();
+        var paths = new NetclawPaths(basePath);
+        paths.EnsureDirectoriesExist();
+
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            $$"""
+            {
+              "configVersion": 1,
+              "McpServers": {
+                "github": {
+                  "Transport": "http",
+                  "Url": "https://api.githubcopilot.com/mcp/",
+                  "OAuthClientId": "configured-client",
+                  "OAuthClientSecret": "{{clientSecret}}"
+                }
+              }
+            }
+            """,
+            TestContext.Current.CancellationToken);
+
+        var check = new ConfigSchemaDoctorCheck(paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Error, result.Severity);
+    }
+
     [Fact]
     public async Task ReturnsError_WhenConfigAttemptsToSelectPersistence()
     {
