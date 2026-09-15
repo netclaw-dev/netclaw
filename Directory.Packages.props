@@ -136,7 +136,7 @@
        ships linux-x64 + linux-arm64 native assets. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
-    <PackageVersion Include="FastBertTokenizer" Version="1.0.28" />
+    <PackageVersion Include="FastBertTokenizer" Version="1.2.6" />
     <!-- Pinned to 10.0.10 (matches $(MicrosoftAspNetCoreVersion)), not the lowest version that
          compiles: Microsoft.Extensions.AI 10.8.0 already pulls System.Numerics.Tensors
          >= 10.0.10 transitively, and CentralPackageTransitivePinningEnabled requires the
