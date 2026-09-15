@@ -58,8 +58,8 @@ internal static class PluginPackageSelector
         bool hasMcpConfig,
         string commit)
     {
-        if (HasRecognizedAgentPluginSchema(agentPluginManifest))
-            return AgentPluginAdapter.Parse(agentPluginManifest!, hasMcpConfig, commit);
+        if (agentPluginManifest is not null)
+            return AgentPluginAdapter.Parse(agentPluginManifest, hasMcpConfig, commit);
         return ParseRequired(CodexAdapter, codexManifest, hasMcpConfig, commit);
     }
 
@@ -72,26 +72,6 @@ internal static class PluginPackageSelector
         if (manifest is null)
             throw new GitSkillPluginRejectedException(commit, $"The {adapter.Format} plugin manifest is missing.");
         return adapter.Parse(manifest, hasMcpConfig, commit);
-    }
-
-    private static bool HasRecognizedAgentPluginSchema(byte[]? manifest)
-    {
-        if (manifest is null)
-            return false;
-        try
-        {
-            using var document = JsonDocument.Parse(
-                Encoding.UTF8.GetString(manifest),
-                new JsonDocumentOptions { MaxDepth = 32 });
-            return document.RootElement.ValueKind == JsonValueKind.Object
-                && document.RootElement.TryGetProperty("$schema", out var schema)
-                && schema.ValueKind == JsonValueKind.String
-                && string.Equals(schema.GetString(), AgentPluginSchema, StringComparison.Ordinal);
-        }
-        catch (JsonException)
-        {
-            return false;
-        }
     }
 
     private sealed class AgentPluginPackageAdapter : IPluginPackageAdapter

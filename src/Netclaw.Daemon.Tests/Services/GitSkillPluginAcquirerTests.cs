@@ -216,6 +216,27 @@ public sealed class GitSkillPluginAcquirerTests : IDisposable
         Assert.Contains("Agent Plugins manifest name", error.Message);
     }
 
+    [Theory]
+    [InlineData("{", "JSON")]
+    [InlineData("{ \"name\": \"portable.plugin\" }", "schema")]
+    [InlineData("{ \"$schema\": \"https://agent-plugins.org/schemas/2.0.0/plugin.schema.json\", \"name\": \"portable.plugin\" }", "schema")]
+    public async Task Acquire_auto_rejects_an_invalid_portable_root_even_with_a_valid_Codex_manifest(
+        string portableManifest,
+        string expectedReason)
+    {
+        var archive = CreateArchive(
+            ("repo/plugin.json", portableManifest, TarEntryType.RegularFile),
+            ("repo/.codex-plugin/plugin.json", Manifest("1.0.0"), TarEntryType.RegularFile),
+            ("repo/skills/alpha/SKILL.md", Skill("alpha"), TarEntryType.RegularFile));
+
+        var error = await Assert.ThrowsAsync<GitSkillPluginRejectedException>(() =>
+            CreateAcquirer(archive).AcquireAsync(
+                Source(ManagedPluginSourceValidator.AutoFormat),
+                TestContext.Current.CancellationToken));
+
+        Assert.Contains(expectedReason, error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
     [Fact]
     public async Task Acquire_portable_skips_an_invalid_skill_and_keeps_a_valid_sibling()
     {
