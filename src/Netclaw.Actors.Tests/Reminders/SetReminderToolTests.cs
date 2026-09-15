@@ -351,6 +351,47 @@ public class SetReminderToolTests : TestKit
     }
 
     [Fact]
+    public async Task Mode_B_teams_self_targeting_persists_session_and_origin_channel_type()
+    {
+        var probe = CreateTestProbe();
+        var tool = new SetReminderTool(probe, _timeProvider, new SchedulingConfig());
+        var context = TestToolExecutionContext.CreateBound(
+            "teams~dGVuYW50LWE~personal~Y29udmVyc2F0aW9uLWE/conversation",
+            null,
+            new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = TrustBoundary.Personal,
+                ChannelType = "teams"
+            });
+
+        var execution = Task.Run(async () => await tool.ExecuteAsync(new Dictionary<string, object?>
+        {
+            ["Id"] = "teams-self-target",
+            ["Name"] = "teams-self-target",
+            ["Prompt"] = "Check weather",
+            ["ScheduleType"] = "once",
+            ["Schedule"] = "5m",
+            ["DeliveryKind"] = "current_session"
+        }, context));
+
+        var cmd = await probe.ExpectMsgAsync<SaveReminderCommand>(
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(DeliveryKind.CurrentSession, cmd.Definition.Delivery.Kind);
+        Assert.Equal(ChannelType.Teams, cmd.Definition.Delivery.OriginChannelType);
+        Assert.Equal(context.SessionId, cmd.Definition.Delivery.SessionId);
+
+        probe.Reply(new ReminderSavedResponse(
+            cmd.Definition.Id,
+            cmd.Definition.Title,
+            Success: true,
+            NextFire: _timeProvider.GetUtcNow().AddMinutes(5)));
+
+        await execution;
+    }
+
+    [Fact]
     public async Task Mode_B_rejected_for_unsupported_origin_channel_type()
     {
         var probe = CreateTestProbe();

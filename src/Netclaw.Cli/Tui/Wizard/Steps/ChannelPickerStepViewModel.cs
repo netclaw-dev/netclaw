@@ -39,12 +39,14 @@ public sealed class ChannelPickerStepViewModel : IWizardStepViewModel
         var slackVm = new SlackStepViewModel(slackProbe) { SkipEnableSubStep = true };
         var discordVm = new DiscordStepViewModel(discordProbe) { SkipEnableSubStep = true };
         var mattermostVm = new MattermostStepViewModel(mattermostProbe) { SkipEnableSubStep = true };
+        var teamsVm = new TeamsStepViewModel { SkipEnableSubStep = true };
 
         _adapters =
         [
             new ChannelAdapterEntry(ChannelType.Slack, "Slack", slackVm, new SlackStepView()),
             new ChannelAdapterEntry(ChannelType.Discord, "Discord", discordVm, new DiscordStepView()),
-            new ChannelAdapterEntry(ChannelType.Mattermost, "Mattermost", mattermostVm, new MattermostStepView())
+            new ChannelAdapterEntry(ChannelType.Mattermost, "Mattermost", mattermostVm, new MattermostStepView()),
+            new ChannelAdapterEntry(ChannelType.Teams, "Microsoft Teams", teamsVm, new TeamsStepView())
         ];
 
         foreach (var adapter in _adapters)

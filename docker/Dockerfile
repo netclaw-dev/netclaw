@@ -36,6 +36,46 @@
 # can invoke it from inside the container (e.g., `netclaw doctor`).
 ARG TARGETARCH
 ARG NETCLAW_VERSION=unknown
+ARG ARTIFACTS_STAGE=prebuilt-artifacts
+
+# Standard release builds consume the binaries published by
+# scripts/docker/build-image.sh.
+FROM scratch AS prebuilt-artifacts
+ARG TARGETARCH
+COPY publish/cli-${TARGETARCH}/netclaw /artifacts/cli-${TARGETARCH}/netclaw
+COPY publish/daemon-${TARGETARCH}/netclawd /artifacts/daemon-${TARGETARCH}/netclawd
+
+# Dedicated builders such as Komodo can compile the same self-contained
+# artifacts without requiring a host .NET installation.
+FROM mcr.microsoft.com/dotnet/sdk:10.0-noble AS source-artifacts
+ARG TARGETARCH
+ARG NETCLAW_VERSION=unknown
+WORKDIR /src
+COPY . .
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN set -eux; \
+    case "$TARGETARCH" in \
+        amd64) runtime_id=linux-x64 ;; \
+        arm64) runtime_id=linux-arm64 ;; \
+        *) echo "ERROR: unsupported TARGETARCH '$TARGETARCH'" >&2; exit 1 ;; \
+    esac; \
+    version_args=(); \
+    if [[ "$NETCLAW_VERSION" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then \
+        version_args=(--version "${NETCLAW_VERSION#v}"); \
+    fi; \
+    bash scripts/build/publish-binaries.sh \
+        --rid "$runtime_id" \
+        --component all \
+        --output-dir /publish \
+        "${version_args[@]}"; \
+    install -D -m 0755 /publish/cli/netclaw \
+        "/artifacts/cli-${TARGETARCH}/netclaw"; \
+    install -D -m 0755 /publish/daemon/netclawd \
+        "/artifacts/daemon-${TARGETARCH}/netclawd"
+
+# Only the selected artifact stage is evaluated. This keeps the upstream
+# prebuilt-artifact release contract while supporting Komodo source builds.
+FROM ${ARTIFACTS_STAGE} AS artifacts
 
 FROM ubuntu:24.04
 ARG TARGETARCH
@@ -89,8 +129,8 @@ WORKDIR /opt/netclaw
 
 # Self-contained single-file binaries. TARGETARCH selects the right
 # platform directory (amd64 or arm64). Schemas are embedded in the CLI binary.
-COPY publish/cli-${TARGETARCH}/netclaw /opt/netclaw/cli/netclaw
-COPY publish/daemon-${TARGETARCH}/netclawd /opt/netclaw/daemon/netclawd
+COPY --from=artifacts /artifacts/cli-${TARGETARCH}/netclaw /opt/netclaw/cli/netclaw
+COPY --from=artifacts /artifacts/daemon-${TARGETARCH}/netclawd /opt/netclaw/daemon/netclawd
 COPY docker/entrypoint.sh /opt/netclaw/entrypoint.sh
 # `netclaw` on PATH is a self-dropping launcher (not a bare symlink) so a
 # root-context `docker exec`/`kubectl exec -- netclaw <cmd>` re-execs as the

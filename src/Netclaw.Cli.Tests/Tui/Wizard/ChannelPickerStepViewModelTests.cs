@@ -301,13 +301,15 @@ public sealed class ChannelPickerStepViewModelTests : WizardStepTestBase
     }
 
     [Fact]
-    public void Adapters_IncludeMattermost()
+    public void Adapters_IncludeMattermost_AndMicrosoftTeamsInOrder()
     {
         using var picker = new ChannelPickerStepViewModel(_fakeProbe, _fakeDiscordProbe, _fakeMattermostProbe);
 
-        Assert.Equal(3, picker.Adapters.Count);
+        Assert.Equal(4, picker.Adapters.Count);
+        Assert.Equal(["Slack", "Discord", "Mattermost", "Microsoft Teams"], picker.Adapters.Select(static adapter => adapter.DisplayName));
         Assert.Contains(picker.Adapters, a => a.Type == ChannelType.Mattermost);
         Assert.Contains(picker.Adapters, a => a.DisplayName == "Mattermost");
+        Assert.Equal(ChannelType.Teams, picker.Adapters[3].Type);
     }
 
     [Fact]

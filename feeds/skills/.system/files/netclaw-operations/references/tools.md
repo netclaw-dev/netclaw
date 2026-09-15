@@ -55,8 +55,9 @@ Personal). **Public parent sessions** get read-only file tools only — `file_re
 authorized file paths to their parent instead of delivering files. **Team** adds
 `file_write`, `file_edit`, `web_search`, `web_fetch`, the scheduling tools,
 `skill_manage`, and `set_working_directory`. **Personal** gets everything.
-`shell_execute` is Personal-only — in a Team or Public session, use `file_list`
-to enumerate a directory instead of `ls`.
+Team excludes `shell_execute` by default. An interactive Team session can use it
+only with an effective `HostAllowed` shell mode, an explicit Team allow-list, and
+an exact `Approval` override. A Team `Auto` override and all Public shell calls fail.
 
 Tools belonging to disabled subsystems (see [Feature Kill Switches](#feature-kill-switches))
 are hidden from `search_tools` results for all audiences. Public sessions

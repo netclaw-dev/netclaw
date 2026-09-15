@@ -1,0 +1,11 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "type": "message",
+  "id": "ACTIVITY_MENTION_TEST_003",
+  "text": "<at>synthetic bot</at> <at>synthetic bot</at> harmless probe",
+  "recipient": { "id": "28:BOT_TEST_001" },
+  "entities": [
+    { "type": "mention", "text": "<at>synthetic bot</at>", "mentioned": { "id": "28:BOT_TEST_001", "name": "synthetic bot" } },
+    { "type": "mention", "text": "<at>synthetic bot</at>", "mentioned": { "id": "28:BOT_TEST_001", "name": "synthetic bot" } }
+  ]
+}

@@ -6,14 +6,16 @@
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using Netclaw.Channels.Teams;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 
 namespace Netclaw.Daemon.Security;
 
 /// <summary>
 /// Registers the Netclaw multi-scheme auth pipeline: a PolicyScheme selector
-/// that routes to DeviceBearer when an <c>Authorization: Bearer</c> header is
-/// present, otherwise to Loopback (local operator).
+/// that routes an active Teams activity endpoint to its SDK scheme. It routes
+/// other bearer requests to DeviceBearer and local requests to Loopback.
 /// </summary>
 internal static class NetclawAuthExtensions
 {
@@ -25,11 +27,20 @@ internal static class NetclawAuthExtensions
             .AddPolicyScheme("AuthSelector", "Bearer or Loopback selector", options =>
             {
                 options.ForwardDefaultSelector = ctx =>
-                    ctx.Request.Headers.ContainsKey("Authorization") &&
-                    ctx.Request.Headers.Authorization.ToString()
-                        .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
+                {
+                    var teamsIngress = ctx.RequestServices.GetService<TeamsIngressRegistration>();
+                    if (teamsIngress?.CanActivateSdk == true
+                        && ctx.Request.Path == TeamsActivityEndpointExtensions.ActivityPath)
+                    {
+                        return TeamsActivityEndpointExtensions.AuthenticationScheme;
+                    }
+
+                    return ctx.Request.Headers.ContainsKey("Authorization")
+                           && ctx.Request.Headers.Authorization.ToString()
+                               .StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase)
                         ? DeviceTokenAuthenticationHandler.SchemeName
                         : LoopbackAuthenticationHandler.SchemeName;
+                };
             })
             .AddScheme<AuthenticationSchemeOptions, LoopbackAuthenticationHandler>(
                 LoopbackAuthenticationHandler.SchemeName, _ => { })

@@ -1,0 +1,11 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "type": "message",
+  "id": "ACTIVITY_ROOT_TEST_002",
+  "text": "second harmless channel root probe",
+  "from": { "id": "USER_TEST_001" },
+  "recipient": { "id": "28:BOT_TEST_001" },
+  "conversation": { "id": "CONVERSATION_ROOT_TEST_002;messageid=ACTIVITY_ROOT_TEST_002", "tenantId": "TENANT_TEST_001", "conversationType": "channel", "isGroup": true },
+  "channelData": { "team": { "id": "TEAM_TEST_001" }, "channel": { "id": "CHANNEL_TEST_001" } },
+  "replyToId": null
+}

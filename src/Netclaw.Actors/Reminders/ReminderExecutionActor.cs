@@ -406,6 +406,7 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
             ChannelType.Slack => registry.TryGet<SlackGatewayActorKey>(out var slack) ? slack : null,
             ChannelType.Discord => registry.TryGet<DiscordGatewayActorKey>(out var discord) ? discord : null,
             ChannelType.Mattermost => registry.TryGet<MattermostGatewayActorKey>(out var mattermost) ? mattermost : null,
+            ChannelType.Teams => registry.TryGet<TeamsGatewayActorKey>(out var teams) ? teams : null,
             ChannelType.Tui => registry.TryGet<SignalRGatewayActorKey>(out var signalr) ? signalr : null,
             ChannelType.SignalR => registry.TryGet<SignalRGatewayActorKey>(out var signalr2) ? signalr2 : null,
             _ => null

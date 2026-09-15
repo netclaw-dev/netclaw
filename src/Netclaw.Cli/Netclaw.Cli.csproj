@@ -36,6 +36,8 @@
     <ProjectReference Include="..\Netclaw.Channels\Netclaw.Channels.csproj" />
     <ProjectReference Include="..\Netclaw.Channels.Slack\Netclaw.Channels.Slack.csproj" />
     <ProjectReference Include="..\Netclaw.Providers\Netclaw.Providers.csproj" />
+    <ProjectReference Include="..\Netclaw.Channels.Teams\Netclaw.Channels.Teams.csproj" />
+    <ProjectReference Include="..\Netclaw.Channels.Teams.Graph\Netclaw.Channels.Teams.Graph.csproj" />
   </ItemGroup>
 
   <ItemGroup>
