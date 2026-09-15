@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Akka.Event;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
@@ -73,6 +74,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     {
         const string callId = "call-shell-1";
         _toolExecutor.GatedTools.Add("shell_execute");
+        var diagnostics = CreateTestProbe();
+        Sys.EventStream.Subscribe(diagnostics, typeof(LogEvent));
 
         _fakeChatClient.ToolCallsOnFirstCall =
         [
@@ -153,10 +156,60 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             [authorizationAttemptId, authorizationAttemptId],
             _toolExecutor.AuthorizationAttempts.ToArray());
 
+        var dispositions = new List<LogEvent>();
+        dispositions.Add(await diagnostics.FishForMessageAsync<LogEvent>(
+            IsCycleDisposition,
+            TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken));
+        var disposition = Assert.Single(dispositions);
+        var properties = Assert.IsAssignableFrom<LogMessage>(disposition.Message).GetProperties();
+        Assert.Equal(
+            ["BatchSize", "Decision", "Dispatched", "HistoryCount", "IterationCount", "Period", "Repetitions"],
+            properties.Keys.Order(StringComparer.Ordinal));
+        Assert.Equal("Execute", GetProperty(disposition, "Decision"));
+        Assert.Equal(0, GetIntProperty(disposition, "HistoryCount"));
+        Assert.Equal(0, GetIntProperty(disposition, "IterationCount"));
+        Assert.Equal(0, GetIntProperty(disposition, "Period"));
+        Assert.Equal(0, GetIntProperty(disposition, "Repetitions"));
+        Assert.Equal(1, GetIntProperty(disposition, "BatchSize"));
+        Assert.True(GetDispatched(disposition));
+
+        var trailingDiagnostics = new List<LogEvent>();
+        await foreach (var diagnostic in diagnostics.ReceiveWhileAsync<LogEvent>(
+            new Predicate<LogEvent>(AssertNoCycleDisposition),
+            max: TimeSpan.FromSeconds(1),
+            idle: TimeSpan.FromMilliseconds(100),
+            msgs: int.MaxValue,
+            shouldIgnoreOtherMessageTypes: true,
+            cancellationToken: TestContext.Current.CancellationToken))
+        {
+            trailingDiagnostics.Add(diagnostic);
+        }
+
+        Assert.DoesNotContain(trailingDiagnostics, IsCycleDisposition);
+
         // No duplicate approval prompt was emitted for the re-driven call.
         await subscriberB.ExpectNoMsgAsync(
             TimeSpan.FromMilliseconds(300), TestContext.Current.CancellationToken);
     }
+
+    private static bool IsCycleDisposition(LogEvent logEvent)
+        => logEvent.Message.ToString()!.StartsWith("tool_cycle_disposition", StringComparison.Ordinal);
+
+    private static bool AssertNoCycleDisposition(LogEvent logEvent)
+    {
+        Assert.False(IsCycleDisposition(logEvent));
+        return true;
+    }
+
+    private static string GetProperty(LogEvent logEvent, string name)
+        => Assert.IsAssignableFrom<LogMessage>(logEvent.Message).GetProperties()[name]?.ToString()!;
+
+    private static int GetIntProperty(LogEvent logEvent, string name)
+        => Assert.IsType<int>(Assert.IsAssignableFrom<LogMessage>(logEvent.Message).GetProperties()[name]);
+
+    private static bool GetDispatched(LogEvent logEvent)
+        => Assert.IsType<bool>(Assert.IsAssignableFrom<LogMessage>(logEvent.Message).GetProperties()["Dispatched"]);
 
     [Fact]
     public async Task Idle_passivation_proceeds_with_pending_approval_and_response_resumes()

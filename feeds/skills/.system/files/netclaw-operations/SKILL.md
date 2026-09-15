@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.74.4"
+  version: "2.74.5"
 ---
 
 # Netclaw Operations
@@ -187,6 +187,15 @@ A valid metadata repair is not the same rejected action. A new user message
 starts a fresh cycle window; compaction alone does not.
 If a text-only response contains tool calls, Netclaw rejects those calls and reports a provider failure.
 This failure does not prove that the turn exhausted its tool budget.
+
+Cycle disposition diagnostics use one structured event for each evaluated batch.
+The event reports the decision, cycle counts, batch size, and dispatch state.
+`Execute` with `Dispatched=true` means that the batch reached the execution pipeline.
+This state does not prove that a tool succeeded.
+Approval can still wait or deny the batch.
+`Correct` and `Stop` always use `Dispatched=false`.
+The event contains no tool payload or identity data.
+These events are process-level diagnostics, not per-session `session.log` entries.
 
 ## Large tool output
 

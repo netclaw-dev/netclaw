@@ -857,7 +857,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
     public async Task Exact_tool_cycle_gets_one_correction_then_stops_without_execution(bool violatesTextOnly)
     {
         var diagnostics = CreateTestProbe();
-        Sys.EventStream.Subscribe(diagnostics, typeof(Warning));
+        Sys.EventStream.Subscribe(diagnostics, typeof(LogEvent));
         _fakeChatClient.ToolCallsOnFirstCall =
         [
             new FunctionCallContent(
@@ -885,12 +885,13 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             Content = "Repeat the same search."
         }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
+        var toolCallOutputs = new List<ToolCallOutput>();
         var results = new List<ToolResultOutput>();
         for (var i = 0; i < 3; i++)
         {
-            await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            toolCallOutputs.Add(await subscriber.ExpectMsgAsync<ToolCallOutput>(
                 TimeSpan.FromSeconds(3),
-                cancellationToken: TestContext.Current.CancellationToken);
+                cancellationToken: TestContext.Current.CancellationToken));
             results.Add(await subscriber.ExpectMsgAsync<ToolResultOutput>(
                 TimeSpan.FromSeconds(3),
                 cancellationToken: TestContext.Current.CancellationToken));
@@ -913,23 +914,80 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             TimeSpan.FromSeconds(3),
             cancellationToken: TestContext.Current.CancellationToken);
 
+        Assert.Equal(3, toolCallOutputs.Count);
         Assert.Equal("same result", results[0].Result);
         Assert.Equal("same result", results[1].Result);
         Assert.Contains("repeated action-and-outcome cycle", results[2].Result, StringComparison.Ordinal);
         Assert.Equal(2, _fakeToolExecutor.CallCount);
         Assert.Equal(5, _fakeChatClient.CallCount);
-        for (var i = 0; i < 2; i++)
+        var dispositions = new List<LogEvent>();
+        for (var i = 0; i < 4; i++)
         {
-            var diagnostic = await diagnostics.FishForMessageAsync<Warning>(
-                warning => warning.Message.ToString()!.StartsWith("Tool cycle decision", StringComparison.Ordinal),
+            var diagnostic = await diagnostics.FishForMessageAsync<LogEvent>(
+                logEvent => logEvent.Message.ToString()!.StartsWith("tool_cycle_disposition", StringComparison.Ordinal),
                 TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+            dispositions.Add(diagnostic);
+        }
+
+        Assert.Equal(
+            ["Execute", "Execute", "Correct", "Stop"],
+            dispositions.Select(static evt => GetProperty(evt, "Decision")).ToArray());
+        Assert.Equal([0, 1, 2, 2], dispositions.Select(static evt => GetIntProperty(evt, "HistoryCount")).ToArray());
+        Assert.Equal([0, 1, 2, 3], dispositions.Select(static evt => GetIntProperty(evt, "IterationCount")).ToArray());
+        Assert.Equal([1, 1, 1, 1], dispositions.Select(static evt => GetIntProperty(evt, "BatchSize")).ToArray());
+        Assert.Equal([true, true, false, false], dispositions.Select(static evt => GetBoolProperty(evt, "Dispatched")).ToArray());
+        Assert.Equal([0, 0, 1, 0], dispositions.Select(static evt => GetIntProperty(evt, "Period")).ToArray());
+        Assert.Equal([0, 0, 2, 0], dispositions.Select(static evt => GetIntProperty(evt, "Repetitions")).ToArray());
+        Assert.False(GetBoolProperty(dispositions[2], "Dispatched"));
+        Assert.Equal(2, _fakeToolExecutor.CallCount);
+
+        foreach (var diagnostic in dispositions)
+        {
             Assert.Equal(typeof(TurnStateTracker), diagnostic.LogClass);
             Assert.DoesNotContain(sessionId.Value, diagnostic.LogSource, StringComparison.Ordinal);
             Assert.Equal($"TurnStateTracker (akka://{Sys.Name})", diagnostic.LogSource);
+            var message = diagnostic.Message.ToString()!;
+            Assert.DoesNotContain("search_tools", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("browser", message, StringComparison.Ordinal);
+            Assert.DoesNotContain("same result", message, StringComparison.Ordinal);
             var properties = Assert.IsAssignableFrom<LogMessage>(diagnostic.Message).GetProperties();
-            Assert.Equal(["DecisionKind", "Period", "Repetitions"], properties.Keys.Order(StringComparer.Ordinal));
+            Assert.Equal(
+                ["BatchSize", "Decision", "Dispatched", "HistoryCount", "IterationCount", "Period", "Repetitions"],
+                properties.Keys.Order(StringComparer.Ordinal));
         }
+
+        var trailingDiagnostics = new List<LogEvent>();
+        await foreach (var diagnostic in diagnostics.ReceiveWhileAsync<LogEvent>(
+            new Predicate<LogEvent>(AssertNoCycleDisposition),
+            max: TimeSpan.FromSeconds(1),
+            idle: TimeSpan.FromMilliseconds(100),
+            msgs: int.MaxValue,
+            shouldIgnoreOtherMessageTypes: true,
+            cancellationToken: TestContext.Current.CancellationToken))
+        {
+            trailingDiagnostics.Add(diagnostic);
+        }
+
+        Assert.DoesNotContain(trailingDiagnostics, IsCycleDisposition);
     }
+
+    private static bool IsCycleDisposition(LogEvent logEvent)
+        => logEvent.Message.ToString()!.StartsWith("tool_cycle_disposition", StringComparison.Ordinal);
+
+    private static bool AssertNoCycleDisposition(LogEvent logEvent)
+    {
+        Assert.False(IsCycleDisposition(logEvent));
+        return true;
+    }
+
+    private static string GetProperty(LogEvent logEvent, string name)
+        => Assert.IsAssignableFrom<LogMessage>(logEvent.Message).GetProperties()[name]?.ToString()!;
+
+    private static int GetIntProperty(LogEvent logEvent, string name)
+        => Assert.IsType<int>(Assert.IsAssignableFrom<LogMessage>(logEvent.Message).GetProperties()[name]);
+
+    private static bool GetBoolProperty(LogEvent logEvent, string name)
+        => Assert.IsType<bool>(Assert.IsAssignableFrom<LogMessage>(logEvent.Message).GetProperties()[name]);
 
     [Fact]
     public async Task Parallel_cycle_correction_preserves_every_call_result_pair()

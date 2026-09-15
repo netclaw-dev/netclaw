@@ -372,6 +372,34 @@ public sealed class TurnStateTrackerTests
     }
 
     [Fact]
+    public void CycleDecision_SnapshotsCountsBeforeCandidateEvaluation()
+    {
+        var tracker = new TurnStateTracker();
+        var batch = Prepare(Call("call-1", "sample/read"));
+        var completed = Complete(
+            batch,
+            ("call-1", ToolInvocationOutcomeCategory.Success, "same"));
+
+        var initial = tracker.EvaluateBeforeDispatch(batch.Action);
+        Assert.Equal(0, initial.HistoryCount);
+        Assert.Equal(0, initial.IterationCount);
+
+        tracker.ObserveCompleted(completed);
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        tracker.ObserveCompleted(completed);
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+
+        var corrected = tracker.EvaluateBeforeDispatch(batch.Action);
+        Assert.Equal(ToolCycleDecisionKind.Correct, corrected.Kind);
+        Assert.Equal(2, corrected.HistoryCount);
+        Assert.Equal(2, corrected.IterationCount);
+
+        tracker.RecordToolCompletion(resultCount: 1, maxToolIterationsPerTurn: 30);
+        Assert.Equal(2, corrected.HistoryCount);
+        Assert.Equal(2, corrected.IterationCount);
+    }
+
+    [Fact]
     public void CompletedCycleHistory_KeepsOnlySixIterations()
     {
         var tracker = new TurnStateTracker();

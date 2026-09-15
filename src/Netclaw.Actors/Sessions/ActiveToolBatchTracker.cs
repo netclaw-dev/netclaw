@@ -17,6 +17,10 @@ internal sealed class ActiveToolBatchTracker
     private readonly Dictionary<string, ToolCycleResult> _cycleResults = new(StringComparer.Ordinal);
     private PreparedToolCycleBatch? _preparedCycleBatch;
 
+    public int BatchSize { get; private set; }
+
+    public bool HasReachedDispatch { get; private set; }
+
     public int CompletedCount => _completedCallIds.Count;
 
     public bool HasAllResults => _expectedCallIds.Count > 0
@@ -33,6 +37,8 @@ internal sealed class ActiveToolBatchTracker
     {
         _preparedCycleBatch = null;
         _cycleResults.Clear();
+        BatchSize = assistantMessage.ToolCalls.Count;
+        HasReachedDispatch = false;
         ClearExpectedCallIds();
         foreach (var call in assistantMessage.ToolCalls)
             _expectedCallIds.Add(call.CallId.Value);
@@ -51,10 +57,13 @@ internal sealed class ActiveToolBatchTracker
         IEnumerable<FunctionCallContent> toolCalls,
         PreparedToolCycleBatch? preparedCycleBatch)
     {
+        var calls = toolCalls.ToArray();
         _preparedCycleBatch = preparedCycleBatch;
         _cycleResults.Clear();
+        BatchSize = calls.Length;
+        HasReachedDispatch = false;
         ClearExpectedCallIds();
-        foreach (var call in toolCalls)
+        foreach (var call in calls)
             _expectedCallIds.Add(call.CallId);
 
         ClearCompletedCallIds();
@@ -78,12 +87,22 @@ internal sealed class ActiveToolBatchTracker
     public void MarkExecutionTaskCompleted()
         => ExecutionTaskCompleted = true;
 
+    public void MarkDispatched()
+    {
+        if (BatchSize == 0)
+            throw new InvalidOperationException("A tool batch must be active before dispatch is marked.");
+
+        HasReachedDispatch = true;
+    }
+
     public void Clear()
     {
         ClearExpectedCallIds();
         ClearCompletedCallIds();
         _preparedCycleBatch = null;
         _cycleResults.Clear();
+        BatchSize = 0;
+        HasReachedDispatch = false;
         ExecutionTaskCompleted = false;
     }
 

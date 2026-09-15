@@ -7,6 +7,8 @@ using System.Buffers.Binary;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Akka.Actor;
+using Akka.Event;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Tools;
@@ -113,8 +115,14 @@ internal sealed class TurnStateTracker
     /// </remarks>
     public ToolCycleDecision EvaluateBeforeDispatch(ToolActionSignature candidate)
     {
+        var historyCount = _completedToolCycles.Count;
+        var iterationCount = ToolIterationCount;
+
         if (_lastBlockedAction == candidate)
-            return new ToolCycleDecision(ToolCycleDecisionKind.Stop);
+            return new ToolCycleDecision(
+                ToolCycleDecisionKind.Stop,
+                HistoryCount: historyCount,
+                IterationCount: iterationCount);
 
         for (var period = 1; period <= ToolCycleSignatureFactory.MaximumPeriod; period++)
         {
@@ -133,10 +141,15 @@ internal sealed class TurnStateTracker
             return new ToolCycleDecision(
                 ToolCycleDecisionKind.Correct,
                 Period: period,
-                Repetitions: 2);
+                Repetitions: 2,
+                HistoryCount: historyCount,
+                IterationCount: iterationCount);
         }
 
-        return new ToolCycleDecision(ToolCycleDecisionKind.Execute);
+        return new ToolCycleDecision(
+            ToolCycleDecisionKind.Execute,
+            HistoryCount: historyCount,
+            IterationCount: iterationCount);
     }
 
     public void ObserveCompleted(CompletedToolCycleIteration iteration)
@@ -301,7 +314,40 @@ internal enum ToolCycleDecisionKind
 internal readonly record struct ToolCycleDecision(
     ToolCycleDecisionKind Kind,
     int Period = 0,
-    int Repetitions = 0);
+    int Repetitions = 0,
+    int HistoryCount = 0,
+    int IterationCount = 0);
+
+internal static class ToolCycleDispositionLogger
+{
+    private const string MessageTemplate =
+        "tool_cycle_disposition decision={Decision} period={Period} repetitions={Repetitions} "
+        + "historyCount={HistoryCount} iterationCount={IterationCount} batchSize={BatchSize} dispatched={Dispatched}";
+
+    public static void Log(
+        ActorSystem system,
+        ToolCycleDecision decision,
+        int batchSize,
+        bool dispatched)
+    {
+        var logger = Logging.GetLogger(system, typeof(TurnStateTracker));
+        var arguments = new object[]
+        {
+            decision.Kind,
+            decision.Period,
+            decision.Repetitions,
+            decision.HistoryCount,
+            decision.IterationCount,
+            batchSize,
+            dispatched
+        };
+
+        if (decision.Kind == ToolCycleDecisionKind.Execute)
+            logger.Info(MessageTemplate, arguments);
+        else
+            logger.Warning(MessageTemplate, arguments);
+    }
+}
 
 internal static class ToolCycleMessages
 {

@@ -837,17 +837,10 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                 _toolExecutorLogger);
         var preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, executor);
         var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
-        if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
-        {
-            Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Subagent tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
-                cycleDecision.Kind,
-                cycleDecision.Period,
-                cycleDecision.Repetitions);
-        }
 
         if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
         {
+            ToolCycleDispositionLogger.Log(Context.System, cycleDecision, toolCalls.Count, dispatched: false);
             _forcedFinalOutcomeReason = SubAgentOutcomeReason.ToolCycleStopped;
             AddSystemNudge(ToolCycleMessages.Final);
             FireLlmCall(forceNoTools: true);
@@ -859,6 +852,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
         if (cycleDecision.Kind == ToolCycleDecisionKind.Correct)
         {
+            ToolCycleDispositionLogger.Log(Context.System, cycleDecision, toolCalls.Count, dispatched: false);
             EmitToolCycleCorrection(toolCalls);
             return;
         }
@@ -879,20 +873,32 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
             ? ToolExecutionWatchdogState.None
             : ToolExecutionWatchdogState.RunningApprovalCapableTools;
 
-        _ = ExecuteToolsAsync(
-            executor,
-            toolCalls,
-            ToolExecutionContext,
-            _executionCts?.Token ?? CancellationToken.None,
-            _externalCts?.Token ?? CancellationToken.None,
-            self,
-            _approvalBridge,
-            _managedTemporaryCorrections.Snapshot(),
-            setWorkingDirectoryAvailable,
-            _log,
-            _definition.Name,
-            _parentSessionId,
-            _subSessionId);
+        Task execution;
+        try
+        {
+            execution = ExecuteToolsAsync(
+                executor,
+                toolCalls,
+                ToolExecutionContext,
+                _executionCts?.Token ?? CancellationToken.None,
+                _externalCts?.Token ?? CancellationToken.None,
+                self,
+                _approvalBridge,
+                _managedTemporaryCorrections.Snapshot(),
+                setWorkingDirectoryAvailable,
+                _log,
+                _definition.Name,
+                _parentSessionId,
+                _subSessionId);
+        }
+        catch
+        {
+            ToolCycleDispositionLogger.Log(Context.System, cycleDecision, toolCalls.Count, dispatched: false);
+            throw;
+        }
+
+        ToolCycleDispositionLogger.Log(Context.System, cycleDecision, toolCalls.Count, dispatched: true);
+        _ = execution;
     }
 
     private void EmitToolCycleCorrection(IReadOnlyList<FunctionCallContent> toolCalls)

@@ -1829,17 +1829,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ?? throw new InvalidOperationException("A tool-call response requires a tool executor.");
         var preparedCycleBatch = ToolCycleSignatureFactory.Prepare(toolCalls, toolExecutor);
         var cycleDecision = _turnState.EvaluateBeforeDispatch(preparedCycleBatch.Action);
-        if (cycleDecision.Kind != ToolCycleDecisionKind.Execute)
-        {
-            Logging.GetLogger(Context.System, typeof(TurnStateTracker)).Warning(
-                "Tool cycle decision kind={DecisionKind} period={Period} repetitions={Repetitions}",
-                cycleDecision.Kind,
-                cycleDecision.Period,
-                cycleDecision.Repetitions);
-        }
 
         if (cycleDecision.Kind == ToolCycleDecisionKind.Stop)
         {
+            ToolCycleDispositionLogger.Log(Context.System, cycleDecision, toolCalls.Count, dispatched: false);
             RecordIntermediateUsage(usage);
             _state = _state.AddSystemNudge(ToolCycleMessages.Final);
             FireLlmCall(forceNoTools: true);
@@ -1931,11 +1924,26 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (cycleDecision.Kind == ToolCycleDecisionKind.Correct)
         {
+            ToolCycleDispositionLogger.Log(Context.System, cycleDecision, toolCalls.Count, dispatched: false);
             EmitToolCycleCorrection(toolCalls);
             return;
         }
 
-        DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch);
+        try
+        {
+            DispatchToolBatch(toolCalls, preparedCycleBatch: preparedCycleBatch);
+        }
+        catch
+        {
+            ToolCycleDispositionLogger.Log(Context.System, cycleDecision, toolCalls.Count, dispatched: false);
+            throw;
+        }
+
+        ToolCycleDispositionLogger.Log(
+            Context.System,
+            cycleDecision,
+            _activeToolBatch.BatchSize,
+            _activeToolBatch.HasReachedDispatch);
     }
 
     private void RecordIntermediateUsage(UsageDetails? usage)
@@ -2089,7 +2097,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             CancellationToken = toolExecutionCt
         };
 
-        _ = pipeline.ExecuteAsync(batch);
+        var execution = pipeline.ExecuteAsync(batch);
+        _activeToolBatch.MarkDispatched();
+        _ = execution;
     }
 
     private void HandleTextResponse(
