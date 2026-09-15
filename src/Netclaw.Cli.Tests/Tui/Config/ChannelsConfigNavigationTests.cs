@@ -86,6 +86,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
@@ -703,6 +704,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                         slackProbe ?? new FakeSlackProbe(),
                         discordProbe ?? new FakeDiscordProbe(),
                         mattermostProbe ?? new FakeMattermostProbe(),
+                        new FakeTelegramProbe(),
                         tuiNavigation);
                     return capturedChannelsVm;
                 });

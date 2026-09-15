@@ -97,6 +97,31 @@
       },
       "additionalProperties": false
     },
+    "Telegram": {
+      "type": "object",
+      "properties": {
+        "Enabled": { "type": "boolean", "default": false },
+        "AllowDirectMessages": { "type": "boolean", "default": false },
+        "MentionOnly": { "type": "boolean", "default": true },
+        "AllowedChatIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "AllowedUserIds": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "ChatAudiences": {
+          "type": "object",
+          "description": "Per-chat audience overrides. Keys are Telegram chat IDs or 'dm'. Values are 'personal', 'team', or 'public'.",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["personal", "team", "public"]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Logging": {
       "type": "object",
       "properties": {

@@ -16,12 +16,14 @@ internal sealed class ChannelsEditorModel
     public DiscordChannelEditorModel Discord { get; } = new();
 
     public MattermostChannelEditorModel Mattermost { get; } = new();
+    public TelegramChannelEditorModel Telegram { get; } = new();
 
     public static ChannelsEditorModel FromStep(ChannelPickerStepViewModel step)
     {
         var slack = step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
         var discord = step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
         var mattermost = step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+        var telegram = step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram);
 
         var model = new ChannelsEditorModel
         {
@@ -46,6 +48,12 @@ internal sealed class ChannelsEditorModel
                 BotTokenDraft = Normalize(mattermost.BotToken),
                 HasPersistedBotToken = mattermost.HasPersistedBotToken,
                 CallbackUrl = Normalize(mattermost.CallbackUrl),
+            },
+            Telegram =
+            {
+                Enabled = step.IsAdapterEnabled(ChannelType.Telegram),
+                BotTokenDraft = Normalize(telegram.BotToken),
+                HasPersistedBotToken = telegram.HasPersistedBotToken,
             }
         };
 
@@ -90,6 +98,12 @@ internal sealed class MattermostChannelEditorModel : ChannelEditorProviderModel
     public string? CallbackUrl { get; set; }
 }
 
+internal sealed class TelegramChannelEditorModel : ChannelEditorProviderModel
+{
+    public string? BotTokenDraft { get; set; }
+    public bool HasPersistedBotToken { get; set; }
+}
+
 internal sealed class ChannelsEditorValidator : IValidateOptions<ChannelsEditorModel>
 {
     public ValidateOptionsResult Validate(string? name, ChannelsEditorModel options)
@@ -130,6 +144,10 @@ internal sealed class ChannelsEditorValidator : IValidateOptions<ChannelsEditorM
                 errors.Add(ChannelsEditorValidationMessages.MattermostCallbackUrlAbsoluteHttp);
         }
 
+        if (options.Telegram.Enabled
+            && !HasEffectiveSecret(options.Telegram.BotTokenDraft, options.Telegram.HasPersistedBotToken))
+            errors.Add(ChannelsEditorValidationMessages.TelegramBotTokenRequired);
+
         return errors.Count > 0
             ? ValidateOptionsResult.Fail(errors)
             : ValidateOptionsResult.Success;
@@ -154,6 +172,9 @@ internal static class ChannelsEditorFieldPaths
     internal const string MattermostBotToken = "Mattermost.BotToken";
     internal const string MattermostCallbackUrl = "Mattermost.CallbackUrl";
     internal const string MattermostAllowedChannelIds = "Mattermost.AllowedChannelIds";
+    internal const string TelegramBotToken = "Telegram.BotToken";
+    internal const string TelegramAllowedChatIds = "Telegram.AllowedChatIds";
+    internal const string TelegramAllowedUserIds = "Telegram.AllowedUserIds";
 }
 
 internal static class ChannelsEditorValidationMessages
@@ -167,6 +188,7 @@ internal static class ChannelsEditorValidationMessages
     internal const string MattermostServerUrlAbsoluteHttp = "Mattermost server URL must be an absolute http:// or https:// URL.";
     internal const string MattermostBotTokenRequired = "Mattermost bot token is required.";
     internal const string MattermostCallbackUrlAbsoluteHttp = "Mattermost callback URL must be an absolute http:// or https:// URL.";
+    internal const string TelegramBotTokenRequired = "Telegram bot token is required.";
 }
 
 internal sealed record ChannelsEditorValidationIssue(string? FieldId, string Message, ConfigValidationSeverity Severity);
@@ -211,6 +233,7 @@ internal sealed class ChannelsEditorValidationAdapter
             ChannelsEditorValidationMessages.MattermostServerUrlAbsoluteHttp => ChannelsEditorFieldPaths.MattermostServerUrl,
             ChannelsEditorValidationMessages.MattermostBotTokenRequired => ChannelsEditorFieldPaths.MattermostBotToken,
             ChannelsEditorValidationMessages.MattermostCallbackUrlAbsoluteHttp => ChannelsEditorFieldPaths.MattermostCallbackUrl,
+            ChannelsEditorValidationMessages.TelegramBotTokenRequired => ChannelsEditorFieldPaths.TelegramBotToken,
             _ => null,
         };
 }

@@ -214,6 +214,27 @@ public sealed class ConfigDashboardViewModelTests
     }
 
     [Fact]
+    public void Channels_summary_includes_telegram_with_its_configured_chats()
+    {
+        using var dir = new DisposableTempDir();
+        var paths = new NetclawPaths(dir.Path);
+        paths.EnsureDirectoriesExist();
+        File.WriteAllText(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Telegram": {
+                "Enabled": true,
+                "AllowedChatIds": ["-1001234567890"]
+              }
+            }
+            """);
+        using var vm = new ConfigDashboardViewModel(new ConfigDashboardNavigationState(), paths);
+
+        Assert.Equal("Telegram · 1 channel", Summary(vm, "Channels"));
+    }
+
+    [Fact]
     public void Status_summaries_are_recomputed_on_each_read_for_autosave_reentrancy()
     {
         using var dir = new DisposableTempDir();

@@ -24,6 +24,7 @@
     <ProjectReference Include="../Netclaw.Channels.Discord/Netclaw.Channels.Discord.csproj" />
     <ProjectReference Include="../Netclaw.Channels.Mattermost/Netclaw.Channels.Mattermost.csproj" />
     <ProjectReference Include="../Netclaw.Channels.Slack/Netclaw.Channels.Slack.csproj" />
+    <ProjectReference Include="../Netclaw.Channels.Telegram/Netclaw.Channels.Telegram.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <ProjectReference Include="../Netclaw.Media/Netclaw.Media.csproj" />
     <ProjectReference Include="../Netclaw.Providers/Netclaw.Providers.csproj" />
