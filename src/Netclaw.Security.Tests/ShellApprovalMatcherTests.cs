@@ -25,6 +25,13 @@ public sealed class ShellApprovalMatcherTests
             ["WorkingDirectory"] = workingDirectory
         };
 
+    private static ShellApprovalMatcher CreatePowerShellMatcher(PwshDialect dialect)
+        => new(ShellExecutionEnvironment.CreatePowerShell(
+            dialect == PwshDialect.WindowsPowerShell51
+                ? @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe"
+                : @"C:\Program Files\PowerShell\7\pwsh.exe",
+            dialect));
+
     private static ApprovalEntry Verb(string verb) => new(verb) { Directory = null };
     private static ApprovalEntry InDir(string verb, string dir) => new(verb) { Directory = dir };
 
@@ -180,6 +187,62 @@ public sealed class ShellApprovalMatcherTests
 
         Assert.False(analysis.IsMessy);
         Assert.Equal("Get-ChildItem", Assert.Single(analysis.Candidates).Verb);
+    }
+
+    [Fact]
+    public void Windows_power_shell_recursive_tree_keeps_only_exact_approval_material()
+    {
+        var matcher = CreatePowerShellMatcher(PwshDialect.WindowsPowerShell51);
+        const string command =
+            "Get-ChildItem -Path \"C:\\WORK\\PROJECT\" -Recurse "
+            + "-Include *.cs,*.conf,*.json | Select-Object -ExpandProperty FullName";
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, @"C:\WORK\PROJECT"));
+
+        Assert.True(analysis.IsMessy);
+        Assert.Empty(analysis.Candidates);
+        Assert.NotEmpty(analysis.Patterns);
+    }
+
+    [Theory]
+    [InlineData(
+        "Get-ChildItem -Path \"C:\\WORK\\PROJECT\" -Recurse -Include *.cs,*.conf,*.json | Select-Object -ExpandProperty FullName")]
+    [InlineData(
+        "Get-Content \"C:\\WORK\\PROJECT\\SourceFile.cs\" | Select-Object -Index (113..145)")]
+    [InlineData(
+        "Select-String -Path \"C:\\WORK\\PROJECT\\SourceFile.cs\" -Pattern needle | Select-Object LineNumber,Line")]
+    [InlineData(
+        "Get-Process -Name dotnet,powershell | Select-Object Id,ProcessName,StartTime")]
+    public void Power_shell_7_live_read_shapes_have_reusable_candidates(string command)
+    {
+        var matcher = CreatePowerShellMatcher(PwshDialect.PowerShell7);
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, @"C:\WORK\PROJECT"));
+
+        Assert.False(analysis.IsMessy);
+        Assert.NotEmpty(analysis.Candidates);
+    }
+
+    [Theory]
+    [InlineData("Get-Process | Select-Object @{Name='Process';Expression={$_.Name}}")]
+    [InlineData("Get-Process | Select-Object Name,$property")]
+    [InlineData("Get-ChildItem -Path C:\\WORK\\ONE,C:\\WORK\\TWO")]
+    [InlineData("Get-ChildItem -Path C:\\WORK\\*\\src")]
+    [InlineData("Get-ChildItem -Path C:\\WORK\\PROJECT -Recurse:$flag")]
+    public void Power_shell_unproved_projection_or_tree_facts_stay_messy(string command)
+    {
+        var matcher = CreatePowerShellMatcher(PwshDialect.WindowsPowerShell51);
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, @"C:\WORK\PROJECT"));
+
+        Assert.True(analysis.IsMessy);
+        Assert.Empty(analysis.Candidates);
     }
 
     [Theory]

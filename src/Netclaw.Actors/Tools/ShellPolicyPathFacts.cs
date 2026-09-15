@@ -15,6 +15,7 @@ internal enum ShellPolicyPathOrigin
     AuthoredArgument = 1,
     AuthoredFileSystemValue = 2,
     Redirect = 3,
+    FileSystemTreeRoot = 4,
 }
 
 internal enum ShellPolicyPathResolutionState
@@ -220,16 +221,9 @@ internal sealed class ShellPolicyOccurrencePathFacts
         foreach (var argument in occurrence.Arguments)
         {
             var hasBoundedNonFileSystemValue =
-                argument.AuthoredNonFileSystemValue is
-                    ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
-            var hasBoundedFileSystemValue =
-                argument.AuthoredFileSystemValue is
-                    ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
-            if (argument.AuthoredNonFileSystemValue is not
-                (ShellValueDomain.Unknown
-                or ShellValueDomain.Exact
-                or ShellValueDomain.FiniteSet)
-                || (hasBoundedNonFileSystemValue && hasBoundedFileSystemValue))
+                ShellCommandAnalysis.HasAuditedNonFileSystemValue(argument);
+            if (argument.AuthoredNonFileSystemValue is not ShellValueDomain.Unknown
+                && !hasBoundedNonFileSystemValue)
             {
                 hasUnprovedNonFileSystemSemantics = true;
             }
@@ -285,6 +279,14 @@ internal sealed class ShellPolicyOccurrencePathFacts
                 RedirectMode = redirect.Mode,
                 RedirectIsComplete = redirect.IsComplete
             });
+        }
+
+        foreach (var access in occurrence.FileSystemTreeAccesses)
+        {
+            facts.Add(CreateFact(
+                ShellPolicyPathOrigin.FileSystemTreeRoot,
+                access.Root,
+                ShellPathShape.Unknown));
         }
 
         return new ShellPolicyOccurrencePathFacts(

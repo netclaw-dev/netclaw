@@ -231,6 +231,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     {
         if (!result.IsResolved
             || result.HasDynamicSyntax
+            || result.RequiresExactTreeApproval
             || HasUnscopedPowerShellProviderOperand(result))
             return [];
 
@@ -1236,6 +1237,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     {
         if (!analysis.IsResolved
             || analysis.HasDynamicSyntax
+            || analysis.RequiresExactTreeApproval
             || HasUnscopedPowerShellProviderOperand(analysis))
             return true;
 

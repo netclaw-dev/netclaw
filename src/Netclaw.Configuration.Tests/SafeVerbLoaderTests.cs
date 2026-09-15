@@ -70,6 +70,8 @@ public sealed class SafeVerbLoaderTests
 
         // Read-only verbs added by the safe-verb expansion.
         Assert.True(list.Contains("Get-Date"));
+        Assert.True(list.Contains("Get-Process"));
+        Assert.True(list.Contains("Select-Object"));
         Assert.True(list.Contains("whoami"));
         Assert.True(list.Contains("git describe"));
         Assert.True(list.Contains("git ls-tree"));
@@ -83,7 +85,6 @@ public sealed class SafeVerbLoaderTests
         Assert.False(list.Contains("git log"));
         Assert.False(list.Contains("gh pr view"));
         Assert.False(list.Contains("gh api"));
-        Assert.False(list.Contains("Get-Process"));
         Assert.False(list.Contains("gh auth status"));
     }
 

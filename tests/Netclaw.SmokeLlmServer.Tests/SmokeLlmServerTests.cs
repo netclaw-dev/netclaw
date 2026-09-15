@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Net;
+using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.AspNetCore.Builder;
@@ -14,6 +15,7 @@ namespace Netclaw.SmokeLlmServer.Tests;
 
 public sealed class SmokeLlmServerTests : IAsyncLifetime
 {
+    private const string ProtectedApiKey = "unit-test-protected-key";
     private readonly string _tempDirectory = Path.Combine(Path.GetTempPath(), $"netclaw-smoke-llm-tests-{Guid.NewGuid():N}");
     private WebApplication? _app;
     private HttpClient? _client;
@@ -23,7 +25,7 @@ public sealed class SmokeLlmServerTests : IAsyncLifetime
     {
         Directory.CreateDirectory(_tempDirectory);
         _requestRecordPath = Path.Combine(_tempDirectory, "requests.jsonl");
-        _app = await SmokeLlmServerHost.StartAsync(new SmokeLlmServerOptions(0, _requestRecordPath));
+        _app = await SmokeLlmServerHost.StartAsync(new SmokeLlmServerOptions(0, _requestRecordPath, ProtectedApiKey));
         _client = new HttpClient { BaseAddress = new Uri(SmokeLlmServerHost.GetBaseAddress(_app)) };
     }
 
@@ -75,6 +77,42 @@ public sealed class SmokeLlmServerTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Protected_routes_require_the_configured_bearer_key_without_recording_it()
+    {
+        using var missingKeyResponse = await Client.GetAsync(
+            $"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/models",
+            TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, missingKeyResponse.StatusCode);
+
+        using var wrongKeyRequest = new HttpRequestMessage(
+            HttpMethod.Get,
+            $"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/models");
+        wrongKeyRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", "wrong-key");
+        using var wrongKeyResponse = await Client.SendAsync(wrongKeyRequest, TestContext.Current.CancellationToken);
+        Assert.Equal(HttpStatusCode.Unauthorized, wrongKeyResponse.StatusCode);
+
+        Client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer",
+            ProtectedApiKey);
+        var models = await Client.GetFromJsonAsync<JsonElement>(
+            $"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/models",
+            TestContext.Current.CancellationToken);
+        Assert.Equal(SmokeLlmServerOptions.ModelId, models.GetProperty("data")[0].GetProperty("id").GetString());
+
+        using var completionResponse = await Client.PostAsJsonAsync(
+            $"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/chat/completions",
+            new { model = SmokeLlmServerOptions.ModelId, messages = Array.Empty<object>() },
+            TestContext.Current.CancellationToken);
+        completionResponse.EnsureSuccessStatusCode();
+
+        var records = await File.ReadAllTextAsync(_requestRecordPath, TestContext.Current.CancellationToken);
+        Assert.Contains($"\"Route\":\"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/models\"", records, StringComparison.Ordinal);
+        Assert.Contains($"\"Route\":\"{SmokeLlmServerOptions.ProtectedRoutePrefix}/v1/chat/completions\"", records, StringComparison.Ordinal);
+        Assert.Contains("\"BearerAuthorized\":true", records, StringComparison.Ordinal);
+        Assert.DoesNotContain(ProtectedApiKey, records, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Bad_request_and_non_loopback_address_fail_loudly()
     {
         var response = await Client.PostAsJsonAsync("/v1/chat/completions", new { model = "unknown" }, TestContext.Current.CancellationToken);
@@ -82,7 +120,13 @@ public sealed class SmokeLlmServerTests : IAsyncLifetime
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
         Assert.Contains(SmokeLlmServerOptions.ModelId, await response.Content.ReadAsStringAsync(TestContext.Current.CancellationToken), StringComparison.Ordinal);
         await Assert.ThrowsAsync<ArgumentException>(async () =>
-            await SmokeLlmServerHost.StartAsync(new SmokeLlmServerOptions(0, _requestRecordPath, IPAddress.Any), TestContext.Current.CancellationToken));
+            await SmokeLlmServerHost.StartAsync(
+                new SmokeLlmServerOptions(0, _requestRecordPath, ProtectedApiKey, IPAddress.Any),
+                TestContext.Current.CancellationToken));
+        await Assert.ThrowsAsync<ArgumentException>(async () =>
+            await SmokeLlmServerHost.StartAsync(
+                new SmokeLlmServerOptions(0, _requestRecordPath, string.Empty),
+                TestContext.Current.CancellationToken));
     }
 
     [Fact]

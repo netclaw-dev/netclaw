@@ -32,6 +32,7 @@ fi
 echo "provider-add: checking 'smoke-add-provider' in config..."
 assert_field '.Providers["smoke-add-provider"].Type'     'openai-compatible'     "$config_json" || :
 assert_field '.Providers["smoke-add-provider"].Endpoint' "$SMOKE_LLM_ENDPOINT"  "$config_json" || :
+assert_field '(.Providers["smoke-add-provider"] | has("AuthMethod"))' 'false' "$config_json" || :
 
 echo "provider-add: cross-checking 'netclaw provider list'..."
 list_output="$("$NETCLAW_SMOKE_CLI" provider list 2>/dev/null | tr -d '\r')"

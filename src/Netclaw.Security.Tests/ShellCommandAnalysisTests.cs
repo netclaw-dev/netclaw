@@ -16,6 +16,10 @@ public sealed class ShellCommandAnalysisTests
         ShellExecutionEnvironment.CreatePowerShell(
             @"C:\Program Files\PowerShell\7\pwsh.exe",
             PwshDialect.PowerShell7);
+    private static readonly ShellExecutionEnvironment WindowsPowerShellEnvironment =
+        ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            PwshDialect.WindowsPowerShell51);
 
     private readonly ShellCommandAnalyzer _analyzer = new(BashEnvironment);
 
@@ -211,6 +215,27 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Fact]
+    public void Analysis_snapshots_commands_before_it_caches_dynamic_syntax()
+    {
+        var parsed = PowerShellEnvironment.Parse("Get-Date", @"C:\work");
+        var commands = parsed.Commands.ToList();
+        var analysis = new ShellCommandAnalysis(
+            PowerShellEnvironment,
+            "Get-Date",
+            @"C:\work",
+            commands,
+            denyOnlyClauses: [],
+            ShellAnalysisFailure.None,
+            new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),
+            syntaxProofComplete: true);
+
+        commands.Clear();
+
+        Assert.Single(analysis.Commands);
+        Assert.False(analysis.HasDynamicSyntax);
+    }
+
+    [Fact]
     public void Power_shell_proved_command_argument_region_is_complete()
     {
         var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
@@ -226,7 +251,7 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Fact]
-    public void Power_shell_unknown_command_argument_region_stays_dynamic()
+    public void Power_shell_unknown_command_argument_region_fails_closed()
     {
         var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
         var analysis = analyzer.Analyze(
@@ -235,6 +260,9 @@ public sealed class ShellCommandAnalysisTests
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
         Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+        Assert.Contains(
+            analysis.Commands,
+            command => command.Clause.Verb.Joined == "Remove-Item");
     }
 
     [Theory]
@@ -302,14 +330,48 @@ public sealed class ShellCommandAnalysisTests
             Describe(analysis));
     }
 
-    [Fact]
-    public void Power_shell_empty_command_argument_region_stays_dynamic()
+    [Theory]
+    [InlineData("ForEach-Object { }")]
+    [InlineData("ForEach-Object { $_.FullName }")]
+    [InlineData("Where-Object { $_.Length -gt 0 }")]
+    public void Power_shell_proved_command_argument_region_without_child_commands_is_complete(
+        string command)
     {
         var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
-        var analysis = analyzer.Analyze("ForEach-Object { }", @"C:\work");
+        var analysis = analyzer.Analyze(command, @"C:\work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
-        Assert.True(analysis.HasDynamicSyntax, Describe(analysis));
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Theory]
+    [InlineData("ForEach-Object { ($_ -split '/')[0..3] -join '/' }")]
+    [InlineData("ForEach-Object { ($PSItem -split \"/\")[2] -join \"/\" }")]
+    public void Power_shell_split_index_join_projection_region_is_complete(string command)
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(command, @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        Assert.False(analysis.RequiresExactTreeApproval);
+    }
+
+    [Theory]
+    [InlineData("ForEach-Object { $_.Delete() }")]
+    [InlineData("ForEach-Object { $path = '.\\victim.txt' }")]
+    [InlineData("ForEach-Object { \"$(Remove-Item .\\victim.txt)\" }")]
+    [InlineData("ForEach-Object { ($_ -split $separator)[0] -join '/' }")]
+    [InlineData("ForEach-Object { ($_ -split '/')[0..$(Get-Date)] -join '/' }")]
+    public void Power_shell_unsupported_command_argument_expression_stays_strict(
+        string command)
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(command, @"C:\work");
+
+        Assert.True(
+            analysis.Failure != ShellAnalysisFailure.None || analysis.HasDynamicSyntax,
+            Describe(analysis));
     }
 
     [Fact]
@@ -542,6 +604,173 @@ public sealed class ShellCommandAnalysisTests
         var redirect = Assert.IsType<FileRedirectAnalysis>(
             Assert.Single(Assert.Single(analysis.Commands).Redirects));
         Assert.IsType<ShellValueDomain.Unknown>(redirect.Target);
+    }
+
+    [Theory]
+    [InlineData(
+        "Get-Content \"C:\\WORK\\PROJECT\\SourceFile.cs\" | Select-Object -Index (113..145)")]
+    [InlineData(
+        "Select-String -Path \"C:\\WORK\\PROJECT\\SourceFile.cs\" -Pattern needle | Select-Object LineNumber,Line")]
+    [InlineData(
+        "Get-Process -Name dotnet,powershell | Select-Object Id,ProcessName,StartTime")]
+    public void Windows_power_shell_live_read_shapes_are_reusable(string command)
+    {
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        Assert.False(analysis.RequiresExactTreeApproval);
+    }
+
+    [Fact]
+    public void Windows_power_shell_recursive_tree_requires_exact_approval()
+    {
+        const string command =
+            "Get-ChildItem -Path \"C:\\WORK\\PROJECT\" -Recurse "
+            + "-Include *.cs,*.conf,*.json | Select-Object -ExpandProperty FullName";
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        Assert.True(analysis.RequiresExactTreeApproval);
+        var access = Assert.Single(analysis.Commands[0].FileSystemTreeAccesses);
+        Assert.Equal(ShellTreeTraversalMode.RecursiveMayFollowLinks, access.Traversal);
+    }
+
+    [Fact]
+    public void Power_shell_7_recursive_tree_without_link_following_is_reusable()
+    {
+        const string command =
+            "Get-ChildItem -Path \"C:\\WORK\\PROJECT\" -Recurse "
+            + "-Include *.cs,*.conf,*.json | Select-Object -ExpandProperty FullName";
+        var analysis = new ShellCommandAnalyzer(PowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        Assert.False(analysis.RequiresExactTreeApproval);
+        var access = Assert.Single(analysis.Commands[0].FileSystemTreeAccesses);
+        Assert.Equal(ShellTreeTraversalMode.RecursiveWithoutFollowingLinks, access.Traversal);
+    }
+
+    [Theory]
+    [InlineData("Get-Process | Select-Object @{Name='Process';Expression={$_.Name}}")]
+    [InlineData("Get-Process | Select-Object Name,$property")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index $(Get-Date)")]
+    public void Unproved_power_shell_projection_facts_stay_dynamic(string command)
+    {
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.True(
+            analysis.Failure != ShellAnalysisFailure.None || analysis.HasDynamicSyntax,
+            Describe(analysis));
+    }
+
+    [Theory]
+    [InlineData("Get-ChildItem -Path C:\\WORK\\ONE,C:\\WORK\\TWO")]
+    [InlineData("Get-ChildItem -Path C:\\WORK\\*\\src")]
+    [InlineData("Get-ChildItem -Path C:\\WORK\\PROJECT -Recurse:$flag")]
+    [InlineData("Get-ChildItem -Path \\*.cs")]
+    [InlineData("Get-ChildItem -Path /*.cs")]
+    [InlineData("Get-ChildItem -Path \\\\server\\*.cs")]
+    [InlineData("Get-ChildItem -Path \\\\?\\C:\\*.cs")]
+    [InlineData("Get-ChildItem -Path C:*.cs")]
+    [InlineData("Get-ChildItem -Path C:folder\\*.cs")]
+    public void Unbounded_power_shell_tree_shapes_require_exact_approval(string command)
+    {
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.True(analysis.RequiresExactTreeApproval);
+    }
+
+    [Fact]
+    public void Future_tree_traversal_mode_is_not_reusable()
+    {
+        Assert.False(
+            ShellFileSystemTreeAccessPolicy.IsReusableTraversal(
+                (ShellTreeTraversalMode)int.MaxValue));
+    }
+
+    [Theory]
+    [InlineData("Get-Process | Select-Object Name,Name")]
+    [InlineData("Get-Process -Name 'dotnet,powershell' | Select-Object Id")]
+    public void Audited_static_nonfilesystem_values_are_reusable(string command)
+    {
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+    }
+
+    [Fact]
+    public void Power_shell_nonfilesystem_list_over_cap_stays_dynamic()
+    {
+        var properties = string.Join(',', Enumerable.Range(1, 33).Select(i => $"P{i}"));
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            $"Get-Process | Select-Object {properties}",
+            @"C:\WORK\PROJECT");
+
+        Assert.True(
+            analysis.Failure != ShellAnalysisFailure.None || analysis.HasDynamicSyntax,
+            Describe(analysis));
+    }
+
+    [Theory]
+    [InlineData("Get-Process | Select-Object Name$(Get-Date)")]
+    [InlineData("Get-Process | Select-Object Name$property")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (113 + 145)")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (113..$end)")]
+    public void Unproved_nonfilesystem_domains_stay_dynamic(string command)
+    {
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.True(
+            analysis.Failure != ShellAnalysisFailure.None || analysis.HasDynamicSyntax,
+            Describe(analysis));
+    }
+
+    [Theory]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (-1..145)")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (0..4096)")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (0..2147483647)")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (0..2147483648)")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (0..9223372036854775807)")]
+    public void Resource_unbounded_integer_ranges_stay_dynamic(string command)
+    {
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.True(
+            analysis.Failure != ShellAnalysisFailure.None || analysis.HasDynamicSyntax,
+            Describe(analysis));
+    }
+
+    [Theory]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (0..0)")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (0..4095)")]
+    [InlineData("Get-Content C:\\WORK\\PROJECT\\a.cs | Select-Object -Index (2147483646..2147483647)")]
+    public void Bounded_integer_range_limits_are_reusable(string command)
+    {
+        var analysis = new ShellCommandAnalyzer(WindowsPowerShellEnvironment).Analyze(
+            command,
+            @"C:\WORK\PROJECT");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
     }
 
     private static string Describe(ShellCommandAnalysis analysis)

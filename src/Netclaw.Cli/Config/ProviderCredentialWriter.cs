@@ -51,6 +51,12 @@ internal static class ProviderCredentialWriter
         ISecretsProtector? protector = null,
         IReadOnlyDictionary<string, object?>? vendorOptions = null)
     {
+        if (authMethod == AuthMethod.ApiKey && string.IsNullOrWhiteSpace(apiKey))
+            throw new ArgumentException("API key authentication requires a nonblank API key.", nameof(apiKey));
+
+        if (authMethod == AuthMethod.None && !string.IsNullOrWhiteSpace(apiKey))
+            throw new ArgumentException("No authentication cannot include an API key.", nameof(apiKey));
+
         paths.EnsureDirectoriesExist();
 
         // Build provider config entry in netclaw.json
@@ -100,6 +106,15 @@ internal static class ProviderCredentialWriter
             };
             SecretsFileWriter.Write(paths.SecretsPath, secrets,
                 options: JsonDefaults.Indented, protector: effectiveProtector);
+        }
+        else if (authMethod == AuthMethod.None)
+        {
+            var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
+            if (secretProviders?.Remove(providerName) == true)
+            {
+                SecretsFileWriter.Write(paths.SecretsPath, secrets,
+                    options: JsonDefaults.Indented, protector: effectiveProtector);
+            }
         }
     }
 }

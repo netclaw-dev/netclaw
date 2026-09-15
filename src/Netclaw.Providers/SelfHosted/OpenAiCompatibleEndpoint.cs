@@ -3,7 +3,18 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Net.Http.Headers;
+
 namespace Netclaw.Providers.SelfHosted;
+
+internal static class OpenAiCompatibleHttp
+{
+    public static void ApplyBearerAuth(HttpRequestMessage request, string? apiKey)
+    {
+        if (!string.IsNullOrWhiteSpace(apiKey))
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+    }
+}
 
 public sealed record OpenAiCompatibleEndpoint(
     Uri BaseUri,

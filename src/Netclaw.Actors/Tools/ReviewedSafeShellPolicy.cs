@@ -267,6 +267,15 @@ internal sealed class ReviewedSafeShellPolicy
         if (sourceOccurrence is null)
             return false;
 
+        if (ShellFileSystemTreeAccessPolicy.RequiresExactApproval(
+                candidateShell == ApprovalShell.PowerShell
+                    ? ShellGrammar.PowerShell
+                    : ShellGrammar.Bash,
+                sourceOccurrence))
+        {
+            return false;
+        }
+
         if (HasFileWritingRedirect(resolvedPaths))
             return false;
 
@@ -301,14 +310,17 @@ internal sealed class ReviewedSafeShellPolicy
             ? ShellPathStyle.Posix
             : ShellPathStyle.Windows;
         foreach (var fact in resolvedPaths.Facts.Where(static fact =>
-                     fact.Source.Origin == ShellPolicyPathOrigin.AuthoredArgument))
+                     fact.Source.Origin is ShellPolicyPathOrigin.AuthoredArgument
+                         or ShellPolicyPathOrigin.FileSystemTreeRoot))
         {
+            var validDomain = fact.Source.Origin == ShellPolicyPathOrigin.FileSystemTreeRoot
+                ? fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.PathPattern
+                : fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
             if (fact.Source.AuthoredPathShape == ShellPathShape.Posix
                     && pathStyle != ShellPathStyle.Posix
                 || fact.Source.AuthoredPathShape == ShellPathShape.Windows
                     && pathStyle != ShellPathStyle.Windows
-                || fact.Source.Domain is not
-                    (ShellValueDomain.Exact or ShellValueDomain.FiniteSet)
+                || !validDomain
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0
                 || fact.Paths.Any(path =>

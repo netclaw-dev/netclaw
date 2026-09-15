@@ -333,6 +333,20 @@ Done when:
   Each regression locks its evidence source, approval shape, and actor contact.
 - [x] A safe pipeline stage can compose with a stored grant for each stage that
   still requires approval.
+- [x] The paired Windows PowerShell consumer pins official
+  ShellSyntaxTree `0.4.0-beta.1`.
+  Partial diagnostic syntax remains denial-only. Typed tree facts keep Windows
+  PowerShell 5.1 link-following recursion exact-only. Interactive Auto and
+  Approval offer only Once or Deny. Headless Auto denies the call. The exact
+  retry repeats hard-deny and protected-path checks. The explicit restore,
+  Release build, Security tests, Actors tests, Configuration tests, and 79
+  focused mutants passed against the official package. The Netclaw beta
+  remains unpublished.
+- [x] Adopt ShellSyntaxTree `0.4.0-beta.2` with analyzer and approval-catalog
+  coverage for bounded PowerShell split/index/join projections on PowerShell 7
+  and Windows PowerShell 5.1. Dynamic projection operands stay strict. The
+  public package restore, Release build, full test suite, and all 79 focused
+  shell-policy mutants pass.
 - [x] A prompt excludes a safe stage from the approval candidates that the user
   can persist.
 - [x] A prompt excludes candidates that existing session or persistent grants
@@ -344,6 +358,10 @@ Done when:
   each effective directory, across live, sub-agent, and redrive paths.
 - [x] External paths, mismatched grants, dynamic syntax, and hard-deny rules
   keep their strict behavior.
+- [x] PowerShell 7 command-argument regions with no child commands can reuse an
+  explicit host grant when ShellSyntaxTree reports a complete known region.
+  Unknown receivers, unknown syntax nodes, methods, assignments, and executable
+  substitutions remain one-time-only. A body command needs separate authority.
 - [x] Bash causal approval intent composes exact stored grants for an initial
   exact ShellSyntaxTree 0.3.4 directory change with reviewed diagnostic tails.
   Execution facts, folder grants, protected paths, headless authority, and

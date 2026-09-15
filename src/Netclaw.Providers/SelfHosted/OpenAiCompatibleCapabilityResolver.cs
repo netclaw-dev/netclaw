@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Net.Http.Headers;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
@@ -53,7 +52,7 @@ public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolve
         try
         {
             using var modelsRequest = new HttpRequestMessage(HttpMethod.Get, _endpoint.ModelsPath);
-            ApplyAuth(modelsRequest);
+            OpenAiCompatibleHttp.ApplyBearerAuth(modelsRequest, _endpoint.ApiKey);
 
             using var modelsResponse = await _httpClient.SendAsync(modelsRequest, ct);
             modelsResponse.EnsureSuccessStatusCode();
@@ -63,7 +62,7 @@ public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolve
             string? propsJson = null;
             using (var propsRequest = new HttpRequestMessage(HttpMethod.Get, "/props"))
             {
-                ApplyAuth(propsRequest);
+                OpenAiCompatibleHttp.ApplyBearerAuth(propsRequest, _endpoint.ApiKey);
                 using var propsResponse = await _httpClient.SendAsync(propsRequest, ct);
                 if (propsResponse.IsSuccessStatusCode)
                     propsJson = await propsResponse.Content.ReadAsStringAsync(ct);
@@ -117,11 +116,5 @@ public sealed class OpenAiCompatibleCapabilityResolver : IModelCapabilityResolve
                 return strategy.Parse(probe);
         }
         return null;
-    }
-
-    private void ApplyAuth(HttpRequestMessage request)
-    {
-        if (!string.IsNullOrWhiteSpace(_endpoint.ApiKey))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _endpoint.ApiKey);
     }
 }

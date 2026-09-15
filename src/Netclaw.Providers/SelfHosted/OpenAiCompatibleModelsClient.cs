@@ -3,7 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Net.Http.Headers;
 using System.Text.Json;
 
 namespace Netclaw.Providers.SelfHosted;
@@ -22,7 +21,7 @@ public sealed class OpenAiCompatibleModelsClient
     public async Task<string[]> ListModelIdsAsync(CancellationToken cancellationToken = default)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, _endpoint.ModelsPath);
-        ApplyAuth(request);
+        OpenAiCompatibleHttp.ApplyBearerAuth(request, _endpoint.ApiKey);
 
         using var response = await _httpClient.SendAsync(request, cancellationToken);
         response.EnsureSuccessStatusCode();
@@ -37,11 +36,5 @@ public sealed class OpenAiCompatibleModelsClient
         return [.. data.EnumerateArray()
             .Where(x => x.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
             .Select(x => x.GetProperty("id").GetString()!)];
-    }
-
-    private void ApplyAuth(HttpRequestMessage request)
-    {
-        if (!string.IsNullOrWhiteSpace(_endpoint.ApiKey))
-            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _endpoint.ApiKey);
     }
 }

@@ -34,6 +34,7 @@ public enum ProviderManagerState
     AddGitHubCopilotEnterpriseHost,
     AddGitHubCopilotEnterpriseApiBase,
     AddCredentials,
+    AddOptionalApiKey,
     AddOAuthDeviceFlow,
     AddBrowserOAuthFlow,
     AddValidating,
@@ -41,6 +42,7 @@ public enum ProviderManagerState
     Details,
     RenameProvider,
     FixCredentials,
+    FixSelectOptionalApiKeyUpdate,
     RemoveConfirm
 }
 
@@ -53,6 +55,16 @@ public enum ProviderHealthStatus
     Probing,
     Healthy,
     Unhealthy
+}
+
+/// <summary>
+/// The explicit action for an optional API key during a provider repair.
+/// </summary>
+public enum OptionalApiKeyUpdate
+{
+    KeepCurrent,
+    Replace,
+    Remove
 }
 
 /// <summary>
@@ -141,6 +153,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     // ── Fix flow state ──
     public string? FixApiKey { get; set; }
     public string? FixEndpoint { get; set; }
+    public OptionalApiKeyUpdate? FixOptionalApiKeyUpdate { get; private set; }
 
     // ── Remove flow state ──
     public string? RemoveProviderName { get; set; }
@@ -384,7 +397,12 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         if (NewProviderType is null) return;
 
         var descriptor = _registry.Get(NewProviderType);
-        if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
+
+        // Credential-optional providers skip the auth picker: nothing there is
+        // required. An optional Bearer key is offered after the endpoint
+        // (AddOptionalApiKey), which keeps the picker's label list — which drops
+        // AuthMethod.None — from forcing a key the provider does not need.
+        if (descriptor.Auth.IsCredentialOptional())
         {
             NewAuthMethod = AuthMethod.None;
             CurrentState.Value = ProviderManagerState.AddCredentials;
@@ -395,6 +413,30 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         }
 
         NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Submit the endpoint for a credential-optional provider. Providers that
+    /// accept an optional Bearer key route to <see cref="ProviderManagerState.AddOptionalApiKey"/>
+    /// before probing; the rest probe immediately.
+    /// </summary>
+    /// <remarks>
+    /// Separate from <see cref="SubmitCredentials"/> because that method is also
+    /// the submit path for required API keys, where a blank answer is an error.
+    /// </remarks>
+    public void SubmitEndpoint()
+    {
+        if (NewProviderType is null) return;
+
+        var descriptor = _registry.Get(NewProviderType);
+        if (descriptor.Auth.OffersOptionalApiKey())
+        {
+            CurrentState.Value = ProviderManagerState.AddOptionalApiKey;
+            NotifyStateChanged();
+            return;
+        }
+
+        SubmitCredentials();
     }
 
     /// <summary>
@@ -445,6 +487,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         DetailProvider = item;
         FixApiKey = null;
         FixEndpoint = item.Entry?.Endpoint;
+        FixOptionalApiKeyUpdate = null;
         IsFixFlow = true;
         CurrentState.Value = ProviderManagerState.FixCredentials;
         NotifyStateChanged();
@@ -653,6 +696,76 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
     }
 
     /// <summary>
+    /// Submit the optional Bearer key for a credential-optional provider and
+    /// start the validation probe. A blank key is valid: it leaves the provider
+    /// unauthenticated, which is the pre-existing default.
+    /// </summary>
+    /// <remarks>
+    /// Records <see cref="AuthMethod.ApiKey"/> only when a key was actually
+    /// supplied, so the provider list reports the credential that is on disk and
+    /// matches what <c>netclaw provider add --api-key</c> writes. The runtime sends
+    /// the Bearer header only when the operator selects <see cref="AuthMethod.ApiKey"/>.
+    /// <see cref="AuthMethod.None"/> keeps the endpoint credential-free.
+    /// </remarks>
+    public void SubmitOptionalApiKey()
+    {
+        NewAuthMethod = string.IsNullOrWhiteSpace(NewApiKey)
+            ? AuthMethod.None
+            : AuthMethod.ApiKey;
+        CurrentState.Value = ProviderManagerState.AddValidating;
+        NotifyStateChanged();
+        StartProbe();
+    }
+
+    /// <summary>
+    /// Show the optional Bearer key input for an add or replacement operation.
+    /// </summary>
+    public void AdvanceToOptionalApiKey()
+    {
+        CurrentState.Value = ProviderManagerState.AddOptionalApiKey;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Show the optional API-key choices for a provider repair.
+    /// </summary>
+    public void AdvanceToFixOptionalApiKeyUpdate()
+    {
+        FixOptionalApiKeyUpdate = null;
+        CurrentState.Value = ProviderManagerState.FixSelectOptionalApiKeyUpdate;
+        NotifyStateChanged();
+    }
+
+    /// <summary>
+    /// Select the optional API-key action for a provider repair.
+    /// </summary>
+    public void SelectFixOptionalApiKeyUpdate(OptionalApiKeyUpdate update)
+    {
+        if (DetailProvider is null)
+            return;
+
+        var hasStoredKey = DetailProvider.Entry is { } entry && !entry.ApiKey.IsNullOrEmpty();
+        if (update == OptionalApiKeyUpdate.KeepCurrent && !hasStoredKey)
+        {
+            StatusMessage.Value = "This provider has no stored API key.";
+            RequestRedraw();
+            return;
+        }
+
+        FixOptionalApiKeyUpdate = update;
+        FixApiKey = null;
+
+        if (update == OptionalApiKeyUpdate.Replace)
+        {
+            CurrentState.Value = ProviderManagerState.AddOptionalApiKey;
+            NotifyStateChanged();
+            return;
+        }
+
+        SubmitFixCredentials();
+    }
+
+    /// <summary>
     /// Submit fixed credentials and start validation probe.
     /// </summary>
     public void SubmitFixCredentials()
@@ -662,7 +775,19 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         var type = DetailProvider.ProviderType;
         var descriptor = _registry.Get(type);
 
-        if (descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.ApiKey) && string.IsNullOrWhiteSpace(FixApiKey))
+        var optionalApiKey = descriptor.Auth.OffersOptionalApiKey();
+        if (optionalApiKey && FixOptionalApiKeyUpdate is null)
+        {
+            StatusMessage.Value = "Select how Netclaw must update the API key.";
+            RequestRedraw();
+            return;
+        }
+
+        var keyIsRequired = descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.ApiKey)
+                            && (!descriptor.Auth.IsCredentialOptional()
+                                || FixOptionalApiKeyUpdate == OptionalApiKeyUpdate.Replace);
+
+        if (keyIsRequired && string.IsNullOrWhiteSpace(FixApiKey))
         {
             StatusMessage.Value = "API key is required.";
             RequestRedraw();
@@ -674,9 +799,32 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         // on disk with no rollback. The normal add flow defers its write identically.
         NewProviderType = type;
         NewEndpoint = FixEndpoint;
-        NewApiKey = FixApiKey
-            ?? DetailProvider.Entry?.ApiKey?.Value
-            ?? DetailProvider.Entry?.OAuthAccessToken?.Value;
+        if (optionalApiKey)
+        {
+            NewAuthMethod = FixOptionalApiKeyUpdate switch
+            {
+                OptionalApiKeyUpdate.KeepCurrent => AuthMethod.ApiKey,
+                OptionalApiKeyUpdate.Replace => AuthMethod.ApiKey,
+                OptionalApiKeyUpdate.Remove => AuthMethod.None,
+                _ => throw new InvalidOperationException("The optional API-key update is unresolved.")
+            };
+            NewApiKey = FixOptionalApiKeyUpdate switch
+            {
+                OptionalApiKeyUpdate.KeepCurrent => DetailProvider.Entry?.ApiKey?.Value,
+                OptionalApiKeyUpdate.Replace => FixApiKey,
+                OptionalApiKeyUpdate.Remove => null,
+                _ => throw new InvalidOperationException("The optional API-key update is unresolved.")
+            };
+        }
+        else
+        {
+            NewAuthMethod = descriptor.Auth.SupportedAuthMethods.Contains(AuthMethod.ApiKey)
+                ? AuthMethod.ApiKey
+                : DetailProvider.Entry?.AuthMethod ?? AuthMethod.None;
+            NewApiKey = FixApiKey
+                ?? DetailProvider.Entry?.ApiKey?.Value
+                ?? DetailProvider.Entry?.OAuthAccessToken?.Value;
+        }
         NewVendorOptions = string.Equals(type, "github-copilot", StringComparison.OrdinalIgnoreCase)
                            && DetailProvider.Entry is not null
             ? GitHubCopilotAuthResolver.ToVendorOptions(DetailProvider.Entry)
@@ -688,36 +836,78 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         StartProbe();
     }
 
-    // Persists the fixed API key (to secrets.json) and endpoint (to netclaw.json) for the provider
-    // being repaired. Called only from the probe-success branch so an invalid new credential never
-    // overwrites the working one. Updates the existing provider entry keyed by ConfiguredName.
+    // This method writes the selected authentication state only after a successful probe.
+    // It keeps AuthMethod and its secret synchronized for the runtime consumer.
     private void WriteFixedCredentials()
     {
         if (DetailProvider?.ConfiguredName is not { } name)
             return;
 
-        if (!string.IsNullOrWhiteSpace(FixApiKey))
-        {
-            var (_, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
-            var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
-            secretProviders[name] = new Dictionary<string, object>
-            {
-                ["ApiKey"] = FixApiKey
-            };
-            ConfigFileHelper.WriteSecretsFile(_paths, secrets);
-        }
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var (config, secrets) = ConfigFileHelper.LoadConfigFiles(_paths);
+        var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
+        if (!providers.TryGetValue(name, out var rawProvider))
+            return;
 
-        if (FixEndpoint is not null && DetailProvider.Entry is not null
-            && !string.Equals(FixEndpoint, DetailProvider.Entry.Endpoint, StringComparison.Ordinal))
+        var provider = ConfigFileHelper.DeserializeSection<Dictionary<string, object>>(rawProvider) ?? [];
+        if (FixEndpoint is not null)
+            provider["Endpoint"] = FixEndpoint;
+
+        if (NewAuthMethod == AuthMethod.None)
+            provider.Remove("AuthMethod");
+        else
+            provider["AuthMethod"] = NewAuthMethod.ToString();
+
+        providers[name] = provider;
+        ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+
+        try
         {
-            var (config, _) = ConfigFileHelper.LoadConfigFiles(_paths);
-            var providers = ConfigFileHelper.GetOrCreateSection(config, "Providers");
-            if (providers.TryGetValue(name, out var existing) &&
-                existing is Dictionary<string, object> providerDict)
+            if (NewAuthMethod == AuthMethod.ApiKey && !string.IsNullOrWhiteSpace(NewApiKey))
             {
-                providerDict["Endpoint"] = FixEndpoint;
-                ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+                var secretProviders = ConfigFileHelper.GetOrCreateSection(secrets, "Providers");
+                secretProviders[name] = new Dictionary<string, object>
+                {
+                    ["ApiKey"] = NewApiKey
+                };
+                ConfigFileHelper.WriteSecretsFile(_paths, secrets);
+                return;
             }
+
+            if (NewAuthMethod == AuthMethod.None)
+            {
+                var secretProviders = ConfigFileHelper.GetSectionOrNull(secrets, "Providers");
+                if (secretProviders?.TryGetValue(name, out var rawSecret) == true)
+                {
+                    var secret = ConfigFileHelper.DeserializeSection<Dictionary<string, object>>(rawSecret) ?? [];
+                    if (secret.Remove("ApiKey"))
+                    {
+                        if (secret.Count == 0)
+                            secretProviders.Remove(name);
+                        else
+                            secretProviders[name] = secret;
+                        ConfigFileHelper.WriteSecretsFile(_paths, secrets);
+                    }
+                }
+            }
+        }
+        catch (Exception secretError)
+        {
+            try
+            {
+                AtomicFile.WriteAllText(_paths.NetclawConfigPath, configBefore);
+            }
+            catch (Exception rollbackError)
+            {
+                throw new AggregateException(
+                    "The secret update and the configuration rollback both failed.",
+                    secretError,
+                    rollbackError);
+            }
+
+            throw new IOException(
+                "The secret update failed. Netclaw restored the prior provider configuration.",
+                secretError);
         }
     }
 
@@ -972,6 +1162,7 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
         IsFixFlow = false;
         FixApiKey = null;
         FixEndpoint = null;
+        FixOptionalApiKeyUpdate = null;
         RemoveProviderName = null;
         RemoveBlockingRoles.Clear();
         RenameNewName = null;
@@ -1016,17 +1207,27 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
                 break;
             case ProviderManagerState.AddCredentials:
                 var descriptor = _registry.Get(NewProviderType ?? "");
-                if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
+                if (descriptor.Auth.IsCredentialOptional())
                     GoBackToList();
                 else
                     CurrentState.Value = ProviderManagerState.AddSelectAuth;
+                NotifyStateChanged();
+                break;
+            case ProviderManagerState.AddOptionalApiKey:
+                CurrentState.Value = IsFixFlow
+                    ? ProviderManagerState.FixSelectOptionalApiKeyUpdate
+                    : ProviderManagerState.AddCredentials;
                 NotifyStateChanged();
                 break;
             case ProviderManagerState.AddValidating:
                 CancelProbe();
                 if (IsFixFlow)
                 {
-                    CurrentState.Value = ProviderManagerState.FixCredentials;
+                    var fixDescriptor = _registry.Get(NewProviderType ?? DetailProvider?.ProviderType ?? "");
+                    CurrentState.Value = fixDescriptor.Auth.OffersOptionalApiKey()
+                                         && FixOptionalApiKeyUpdate == OptionalApiKeyUpdate.Replace
+                        ? ProviderManagerState.AddOptionalApiKey
+                        : ProviderManagerState.FixCredentials;
                 }
                 else
                 {
@@ -1043,6 +1244,10 @@ public sealed class ProviderManagerViewModel : ReactiveViewModel
             case ProviderManagerState.Details:
             case ProviderManagerState.FixCredentials:
                 GoBackToList();
+                break;
+            case ProviderManagerState.FixSelectOptionalApiKeyUpdate:
+                CurrentState.Value = ProviderManagerState.FixCredentials;
+                NotifyStateChanged();
                 break;
             case ProviderManagerState.RemoveConfirm:
                 GoBackToList();

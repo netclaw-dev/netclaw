@@ -102,6 +102,40 @@ public sealed class ProviderManagerPageTests : IDisposable
     }
 
     [Fact]
+    public async Task OpenAiCompatibleAdd_AcceptsTypedOptionalApiKey()
+    {
+        var (_, app, vm) = CreateHeadlessApp(out var input);
+
+        foreach (var _ in _registry.KnownTypeKeys.TakeWhile(type => type != "openai-compatible"))
+            input.EnqueueKey(ConsoleKey.DownArrow);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("https://gateway.example.test/v1");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueuePaste("sk-gateway-key");
+        input.EnqueueKey(ConsoleKey.Enter);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(cts.Token);
+        try
+        {
+            await WaitForConditionAsync(
+                () => vm.CurrentState.Value == ProviderManagerState.AddComplete,
+                cts.Token);
+
+            Assert.Equal(AuthMethod.ApiKey, vm.NewAuthMethod);
+            Assert.Equal("sk-gateway-key", vm.NewApiKey);
+            var providers = ProviderCommand.LoadProviders(_paths);
+            Assert.Equal("sk-gateway-key", providers[vm.NewProviderName!].ApiKey?.Value);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(cts.Token);
+        }
+    }
+
+    [Fact]
     public async Task OAuthDeviceFlow_WhenAuthorizationStarts_ShowsTheUserCode()
     {
         var (terminal, app, vm) = CreateHeadlessApp(out var input);
@@ -191,9 +225,168 @@ public sealed class ProviderManagerPageTests : IDisposable
         Assert.DoesNotContain(vm.DisplayProviders, p => p.ConfiguredName == "bravo-ollama");
     }
 
+    [Fact]
+    public async Task OpenAiCompatibleFix_OffersExplicitKeyChoicesAndAcceptsReplacement()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "https://gateway.example.test/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old-key" }
+            }
+        });
+
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(cts.Token);
+        try
+        {
+            await WaitForConditionAsync(
+                () => vm.CurrentState.Value == ProviderManagerState.List,
+                cts.Token);
+
+            vm.StartFixCredentials(vm.DisplayProviders.Single(p => p.ConfiguredName == "my-vllm"));
+            await WaitForConditionAsync(() => terminal.Contains("Fix credentials for"), cts.Token);
+
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => terminal.Contains("Keep current API key")
+                      && terminal.Contains("Replace API key")
+                      && terminal.Contains("Remove API key"),
+                cts.Token);
+
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => terminal.Contains("Enter the replacement API key"),
+                cts.Token);
+
+            input.EnqueuePaste("sk-new-key");
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => vm.CurrentState.Value == ProviderManagerState.List,
+                cts.Token);
+
+            var providers = ProviderCommand.LoadProviders(_paths);
+            Assert.Equal("sk-new-key", providers["my-vllm"].ApiKey?.Value);
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(cts.Token);
+        }
+    }
+
+    [Fact]
+    public async Task OpenAiCompatibleFix_FailedReplacementRestoresTypedValues()
+    {
+        WriteConfig(new Dictionary<string, object>
+        {
+            ["configVersion"] = 1,
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object>
+                {
+                    ["Type"] = "openai-compatible",
+                    ["Endpoint"] = "https://old.example.test/v1",
+                    ["AuthMethod"] = "ApiKey"
+                }
+            }
+        });
+        WriteSecrets(new Dictionary<string, object>
+        {
+            ["Providers"] = new Dictionary<string, object>
+            {
+                ["my-vllm"] = new Dictionary<string, object> { ["ApiKey"] = "sk-old-key" }
+            }
+        });
+        var configBefore = File.ReadAllText(_paths.NetclawConfigPath);
+        var secretsBefore = File.ReadAllText(_paths.SecretsPath);
+
+        var (terminal, app, vm) = CreateHeadlessApp(out var input);
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var run = app.RunAsync(cts.Token);
+        try
+        {
+            await WaitForConditionAsync(
+                () => vm.CurrentState.Value == ProviderManagerState.List,
+                cts.Token);
+            _fakeProbe.NextResult = new ProviderProbeResult(false, "Unauthorized", []);
+
+            vm.StartFixCredentials(vm.DisplayProviders.Single(p => p.ConfiguredName == "my-vllm"));
+            await WaitForConditionAsync(() => terminal.Contains("Fix credentials for"), cts.Token);
+
+            input.EnqueuePaste("https://new.example.test/v1");
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(() => terminal.Contains("Replace API key"), cts.Token);
+            input.EnqueueKey(ConsoleKey.DownArrow);
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => terminal.Contains("Enter the replacement API key"),
+                cts.Token);
+
+            input.EnqueuePaste("bad-key");
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => vm.ProbeResult.Value is { Success: false } && !vm.IsProbing.Value,
+                cts.Token);
+
+            input.EnqueueKey(ConsoleKey.Escape);
+            await WaitForConditionAsync(
+                () => vm.CurrentState.Value == ProviderManagerState.AddOptionalApiKey,
+                cts.Token);
+            input.EnqueuePaste("-fixed");
+            input.EnqueueKey(ConsoleKey.Enter);
+            await WaitForConditionAsync(
+                () => _fakeProbe.LastApiKey == "bad-key-fixed" && !vm.IsProbing.Value,
+                cts.Token);
+
+            input.EnqueueKey(ConsoleKey.Escape);
+            await WaitForConditionAsync(
+                () => vm.CurrentState.Value == ProviderManagerState.AddOptionalApiKey,
+                cts.Token);
+            input.EnqueueKey(ConsoleKey.Escape);
+            await WaitForConditionAsync(
+                () => vm.CurrentState.Value == ProviderManagerState.FixSelectOptionalApiKeyUpdate,
+                cts.Token);
+            input.EnqueueKey(ConsoleKey.Escape);
+            await WaitForConditionAsync(
+                () => terminal.Contains("https://new.example.test/v1"),
+                cts.Token);
+
+            Assert.Equal("https://new.example.test/v1", vm.FixEndpoint);
+            Assert.Equal(configBefore, File.ReadAllText(_paths.NetclawConfigPath));
+            Assert.Equal(secretsBefore, File.ReadAllText(_paths.SecretsPath));
+        }
+        finally
+        {
+            input.EnqueueKey(ConsoleKey.Q, control: true);
+            await run.WaitAsync(cts.Token);
+        }
+    }
+
     private void WriteConfig(Dictionary<string, object> data)
     {
         File.WriteAllText(_paths.NetclawConfigPath,
+            JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private void WriteSecrets(Dictionary<string, object> data)
+    {
+        File.WriteAllText(_paths.SecretsPath,
             JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true }));
     }
 

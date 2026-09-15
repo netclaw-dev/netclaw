@@ -243,7 +243,9 @@ public sealed class ShellCommandDenyOnlyPolicyTests
             @"C:\work",
             commands: [],
             clauses,
-            ShellAnalysisFailure.Unresolved);
+            ShellAnalysisFailure.Unresolved,
+            new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),
+            syntaxProofComplete: false);
 
         clauses.Clear();
 

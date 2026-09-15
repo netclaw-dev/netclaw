@@ -43,6 +43,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     private readonly FunctionCallContent _toolCall;
     private readonly ToolExecutionContext _context;
     private readonly DispatchingToolExecutor _executor;
+    private readonly ToolRegistry _registry;
+    private readonly ToolAccessPolicy _policy;
 
     private ShellApprovalHarness(
         string rootDirectory,
@@ -52,6 +54,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         DispatchingToolExecutor executor,
+        ToolRegistry registry,
+        ToolAccessPolicy policy,
         CountingApprovalService approvalService)
     {
         _rootDirectory = rootDirectory;
@@ -61,6 +65,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         _toolCall = toolCall;
         _context = context;
         _executor = executor;
+        _registry = registry;
+        _policy = policy;
         ApprovalService = approvalService;
     }
 
@@ -86,7 +92,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         TimeProvider? timeProvider = null,
         ShellApprovalHarnessScope? scope = null,
         SafeVerbList? safeVerbs = null,
-        IReadOnlyList<string>? deniedPaths = null)
+        IReadOnlyList<string>? deniedPaths = null,
+        ToolApprovalMode? shellApprovalMode = null)
     {
         var rootDirectory = Path.Combine(
             CanonicalTemporaryDirectory(),
@@ -181,7 +188,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         }
 
         var countingApprovalService = new CountingApprovalService(approvalService);
-        var config = CreateConfig();
+        var config = CreateConfig(shellApprovalMode);
         var commandPolicy = new ShellCommandPolicy(environment);
         var effectiveDeniedPaths = deniedPaths ?? (environment.Platform == ShellPlatform.Windows
             ? [@"C:\protected\config"]
@@ -238,6 +245,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             toolCall,
             context,
             executor,
+            registry,
+            policy,
             countingApprovalService);
     }
 
@@ -275,6 +284,14 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     public Task<ToolAuthorizationDecision> EvaluateDecisionAsync(CancellationToken ct)
         => _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
+
+    internal Task<ShellAuthorizationResult> EvaluateCoordinatorAsync(CancellationToken ct)
+        => new ShellPolicyCoordinator(_registry, _policy, ApprovalService).EvaluateAsync(
+            _registry.GetByName(_toolCall.Name)
+                ?? throw new InvalidOperationException("The shell tool is not registered."),
+            _toolCall,
+            _context,
+            ct);
 
     public void SeedOneTimeApproval(ToolApprovalContext approvalContext)
         => _context.Approval.SeedOneTimeApproval(
@@ -316,12 +333,21 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             Directory.Delete(_rootDirectory, recursive: true);
     }
 
-    private static ToolConfig CreateConfig()
-        => new()
+    private static ToolConfig CreateConfig(ToolApprovalMode? shellApprovalMode)
+    {
+        var config = new ToolConfig
         {
             ShellMode = ShellExecutionMode.HostAllowed,
             AudienceProfiles = ToolAudienceProfileDefaults.CreateProfilesForPosture(DeploymentPosture.Personal)
         };
+
+        if (shellApprovalMode is { } mode)
+        {
+            config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[ShellTool.ToolName] = mode;
+        }
+
+        return config;
+    }
 
     private static string CanonicalTemporaryDirectory()
     {

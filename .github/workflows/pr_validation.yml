@@ -197,6 +197,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  shell-analysis-mutation:
+    name: Shell Analysis Mutation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Test shell-analysis mutants"
+        run: ./scripts/run-shell-command-analysis-mutations.sh
+
+      - name: "Upload shell-analysis mutation report"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shell-command-analysis-mutation-report
+          path: ./artifacts/stryker/shell-command-analysis
+          if-no-files-found: ignore
+          retention-days: 14
+
   approval-directory-mutation:
     name: Approval Directory Mutation Tests
     runs-on: ubuntu-latest

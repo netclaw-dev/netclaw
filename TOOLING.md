@@ -29,7 +29,7 @@
 
 ## Focused Mutation Tests
 
-The path-access, tool authorization, approval directory, and reminder execution jobs run on each pull request, merge group, and `dev` push.
+The path-access, tool authorization, approval directory, reminder execution, and shell analysis mutation jobs run on each pull request, merge group, and `dev` push.
 Each Linux job runs in parallel with the normal test matrix.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
@@ -43,11 +43,12 @@ coverage. They do not replace positive and negative behavior tests.
 | `PathAccessPolicy.AddSessionRoots` | Only a Personal context receives shared session roots | 2 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AuthorizeMcpInvocation` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 79 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | `ApprovalPatternMatching.EvaluateApprovalScope` | Folder grants require containment and reject link escape | 4 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 
-Run the same check locally:
+Run the path-access check locally:
 
 ```bash
 ./scripts/run-path-access-mutations.sh
@@ -179,6 +180,23 @@ The final local run took 95 seconds after package restore.
 The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
 Its report directory is `artifacts/stryker/reminder-execution`.
 
+### Shell Analysis Gate
+
+Run the shell analysis gate:
+
+```bash
+./scripts/run-shell-command-analysis-mutations.sh
+```
+
+The script tests 79 mutants across execution-region accounting, denial-only
+matching, tree traversal and root correspondence, bounded non-filesystem
+values, candidate extraction, approval mode, path facts, and reviewed-safe
+policy. The job fails unless every mutant dies.
+
+The final local run took about 6 minutes. CI allows 30 minutes for
+hosted-runner variance and report upload. The report directory is
+`artifacts/stryker/shell-command-analysis`.
+
 ### Scope Review
 
 Review the target list after each security fix or authority policy change.
@@ -191,7 +209,7 @@ Add one focused target when all these conditions apply:
 - Deterministic tests reject that mutation.
 - A narrow source span contains the relevant decision.
 - Stryker produces stable, meaningful mutants for that span.
-- The total mutation job stays below its 10-minute CI timeout.
+- The total mutation job stays below its configured CI timeout.
 
 Use this procedure:
 

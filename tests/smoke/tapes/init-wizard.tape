@@ -34,6 +34,10 @@ Backspace 32
 Type "__SMOKE_LLM_ENDPOINT__"
 Enter
 
+# OpenAI-compatible endpoints can use an optional Bearer key.
+Wait+Screen@10s /API key \(optional\)/
+Enter
+
 # Wait for connection probe + model discovery. The success message
 # auto-advances to the model list quickly enough that vhs can miss it;
 # wait directly for the model selection header instead.

@@ -71,7 +71,7 @@ assertion="${ASSERT_DIR}/${TAPE_NAME}.sh"
 requires_assertion=false
 if [[ "${TAPE_BODY_DIR:-${TAPES_DIR}}" == "${TAPES_DIR}" ]]; then
   case "$TAPE_NAME" in
-    init-wizard|provider-add|provider-rename|config-*)
+    init-wizard|init-wizard-authenticated|provider-add|provider-rename|config-*)
       requires_assertion=true
       ;;
   esac
@@ -137,6 +137,8 @@ cat "$preamble" "$body" | sed \
   -e "s|__NETCLAW_SMOKE_MCP_SERVER__|${NETCLAW_SMOKE_MCP_SERVER:-}|g" \
   -e "s|__SMOKE_LLM_ENDPOINT__|${SMOKE_LLM_ENDPOINT:-}|g" \
   -e "s|__SMOKE_LLM_MODEL__|${SMOKE_LLM_MODEL:-}|g" \
+  -e "s|__SMOKE_LLM_PROTECTED_ENDPOINT__|${SMOKE_LLM_PROTECTED_ENDPOINT:-}|g" \
+  -e "s|__SMOKE_LLM_PROTECTED_API_KEY__|${SMOKE_LLM_PROTECTED_API_KEY:-}|g" \
   > "$combined"
 
 echo "==> Running native tape: ${TAPE_NAME} (timeout=${TAPE_TIMEOUT_S}s)"

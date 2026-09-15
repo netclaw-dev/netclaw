@@ -363,7 +363,10 @@ public sealed class ToolAccessPolicy
                 return pathAccessDeny;
         }
 
-        var mode = GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher);
+        var configuredMode = GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher);
+        var mode = ResolveShellApprovalMode(
+            configuredMode,
+            shellAnalysis?.RequiresExactTreeApproval == true);
         var approvalModeDecision = GetApprovalModeDecision(mode);
         if (approvalModeDecision is { Outcome: ToolAuthorizationOutcome.Denied })
             return approvalModeDecision;
@@ -877,6 +880,17 @@ public sealed class ToolAccessPolicy
             ToolApprovalMode.Deny => ToolAuthorizationDecision.Deny("tool_denied_by_approval_policy"),
             _ => ToolAuthorizationDecision.Deny("internal_policy_failure")
         };
+
+    /// <summary>
+    /// Converts an interactive Auto request to one exact approval when a tree
+    /// effect can follow links. The earlier path gate denies headless use.
+    /// </summary>
+    internal static ToolApprovalMode ResolveShellApprovalMode(
+        ToolApprovalMode configuredMode,
+        bool requiresExactTreeApproval)
+        => configuredMode == ToolApprovalMode.Auto && requiresExactTreeApproval
+            ? ToolApprovalMode.Approval
+            : configuredMode;
 
     internal static ToolApprovalContext NarrowShellApprovalContext(
         ToolApprovalContext context,

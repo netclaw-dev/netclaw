@@ -67,6 +67,7 @@ public sealed class ProviderStepView : IWizardStepView
             7 => BuildGitHubCopilotAuthHost(vm, callbacks),
             8 => BuildGitHubCopilotEnterpriseHost(vm, callbacks),
             9 => BuildGitHubCopilotEnterpriseApiBase(vm, callbacks),
+            10 => BuildOptionalApiKey(vm, callbacks),
             _ => Layouts.Empty()
         };
     }
@@ -92,7 +93,10 @@ public sealed class ProviderStepView : IWizardStepView
                 {
                     vm.SelectedProviderType = typeKey;
                     var descriptor = registry.Get(typeKey);
-                    if (descriptor.Auth.SupportedAuthMethods is [AuthMethod.None])
+                    // Credential-optional providers skip the auth picker: there is
+                    // nothing required to choose. An optional Bearer key is offered
+                    // later, after the endpoint (sub-step 10).
+                    if (descriptor.Auth.IsCredentialOptional())
                     {
                         vm.SelectedAuthMethod = AuthMethod.None;
                         vm.SetSubStep(2);
@@ -274,7 +278,7 @@ public sealed class ProviderStepView : IWizardStepView
 
         _lastFocusedList = null;
 
-        if (descriptor.Auth is EndpointOnlyAuth)
+        if (descriptor.Auth.IsCredentialOptional())
         {
             var defaultEndpoint = descriptor.DefaultEndpoint;
             _endpointInput = new TextInputNode().WithPlaceholder(defaultEndpoint);
@@ -286,8 +290,20 @@ public sealed class ProviderStepView : IWizardStepView
                 .Subscribe(text =>
                 {
                     vm.EndpointInput = string.IsNullOrWhiteSpace(text) ? defaultEndpoint : text;
-                    vm.SetSubStep(3);
-                    vm.StartProbe();
+
+                    // A provider that takes an optional Bearer key gets one more
+                    // prompt before the probe, so the probe validates the key the
+                    // operator actually intends to use.
+                    if (descriptor.Auth.OffersOptionalApiKey())
+                    {
+                        vm.SetSubStep(10);
+                    }
+                    else
+                    {
+                        vm.SetSubStep(3);
+                        vm.StartProbe();
+                    }
+
                     callbacks.InvalidateAndRedraw();
                 })
                 .DisposeWith(callbacks.Subscriptions);
@@ -321,6 +337,54 @@ public sealed class ProviderStepView : IWizardStepView
         return Layouts.Vertical()
             .WithChild(new TextNode($"  {displayName} API key:").WithForeground(Color.White))
             .WithChild(WizardStepHelpers.BuildTextInputPanel(_apiKeyInput, "API Key"));
+    }
+
+    /// <summary>
+    /// Optional Bearer key prompt for credential-optional providers
+    /// (<see cref="OptionalApiKeyAuth"/>). Pressing Enter with a blank field
+    /// keeps the provider credential-free, which is the default behavior.
+    /// </summary>
+    private ILayoutNode BuildOptionalApiKey(ProviderStepViewModel vm, StepViewCallbacks callbacks)
+    {
+        var providerType = vm.SelectedProviderType ?? "unknown";
+        var descriptor = vm.Registry.Get(providerType);
+
+        _lastFocusedList = null;
+
+        _apiKeyInput = new TextInputNode()
+            .AsPassword()
+            .WithPlaceholder("Leave blank for no authentication...");
+        _apiKeyInput.Text = vm.ApiKeyInput ?? string.Empty;
+        _apiKeyInput.OnFocused();
+        _lastFocusedInput = _apiKeyInput;
+
+        // No Where(!IsNullOrWhiteSpace) filter here — unlike the required-key
+        // path, a blank submit is the meaningful "no key" answer.
+        _apiKeyInput.Submitted
+            .Subscribe(text =>
+            {
+                vm.ApiKeyInput = string.IsNullOrWhiteSpace(text) ? null : text;
+
+                // Record ApiKey only when a key exists, so the wizard writes the
+                // same shape as `netclaw provider add --api-key`. The runtime never
+                // requires the key for this provider type.
+                vm.SelectedAuthMethod = vm.ApiKeyInput is null
+                    ? AuthMethod.None
+                    : AuthMethod.ApiKey;
+                vm.SetSubStep(3);
+                vm.StartProbe();
+                callbacks.InvalidateAndRedraw();
+            })
+            .DisposeWith(callbacks.Subscriptions);
+
+        return Layouts.Vertical()
+            .WithChild(new TextNode($"  {descriptor.DisplayName} API key (optional):").WithForeground(Color.White))
+            .WithChild(WizardStepHelpers.BuildTextInputPanel(_apiKeyInput, "API Key"))
+            .WithChild(new TextNode("").Height(1))
+            .WithChild(new TextNode("  Only needed when the endpoint sits behind an authenticated gateway.")
+                .WithForeground(Color.Gray))
+            .WithChild(new TextNode("  Press [Enter] to skip. A supplied key is stored in secrets.json.")
+                .WithForeground(Color.Gray));
     }
 
     private ILayoutNode BuildValidation(ProviderStepViewModel vm)

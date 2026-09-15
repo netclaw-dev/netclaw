@@ -170,13 +170,16 @@ public sealed class ChatClientDoctorCheck : IDoctorCheck
         IProviderDescriptor descriptor)
     {
         var supported = descriptor.Auth.SupportedAuthMethods;
-        if (supported.Contains(AuthMethod.None))
-            return null;
-
         var hasApiKey = !provider.ApiKey.IsNullOrEmpty();
         var hasOAuthToken = !provider.OAuthAccessToken.IsNullOrEmpty();
         var supportsApiKey = supported.Contains(AuthMethod.ApiKey);
         var supportsOAuth = supported.Any(IsOAuth);
+
+        if (provider.AuthMethod == AuthMethod.ApiKey && supportsApiKey && !hasApiKey)
+            return $"provider '{providerName}' ({descriptor.TypeKey}) requires ApiKey in secrets.json.";
+
+        if (supported.Contains(AuthMethod.None))
+            return null;
 
         if (supportsApiKey && supportsOAuth)
         {

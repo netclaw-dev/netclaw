@@ -46,7 +46,12 @@ Backspace 32
 Type "__SMOKE_LLM_ENDPOINT__"
 Enter
 
-# ─── Step 3: Probe + persisted provider confirmation ─────────────────
+# ─── Step 3: Optional API key ────────────────────────────────────────
+Wait+Screen@10s /API key \(optional\)/
+# A blank key keeps the endpoint unauthenticated.
+Enter
+
+# ─── Step 4: Probe + persisted provider confirmation ─────────────────
 # The deterministic provider probe resolves without model loading. The provider persists before
 # the success screen renders, so wait directly on the persisted-provider
 # confirmation (skips the transient "Validating..." frame).

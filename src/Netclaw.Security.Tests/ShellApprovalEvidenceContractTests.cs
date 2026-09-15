@@ -1453,7 +1453,9 @@ public sealed partial class ShellApprovalEvidenceContractTests
             analysis.WorkingDirectory,
             analysis.Commands,
             denyOnlyClauses: [],
-            ShellAnalysisFailure.None);
+            ShellAnalysisFailure.None,
+            new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),
+            syntaxProofComplete: true);
 
     private static ApprovalEvidenceMatrix DeserializeMatrix(byte[] bytes)
         => JsonSerializer.Deserialize(

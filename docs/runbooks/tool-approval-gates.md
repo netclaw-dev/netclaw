@@ -154,6 +154,14 @@ phrase for every uncovered command occurrence. It also omits `Always here`
 when no safe directory scope can be stored. This rule prevents a one-time
 decision from becoming broader reusable authority.
 
+A command with an exact-tree requirement always offers only `Once` or `Deny`.
+It cannot use reviewed-safe, session, stored, or persistent coverage. This rule
+applies in interactive `Auto` and `Approval` modes. Headless `Auto` denies the
+call, and `Deny` mode denies it.
+
+The exact one-time retry parses the call again. It repeats the command
+hard-deny and protected-path checks before execution.
+
 ### Command patterns
 
 For `shell_execute`, patterns come from the parser for the daemon's selected
@@ -212,14 +220,13 @@ needs an exact one-time, session, or persistent grant. The bundled safe-policy
 catalogs (`safe-verbs.linux.json`, `safe-verbs.windows.json`) cover
 file readers (for example `ls`, `grep`, and `cat` on Bash; `Get-ChildItem`,
 `Get-Content`, and `Select-String` on PowerShell), system/info phrases
-(`whoami`, `uname`, `uptime`), and narrowly reviewed `git`/`gh` queries
+(`whoami`, `uname`, `uptime`), reviewed Windows queries (`Get-Process` and
+`Select-Object`), and narrowly reviewed `git`/`gh` queries
 (`git status`, `git rev-parse`, `gh run list`). Mutating verbs (`git push`, `git fetch`, `rm`),
 command-prefixing verbs (`env`, `xargs`, `sudo`), network-writing verbs
-(`gh api`, `curl`), and environment/process-inspection verbs (`printenv`,
-`ps`) are never auto-allowed. The path access decision limits where these verbs
-can act. Thus, the catalog cannot contain a verb that dumps the process
-environment or process table. Each entry stores canonical shell tokens and a
-proof category.
+(`gh api`, `curl`), environment dumps (`printenv`), and the Bash `ps` process
+table are never auto-allowed. The path access decision limits where file verbs
+can act. Each entry stores canonical shell tokens and a proof category.
 `ReviewedDiagnostic` classifies the shell-authored invocation. It does not
 claim that Netclaw sandboxes the executable.
 
@@ -272,14 +279,47 @@ The important value-domain rules are:
 - `AuthoredPathShape` is lexical evidence only. A slash-shaped value may be a
   repository slug, URL segment, image name, or other data, so shape alone never
   creates filesystem authority.
-- `IntegerRange` and `Concatenation` can prove bounded scalar data. They cannot
-  select an executable, justify a redirect, or grant file access.
+- A `DynamicSkip` exemption needs an audited non-path fact. The argument must
+  set `IsPath` to false and `AuthoredFileSystemValue` to `Unknown`.
+- The exemption accepts `Exact`, `FiniteSet`, and an `OrderedList` with 2
+  through 32 non-null elements. An ordered list can contain duplicates.
+- The exemption accepts an `IntegerRange` only when the typed bounds match and
+  the range contains no more than 4,096 elements.
+- Conflicting facts, arbitrary values, `Concatenation`, and future enum values
+  do not satisfy the `DynamicSkip` exemption.
+- Bounded non-path values cannot select an executable, justify a redirect, or
+  grant file access.
 - `Unknown`, incomplete control flow, a dynamic executable, an unresolved path,
   or an unresolved redirect stays strict.
+
+The important file-tree rules are:
+
+- Netclaw consumes one consistent ShellSyntaxTree tree-access fact.
+- Direct access and no-link recursion can use normal policy after all root
+  checks pass.
+- Windows PowerShell 5.1 recursion remains exact-only because it can follow
+  links.
+- Unknown, malformed, conflicting, and future tree facts remain exact-only.
+- A root separator, an incomplete root, a device UNC root, and a
+  drive-relative `C:` glob remain exact-only.
+- The tree root enters path policy as `FileSystemTreeRoot`.
 
 The result can compose. A three-part command can use a stored grant for one
 candidate and reviewed-safe policy for the other two. Netclaw prompts only for
 the candidates that remain uncovered.
+
+#### Example: a bounded PowerShell line selection
+
+Input:
+
+```powershell
+Get-Content "C:\WORK\PROJECT\SourceFile.cs" |
+  Select-Object -Index (113..145)
+```
+
+ShellSyntaxTree reports one exact path and a bounded 33-element integer range.
+Netclaw can apply reviewed-safe policy when the file is under a trusted root.
+The hard-deny and protected-path checks still run first.
 
 #### Example: bounded status data in a compound command
 
@@ -379,6 +419,23 @@ external path stays exact, but it is not reviewed-safe merely because it is
 finite; it needs a folder or global grant that matches, or it requires approval. A
 runtime iterator, active glob, or command substitution does not receive this
 finite fact.
+
+#### Example: a PowerShell expression-only callback
+
+Input:
+
+```powershell
+Get-ChildItem | ForEach-Object { $_.FullName }
+```
+
+ShellSyntaxTree reports a complete command-argument region for the script block.
+The region contains no authored child command. Netclaw can therefore reuse an
+explicit `ForEach-Object` grant for the host argument. `Get-ChildItem` still
+needs its own reviewed-safe or explicit coverage.
+
+Netclaw does not make `ForEach-Object` reviewed-safe. A method call, an
+assignment, an executable substitution, or an unknown receiver remains
+one-time-only. A child command in the script block needs separate authority.
 
 #### Example: stored mutation grants compose with reviewed-safe readers
 

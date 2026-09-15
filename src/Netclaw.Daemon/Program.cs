@@ -519,7 +519,9 @@ static void ConfigureDaemonServices(
             : mainProvider.Endpoint)
         : null;
     var openAiCompatibleApiKey = mainProviderType?.Equals("openai-compatible", StringComparison.OrdinalIgnoreCase) == true
-        ? mainProvider?.ApiKey?.Value
+        ? mainProvider?.AuthMethod is AuthMethod.ApiKey
+            ? mainProvider.ApiKey?.Value
+            : null
         : null;
 
     services.AddSingleton<ModelCapabilities>(sp =>

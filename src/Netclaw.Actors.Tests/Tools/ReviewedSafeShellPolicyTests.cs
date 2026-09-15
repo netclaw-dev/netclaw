@@ -158,6 +158,41 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
+    public void Reviewed_safe_policy_rejects_exact_only_tree_access()
+    {
+        var environment = ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
+            PwshDialect.WindowsPowerShell51);
+        var occurrence = Assert.Single(
+            new ShellCommandAnalyzer(environment)
+                .Analyze(
+                    @"Get-ChildItem -Path C:\WORK\PROJECT -Recurse",
+                    @"C:\WORK\PROJECT")
+                .Commands);
+        var candidate = new ApprovalCandidate("Get-ChildItem", @"C:\WORK\PROJECT")
+        {
+            Shell = ApprovalShell.PowerShell,
+            VerbTokens = ["Get-ChildItem"],
+            SourceOccurrence = occurrence
+        };
+        var projected = new ShellPolicyCandidate(
+            new ShellPolicyCandidateId(0),
+            candidate,
+            occurrence);
+        var facts = Assert.Single(ShellPolicyPathFacts.Create(
+            [projected],
+            ShellPathStyle.Windows));
+        var policy = CreatePolicy(SafeVerbList.FromVerbs(
+            ApprovalShell.PowerShell,
+            ["Get-ChildItem"]));
+
+        Assert.False(policy.ShortCircuits(
+            projected,
+            facts,
+            PersonalContext(projectDir: _projectDir)));
+    }
+
+    [Fact]
     public void Reviewed_verb_in_session_worktree_directory_uses_shared_session_trusted_root()
     {
         var storage = SessionStoragePaths.CreateVersion2(
