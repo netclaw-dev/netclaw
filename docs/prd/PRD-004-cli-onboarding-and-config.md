@@ -106,9 +106,15 @@ Top-level domains:
 9. `Security & Access`
 
 The daemon restores its system skills from the installed binary. The `Skill Sources`
-domain configures user and private server sources. It does not configure system skill updates.
+domain configures local folders and private server sources. It does not configure system skill updates.
 Operators can use `netclaw skill sync` to run the configured external source
 sync pass. The command does not add sources or write configuration.
+
+The top-level `netclaw plugin` family manages package sources from public GitHub repositories.
+Agent Plugins 1.0.0 is the primary package contract.
+Host-specific package formats are explicit compatibility contracts.
+The daemon can publish supported plugin skills into the existing skill inventory.
+Package metadata cannot grant tool, subagent, shell, MCP, or filesystem authority.
 
 Command ownership stays explicit:
 
@@ -192,6 +198,14 @@ Command ownership stays explicit:
 ### Testing (daemon required)
 
 - `netclaw test smoke [--provider ollama]` — end-to-end smoke test through daemon
+
+### Managed Plugins (daemon required)
+
+- `netclaw plugin install <source>` — configure, acquire, validate, and publish a managed plugin
+- `netclaw plugin list [--json]` — show configured sources and installed package state
+- `netclaw plugin update <source-id>|--all` — run the shared sync pass and report plugin results
+- `netclaw plugin enable|disable <source-id>` — change source availability
+- `netclaw plugin remove <source-id>` — remove a source and its durable sync state
 
 ## Requirements
 
@@ -344,6 +358,25 @@ The CLI SHALL provide commands to manage the daemon lifecycle:
 The daemon (`Netclaw.Daemon`) SHALL run as a standalone service with Slack Socket
 Mode adapter, Akka actor system, scheduled task timers, SignalR hub, and health
 endpoints. No TUI rendering. This is the primary production entry point.
+
+### CLI-014 Managed Plugin Lifecycle
+
+The CLI SHALL expose managed package lifecycle operations through the top-level
+`netclaw plugin` command. The CLI SHALL use the authenticated daemon API.
+It SHALL not write daemon configuration directly.
+
+The default package format SHALL detect Agent Plugins 1.0.0 before supported
+compatibility manifests. Explicit format selection SHALL inspect one format only.
+A selected invalid manifest SHALL fail without a fallback to another format.
+
+`netclaw plugin list --json` SHALL emit one stable JSON document without prose.
+Safe daemon problem details SHALL remain visible in CLI error output.
+Invalid or unbounded daemon bodies SHALL produce a bounded status message.
+
+The first release supports public GitHub repositories, portable Agent Plugins,
+and Codex compatibility manifests. It excludes marketplaces, private Git
+credentials, plugin subagents, MCP activation, hooks, LSP configuration, and
+host execution.
 
 ## UX Requirements
 
