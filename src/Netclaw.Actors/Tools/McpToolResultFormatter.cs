@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -56,6 +57,15 @@ public static class McpToolResultFormatter
             // element only if there is genuinely nothing extractable.
             return string.IsNullOrWhiteSpace(detail) ? element.GetRawText() : detail;
         }
+
+        if (result is AIContent singleContent)
+            return FormatAiContent(singleContent);
+
+        if (result is AIContent[] contentArray)
+            return FormatAiContents(contentArray);
+
+        if (result is IEnumerable<AIContent> contents)
+            return FormatAiContents(contents);
 
         return result?.ToString() ?? string.Empty;
     }
@@ -120,5 +130,37 @@ public static class McpToolResultFormatter
         }
 
         return string.Join("\n", parts);
+    }
+
+    private static string FormatAiContents(IEnumerable<AIContent> contents)
+    {
+        var parts = new List<string>();
+        foreach (var content in contents)
+        {
+            var part = FormatAiContent(content);
+            if (!string.IsNullOrEmpty(part))
+                parts.Add(part);
+        }
+
+        return string.Join("\n", parts);
+    }
+
+    private static string FormatAiContent(AIContent content)
+        => content switch
+        {
+            TextContent text when !string.IsNullOrEmpty(text.Text) => text.Text,
+            DataContent data => FormatDataContentMarker(data),
+            _ => string.Empty,
+        };
+
+    private static string FormatDataContentMarker(DataContent data)
+    {
+        var mediaType = string.IsNullOrWhiteSpace(data.MediaType)
+            ? "application/octet-stream"
+            : data.MediaType;
+
+        return mediaType.StartsWith("image/", StringComparison.OrdinalIgnoreCase)
+            ? $"[image: {mediaType}]"
+            : $"[attachment: {mediaType}]";
     }
 }
