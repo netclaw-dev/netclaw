@@ -6,6 +6,7 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Http.HttpResults;
+using Microsoft.Extensions.Logging;
 using Akka.Actor;
 using Akka.Hosting;
 using Netclaw.Actors.Skills;
@@ -73,6 +74,7 @@ public static class SkillEndpointRouteBuilderExtensions
                 ManagedPluginApi.InstallRequest request,
                 GitSkillPluginManagementService service,
                 DaemonRestartSignal restartSignal,
+                ILogger<GitSkillPluginManagementService> logger,
                 CancellationToken cancellationToken) =>
             {
                 try
@@ -89,7 +91,7 @@ public static class SkillEndpointRouteBuilderExtensions
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
                 {
-                    return PluginProblem(ex);
+                    return PluginProblem(ex, logger);
                 }
             })
             .WithName("InstallPlugin")
@@ -101,7 +103,8 @@ public static class SkillEndpointRouteBuilderExtensions
                 string sourceId,
                 ManagedPluginApi.SetEnabledRequest request,
                 GitSkillPluginManagementService service,
-                DaemonRestartSignal restartSignal) =>
+                DaemonRestartSignal restartSignal,
+                ILogger<GitSkillPluginManagementService> logger) =>
             {
                 try
                 {
@@ -115,7 +118,7 @@ public static class SkillEndpointRouteBuilderExtensions
                 }
                 catch (Exception ex)
                 {
-                    return PluginProblem(ex);
+                    return PluginProblem(ex, logger);
                 }
             })
             .WithName("SetPluginEnabled")
@@ -126,7 +129,8 @@ public static class SkillEndpointRouteBuilderExtensions
         app.MapDelete("/api/plugins/{sourceId}", IResult (
                 string sourceId,
                 GitSkillPluginManagementService service,
-                DaemonRestartSignal restartSignal) =>
+                DaemonRestartSignal restartSignal,
+                ILogger<GitSkillPluginManagementService> logger) =>
             {
                 try
                 {
@@ -140,7 +144,7 @@ public static class SkillEndpointRouteBuilderExtensions
                 }
                 catch (Exception ex)
                 {
-                    return PluginProblem(ex);
+                    return PluginProblem(ex, logger);
                 }
             })
             .WithName("RemovePlugin")
@@ -149,8 +153,11 @@ public static class SkillEndpointRouteBuilderExtensions
             .RequireAuthorization();
     }
 
-    private static IResult PluginProblem(Exception exception)
+    private static IResult PluginProblem(
+        Exception exception,
+        ILogger<GitSkillPluginManagementService> logger)
     {
+        logger.LogWarning(exception, "The plugin API request failed.");
         var (status, title) = exception switch
         {
             GitSkillPluginConfigException { Failure: GitSkillPluginConfigFailure.NotFound }

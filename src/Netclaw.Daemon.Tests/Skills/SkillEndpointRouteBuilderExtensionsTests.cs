@@ -217,6 +217,34 @@ public sealed class SkillEndpointRouteBuilderExtensionsTests : IDisposable
     }
 
     [Fact]
+    public async Task Plugin_config_write_error_does_not_disclose_the_local_config_path()
+    {
+        var paths = new NetclawPaths(_dir.Path);
+        paths.EnsureDirectoriesExist();
+        Directory.CreateDirectory(paths.NetclawConfigPath);
+        await using var app = await CreateAppAsync(spoofLoopback: true, new SkillRegistry(), paths);
+        var request = new ManagedPluginApi.InstallRequest
+        {
+            Repository = "owner/repository",
+            SourceId = "fixture",
+            ReferenceKind = ManagedPluginApi.InstallReferenceKind.Commit,
+            Reference = "13e26d39ed01d97ea592235d041304d289f4ba07",
+        };
+
+        var response = await app.GetTestClient().PostAsJsonAsync(
+            "/api/plugins",
+            request,
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        var problem = await response.Content.ReadFromJsonAsync<ProblemDetails>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.NotNull(problem);
+        Assert.Equal("The daemon configuration could not be written. Check the daemon logs.", problem.Detail);
+        Assert.DoesNotContain(_dir.Path, problem.Detail, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task Sync_post_returns_503_when_host_stop_cancels_the_joined_pass()
     {
         var paths = new NetclawPaths(_dir.Path);

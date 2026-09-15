@@ -17,11 +17,24 @@ internal enum GitSkillPluginConfigFailure
     NotFound,
 }
 
-internal sealed class GitSkillPluginConfigException(
-    GitSkillPluginConfigFailure failure,
-    string message) : Exception(message)
+internal sealed class GitSkillPluginConfigException : Exception
 {
-    public GitSkillPluginConfigFailure Failure { get; } = failure;
+    public GitSkillPluginConfigException(
+        GitSkillPluginConfigFailure failure,
+        string message) : base(message)
+    {
+        Failure = failure;
+    }
+
+    public GitSkillPluginConfigException(
+        GitSkillPluginConfigFailure failure,
+        string message,
+        Exception innerException) : base(message, innerException)
+    {
+        Failure = failure;
+    }
+
+    public GitSkillPluginConfigFailure Failure { get; }
 }
 
 /// <summary>Owns atomic plugin source mutations in the daemon config file.</summary>
@@ -119,7 +132,8 @@ internal sealed class GitSkillPluginConfigStore(
         {
             throw new GitSkillPluginConfigException(
                 GitSkillPluginConfigFailure.Invalid,
-                $"The daemon configuration could not be read: {ex.Message}");
+                "The daemon configuration could not be read. Check the daemon logs.",
+                ex);
         }
 
         if (node is not JsonObject root)
@@ -154,7 +168,8 @@ internal sealed class GitSkillPluginConfigStore(
         {
             throw new GitSkillPluginConfigException(
                 GitSkillPluginConfigFailure.Invalid,
-                $"SkillFeeds.Plugins is invalid: {ex.Message}");
+                "SkillFeeds.Plugins is invalid. Check the daemon logs.",
+                ex);
         }
     }
 
@@ -189,7 +204,8 @@ internal sealed class GitSkillPluginConfigStore(
         {
             throw new GitSkillPluginConfigException(
                 GitSkillPluginConfigFailure.Invalid,
-                $"The daemon configuration could not be written: {ex.Message}");
+                "The daemon configuration could not be written. Check the daemon logs.",
+                ex);
         }
     }
 }
