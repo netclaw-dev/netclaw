@@ -198,6 +198,13 @@ A package rename does not silently change the source ID.
 
 **Code anchors:** `ManagedPluginSource`, `ManagedPluginStateStore`
 
+### Plugin marketplace catalog
+
+A plugin marketplace catalog lists package names, descriptions, and source locations.
+It is metadata, not an installed package or a grant of runtime authority.
+A catalog snapshot is the last validated revision that the daemon stores.
+An installed plugin keeps its own source ID and package receipt.
+
 ### Workspace tool
 
 A workspace tool reads, lists, writes, edits, attaches, or selects files and
