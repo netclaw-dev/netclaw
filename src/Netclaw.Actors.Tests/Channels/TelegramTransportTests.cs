@@ -4,10 +4,11 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Channels;
 using Netclaw.Channels.Telegram;
-using Telegram.Bot.Exceptions;
 using Netclaw.Configuration;
 using Telegram.Bot;
+using Telegram.Bot.Exceptions;
 using Telegram.Bot.Types;
 using Telegram.Bot.Types.Enums;
 using Telegram.Bot.Types.ReplyMarkups;
@@ -93,7 +94,7 @@ public sealed class TelegramTransportTests
         var transport = CreateTransport((_, _) => client);
 
         await transport.StartAsync(TestContext.Current.CancellationToken);
-        await transport.SendTextAsync(77, "netclaw **bold** status", TestContext.Current.CancellationToken);
+        await transport.SendTextAsync(77, "netclaw **bold** status", cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(2, client.SentTexts.Count);
         Assert.Equal(ParseMode.Html, client.SentTexts[0].ParseMode);
@@ -112,10 +113,79 @@ public sealed class TelegramTransportTests
 
         await transport.StartAsync(TestContext.Current.CancellationToken);
         var thrown = await Assert.ThrowsAsync<ApiRequestException>(
-            () => transport.SendTextAsync(77, "hello", TestContext.Current.CancellationToken));
+            () => transport.SendTextAsync(77, "hello", cancellationToken: TestContext.Current.CancellationToken));
 
         Assert.Same(failure, thrown);
         _ = Assert.Single(client.SentTexts);
+    }
+
+    [Fact]
+    public async Task Oversized_download_aborts_on_the_crossing_chunk_and_deletes_the_partial_file()
+    {
+        var staging = Path.Combine(Path.GetTempPath(), $"netclaw-telegram-{Guid.NewGuid():N}");
+        try
+        {
+            var client = new FakeTelegramBotApiClient
+            {
+                FakeFile = new TGFile { FileId = "file-1", FileSize = 10 },
+                DownloadContent = new byte[2048],
+                DownloadChunkSize = 512,
+            };
+            var transport = CreateTransport((_, _) => client);
+            await transport.StartAsync(TestContext.Current.CancellationToken);
+
+            var thrown = await Assert.ThrowsAsync<AttachmentTooLargeException>(
+                () => transport.DownloadFileAsync(
+                    new TelegramFileReference("file-1", "note.bin", "application/octet-stream", 10),
+                    staging,
+                    maxBytes: 1024,
+                    TestContext.Current.CancellationToken));
+
+            Assert.Equal(1024, thrown.MaxBytes);
+            Assert.Equal(1536, thrown.BytesReceived);
+            Assert.Equal(3, client.DownloadChunkAttempts);
+            Assert.Empty(Directory.GetFiles(staging));
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Under_limit_download_saves_the_complete_file()
+    {
+        var staging = Path.Combine(Path.GetTempPath(), $"netclaw-telegram-{Guid.NewGuid():N}");
+        try
+        {
+            var content = new byte[600];
+            Array.Fill(content, (byte)0xAB);
+            var client = new FakeTelegramBotApiClient
+            {
+                FakeFile = new TGFile { FileId = "file-1", FileSize = 600 },
+                DownloadContent = content,
+                DownloadChunkSize = 512,
+            };
+            var transport = CreateTransport((_, _) => client);
+            await transport.StartAsync(TestContext.Current.CancellationToken);
+
+            var result = await transport.DownloadFileAsync(
+                new TelegramFileReference("file-1", "note.bin", "application/octet-stream", 600),
+                staging,
+                maxBytes: 1024,
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(600, result.BytesWritten);
+            Assert.True(File.Exists(result.FilePath));
+            var saved = await File.ReadAllBytesAsync(result.FilePath, TestContext.Current.CancellationToken);
+            Assert.Equal(content, saved);
+        }
+        finally
+        {
+            if (Directory.Exists(staging))
+                Directory.Delete(staging, recursive: true);
+        }
     }
 
     private static TelegramTransport CreateTransport(TelegramBotClientFactory factory) =>
@@ -135,9 +205,17 @@ public sealed class TelegramTransportTests
 
         public int EventSubscriptionCount { get; private set; }
 
-        public List<(long ChatId, string Text, ParseMode ParseMode)> SentTexts { get; } = [];
+        public List<(long ChatId, string Text, ParseMode ParseMode, int? MessageThreadId)> SentTexts { get; } = [];
 
         public Queue<Exception> SendMessageFailures { get; } = new();
+
+        public TGFile? FakeFile { get; set; }
+
+        public byte[] DownloadContent { get; set; } = [];
+
+        public int DownloadChunkSize { get; set; } = 512;
+
+        public int DownloadChunkAttempts { get; private set; }
 
         private TelegramBotClient.OnMessageHandler? _onMessage;
 
@@ -180,19 +258,28 @@ public sealed class TelegramTransportTests
             string text,
             ParseMode parseMode = default,
             InlineKeyboardMarkup? replyMarkup = null,
+            int? messageThreadId = null,
             CancellationToken cancellationToken = default)
         {
-            SentTexts.Add((chatId, text, parseMode));
+            SentTexts.Add((chatId, text, parseMode, messageThreadId));
             if (SendMessageFailures.TryDequeue(out var failure))
                 throw failure;
 
             return Task.FromResult(new Message { Id = 1 });
         }
 
-        public Task<Message> SendRichMessage(long chatId, InputRichMessage message, CancellationToken cancellationToken = default) =>
+        public Task<Message> SendRichMessage(
+            long chatId,
+            InputRichMessage message,
+            int? messageThreadId = null,
+            CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("Not exercised by these tests.");
 
-        public Task<Message> SendDocument(long chatId, InputFile file, CancellationToken cancellationToken = default) =>
+        public Task<Message> SendDocument(
+            long chatId,
+            InputFile file,
+            int? messageThreadId = null,
+            CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("Not exercised by these tests.");
 
         public Task AnswerCallbackQuery(string queryId, string? text, bool showAlert, CancellationToken cancellationToken = default) =>
@@ -208,9 +295,16 @@ public sealed class TelegramTransportTests
             Task.CompletedTask;
 
         public Task<TelegramFile> GetFile(string fileId, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException("Not exercised by these tests.");
+            Task.FromResult(FakeFile ?? new TGFile { FileId = fileId });
 
-        public Task DownloadFile(TelegramFile file, Stream destination, CancellationToken cancellationToken = default) =>
-            throw new NotSupportedException("Not exercised by these tests.");
+        public async Task DownloadFile(TelegramFile file, Stream destination, CancellationToken cancellationToken = default)
+        {
+            for (var offset = 0; offset < DownloadContent.Length; offset += DownloadChunkSize)
+            {
+                var count = Math.Min(DownloadChunkSize, DownloadContent.Length - offset);
+                DownloadChunkAttempts++;
+                await destination.WriteAsync(DownloadContent.AsMemory(offset, count), cancellationToken);
+            }
+        }
     }
 }

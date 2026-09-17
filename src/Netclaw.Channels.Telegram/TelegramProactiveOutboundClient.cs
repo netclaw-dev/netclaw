@@ -46,7 +46,7 @@ public sealed class TelegramProactiveOutboundClient(
 
         try
         {
-            await transport.SendTextAsync(targetId, request.Text, ct);
+            await transport.SendTextAsync(targetId, request.Text, cancellationToken: ct);
         }
         catch (Exception ex)
         {

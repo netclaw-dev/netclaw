@@ -44,16 +44,19 @@ public interface ITelegramBotApiClient
         string text,
         ParseMode parseMode = default,
         InlineKeyboardMarkup? replyMarkup = null,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default);
 
     Task<Message> SendRichMessage(
         long chatId,
         InputRichMessage message,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default);
 
     Task<Message> SendDocument(
         long chatId,
         InputFile file,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default);
 
     Task AnswerCallbackQuery(string queryId, string? text, bool showAlert, CancellationToken cancellationToken = default);
@@ -114,20 +117,23 @@ internal sealed class TelegramBotApiClient : ITelegramBotApiClient
         string text,
         ParseMode parseMode = default,
         InlineKeyboardMarkup? replyMarkup = null,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default) =>
-        _client.SendMessage(chatId, text, parseMode: parseMode, replyMarkup: replyMarkup, cancellationToken: cancellationToken);
+        _client.SendMessage(chatId, text, parseMode: parseMode, replyMarkup: replyMarkup, messageThreadId: messageThreadId, cancellationToken: cancellationToken);
 
     public Task<Message> SendRichMessage(
         long chatId,
         InputRichMessage message,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default) =>
-        _client.SendRichMessage(chatId, message, cancellationToken: cancellationToken);
+        _client.SendRichMessage(chatId, message, messageThreadId: messageThreadId, cancellationToken: cancellationToken);
 
     public Task<Message> SendDocument(
         long chatId,
         InputFile file,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default) =>
-        _client.SendDocument(chatId, file, cancellationToken: cancellationToken);
+        _client.SendDocument(chatId, file, messageThreadId: messageThreadId, cancellationToken: cancellationToken);
 
     public Task AnswerCallbackQuery(string queryId, string? text, bool showAlert, CancellationToken cancellationToken = default) =>
         _client.AnswerCallbackQuery(queryId, text, showAlert, cancellationToken: cancellationToken);

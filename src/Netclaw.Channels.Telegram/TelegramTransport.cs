@@ -102,6 +102,7 @@ public sealed class TelegramTransport(
     public async Task SendTextAsync(
         long chatId,
         string text,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default)
     {
         var client = _client
@@ -115,7 +116,8 @@ public sealed class TelegramTransport(
                 await client.SendRichMessage(
                     chatId,
                     new InputRichMessage { Html = rich.Html },
-                    cancellationToken: cancellationToken).ConfigureAwait(false);
+                    messageThreadId,
+                    cancellationToken).ConfigureAwait(false);
                 return;
             }
             catch (ApiRequestException ex)
@@ -135,6 +137,7 @@ public sealed class TelegramTransport(
                 chatId,
                 TelegramTextFormatter.ToHtml(text),
                 parseMode: ParseMode.Html,
+                messageThreadId: messageThreadId,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
         catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("can't parse entities", StringComparison.Ordinal))
@@ -142,7 +145,11 @@ public sealed class TelegramTransport(
             // Only Telegram's documented entity-parse rejection may fall back to
             // plain text. Auth failures, rate limits, and bad destinations keep
             // the original failure — a retry cannot succeed and only hides the cause.
-            await client.SendMessage(chatId, text, cancellationToken: cancellationToken).ConfigureAwait(false);
+            await client.SendMessage(
+                chatId,
+                text,
+                messageThreadId: messageThreadId,
+                cancellationToken: cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -150,6 +157,7 @@ public sealed class TelegramTransport(
         long chatId,
         string filePath,
         string fileName,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default)
     {
         var client = _client
@@ -159,6 +167,7 @@ public sealed class TelegramTransport(
         await client.SendDocument(
             chatId,
             InputFile.FromStream(stream, fileName),
+            messageThreadId: messageThreadId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
     }
 
@@ -166,6 +175,7 @@ public sealed class TelegramTransport(
         long chatId,
         string text,
         IReadOnlyList<TelegramApprovalButton> buttons,
+        int? messageThreadId = null,
         CancellationToken cancellationToken = default)
     {
         var client = _client
@@ -180,6 +190,7 @@ public sealed class TelegramTransport(
             TelegramTextFormatter.ToHtml(text),
             parseMode: ParseMode.Html,
             replyMarkup: markup,
+            messageThreadId: messageThreadId,
             cancellationToken: cancellationToken).ConfigureAwait(false);
         return message.Id;
     }
@@ -230,11 +241,18 @@ public sealed class TelegramTransport(
         try
         {
             var telegramFile = await client.GetFile(file.FileId, cancellationToken).ConfigureAwait(false);
+
+            // Fast-fail on the provider-reported size when present. Telegram may
+            // omit or misreport it, so this is an optimization only — the
+            // bounded stream below is the actual enforcement.
+            if (telegramFile.FileSize is { } reportedSize && reportedSize > maxBytes)
+                throw new AttachmentTooLargeException(reportedSize, maxBytes);
+
             await using var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.None);
-            await client.DownloadFile(telegramFile, stream, cancellationToken).ConfigureAwait(false);
-            if (stream.Length > maxBytes)
-                throw new AttachmentTooLargeException(stream.Length, maxBytes);
-            return new AttachmentDownloadResult(path, stream.Length);
+            using var bounded = new BoundedWriteStream(stream, maxBytes);
+            await client.DownloadFile(telegramFile, bounded, cancellationToken).ConfigureAwait(false);
+            await stream.FlushAsync(cancellationToken).ConfigureAwait(false);
+            return new AttachmentDownloadResult(path, bounded.TotalWritten);
         }
         catch
         {
@@ -260,7 +278,8 @@ public sealed class TelegramTransport(
             message.Chat.Type == ChatType.Private,
             files,
             ContainsBotMention(message, text),
-            message.ReplyToMessage?.From?.Id == _botUserId);
+            message.ReplyToMessage?.From?.Id == _botUserId,
+            message.MessageThreadId);
 
         var aclDecision = TelegramAclPolicy.EvaluateInbound(inbound, options);
         if (!aclDecision.IsAllowed)
@@ -293,7 +312,8 @@ public sealed class TelegramTransport(
             callback.From.Id,
             message.Id,
             callback.Id,
-            data);
+            data,
+            message.MessageThreadId);
         if (CallbackReceived is { } handler)
             await handler(inbound).ConfigureAwait(false);
         else
@@ -427,5 +447,65 @@ public sealed class TelegramTransport(
         public List<TelegramInboundMessage> Messages { get; } = [first];
 
         public CancellationTokenSource Delay { get; set; } = new();
+    }
+
+    /// <summary>
+    /// Write-through stream that rejects the chunk crossing <paramref
+    /// name="maxBytes"/> before it reaches disk. Telegram's reported file size
+    /// can be false or absent, so the SDK download must abort mid-copy instead
+    /// of checking the size after the whole file has landed. Same semantics as
+    /// <see cref="StreamingAttachmentDownloader"/>.
+    /// </summary>
+    private sealed class BoundedWriteStream(Stream inner, long maxBytes) : Stream
+    {
+        private long _totalWritten;
+
+        public long TotalWritten => _totalWritten;
+
+        public override async ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            EnsureWithinLimit(buffer.Length);
+            await inner.WriteAsync(buffer, cancellationToken).ConfigureAwait(false);
+            _totalWritten += buffer.Length;
+        }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            EnsureWithinLimit(count);
+            inner.Write(buffer, offset, count);
+            _totalWritten += count;
+        }
+
+        private void EnsureWithinLimit(int incoming)
+        {
+            if (_totalWritten + incoming > maxBytes)
+                throw new AttachmentTooLargeException(_totalWritten + incoming, maxBytes);
+        }
+
+        public override void Flush() => inner.Flush();
+
+        public override Task FlushAsync(CancellationToken cancellationToken) => inner.FlushAsync(cancellationToken);
+
+        public override bool CanRead => false;
+
+        public override bool CanSeek => false;
+
+        public override bool CanWrite => true;
+
+        public override long Length => throw new NotSupportedException();
+
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+
+        public override void SetLength(long value) => throw new NotSupportedException();
     }
 }

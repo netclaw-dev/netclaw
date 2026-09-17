@@ -16,7 +16,8 @@ public sealed record TelegramInboundMessage(
     bool IsDirectMessage,
     IReadOnlyList<TelegramFileReference>? Files = null,
     bool ContainsBotMention = false,
-    bool IsReplyToBot = false);
+    bool IsReplyToBot = false,
+    int? MessageThreadId = null);
 
 public sealed record TelegramFileReference(
     string FileId,
@@ -29,7 +30,8 @@ public sealed record TelegramCallbackQuery(
     long UserId,
     int MessageId,
     string QueryId,
-    string Data);
+    string Data,
+    int? MessageThreadId = null);
 
 public sealed record TelegramApprovalButton(string Label, string CallbackData);
 
