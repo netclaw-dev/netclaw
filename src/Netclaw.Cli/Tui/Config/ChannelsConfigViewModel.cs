@@ -1069,6 +1069,9 @@ public sealed class ChannelsConfigViewModel : ReactiveViewModel
                 mattermost.BotToken = Normalize(BotTokenInput);
                 mattermost.CallbackUrl = Normalize(CallbackUrlInput);
                 break;
+            case ChannelType.Telegram:
+                Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram).BotToken = Normalize(BotTokenInput);
+                break;
         }
 
         Screen.Value = ChannelsConfigScreen.AdapterMenu;
