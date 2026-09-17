@@ -51,7 +51,9 @@ public static class ChannelIntegrationRegistrationExtensions
             .WithResolver((_, options) => new TelegramAddressResolver(options))
             .WithReminderResolver((_, options) => new TelegramReminderTargetResolver(options))
             .WithServices((channelServices, _) =>
-                channelServices.AddSingleton<TelegramTransport>())
+                channelServices
+                    .AddSingleton(TelegramBotApiClient.Factory)
+                    .AddSingleton<TelegramTransport>())
             .WithProactiveSendClient((sp, options) => new TelegramProactiveOutboundClient(
                 sp.GetRequiredService<TelegramTransport>(),
                 options,

@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
 using Microsoft.Extensions.Logging;
-using Telegram.Bot;
 using Telegram.Bot.Exceptions;
 using Telegram.Bot.Polling;
 using Telegram.Bot.Types;
@@ -16,12 +15,13 @@ namespace Netclaw.Channels.Telegram;
 
 public sealed class TelegramTransport(
     TelegramChannelOptions options,
-    ILogger<TelegramTransport> logger) : IAsyncDisposable
+    ILogger<TelegramTransport> logger,
+    TelegramBotClientFactory clientFactory) : IAsyncDisposable
 {
     private readonly object _albumLock = new();
     private readonly Dictionary<string, AlbumBuffer> _albums = [];
     private CancellationTokenSource? _stopSource;
-    private TelegramBotClient? _client;
+    private ITelegramBotApiClient? _client;
     private long? _botUserId;
     private string? _botUsername;
 
@@ -42,15 +42,28 @@ public sealed class TelegramTransport(
             throw new InvalidOperationException("The Telegram channel is disabled.");
 
         var token = options.BotToken.RequireValid("Telegram bot token");
-        _stopSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _client = new TelegramBotClient(token.Value, cancellationToken: _stopSource.Token);
-
-        var bot = await _client.GetMe(_stopSource.Token).ConfigureAwait(false);
-        _botUserId = bot.Id;
-        _botUsername = bot.Username;
-        _client.OnMessage += HandleMessageAsync;
-        _client.OnUpdate += HandleUpdateAsync;
-        _client.OnError += HandleErrorAsync;
+        var stopSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        var client = clientFactory(token.Value, stopSource.Token);
+        try
+        {
+            var bot = await client.GetMe(stopSource.Token).ConfigureAwait(false);
+            client.OnMessage += HandleMessageAsync;
+            client.OnUpdate += HandleUpdateAsync;
+            client.OnError += HandleErrorAsync;
+            _botUserId = bot.Id;
+            _botUsername = bot.Username;
+            _client = client;
+            _stopSource = stopSource;
+        }
+        catch
+        {
+            // Nothing is committed on a failed start. The linked CTS is the
+            // only owned resource to release; dropping the client lets the
+            // next StartAsync build a fresh one instead of tripping the
+            // already-active guard forever.
+            stopSource.Dispose();
+            throw;
+        }
     }
 
     public Task StopAsync()
