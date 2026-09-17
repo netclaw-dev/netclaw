@@ -26,6 +26,7 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
 
     private readonly SessionId _sessionId;
     private readonly TelegramChatId _chatId;
+    private readonly int? _messageThreadId;
     private readonly TelegramGatewayDependencies _dependencies;
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
@@ -43,6 +44,15 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
     {
         _sessionId = sessionId;
         _chatId = chatId;
+
+        // Forum-topic replies must land in the topic the session lives in.
+        // Proactive and reminder sessions use the "chat" fallback key, which is
+        // not numeric, so they send without a topic.
+        _messageThreadId = SessionIdFormat.TrySplit(sessionId, out _, out var threadKey)
+            && int.TryParse(threadKey, out var parsedThreadId)
+            ? parsedThreadId
+            : null;
+
         _dependencies = dependencies;
         _log = Context.GetLogger().WithContext("Adapter", "telegram");
         _handle = new SessionPipelineHandle(dependencies.Pipeline, _log, "telegram");
@@ -200,7 +210,8 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         {
             await _dependencies.Transport.SendTextAsync(
                 _chatId.Value,
-                $"I can only accept up to {policy.MaxFilesPerMessage} files in one message.");
+                $"I can only accept up to {policy.MaxFilesPerMessage} files in one message.",
+                messageThreadId: _messageThreadId);
             return;
         }
 
@@ -234,7 +245,10 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
                         contents.Add(inline);
                     break;
                 case AttachmentIngestOutcome.Rejected rejected:
-                    await _dependencies.Transport.SendTextAsync(_chatId.Value, rejected.UserFacingReason);
+                    await _dependencies.Transport.SendTextAsync(
+                        _chatId.Value,
+                        rejected.UserFacingReason,
+                        messageThreadId: _messageThreadId);
                     break;
             }
         }
@@ -252,7 +266,10 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
                 var text = output.Text;
                 if (!string.IsNullOrWhiteSpace(text))
                 {
-                    await _dependencies.Transport.SendTextAsync(_chatId.Value, text);
+                    await _dependencies.Transport.SendTextAsync(
+                        _chatId.Value,
+                        text,
+                        messageThreadId: _messageThreadId);
                     _deliveredThisTurn = true;
                 }
                 break;
@@ -261,7 +278,8 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             case ErrorOutput output:
                 await _dependencies.Transport.SendTextAsync(
                     _chatId.Value,
-                    $"Sorry, NetClaw had a problem: {output.Message}");
+                    $"Sorry, NetClaw had a problem: {output.Message}",
+                    messageThreadId: _messageThreadId);
                 _deliveredThisTurn = true;
                 break;
 
@@ -319,7 +337,8 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
                 _chatId.Value,
                 TelegramApprovalPromptBuilder.BuildPrompt(request),
                 buttons,
-                cts.Token);
+                messageThreadId: _messageThreadId,
+                cancellationToken: cts.Token);
             _log.Info("Posted Telegram approval prompt for call {CallId}", request.CallId);
         }
         catch (Exception ex)
@@ -450,7 +469,8 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
                 _chatId.Value,
                 output.FilePath,
                 output.FileName,
-                cts.Token);
+                messageThreadId: _messageThreadId,
+                cancellationToken: cts.Token);
             _log.Info("Uploaded file to Telegram chat: {FileName}", output.FileName);
             return true;
         }

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using Akka.Actor;
 using Akka.Event;
 using Netclaw.Actors.Channels;
@@ -24,10 +25,11 @@ internal sealed class TelegramConversationActor : ChannelConversationActor<Teleg
 
         Receive<TelegramCallbackQuery>(callback =>
         {
-            var sessionId = BuildSessionId("chat");
+            var threadKey = ThreadKeyFor(callback.MessageThreadId);
+            var sessionId = BuildSessionId(threadKey);
             var binding = GetOrCreateSessionBinding(
                 _chatId.Value.ToString(),
-                "chat",
+                threadKey,
                 () => TelegramSessionBindingActor.CreateProps(sessionId, _chatId, _dependencies));
             binding.Forward(callback);
         });
@@ -51,7 +53,16 @@ internal sealed class TelegramConversationActor : ChannelConversationActor<Teleg
     protected override string EventIdOf(TelegramInboundMessage message) =>
         $"{message.ChatId}:{message.MessageId}";
 
-    protected override string ThreadKeyOf(TelegramInboundMessage message) => "chat";
+    protected override string ThreadKeyOf(TelegramInboundMessage message) =>
+        ThreadKeyFor(message.MessageThreadId);
+
+    /// <summary>
+    /// Forum topics key their own sessions so topic A's context never reaches
+    /// topic B. Messages without a topic (ordinary groups, private chats) keep
+    /// the historical <c>chat</c> key, so existing session ids are unchanged.
+    /// </summary>
+    internal static string ThreadKeyFor(int? messageThreadId) =>
+        messageThreadId?.ToString(CultureInfo.InvariantCulture) ?? "chat";
 
     protected override string TextOf(TelegramInboundMessage message) => message.Text;
 
