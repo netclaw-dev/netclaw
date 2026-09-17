@@ -8,11 +8,13 @@ using Netclaw.Actors.Channels;
 using Netclaw.Channels.Slack;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Discord;
+using Netclaw.Cli.Telegram;
 using Netclaw.Cli.Tests.Tui;
 using Netclaw.Cli.Tui;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tui.Wizard.Steps;
 using Netclaw.Configuration;
+using Netclaw.Configuration.Secrets;
 using Netclaw.Tests.Utilities;
 using Termina;
 using Termina.Hosting;
@@ -41,7 +43,8 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 "Enabled": true,
                 "ServerUrl": "https://mattermost.example.com",
                 "AllowedChannelIds": ["town-square"]
-              }
+              },
+              "Telegram": { "Enabled": true, "AllowedChatIds": ["-1001234"] }
             }
             """);
         File.WriteAllText(_paths.SecretsPath,
@@ -50,7 +53,8 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
               "configVersion": 1,
               "Slack": { "BotToken": "xoxb-existing", "AppToken": "xapp-existing" },
               "Discord": { "BotToken": "discord-existing" },
-              "Mattermost": { "BotToken": "mattermost-existing" }
+              "Mattermost": { "BotToken": "mattermost-existing" },
+              "Telegram": { "BotToken": "12345:existing" }
             }
             """);
     }
@@ -101,6 +105,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
     [InlineData(ChannelType.Slack)]
     [InlineData(ChannelType.Discord)]
     [InlineData(ChannelType.Mattermost)]
+    [InlineData(ChannelType.Telegram)]
     public async Task Channels_RotateCredentials_AcceptsTypedCredentialInput(ChannelType channelType)
     {
         var app = CreateHeadlessApp(out var input, out var dashboardVm, out var getChannelsVm);
@@ -108,7 +113,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         MoveToAdapter(input, channelType);
 
         input.EnqueueKey(ConsoleKey.Enter); // Open configured adapter management.
-        MoveToRotateCredentials(input);
+        MoveToRotateCredentials(input, channelType);
         input.EnqueueKey(ConsoleKey.Enter); // Rotate credentials.
         TypeCredentials(input, channelType);
         input.EnqueueKey(ConsoleKey.Enter);
@@ -118,6 +123,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         await app.RunAsync(cts.Token);
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        await channelsVm.PendingConfigWrite;
         AssertPersistedCredentials(channelType, typed: true);
         Assert.Equal("Credential changes saved.", channelsVm.Status.Value.Text);
     }
@@ -126,6 +132,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
     [InlineData(ChannelType.Slack)]
     [InlineData(ChannelType.Discord)]
     [InlineData(ChannelType.Mattermost)]
+    [InlineData(ChannelType.Telegram)]
     public async Task Channels_FirstTimeAdapterSetup_AcceptsTypedCredentialInput(ChannelType channelType)
     {
         WriteEmptyChannelFiles();
@@ -141,9 +148,10 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         await app.RunAsync(cts.Token);
 
         var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+        await channelsVm.PendingConfigWrite;
         Assert.Equal(ChannelsConfigScreen.ChannelPermissions, channelsVm.Screen.Value);
         Assert.Equal(channelType, channelsVm.ActiveAdapterType);
-        AssertFirstTimeSetupPersisted(channelsVm, channelType);
+        await AssertFirstTimeSetupPersisted(channelsVm, channelType);
     }
 
     [Fact]
@@ -366,7 +374,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         OpenChannels(dashboardVm);
 
         input.EnqueueKey(ConsoleKey.Enter); // Open configured Slack management.
-        MoveToRotateCredentials(input);
+        MoveToRotateCredentials(input, ChannelType.Slack);
         input.EnqueueKey(ConsoleKey.Enter);
         input.EnqueueString("not-a-slack-token");
         input.EnqueueKey(ConsoleKey.Enter);
@@ -468,6 +476,68 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         AssertSecret(secrets, "Discord.BotToken", "discord-live");
     }
 
+    [Fact]
+    public async Task Channels_TelegramFirstTimeSetup_CanonicalizesChatIdAndEncryptsToken()
+    {
+        // The typed chat ID is a non-canonical spelling of the numeric id the
+        // probe resolves; the persisted allow-list must hold the canonical form
+        // the runtime ACL matches, and the token must be encrypted at rest.
+        WriteEmptyChannelFiles();
+        var telegramProbe = new FakeTelegramProbe
+        {
+            NextProbeResult = new TelegramProbeResult(true, null, "netclaw_bot"),
+            NextResolutionResult = new TelegramChatResolutionResult(
+                true, null, [new ResolvedTelegramChat("-1001234", "Ops Group")], []),
+        };
+        var app = CreateHeadlessApp(
+            out var input,
+            out var dashboardVm,
+            out var getChannelsVm,
+            out _,
+            telegramProbe: telegramProbe);
+        OpenChannels(dashboardVm);
+        MoveToAdapter(input, ChannelType.Telegram);
+
+        input.EnqueueKey(ConsoleKey.Enter); // Enable + first-time setup.
+        input.EnqueueString("12345:first-time-token");
+        input.EnqueueKey(ConsoleKey.Enter);
+        input.EnqueueKey(ConsoleKey.Enter); // Keep mention-only required.
+        input.EnqueueString("-001001234"); // Non-canonical spelling of -1001234.
+        input.EnqueueKey(ConsoleKey.Enter);
+        SelectSecondOption(input); // Disable DMs.
+        SelectSecondOption(input); // Allow anyone in allowed chats.
+        input.EnqueueKey(ConsoleKey.Q, false, false, true);
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        await app.RunAsync(cts.Token);
+
+        var channelsVm = Assert.IsType<ChannelsConfigViewModel>(getChannelsVm());
+
+        // The sub-flow's completion autosave does not probe; settle the queued
+        // completion write, then drive the explicit probe-on save whose numeric
+        // remap canonicalizes the typed non-canonical id on disk.
+        if (channelsVm.PendingLabelRefresh is { } pendingRefresh)
+            await pendingRefresh;
+        await channelsVm.PendingConfigWrite;
+        Assert.True(await channelsVm.SaveAsync(TestContext.Current.CancellationToken));
+        await channelsVm.PendingConfigWrite;
+
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Telegram.Enabled", out var enabled), "Telegram.Enabled missing");
+        Assert.True(Assert.IsType<bool>(enabled));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Telegram.AllowedChatIds", out var chatsRaw), "Telegram channels missing");
+        Assert.Equal(["-1001234"], ToStringArray(chatsRaw));
+
+        var secrets = ConfigFileHelper.LoadJsonDict(_paths.SecretsPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(secrets, "Telegram.BotToken", out var rawToken), "Telegram.BotToken missing");
+        var raw = rawToken?.ToString();
+        Assert.False(string.IsNullOrWhiteSpace(raw));
+        // The persisted value must be ciphertext, not the typed plaintext.
+        Assert.NotEqual("12345:first-time-token", raw);
+        Assert.True(ISecretsProtector.IsEncrypted(raw));
+        Assert.Equal("12345:first-time-token", ConfigFileHelper.DecryptIfEncrypted(_paths, raw));
+    }
+
     private static void OpenChannels(ConfigDashboardViewModel dashboardVm)
     {
         dashboardVm.SelectedIndex.Value = dashboardVm.Items
@@ -484,6 +554,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
             ChannelType.Slack => 0,
             ChannelType.Discord => 1,
             ChannelType.Mattermost => 2,
+            ChannelType.Telegram => 3,
             _ => throw new ArgumentOutOfRangeException(nameof(channelType), channelType, null)
         };
 
@@ -491,9 +562,12 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
             input.EnqueueKey(ConsoleKey.DownArrow);
     }
 
-    private static void MoveToRotateCredentials(VirtualInputSource input)
+    private static void MoveToRotateCredentials(VirtualInputSource input, ChannelType channelType)
     {
-        for (var i = 0; i < 4; i++)
+        // Telegram's management menu carries an extra mention-only toggle row
+        // before the credentials entry.
+        var downs = channelType == ChannelType.Telegram ? 5 : 4;
+        for (var i = 0; i < downs; i++)
             input.EnqueueKey(ConsoleKey.DownArrow);
     }
 
@@ -515,6 +589,9 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 input.EnqueueString("https://typed-mattermost.example.com");
                 input.EnqueueKey(ConsoleKey.Tab);
                 input.EnqueueString("mattermost-typed-token");
+                break;
+            case ChannelType.Telegram:
+                input.EnqueueString("12345:typed-token");
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(channelType), channelType, null);
@@ -554,6 +631,15 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 SelectSecondOption(input); // Allow anyone in allowed channels.
                 input.EnqueueKey(ConsoleKey.Enter); // Skip optional callback URL.
                 break;
+            case ChannelType.Telegram:
+                input.EnqueueString("12345:first-time-token");
+                input.EnqueueKey(ConsoleKey.Enter);
+                input.EnqueueKey(ConsoleKey.Enter); // Keep mention-only required.
+                input.EnqueueString("-1001234");
+                input.EnqueueKey(ConsoleKey.Enter);
+                SelectSecondOption(input); // Disable DMs.
+                SelectSecondOption(input); // Allow anyone in allowed chats.
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(channelType), channelType, null);
         }
@@ -583,13 +669,26 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 Assert.Equal(typed ? "https://typed-mattermost.example.com" : "https://first-time-mattermost.example.com", serverUrl);
                 AssertSecret(secrets, "Mattermost.BotToken", typed ? "mattermost-typed-token" : "mattermost-first-time-token");
                 break;
+            case ChannelType.Telegram:
+                AssertSecret(secrets, "Telegram.BotToken", typed ? "12345:typed-token" : "12345:first-time-token");
+                break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(channelType), channelType, null);
         }
     }
 
-    private void AssertFirstTimeSetupPersisted(ChannelsConfigViewModel vm, ChannelType channelType)
+    private async Task AssertFirstTimeSetupPersisted(ChannelsConfigViewModel vm, ChannelType channelType)
     {
+        // The Telegram sub-flow's completion triggers a fire-and-forget channel
+        // resolution/reconcile; settle it before reading the persisted state.
+        if (channelType == ChannelType.Telegram)
+        {
+            if (vm.PendingLabelRefresh is { } pendingRefresh)
+                await pendingRefresh;
+            await vm.RefreshChannelLabelsAsync(ChannelType.Telegram, TestContext.Current.CancellationToken);
+            await vm.PendingConfigWrite;
+        }
+
         AssertPersistedCredentials(channelType, typed: false);
         var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         switch (channelType)
@@ -612,6 +711,12 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                 Assert.True(mattermost.HasPersistedBotToken);
                 Assert.True(ConfigFileHelper.TryGetPathValue(config, "Mattermost.AllowedChannelIds", out var mattermostChannelsRaw));
                 Assert.Equal(["town-square"], ToStringArray(mattermostChannelsRaw));
+                break;
+            case ChannelType.Telegram:
+                var telegram = vm.Step.GetAdapterViewModel<TelegramStepViewModel>(ChannelType.Telegram);
+                Assert.True(telegram.HasPersistedBotToken);
+                Assert.True(ConfigFileHelper.TryGetPathValue(config, "Telegram.AllowedChatIds", out var telegramChannelsRaw));
+                Assert.Equal(["-1001234"], ToStringArray(telegramChannelsRaw));
                 break;
             default:
                 throw new ArgumentOutOfRangeException(nameof(channelType), channelType, null);
@@ -659,7 +764,8 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
             out _,
             slackProbe: null,
             discordProbe: null,
-            mattermostProbe: null);
+            mattermostProbe: null,
+            telegramProbe: null);
 
     private TerminaApplication CreateHeadlessApp(
         out VirtualInputSource input,
@@ -668,7 +774,8 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
         out VirtualTerminal terminal,
         FakeSlackProbe? slackProbe = null,
         FakeDiscordProbe? discordProbe = null,
-        FakeMattermostProbe? mattermostProbe = null)
+        FakeMattermostProbe? mattermostProbe = null,
+        FakeTelegramProbe? telegramProbe = null)
     {
         var terminalInstance = new VirtualTerminal(120, 40);
         terminal = terminalInstance;
@@ -704,7 +811,7 @@ public sealed class ChannelsConfigNavigationTests : IDisposable
                         slackProbe ?? new FakeSlackProbe(),
                         discordProbe ?? new FakeDiscordProbe(),
                         mattermostProbe ?? new FakeMattermostProbe(),
-                        new FakeTelegramProbe(),
+                        telegramProbe ?? new FakeTelegramProbe(),
                         tuiNavigation);
                     return capturedChannelsVm;
                 });
