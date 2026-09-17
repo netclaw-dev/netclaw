@@ -137,9 +137,11 @@ public sealed class TelegramTransport(
                 parseMode: ParseMode.Html,
                 cancellationToken: cancellationToken).ConfigureAwait(false);
         }
-        catch (ApiRequestException)
+        catch (ApiRequestException ex) when (ex.ErrorCode == 400 && ex.Message.Contains("can't parse entities", StringComparison.Ordinal))
         {
-            // Formatting must never prevent the user from receiving the answer.
+            // Only Telegram's documented entity-parse rejection may fall back to
+            // plain text. Auth failures, rate limits, and bad destinations keep
+            // the original failure — a retry cannot succeed and only hides the cause.
             await client.SendMessage(chatId, text, cancellationToken: cancellationToken).ConfigureAwait(false);
         }
     }

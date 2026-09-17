@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Channels.Telegram;
+using Telegram.Bot.Exceptions;
 using Netclaw.Configuration;
 using Telegram.Bot;
 using Telegram.Bot.Types;
@@ -83,6 +84,40 @@ public sealed class TelegramTransportTests
         Assert.Equal(1, client.GetMeCalls);
     }
 
+    [Fact]
+    public async Task Entity_parse_failure_retries_once_as_plain_text()
+    {
+        var client = new FakeTelegramBotApiClient();
+        client.SendMessageFailures.Enqueue(new ApiRequestException(
+            "Bad Request: can't parse entities: Unsupported start tag \"netclaw\"", 400));
+        var transport = CreateTransport((_, _) => client);
+
+        await transport.StartAsync(TestContext.Current.CancellationToken);
+        await transport.SendTextAsync(77, "netclaw **bold** status", TestContext.Current.CancellationToken);
+
+        Assert.Equal(2, client.SentTexts.Count);
+        Assert.Equal(ParseMode.Html, client.SentTexts[0].ParseMode);
+        Assert.Contains("<b>", client.SentTexts[0].Text);
+        Assert.NotEqual(ParseMode.Html, client.SentTexts[1].ParseMode);
+        Assert.Equal("netclaw **bold** status", client.SentTexts[1].Text);
+    }
+
+    [Fact]
+    public async Task Authorization_failure_is_not_retried_and_preserves_the_original_exception()
+    {
+        var client = new FakeTelegramBotApiClient();
+        var failure = new ApiRequestException("Unauthorized", 401);
+        client.SendMessageFailures.Enqueue(failure);
+        var transport = CreateTransport((_, _) => client);
+
+        await transport.StartAsync(TestContext.Current.CancellationToken);
+        var thrown = await Assert.ThrowsAsync<ApiRequestException>(
+            () => transport.SendTextAsync(77, "hello", TestContext.Current.CancellationToken));
+
+        Assert.Same(failure, thrown);
+        _ = Assert.Single(client.SentTexts);
+    }
+
     private static TelegramTransport CreateTransport(TelegramBotClientFactory factory) =>
         new(ValidOptions(), NullLogger<TelegramTransport>.Instance, factory);
 
@@ -100,7 +135,9 @@ public sealed class TelegramTransportTests
 
         public int EventSubscriptionCount { get; private set; }
 
-        public List<(long ChatId, string Text)> SentTexts { get; } = [];
+        public List<(long ChatId, string Text, ParseMode ParseMode)> SentTexts { get; } = [];
+
+        public Queue<Exception> SendMessageFailures { get; } = new();
 
         private TelegramBotClient.OnMessageHandler? _onMessage;
 
@@ -145,7 +182,10 @@ public sealed class TelegramTransportTests
             InlineKeyboardMarkup? replyMarkup = null,
             CancellationToken cancellationToken = default)
         {
-            SentTexts.Add((chatId, text));
+            SentTexts.Add((chatId, text, parseMode));
+            if (SendMessageFailures.TryDequeue(out var failure))
+                throw failure;
+
             return Task.FromResult(new Message { Id = 1 });
         }
 
