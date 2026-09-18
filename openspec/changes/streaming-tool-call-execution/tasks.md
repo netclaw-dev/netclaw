@@ -96,7 +96,7 @@
 - [x] Update the affected system skill guidance if tool/sub-agent guidance
   changed (System Skills Sync Rule)
 - [x] `dotnet slopwatch analyze` — no new violations; `./scripts/Add-FileHeaders.ps1 -Verify`
-- [ ] Run `./evals/run-evals.sh` (tool surface + `SessionConfig` changed)
+- [x] Run `./evals/run-evals.sh` (tool surface + `SessionConfig` changed)
 - **Acceptance:** full `Netclaw.Actors.Tests` / `Netclaw.Configuration.Tests`
   suites pass; eval suite passes; manual repro confirms a heavy `spawn_agent` no
   longer dies mid-stream and parallel spawns with one wedged do not hang the turn
@@ -113,6 +113,6 @@
   tool-result error fed to the model
 - [x] Tests: self-monitoring runs-to-completion + bounded-only-by-caller-cancellation;
   liveness-validator both directions
-- [ ] Re-run `./evals/run-evals.sh` (Subagents category) on the consolidated build
+- [x] Re-run `./evals/run-evals.sh` (Subagents category) on the consolidated build
 - **Acceptance:** a self-monitoring tool is never killed by a parent timer; opaque
   tools still time out at their wall-clock budget; the subagent eval passes
