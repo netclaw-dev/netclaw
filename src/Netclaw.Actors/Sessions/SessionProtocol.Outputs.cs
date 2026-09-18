@@ -229,6 +229,16 @@ public static partial class SessionProtocol
         /// for diagnostic logging by subscribers and adapters.
         /// </summary>
         public Exception? Cause { get; init; }
+
+        /// <summary>
+        /// True when this instance is not a real session error. The client
+        /// mapper sets it when it cannot read a wire message from the daemon
+        /// (for example, an output type the client build does not know).
+        /// A channel adapter must keep a protocol diagnostic out of any
+        /// machine-readable result envelope and must not report it as a turn
+        /// error. Defaults to false for every daemon-originated error.
+        /// </summary>
+        public bool IsProtocolDiagnostic { get; init; }
     }
 
     /// <summary>
