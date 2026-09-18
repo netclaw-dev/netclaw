@@ -11,7 +11,7 @@
 Output "/tmp/tape-init-existing.gif"
 
 # ─── Seed an existing install ───────────────────────────────────────
-Type "mkdir -p $NETCLAW_HOME/config && echo {} > $NETCLAW_HOME/config/netclaw.json"
+Type "mkdir -p $NETCLAW_HOME/config $NETCLAW_HOME/identity && echo {} > $NETCLAW_HOME/config/netclaw.json && echo '# soul' > $NETCLAW_HOME/identity/SOUL.md"
 Enter
 Wait+Screen@5s /TAPE\$/
 
