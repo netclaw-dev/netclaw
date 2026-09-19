@@ -40,18 +40,23 @@ so that PR validation and release publishing share one code path.
 
 ### Requirement: Image entrypoint auto-starts netclawd
 
-The image SHALL declare `ENTRYPOINT ["/usr/local/bin/netclawd"]`. Starting
-the container via `docker run` SHALL launch the daemon as PID 1 without
-requiring any additional command, matching the Docker idiom for published
-service images (Postgres, Redis, Elasticsearch).
+The image SHALL start `tini` as PID 1. Its supervisor SHALL start `netclawd`.
+The supervisor SHALL forward a container stop signal to the daemon.
+It SHALL wait for the daemon to finish graceful drain before it exits.
 
 #### Scenario: docker run starts the daemon
 
-- **GIVEN** the image is present locally
-- **WHEN** an operator runs `docker run -d --rm <image>` with the minimum
-  valid configuration env vars and an identity bind-mount
-- **THEN** `netclawd` is PID 1 inside the container
+- **GIVEN** the image is present locally with valid configuration and identity files
+- **WHEN** an operator starts the container
+- **THEN** `tini` is PID 1 and the supervisor starts `netclawd`
 - **AND** the daemon binds its HTTP port within 60 seconds
+
+#### Scenario: Pod stop preserves a resume candidate
+
+- **GIVEN** the container has a persistent operator state volume and an eligible interrupted session
+- **WHEN** the pod sends a graceful stop signal with enough termination time
+- **THEN** the supervisor forwards the signal and waits for the daemon to exit
+- **AND** the state volume retains the candidate for the next container start
 
 ### Requirement: Minimal valid configuration reaches healthy state
 
@@ -102,22 +107,18 @@ selection — these MUST come from the operator at `docker run` time.
 - **THEN** no layer contains a `config/netclaw.json` or `config/secrets.json`
   file with a non-empty `Providers` section
 
-### Requirement: Operator state mounts at /root/.netclaw
+### Requirement: Operator state mounts at /home/netclaw/.netclaw
 
-The image SHALL declare `VOLUME /root/.netclaw` so operators can mount a
-host directory (or anonymous volume) to persist identity files, session
-state, SQLite DB, and logs. The image SHALL NOT pre-populate this path
-with identity files, config, or secrets — real operators are expected to
-produce these via `netclaw init` before starting the container.
+The image SHALL declare `VOLUME /home/netclaw/.netclaw`.
+The volume SHALL hold identity, configuration, session data, and restart candidates.
+The image SHALL NOT include operator credentials or identity files.
 
 #### Scenario: Operator bind-mounts an initialized home
 
-- **GIVEN** an operator has previously run `netclaw init` on the host and
-  has a populated `~/.netclaw/`
-- **WHEN** they run `docker run -v ~/.netclaw:/root/.netclaw <image>`
-- **THEN** the container daemon reads their identity and config from the
-  mounted directory
-- **AND** writes new session state back to the host path
+- **GIVEN** an operator has an initialized Netclaw home on the host
+- **WHEN** they mount it at `/home/netclaw/.netclaw` and start the container
+- **THEN** the daemon reads identity and configuration from that directory
+- **AND** it writes session state and restart candidates to the same directory
 
 ### Requirement: Image includes common autonomous-agent tooling
 

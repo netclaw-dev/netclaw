@@ -91,6 +91,8 @@ public sealed record MessageSource
     /// </summary>
     public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
 
+    public ChannelReplyRoute? ReplyRoute { get; init; }
+
     /// <summary>
     /// Explicit output target selected by a trigger source such as a reminder or
     /// webhook route.

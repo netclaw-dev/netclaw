@@ -17,6 +17,10 @@ public static partial class SessionProtocol
     /// </summary>
     public sealed record CommandAck(SessionId SessionId) : ISessionResponse
     {
+        public RestartResumeCandidate? ResumeCandidate { get; init; }
+
+        public string? ResumeBlockedReason { get; init; }
+
         public static CommandAck For(SessionId sessionId) => new(sessionId);
     }
 

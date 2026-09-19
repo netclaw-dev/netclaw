@@ -107,6 +107,7 @@ internal sealed class MattermostConversationActor : ChannelConversationActor<Mat
             Provenance: aclDecision.Provenance,
             Text: normalizedText,
             ReceivedAt: message.ReceivedAt,
+            IsDirectMessage: message.IsDirectMessage,
             Attachments: message.Attachments);
 
     protected override async Task PostIngressClosedReplyAsync(MattermostGatewayMessage message, string closedReason)

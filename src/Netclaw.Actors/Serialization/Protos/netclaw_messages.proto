@@ -107,12 +107,29 @@ message InputAdmittedProto {
   optional string source_reminder_id = 7;
   optional string source_background_job_id = 8;
   int64 admitted_at_ms = 9;
+  optional bool is_direct_message = 10;
+  optional string reply_channel_id = 11;
+  optional string root_message_id = 12;
 }
 
 message InputClosedProto {
   SessionIdProto session_id = 1;
   repeated string input_ids = 2;
   int64 closed_at_ms = 3;
+}
+
+message SessionResumePreparedProto {
+  SessionIdProto session_id = 1;
+  repeated string original_input_ids = 2;
+  repeated string queued_input_ids = 3;
+  int64 deadline_ms = 4;
+  int64 prepared_at_ms = 5;
+}
+
+message SessionResumeClaimedProto {
+  SessionIdProto session_id = 1;
+  int64 prepared_at_ms = 2;
+  int64 claimed_at_ms = 3;
 }
 
 message SessionTitleSetProto {

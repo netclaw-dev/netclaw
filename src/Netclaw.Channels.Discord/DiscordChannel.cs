@@ -17,7 +17,7 @@ using Netclaw.Security;
 
 namespace Netclaw.Channels.Discord;
 
-public sealed class DiscordChannel : IChannel
+public sealed class DiscordChannel : IChannel, IRestartOutputBinder
 {
     private readonly ActorSystem _system;
     private readonly ISessionPipeline _pipeline;
@@ -96,6 +96,55 @@ public sealed class DiscordChannel : IChannel
     /// hierarchy. Null until a connection succeeds.
     /// </summary>
     internal IActorRef? Gateway => _gateway;
+
+    public async Task<RestartOutputBindingResult> BindForRestartAsync(
+        RestartResumeRouteResult route,
+        CancellationToken cancellationToken)
+    {
+        if (!DiscordGatewayActor.TryParseDiscordSessionId(route.SessionId, out var channelId, out var threadId)
+            || route.ReplyRoute is not { } replyRoute
+            || string.IsNullOrWhiteSpace(replyRoute.ReplyChannelId)
+            || route.Contexts.Count == 0
+            || route.Contexts.Any(context => context.ChannelType != "discord"
+                || context.RequesterSenderId is null
+                || context.DefaultDeliveryTarget?.DestinationId != channelId.Value))
+            return new(false, "The stored Discord route or requester is invalid.");
+
+        var userId = new DiscordUserId(route.Contexts[0].RequesterSenderId!.Value.Value);
+        if (route.Contexts.Any(context =>
+                !DiscordAclPolicy.IsAllowedUser(
+                    new DiscordUserId(context.RequesterSenderId!.Value.Value), _options))
+            || replyRoute.IsDirectMessage && !_options.AllowDirectMessages
+            || !replyRoute.IsDirectMessage && !DiscordAclPolicy.IsAllowedChannel(
+                channelId, _options,
+                string.IsNullOrWhiteSpace(_options.DefaultChannelId)
+                    ? null : new DiscordChannelId(_options.DefaultChannelId)))
+            return new(false, "The current Discord ACL rejects the stored route.");
+
+        if (_gateway is not { } gateway
+            || (await GetHealthAsync(cancellationToken)).Status != ChannelHealthStatus.Healthy)
+            return new(false, "The Discord gateway is not ready.");
+
+        try
+        {
+            var ack = await gateway.Ask<ProactiveThreadAck>(
+                new StartProactiveThread(
+                    channelId,
+                    new DiscordReplyChannelId(replyRoute.ReplyChannelId),
+                    threadId,
+                    route.SessionId,
+                    replyRoute.IsDirectMessage ? userId : null,
+                    replyRoute.RootMessageId is { } root ? new DiscordMessageId(root) : null),
+                TimeSpan.FromSeconds(10), cancellationToken);
+            return ack.SessionId == route.SessionId
+                ? new(true)
+                : new(false, "The Discord binding returned a different session.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new(false, $"The Discord output binding failed: {ex.Message}");
+        }
+    }
 
     public async ValueTask<ChannelHealth> GetHealthAsync(CancellationToken cancellationToken = default)
     {

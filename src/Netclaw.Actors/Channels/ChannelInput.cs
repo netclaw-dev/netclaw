@@ -89,6 +89,8 @@ public sealed record ChannelInput
     /// </summary>
     public ChannelDeliveryTargetInfo? DefaultDeliveryTarget { get; init; }
 
+    public ChannelReplyRoute? ReplyRoute { get; init; }
+
     /// <summary>
     /// Explicit output target selected by trigger-originated input when external
     /// output is expected.

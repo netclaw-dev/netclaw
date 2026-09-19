@@ -30,6 +30,8 @@ internal static class NetclawProtoMapper
         TurnRecorded v => ToProto(v),
         InputAdmitted v => ToProto(v),
         InputClosed v => ToProto(v),
+        SessionResumePrepared v => ToProto(v),
+        SessionResumeClaimed v => ToProto(v),
         SessionTitleSet v => ToProto(v),
         SessionCompacted v => ToProto(v),
         ToolBatchStarted v => ToProto(v),
@@ -198,6 +200,13 @@ internal static class NetclawProtoMapper
             proto.ExecutableText = evt.ExecutableText;
         if (evt.TurnContext is not null)
             proto.TurnContext = ToProto(evt.TurnContext);
+        if (evt.ReplyRoute is { } route)
+        {
+            proto.IsDirectMessage = route.IsDirectMessage;
+            proto.ReplyChannelId = route.ReplyChannelId;
+            if (route.RootMessageId is not null)
+                proto.RootMessageId = route.RootMessageId;
+        }
         if (evt.SourceReminderId is { } reminderId)
             proto.SourceReminderId = reminderId.Value;
         if (evt.SourceBackgroundJobId is { } backgroundJobId)
@@ -213,6 +222,10 @@ internal static class NetclawProtoMapper
         UserMessage = FromProto(proto.UserMessage),
         ExecutableText = proto.HasExecutableText ? proto.ExecutableText : null,
         TurnContext = proto.TurnContext is null ? null : FromProto(proto.TurnContext),
+        ReplyRoute = proto.HasReplyChannelId && proto.HasIsDirectMessage
+            ? new ChannelReplyRoute(proto.IsDirectMessage, proto.ReplyChannelId,
+                proto.HasRootMessageId ? proto.RootMessageId : null)
+            : null,
         SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : null,
         SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
         AdmittedAtMs = proto.AdmittedAtMs
@@ -234,6 +247,42 @@ internal static class NetclawProtoMapper
         SessionId = FromProto(proto.SessionId),
         InputIds = proto.InputIds.ToArray(),
         ClosedAtMs = proto.ClosedAtMs
+    };
+
+    internal static Proto.SessionResumePreparedProto ToProto(SessionResumePrepared evt)
+    {
+        var proto = new Proto.SessionResumePreparedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            DeadlineMs = evt.DeadlineMs,
+            PreparedAtMs = evt.PreparedAtMs
+        };
+        proto.OriginalInputIds.AddRange(evt.OriginalInputIds);
+        proto.QueuedInputIds.AddRange(evt.QueuedInputIds);
+        return proto;
+    }
+
+    internal static SessionResumePrepared FromProto(Proto.SessionResumePreparedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        OriginalInputIds = proto.OriginalInputIds.ToArray(),
+        QueuedInputIds = proto.QueuedInputIds.ToArray(),
+        DeadlineMs = proto.DeadlineMs,
+        PreparedAtMs = proto.PreparedAtMs
+    };
+
+    internal static Proto.SessionResumeClaimedProto ToProto(SessionResumeClaimed evt) => new()
+    {
+        SessionId = ToProto(evt.SessionId),
+        PreparedAtMs = evt.PreparedAtMs,
+        ClaimedAtMs = evt.ClaimedAtMs
+    };
+
+    internal static SessionResumeClaimed FromProto(Proto.SessionResumeClaimedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        PreparedAtMs = proto.PreparedAtMs,
+        ClaimedAtMs = proto.ClaimedAtMs
     };
 
     // ── SessionTitleSet ──

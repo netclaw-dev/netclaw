@@ -84,10 +84,12 @@ public sealed class DaemonRestartCoordinator : IDaemonRestartCoordinator
 
             var manifest = new RestartManifest
             {
+                GenerationId = Guid.NewGuid(),
                 Reason = "config-reload",
                 RequestedAt = _timeProvider.GetUtcNow(),
                 SessionIds = [.. drainResult.AllSessionIds.Select(static id => id.Value)],
-                TimedOutSessionIds = [.. drainResult.TimedOutSessionIds.Select(static id => id.Value)]
+                TimedOutSessionIds = [.. drainResult.TimedOutSessionIds.Select(static id => id.Value)],
+                ResumeCandidates = [.. drainResult.ResumeCandidates]
             };
 
             if (manifest.SessionIds.Count == 0)

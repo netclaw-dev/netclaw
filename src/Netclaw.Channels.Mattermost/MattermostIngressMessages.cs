@@ -30,7 +30,8 @@ public sealed record MattermostThreadInbound(
     SourceProvenance Provenance,
     string Text,
     DateTimeOffset ReceivedAt,
-    IReadOnlyList<MattermostFileReference>? Attachments = null);
+    IReadOnlyList<MattermostFileReference>? Attachments = null,
+    bool IsDirectMessage = false);
 
 public sealed record MattermostApprovalResponse(
     MattermostChannelId ChannelId,

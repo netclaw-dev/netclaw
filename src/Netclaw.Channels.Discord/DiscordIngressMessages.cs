@@ -31,7 +31,8 @@ public sealed record DiscordThreadInbound(
     SourceProvenance Provenance,
     string Text,
     DateTimeOffset ReceivedAt,
-    IReadOnlyList<DiscordFileReference>? Attachments = null);
+    IReadOnlyList<DiscordFileReference>? Attachments = null,
+    bool IsDirectMessage = false);
 
 public sealed record DiscordApprovalResponse(
     DiscordChannelId ChannelId,

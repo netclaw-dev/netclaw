@@ -2,6 +2,8 @@
 
 Source PRDs: `PRD-001`, `PRD-002`, `PRD-004`
 
+Use the [engineering glossary](GLOSSARY.md) for shared session terms.
+
 ## Purpose
 
 Define the daemon + thin client architecture, binary split, SignalR transport,
@@ -217,12 +219,28 @@ input ID. The actor restores unconsumed records from the journal after a cold
 start. A retry with the same stable source message ID does not add a second
 record. A source without a stable ID cannot use this deduplication rule.
 
-During drain, a session can stop a tool task that waits only for durable
-approval prompts. The session waits for the tool task to stop before it
-acknowledges drain. Its journal retains the prompts and completed sibling
-results. An approval after restart resumes the original turn under its
-recorded authority. Active tools, accepted buffered input, and incomplete
-results keep the current bounded drain path.
+During drain, a session stops a tool task that waits only for durable approval
+prompts. The session waits for that task to stop before it acknowledges drain.
+An approval after restart resumes the original turn under its recorded authority.
+
+A live model call gets two seconds to finish. The actor then cancels the call.
+The actor waits for its task to stop. It records a candidate only when
+the journal has the accepted input and the turn has no tool effect or partial
+reply. A completed reply creates no candidate unless accepted queued input remains.
+
+Any graceful stop can save a candidate in an atomic restart manifest. A candidate
+expires ten minutes after the first interruption. A normal stop hours before a
+later start leaves the session quiet. A crash does not create a candidate or repeat a claimed model call.
+
+After channel startup, the daemon checks every recorded requester against the current channel ACL.
+It then restores a supported channel output subscriber. The actor checks the deadline,
+input IDs, and recorded authority again.
+It records one durable claim before the model call. The model resumes the original
+turn, then receives the accepted queue in one ordered follow-up call.
+
+The daemon retains a candidate while its output route is unavailable. It reports
+the blocked route and removes an expired candidate. Pending approvals and uncertain
+tool effects never start an automatic model call.
 
 `netclaw daemon status` checks the PID file and verifies the process is alive.
 Reports: running/stopped, PID, uptime, port, number of active sessions.
@@ -350,8 +368,9 @@ not execute tools.
 4. **Valid config**: close daemon-managed ingress, enumerate live session actors,
    ask them to drain, persist a restart manifest, and request coordinated
    daemon restart
-5. **After restart**: warm the sessions that were active when restart began and
-   inject a continuity notice for the next turn
+5. **After restart**: warm prior sessions in the background. Restore eligible
+   output routes, then resume confirmed interrupted work before its deadline.
+   A session without eligible work waits for the next user turn.
 6. **Invalid config**: log warning with validation errors, preserve previous config
 
 ### What Changes Take Effect After Restart

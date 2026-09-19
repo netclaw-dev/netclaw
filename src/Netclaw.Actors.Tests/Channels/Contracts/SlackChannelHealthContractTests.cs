@@ -8,6 +8,7 @@ using Akka.Actor;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels;
 using Netclaw.Channels.Slack;
@@ -17,6 +18,7 @@ using SlackNet;
 using SlackNet.SocketMode;
 using SlackNet.WebApi;
 using Xunit;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
@@ -56,7 +58,8 @@ public sealed class SlackChannelHealthContractTests(ITestOutputHelper output)
                 BotToken = new SensitiveString("xoxb-test"),
                 AppToken = new SensitiveString("xapp-test"),
                 DefaultChannelId = "C-1",
-                AllowedChannelIds = ["C-1"]
+                AllowedChannelIds = ["C-1"],
+                AllowedUserIds = ["U-allowed"]
             },
             new ReconnectFailureLogger(TestActor),
             EmptyThreadHistoryFetcher.Instance,
@@ -68,6 +71,29 @@ public sealed class SlackChannelHealthContractTests(ITestOutputHelper output)
             Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
 
         return _channel;
+    }
+
+    [Fact]
+    public async Task Restart_binding_rejects_when_any_durable_requester_is_no_longer_allowed()
+    {
+        var channel = Assert.IsType<SlackChannel>(CreateChannel(enabled: true));
+        TurnContextRecord ContextFor(string senderId) => new()
+        {
+            SessionId = new SessionId("C-1/1710000000.000001"),
+            TurnId = $"turn-{senderId}",
+            ChannelType = "slack",
+            RequesterSenderId = new SenderId(senderId),
+            DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
+                "slack", "channel", "C-1", "#test")
+        };
+        var route = new RestartResumeRouteResult(
+            new SessionId("C-1/1710000000.000001"),
+            [ContextFor("U-allowed"), ContextFor("U-blocked")], null, null);
+
+        var result = await channel.BindForRestartAsync(route, TestContext.Current.CancellationToken);
+
+        Assert.False(result.Ready);
+        Assert.Contains("ACL rejects", result.Reason, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -402,7 +402,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             Contents = liveContents,
             ReceivedAt = message.ReceivedAt,
             ExecutableText = message.Text,
-            DefaultDeliveryTarget = BuildDefaultDeliveryTarget()
+            DefaultDeliveryTarget = BuildDefaultDeliveryTarget(),
+            ReplyRoute = new ChannelReplyRoute(message.IsDirectMessage, message.ChannelId.Value)
         };
 
         // Re-arm thread-history hydration on a tap-gated mention so the gap the

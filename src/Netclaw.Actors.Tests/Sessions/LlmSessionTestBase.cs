@@ -43,6 +43,8 @@ public abstract class LlmSessionTestBase : TestKit
     /// </summary>
     protected virtual bool UseTestScheduler => false;
 
+    protected virtual bool UseFaultableJournal => false;
+
     /// <summary>
     /// Moves virtual scheduler time forward, synchronously delivering any
     /// scheduler items (e.g. the processing watchdog timeout) that fall due.
@@ -79,10 +81,17 @@ public abstract class LlmSessionTestBase : TestKit
                 "akka.scheduler.implementation = \"Akka.TestKit.TestScheduler, Akka.TestKit\"",
                 HoconAddMode.Prepend);
 
-        builder
-            .WithInMemoryJournal()
-            .WithInMemorySnapshotStore()
-            .WithNetclawSerialization();
+        if (UseFaultableJournal)
+            builder.AddHocon(
+                """
+                akka.persistence.journal.plugin = "akka.persistence.journal.test"
+                akka.persistence.journal.test.class = "Akka.Persistence.TestKit.TestJournal, Akka.Persistence.TestKit"
+                """,
+                HoconAddMode.Prepend);
+        else
+            builder.WithInMemoryJournal();
+
+        builder.WithInMemorySnapshotStore().WithNetclawSerialization();
 
         if (VerifySerialization)
             builder.WithSerializationVerification();

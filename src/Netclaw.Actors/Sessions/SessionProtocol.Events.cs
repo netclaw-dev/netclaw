@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
@@ -74,6 +75,8 @@ public static partial class SessionProtocol
 
         public TurnContextRecord? TurnContext { get; init; }
 
+        public ChannelReplyRoute? ReplyRoute { get; init; }
+
         public ReminderId? SourceReminderId { get; init; }
 
         public BackgroundJobId? SourceBackgroundJobId { get; init; }
@@ -95,6 +98,44 @@ public static partial class SessionProtocol
         public long ClosedAtMs { get; init; }
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClosedAtMs);
+    }
+
+    /// <summary>
+    /// Stores the first interruption deadline so another short stop cannot extend it.
+    /// </summary>
+    public sealed record SessionResumePrepared : ISessionEvent
+    {
+        public SessionId SessionId { get; init; }
+
+        public IReadOnlyList<string> OriginalInputIds { get; init; } = [];
+
+        public IReadOnlyList<string> QueuedInputIds { get; init; } = [];
+
+        public long DeadlineMs { get; init; }
+
+        public long PreparedAtMs { get; init; }
+
+        public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(PreparedAtMs);
+
+        public RestartResumeCandidate ToCandidate() => new(
+            SessionId,
+            OriginalInputIds.ToArray(),
+            QueuedInputIds.ToArray(),
+            DeadlineMs);
+    }
+
+    /// <summary>
+    /// Prevents another process start from sending the same automatic wakeup again.
+    /// </summary>
+    public sealed record SessionResumeClaimed : ISessionEvent
+    {
+        public SessionId SessionId { get; init; }
+
+        public long PreparedAtMs { get; init; }
+
+        public long ClaimedAtMs { get; init; }
+
+        public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(ClaimedAtMs);
     }
 
     /// <summary>

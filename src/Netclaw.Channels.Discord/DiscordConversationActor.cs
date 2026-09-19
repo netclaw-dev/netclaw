@@ -112,6 +112,7 @@ internal sealed class DiscordConversationActor : ChannelConversationActor<Discor
             Provenance: aclDecision.Provenance,
             Text: normalizedText,
             ReceivedAt: message.ReceivedAt,
+            IsDirectMessage: message.IsDirectMessage,
             Attachments: message.Attachments);
 
     protected override async Task PostIngressClosedReplyAsync(DiscordGatewayMessage message, string closedReason)

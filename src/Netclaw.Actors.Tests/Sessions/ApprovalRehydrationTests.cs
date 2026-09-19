@@ -112,6 +112,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             new PrepareForDaemonRestart(sessionId, "config-reload"),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         Assert.Equal(sessionId, ack.SessionId);
+        Assert.Null(ack.ResumeCandidate);
         await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5),
             cancellationToken: TestContext.Current.CancellationToken);
 

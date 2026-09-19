@@ -80,6 +80,7 @@ debugging a daemon-wide problem → read `daemon.log`.
 | Memory recall degraded | `netclaw status` memory section |
 | Memory embedding/relevance model unavailable | Fires a `memory.embedding_model.unavailable` / `memory.relevance_model.unavailable` operational alert (once per model per daemon run) naming the model, failure reason, and consequence when `Memory.Embeddings.Enabled=true` and either ONNX model fails to provision or load; see `netclaw-memory`'s Embeddings section and `netclaw doctor`'s Memory Embeddings / Memory Relevance Gate checks |
 | Daemon won't start | crash logs at `<NETCLAW_HOME>/logs/crash-*.log` (`NETCLAW_HOME` defaults to `~/.netclaw`) |
+| A session stays quiet after a restart | Check the daemon log for a blocked or expired restart candidate. A tool effect, partial reply, approval wait, or absent output route blocks automatic resume. The accepted input remains in the session journal. |
 | Docker daemon cannot create `/home/netclaw/.netclaw/*` | Official image entrypoint repairs writable bind mounts to UID/GID `1654:1654`; if bypassed or read-only, run `sudo chown -R 1654:1654 <host-data-dir>` or use a Docker named volume |
 | Discord/Slack channel offline | `netclaw status` shows the channel `disconnected` with a reason. Discord may also report `degraded` when Discord.Net says the socket is connected but the gateway is not ready, such as after a resumed session that Netclaw is replacing with a clean reconnect. A misconfigured channel (bad token, missing Discord Message Content intent) degrades only that channel — the daemon keeps running and other channels are unaffected. A transient network failure retries automatically; a config/permission failure stays offline until the operator fixes the config and restarts the daemon. |
 | `command not found` for `netclaw`/`dotnet`/a user tool from the shell tool when the daemon runs as a systemd service | The systemd `--user` service does not inherit your login-shell `PATH`; `netclaw daemon install` captures it into `~/.netclaw/config/daemon.env`. Run `netclaw doctor` (the **Systemd Unit PATH** check flags a missing/stale/legacy env file), then `netclaw doctor --fix` to rehydrate `PATH` from your current shell (or re-run `netclaw daemon install`), and finally `systemctl --user restart netclaw`. Installed a new tool after install? Its dir won't be seen until you re-run one of those and restart. Per-directory managers (`mise`/`asdf`/`direnv`) are not captured. |
@@ -87,6 +88,12 @@ debugging a daemon-wide problem → read `daemon.log`.
 Slack health reads the live Socket Mode state. The connection supervisor checks this state every five seconds.
 A disconnect emits `channel.disconnected`. The supervisor retries with exponential backoff up to five minutes.
 A successful recovery emits `channel.reconnected`.
+
+A graceful stop can resume a model turn that stops before any tool effect or partial reply.
+The daemon requires a live output route before it starts the model call.
+The candidate expires ten minutes after the first interruption, even after another short stop.
+A completed reply without accepted queued input leaves the session quiet.
+A crash does not schedule automatic resume.
 
 If webhook notifications are configured, daemon crash paths emit
 `daemon.crashing` operational alerts with context (PID, reason, and latest known

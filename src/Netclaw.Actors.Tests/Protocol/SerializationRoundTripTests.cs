@@ -144,6 +144,7 @@ public sealed class SerializationRoundTripTests : TestKit
             SourceMessageId = "event-1",
             UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Continue the task" },
             ExecutableText = "Continue the task",
+            ReplyRoute = new ChannelReplyRoute(false, "C99999", "1708531200.000100"),
             TurnContext = new TurnContextRecord
             {
                 SessionId = sessionId,
@@ -162,6 +163,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(admitted.UserMessage.Content, restored.UserMessage.Content);
         Assert.Equal(admitted.TurnContext?.Boundary, restored.TurnContext?.Boundary);
         Assert.Equal(admitted.TurnContext?.RequesterSenderId, restored.TurnContext?.RequesterSenderId);
+        Assert.Equal(admitted.ReplyRoute, restored.ReplyRoute);
 
         var snapshot = RoundTrip(new SessionSnapshot
         {
@@ -170,7 +172,13 @@ public sealed class SerializationRoundTripTests : TestKit
         });
         Assert.Single(snapshot.PendingInputs);
         Assert.Equal("input-1", snapshot.PendingInputs[0].InputId);
+        Assert.Equal(admitted.ReplyRoute, snapshot.PendingInputs[0].ReplyRoute);
         Assert.Equal("slack:event-1", Assert.Single(snapshot.RecentSourceMessageKeys));
+
+        var later = admitted with { InputId = "input-2", SourceMessageId = "event-2" };
+        var afterReplay = SessionState.FromSnapshot(snapshot).Apply(RoundTrip(later));
+        Assert.Equal(["input-1", "input-2"], afterReplay.PendingInputs.Select(input => input.InputId));
+        Assert.Equal(admitted.TurnContext?.Boundary, afterReplay.PendingInputs[1].TurnContext?.Boundary);
 
         var completed = RoundTrip(new TurnRecorded
         {
@@ -192,6 +200,26 @@ public sealed class SerializationRoundTripTests : TestKit
             ConsumedInputIds = ["input-1"]
         });
         Assert.Equal("input-1", Assert.Single(toolStarted.ConsumedInputIds));
+
+        var prepared = RoundTrip(new SessionResumePrepared
+        {
+            SessionId = sessionId,
+            OriginalInputIds = ["input-1"],
+            QueuedInputIds = ["input-2"],
+            PreparedAtMs = 1_700_000_000_000,
+            DeadlineMs = 1_700_000_600_000
+        });
+        Assert.Equal(["input-1"], prepared.OriginalInputIds);
+        Assert.Equal(["input-2"], prepared.QueuedInputIds);
+        Assert.Equal(1_700_000_600_000, prepared.DeadlineMs);
+
+        var claimed = RoundTrip(new SessionResumeClaimed
+        {
+            SessionId = sessionId,
+            PreparedAtMs = prepared.PreparedAtMs,
+            ClaimedAtMs = prepared.PreparedAtMs + 1
+        });
+        Assert.Equal(prepared.PreparedAtMs, claimed.PreparedAtMs);
     }
 
     [Fact]

@@ -72,7 +72,16 @@ internal static class SessionDrainHelper
                         reason);
                 }
 
-                return new DrainOutcome(sessionId, drained);
+                if (ack.ResumeBlockedReason is not null)
+                    logger.LogWarning(
+                        "Session {SessionId} cannot resume automatically: {Reason}",
+                        sessionId.Value, ack.ResumeBlockedReason);
+
+                return new DrainOutcome(sessionId, drained)
+                {
+                    ResumeCandidate = drained ? ack.ResumeCandidate : null,
+                    ResumeBlockedReason = ack.ResumeBlockedReason
+                };
             }
             catch (OperationCanceledException) when (!callerCancellationToken.IsCancellationRequested)
             {
@@ -106,10 +115,20 @@ internal static class SessionDrainHelper
                 string.Join(", ", timedOut.Select(static id => id.Value)));
         }
 
-        return new DrainResult(sessionIds, drained, timedOut);
+        return new DrainResult(sessionIds, drained, timedOut)
+        {
+            ResumeCandidates = outcomes.Where(static outcome => outcome.ResumeCandidate is not null)
+                .Select(static outcome => outcome.ResumeCandidate!)
+                .ToArray()
+        };
     }
 
-    internal sealed record DrainOutcome(SessionId SessionId, bool Drained);
+    internal sealed record DrainOutcome(SessionId SessionId, bool Drained)
+    {
+        public RestartResumeCandidate? ResumeCandidate { get; init; }
+
+        public string? ResumeBlockedReason { get; init; }
+    }
 
     internal sealed record DrainResult(
         IReadOnlyList<SessionId> AllSessionIds,
@@ -118,12 +137,15 @@ internal static class SessionDrainHelper
     {
         public static readonly DrainResult Empty = new([], [], []);
 
+        public IReadOnlyList<RestartResumeCandidate> ResumeCandidates { get; init; } = [];
+
         public Dictionary<string, string> ToNotificationContext() => new()
         {
             ["drainOutcome"] = TimedOutSessionIds.Count == 0 ? "drained" : "timeout",
             ["activeSessions"] = AllSessionIds.Count.ToString(CultureInfo.InvariantCulture),
             ["drainedSessions"] = DrainedSessionIds.Count.ToString(CultureInfo.InvariantCulture),
-            ["timedOutSessions"] = TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture)
+            ["timedOutSessions"] = TimedOutSessionIds.Count.ToString(CultureInfo.InvariantCulture),
+            ["resumeCandidates"] = ResumeCandidates.Count.ToString(CultureInfo.InvariantCulture)
         };
     }
 }

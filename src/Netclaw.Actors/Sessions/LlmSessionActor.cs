@@ -144,6 +144,23 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     // is the authoritative timeout — this CTS just propagates cancellation to the
     // HTTP layer so timed-out connections are released.
     private CancellationTokenSource? _activeLlmCts;
+    private Task? _activeLlmWorkTask;
+    private bool _llmStopRequested;
+    private bool _turnHadToolBatch;
+    private SessionResumePrepared? _resumePrepared;
+    private bool _resumeClaimed;
+    private string? _resumeBlockedReason;
+    private InputAdmitted? _currentAdmittedInput;
+    private bool _recoveredQueuePending;
+    private bool _recoveredOriginalTurnActive;
+
+    private static readonly TimeSpan RestartModelGrace = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan RestartResumeAge = TimeSpan.FromMinutes(10);
+    private static readonly object RestartModelGraceTimerKey = new();
+
+    private sealed record RestartModelGraceExpired(long CallId) : INoSerializationVerificationNeeded;
+    private sealed record ModelWorkStoppedForRestart(long CallId, Exception? Failure)
+        : INoSerializationVerificationNeeded;
 
     // Actor-owned CTS for active tool execution. Cancels direct approval waits
     // and tool calls when the session stops, restarts, or fails the turn.
@@ -303,6 +320,17 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
         Recover<InputAdmitted>(evt => _state = _state.Apply(evt));
         Recover<InputClosed>(evt => _state = _state.CloseInputs(evt.InputIds));
+        Recover<SessionResumePrepared>(evt =>
+        {
+            _resumePrepared = evt;
+            _resumeClaimed = false;
+        });
+        Recover<SessionResumeClaimed>(evt =>
+        {
+            if (_resumePrepared?.PreparedAtMs != evt.PreparedAtMs)
+                throw new InvalidOperationException("A resume claim has no matching prepared candidate.");
+            _resumeClaimed = true;
+        });
         Recover<ToolCallRecorded>(ApplyToolCallRecorded);
         Recover<ToolApprovalRequested>(ApplyToolApprovalRequested);
         Recover<ToolApprovalResolved>(ApplyToolApprovalResolved);
@@ -504,6 +532,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 return;
             }
 
+            if (_recoveredQueuePending)
+            {
+                TryReplyNack("The interrupted turn is resuming. Retry after its reply.");
+                return;
+            }
+
             var reminderId = cmd.Source?.ReminderId;
             if (IsReminderDedupHit(reminderId, includeBuffered: true))
             {
@@ -646,6 +680,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<LlmCallFailed>(msg =>
         {
             if (msg.CallId != _activeCallId) return; // stale failure from cancelled call
+            if (_llmStopRequested)
+                return;
             _watchdog.Stop(Timers);
             CancelAndDisposeLlmCts();
 
@@ -768,7 +804,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleLlmResponseReceived(LlmResponseReceived msg)
     {
-        if (msg.CallId != _activeCallId)
+        if (msg.CallId != _activeCallId || _llmStopRequested)
             return;
 
         _watchdog.Stop(Timers);
@@ -828,7 +864,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleLlmResponseDeltaReceived(LlmResponseDeltaReceived msg)
     {
-        if (msg.CallId != _activeCallId)
+        if (msg.CallId != _activeCallId || _llmStopRequested)
             return;
 
         // Two-phase watchdog (shared with the sub-agent path): keep the generous
@@ -1016,7 +1052,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         AddModelInputMediaNudge(msg.ModelInputMediaReferences);
 
         var budgetStatus = _turnState.RecordToolCompletion(msg.ToolResults.Count, _config.MaxToolIterationsPerTurn);
-        if (_buffer.Count > 0)
+        if (_buffer.Count > 0 && !_recoveredQueuePending)
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
                 _buffer.Count, _turnState.ToolIterationCount);
@@ -1404,10 +1440,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_restartDrainRequested)
         {
             _deferredApprovalResponse = null;
-            ClearBufferedMessagesForRestartDrain();
             _resumeToolLoopAfterCompaction = false;
             TransitionTo(SessionPhase.Ready);
-            TransitionTo(SessionPhase.Passivating);
+            PrepareQueuedCandidateForPassivation();
             return;
         }
 
@@ -1416,10 +1451,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var resumeToolLoop = _resumeToolLoopAfterCompaction;
         _resumeToolLoopAfterCompaction = false;
 
+        if (_recoveredOriginalTurnActive && _buffer.Any(static item => item.IsReplay))
+        {
+            var acceptedQueue = _buffer.Where(static item => !item.IsReplay).ToArray();
+            _buffer.RemoveAll(static item => !item.IsReplay);
+            DrainBufferedUserMessages();
+            _buffer.AddRange(acceptedQueue);
+            FireLlmCall();
+            TransitionTo(SessionPhase.Processing);
+            return;
+        }
+
         if (resumeToolLoop)
             _log.Info("Post-compaction: resuming tool loop with follow-up LLM call");
 
-        var hadBufferedMessages = _buffer.Count > 0;
+        var hadBufferedMessages = _buffer.Count > 0 && !_recoveredOriginalTurnActive;
         if (hadBufferedMessages)
         {
             _log.Info("Post-compaction: draining {BufferCount} buffered message(s)", _buffer.Count);
@@ -1676,7 +1722,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         _passivationCompleted = true;
         _lifecycleObserver?.OnSessionDeactivated(_sessionId);
-        _restartDrainReplyTo?.Tell(CommandAck.For(_sessionId));
+        _restartDrainReplyTo?.Tell(CommandAck.For(_sessionId) with
+        {
+            ResumeCandidate = GetValidResumeCandidate(),
+            ResumeBlockedReason = _resumeBlockedReason
+        });
         _restartDrainReplyTo = null;
         Context.Stop(Self);
     }
@@ -1897,6 +1947,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             ConsumedInputIds = _activeInputIds.ToArray()
         }, evt =>
         {
+            _turnHadToolBatch = true;
             _state = _state.CloseInputs(evt.ConsumedInputIds);
             _activeInputIds.Clear();
             ApplyToolBatchStarted(evt);
@@ -2148,8 +2199,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             },
             AssistantReply = reply,
             RecordedAtMs = NowMs(),
-            SourceReminderId = _currentTurnSource?.ReminderId,
-            SourceBackgroundJobId = _currentTurnSource?.BackgroundJobId,
+            SourceReminderId = _currentTurnSource?.ReminderId ?? _currentAdmittedInput?.SourceReminderId,
+            SourceBackgroundJobId = _currentTurnSource?.BackgroundJobId ?? _currentAdmittedInput?.SourceBackgroundJobId,
             ConsumedInputIds = _activeInputIds.ToArray()
         };
 
@@ -2172,6 +2223,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TurnCount = _state.TurnCount + 1,
                 ProcessedReminderIds = processed
             }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
+            _turnHadToolBatch = false;
+            _recoveredOriginalTurnActive = false;
 
             EmitResponseOutputs(lastMessage, usage, includeText: true, includeThinking: true);
             MaybeSnapshot();
@@ -2198,9 +2251,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     {
         if (_restartDrainRequested)
         {
-            ClearBufferedMessagesForRestartDrain();
-            TransitionTo(SessionPhase.Ready);
-            TransitionTo(SessionPhase.Passivating);
+            PrepareQueuedCandidateForPassivation();
             return;
         }
 
@@ -2213,6 +2264,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
         }
 
+        _recoveredQueuePending = false;
+        _currentAdmittedInput = null;
+
         ClearApprovalTurnState();
         TransitionTo(SessionPhase.Ready);
     }
@@ -2220,6 +2274,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private bool DrainBufferedUserMessages()
     {
         var startsNewTurn = _buffer.Any(static buffered => !buffered.IsReplay);
+        if (startsNewTurn && _recoveredQueuePending)
+        {
+            BindRecoveredQueueContext();
+            _recoveredQueuePending = false;
+        }
         if (startsNewTurn)
         {
             // A replay resumes the same turn. New input starts a fresh guard
@@ -2386,6 +2445,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             },
             ExecutableText = cmd.Source?.ExecutableText,
             TurnContext = context.ToRecord(),
+            ReplyRoute = cmd.Source?.ReplyRoute,
             SourceReminderId = cmd.Source?.ReminderId,
             SourceBackgroundJobId = cmd.Source?.BackgroundJobId,
             AdmittedAtMs = NowMs()
@@ -2414,6 +2474,249 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         });
     }
 
+    private void HandleResumeInterruptedSession(ResumeInterruptedSession request)
+    {
+        if (_phase.Current != SessionPhase.Ready || _restartDrainRequested
+            || _resumePrepared is not { } prepared || _resumeClaimed
+            || request.SessionId != _sessionId || request.Candidate.SessionId != _sessionId
+            || request.Candidate.DeadlineMs != prepared.DeadlineMs
+            || !request.Candidate.OriginalInputIds.SequenceEqual(prepared.OriginalInputIds)
+            || !request.Candidate.QueuedInputIds.SequenceEqual(prepared.QueuedInputIds))
+        {
+            TryReplyNack("The interrupted turn is no longer eligible for automatic resume.");
+            return;
+        }
+
+        if (prepared.DeadlineMs <= NowMs())
+        {
+            TryReplyNack("The interrupted turn resume deadline expired.");
+            return;
+        }
+
+        var allIds = prepared.OriginalInputIds.Concat(prepared.QueuedInputIds).ToArray();
+        if (allIds.Length == 0
+            || !_state.PendingInputs.Select(input => input.InputId).SequenceEqual(allIds)
+            || _toolApprovals.PendingCount > 0 || _toolApprovals.ResolvedCount > 0
+            || ParkedToolBatchHistory.FindRedrivableAssistantMessage(_state.History, null) is not null
+            || _buffer.Count > 0)
+        {
+            TryReplyNack("The accepted input ledger changed before automatic resume.");
+            return;
+        }
+
+        if (!_subscribers.Snapshot().Any(static subscriber =>
+                (subscriber.Filter & (OutputFilter.Text | OutputFilter.TextStreaming)) != 0))
+        {
+            TryReplyNack("The resumed reply has no active text output subscriber.");
+            return;
+        }
+
+        var original = _state.PendingInputs.Take(prepared.OriginalInputIds.Count).ToArray();
+        var queued = _state.PendingInputs.Skip(original.Length).ToArray();
+        if (!TryRestoreRecoveryContext(original, out _, out var originalReason))
+        {
+            TryReplyNack($"The stored input authority is invalid: {originalReason}");
+            return;
+        }
+
+        if (!TryRestoreRecoveryContext(queued, out _, out var queuedReason))
+        {
+            TryReplyNack($"The stored input authority is invalid: {queuedReason}");
+            return;
+        }
+
+        if (!HasOneRecoveryOutputRoute(_state.PendingInputs))
+        {
+            TryReplyNack("The accepted inputs have different output routes.");
+            return;
+        }
+
+        Persist(new SessionResumeClaimed
+        {
+            SessionId = _sessionId,
+            PreparedAtMs = prepared.PreparedAtMs,
+            ClaimedAtMs = NowMs()
+        }, _ =>
+        {
+            _resumeClaimed = true;
+            _pendingRestartNotice = null;
+            _turnRestartNotice = null;
+            _recoveredOriginalTurnActive = original.Length > 0;
+            _recoveredQueuePending = true;
+            _turnHadToolBatch = false;
+            _deliveryRetry.Clear();
+            _activeInputIds.Clear();
+            _buffer.AddRange(queued.Select(input => (
+                new SendUserMessage
+                {
+                    SessionId = _sessionId,
+                    Content = input.UserMessage.Content,
+                    MediaReferences = input.UserMessage.MediaReferences,
+                    AdmittedInputId = input.InputId
+                }, false)));
+
+            if (original.Length > 0)
+            {
+                BindRecoveredInputContext(original[0]);
+                _activeInputIds.AddRange(original.Select(input => input.InputId));
+                _state = _state with
+                {
+                    History = _state.History.AddRange(original.Select(input => input.UserMessage))
+                };
+                _turnState.ResetForNewTurn();
+                _recallManager.ResetForNewTurn();
+                _discoveredToolCache.PrepareForNewTurn(
+                    _config.Tuning.DiscoveredToolRetentionTurns,
+                    _config.Tuning.DiscoveredToolMaxCount,
+                    _fullRegistry);
+                FireLlmCall(original[0].ExecutableText ?? original[0].UserMessage.Content);
+            }
+            else
+            {
+                BindRecoveredQueueContext();
+                _recoveredQueuePending = false;
+                DrainBufferedUserMessages();
+                FireLlmCall(queued[0].ExecutableText ?? queued[0].UserMessage.Content);
+            }
+
+            TransitionTo(SessionPhase.Processing);
+            TryReplyAck();
+        });
+    }
+
+    private void HandleGetRestartResumeRoute(GetRestartResumeRoute request)
+    {
+        var candidate = GetValidResumeCandidate();
+        if (_phase.Current != SessionPhase.Ready || request.SessionId != _sessionId
+            || candidate is null || candidate.DeadlineMs != request.Candidate.DeadlineMs
+            || !candidate.OriginalInputIds.SequenceEqual(request.Candidate.OriginalInputIds)
+            || !candidate.QueuedInputIds.SequenceEqual(request.Candidate.QueuedInputIds))
+        {
+            Sender.Tell(new RestartResumeRouteResult(
+                _sessionId, [], null, "The candidate no longer matches the session journal."));
+            return;
+        }
+
+        var first = _state.PendingInputs[0];
+        if (!TurnContext.TryFromRecord(first.TurnContext, out var context, out var reason)
+            || context?.SessionId != _sessionId)
+        {
+            Sender.Tell(new RestartResumeRouteResult(
+                _sessionId, [], null, reason ?? "The stored session authority is invalid."));
+            return;
+        }
+
+        var original = _state.PendingInputs.Take(candidate.OriginalInputIds.Length).ToArray();
+        var queued = _state.PendingInputs.Skip(original.Length).ToArray();
+        if (!TryRestoreRecoveryContext(original, out _, out var originalReason))
+        {
+            Sender.Tell(new RestartResumeRouteResult(
+                _sessionId, [], null, $"The stored input authority is invalid: {originalReason}"));
+            return;
+        }
+
+        if (!TryRestoreRecoveryContext(queued, out _, out var queuedReason))
+        {
+            Sender.Tell(new RestartResumeRouteResult(
+                _sessionId, [], null, $"The stored input authority is invalid: {queuedReason}"));
+            return;
+        }
+
+        if (!HasOneRecoveryOutputRoute(_state.PendingInputs))
+        {
+            Sender.Tell(new RestartResumeRouteResult(
+                _sessionId, [], null, "The accepted inputs have different output routes."));
+            return;
+        }
+
+        Sender.Tell(new RestartResumeRouteResult(
+            _sessionId,
+            _state.PendingInputs.Select(input => input.TurnContext!).ToArray(),
+            first.ReplyRoute, null));
+    }
+
+    private static bool HasOneRecoveryOutputRoute(IReadOnlyList<InputAdmitted> inputs)
+    {
+        if (inputs.Count == 0
+            || !TurnContext.TryFromRecord(inputs[0].TurnContext, out var first, out _))
+            return false;
+
+        foreach (var input in inputs.Skip(1))
+        {
+            if (!TurnContext.TryFromRecord(input.TurnContext, out var current, out _)
+                || current?.ChannelType != first?.ChannelType
+                || current?.EffectiveDeliveryTarget != first?.EffectiveDeliveryTarget
+                || input.ReplyRoute != inputs[0].ReplyRoute)
+                return false;
+        }
+
+        return true;
+    }
+
+    private bool TryRestoreRecoveryContext(
+        IReadOnlyList<InputAdmitted> inputs,
+        out TurnContext? context,
+        out string? reason)
+    {
+        context = null;
+        reason = null;
+        foreach (var input in inputs)
+        {
+            if (!TurnContext.TryFromRecord(input.TurnContext, out var restored, out reason)
+                || restored?.SessionId != _sessionId)
+            {
+                reason ??= "session authority does not match the candidate";
+                return false;
+            }
+
+            if (context is not null && !SameRecoveryAuthority(context, restored))
+            {
+                reason = "the accepted inputs have incompatible authority";
+                return false;
+            }
+
+            context ??= restored;
+        }
+
+        return true;
+    }
+
+    private static bool SameRecoveryAuthority(TurnContext first, TurnContext second)
+        => first.Audience == second.Audience
+           && first.Boundary == second.Boundary
+           && first.ChannelType == second.ChannelType
+           && first.RequesterSenderId == second.RequesterSenderId
+           && first.RequesterPrincipal == second.RequesterPrincipal
+           && first.Provenance == second.Provenance
+           && first.EffectiveDeliveryTarget == second.EffectiveDeliveryTarget
+           && first.HasAdoptedContext == second.HasAdoptedContext
+           && first.HasThirdPartyAdoptedContext == second.HasThirdPartyAdoptedContext
+           && first.AdoptedSpeakerIds.SequenceEqual(second.AdoptedSpeakerIds);
+
+    private void BindRecoveredInputContext(InputAdmitted input)
+    {
+        if (!TurnContext.TryFromRecord(input.TurnContext, out var context, out var reason)
+            || context?.SessionId != _sessionId)
+            throw new InvalidOperationException($"Invalid stored input authority: {reason ?? "session mismatch"}.");
+
+        _currentAdmittedInput = input;
+        _currentTurnSource = null;
+        _currentTurnContext = context;
+        _currentTrustContext = _trustContextDeriver?.DeriveFromTurnContext(context);
+        _toolApprovals.StartTurn(context);
+        BindTurnTelemetry(context);
+        SetSystemPrompt();
+    }
+
+    private void BindRecoveredQueueContext()
+    {
+        var firstId = _buffer.FirstOrDefault(static item => !item.IsReplay).Message?.AdmittedInputId;
+        var input = _state.PendingInputs.FirstOrDefault(candidate => candidate.InputId == firstId)
+            ?? throw new InvalidOperationException("The accepted queue has no matching journal input.");
+        BindRecoveredInputContext(input);
+        _turnHadToolBatch = false;
+    }
+
     private void RestoreConsumedInputs(IReadOnlyList<string> inputIds, SerializableChatMessage lastUserMessage)
     {
         if (inputIds.Count == 0)
@@ -2435,6 +2738,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void ContinueIncomingUserMessage(SendUserMessage cmd)
     {
+        _turnHadToolBatch = false;
+        _currentAdmittedInput = cmd.AdmittedInputId is { } inputId
+            ? _state.PendingInputs.FirstOrDefault(input => input.InputId == inputId)
+            : null;
         _activeInputIds.Clear();
         if (cmd.AdmittedInputId is { } admittedId)
             _activeInputIds.Add(admittedId);
@@ -2533,6 +2840,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void CommandSubscriptionMessages()
     {
+        Command<GetRestartResumeRoute>(HandleGetRestartResumeRoute);
+        Command<ResumeInterruptedSession>(HandleResumeInterruptedSession);
+        Command<RestartModelGraceExpired>(HandleRestartModelGraceExpired);
+        Command<ModelWorkStoppedForRestart>(HandleModelWorkStoppedForRestart);
         Command<WorkingContextSnapshotReady>(HandleWorkingContextSnapshotReady);
         Command<WorkingContextSnapshotCancelled>(msg =>
         {
@@ -2896,7 +3207,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             // through this content on every subsequent turn instead of
             // re-tokenizing it from scratch.
             _activeRecall = _recallManager.TurnRecallCache;
-            _ = CreateWorkingContextContinuationAsync(
+            _activeLlmWorkTask = CreateWorkingContextContinuationAsync(
                     workingContextGeneration,
                     forceNoTools,
                     _turnRestartNotice,
@@ -3025,7 +3336,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             forceNoTools,
             _activeCallId);
 
-        _ = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId, _activeLlmCts!.Token);
+        _activeLlmWorkTask = SessionLlmInvoker.InvokeAsync(client, messages, options, self, _activeCallId, _sessionId, _activeLlmCts!.Token);
     }
 
     private async Task<INoSerializationVerificationNeeded> CreateWorkingContextContinuationAsync(
@@ -3088,6 +3399,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void HandleWorkingContextSnapshotReady(WorkingContextSnapshotReady message)
     {
+        if (_llmStopRequested)
+            return;
         if (!ShouldApplyWorkingContextSnapshot(
                 message.Generation,
                 _workingContextGeneration,
@@ -3252,7 +3565,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Skipped,
-                SourceReminderId = _currentTurnSource?.ReminderId
+                SourceReminderId = _currentTurnSource?.ReminderId ?? _currentAdmittedInput?.SourceReminderId
             });
             TryReplyAck();
         }
@@ -3442,8 +3755,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Content = msg.Result.Output
             },
             RecordedAtMs = NowMs(),
-            SourceReminderId = _currentTurnSource?.ReminderId,
-            SourceBackgroundJobId = _currentTurnSource?.BackgroundJobId,
+            SourceReminderId = _currentTurnSource?.ReminderId ?? _currentAdmittedInput?.SourceReminderId,
+            SourceBackgroundJobId = _currentTurnSource?.BackgroundJobId ?? _currentAdmittedInput?.SourceBackgroundJobId,
             ConsumedInputIds = _activeInputIds.ToArray()
         };
 
@@ -3466,6 +3779,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 TurnCount = _state.TurnCount + 1,
                 ProcessedReminderIds = processed
             }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
+            _recoveredOriginalTurnActive = false;
 
             EmitOutput(new TextOutput(msg.Result.Output)
             {
@@ -3477,7 +3791,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 SessionId = _sessionId,
                 TurnNumber = new TurnNumber(_state.TurnCount),
                 Outcome = TurnOutcome.Completed,
-                SourceReminderId = _currentTurnSource?.ReminderId
+                SourceReminderId = _currentTurnSource?.ReminderId ?? _currentAdmittedInput?.SourceReminderId
             });
 
             MaybeSnapshot();
@@ -3856,7 +4170,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             SessionId = _sessionId,
             TurnNumber = new TurnNumber(_state.TurnCount),
-            SourceReminderId = _currentTurnSource?.ReminderId
+            SourceReminderId = _currentTurnSource?.ReminderId ?? _currentAdmittedInput?.SourceReminderId
         });
     }
 
@@ -4574,8 +4888,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void FinishFailedTurn(string errorMessage, Exception cause, ErrorCategory category)
     {
-        _inFlightDedup.CompleteReminder(_currentTurnSource?.ReminderId);
-        _inFlightDedup.CompleteBackgroundJob(_currentTurnSource?.BackgroundJobId);
+        _recoveredOriginalTurnActive = false;
+        _inFlightDedup.CompleteReminder(_currentTurnSource?.ReminderId ?? _currentAdmittedInput?.SourceReminderId);
+        _inFlightDedup.CompleteBackgroundJob(_currentTurnSource?.BackgroundJobId ?? _currentAdmittedInput?.SourceBackgroundJobId);
         CancelAndDisposeLlmCts();
         CancelAndDisposeToolExecutionCts();
         _deliveryRetry.Clear();
@@ -4604,7 +4919,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             SessionId = _sessionId,
             TurnNumber = new TurnNumber(_state.TurnCount),
             Outcome = TurnOutcome.Failed,
-            SourceReminderId = _currentTurnSource?.ReminderId
+            SourceReminderId = _currentTurnSource?.ReminderId ?? _currentAdmittedInput?.SourceReminderId
         });
 
         DrainBufferedMessagesOrBecomeReady();
@@ -4904,7 +5219,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         var budgetStatus = _turnState.RecordToolCompletion(resultCount, _config.MaxToolIterationsPerTurn);
 
-        if (_buffer.Count > 0)
+        if (_buffer.Count > 0 && !_recoveredQueuePending)
         {
             TurnLog().Info("turn_mid_loop_buffer_drain count={BufferCount} iteration={Iteration}",
                 _buffer.Count, _turnState.ToolIterationCount);
@@ -5065,9 +5380,221 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         _restartDrainReplyTo = Sender;
 
         if (_phase.Current == SessionPhase.Ready)
-            TransitionTo(SessionPhase.Passivating);
+            PrepareResumeCandidateForPassivation([], [], allowNewCandidate: false);
         else if (_phase.Current == SessionPhase.Processing)
+        {
             TryStopDurableApprovalWaits();
+            if (_activeLlmCts is not null)
+                Timers.StartSingleTimer(
+                    RestartModelGraceTimerKey,
+                    new RestartModelGraceExpired(_activeCallId),
+                    RestartModelGrace);
+        }
+    }
+
+    private void HandleRestartModelGraceExpired(RestartModelGraceExpired expired)
+    {
+        if (!_restartDrainRequested || _phase.Current != SessionPhase.Processing
+            || expired.CallId != _activeCallId || _activeLlmCts is null
+            || _activeLlmWorkTask is null || _llmStopRequested)
+            return;
+
+        _llmStopRequested = true;
+        _activeLlmCts.Cancel();
+        _ = ReportModelWorkStopAsync(_activeLlmWorkTask, Self, expired.CallId);
+    }
+
+    private static async Task ReportModelWorkStopAsync(Task work, IActorRef actor, long callId)
+    {
+        try
+        {
+            await work.ConfigureAwait(false);
+            actor.Tell(new ModelWorkStoppedForRestart(callId, null));
+        }
+        catch (Exception ex)
+        {
+            actor.Tell(new ModelWorkStoppedForRestart(callId, ex));
+        }
+    }
+
+    private void HandleModelWorkStoppedForRestart(ModelWorkStoppedForRestart stopped)
+    {
+        if (!_restartDrainRequested || !_llmStopRequested
+            || _phase.Current != SessionPhase.Processing
+            || stopped.CallId != _activeCallId || _activeLlmCts is null)
+            return;
+
+        _watchdog.Stop(Timers);
+        CancelAndDisposeLlmCts();
+        _activeCallId++;
+        _llmStopRequested = false;
+
+        if (stopped.Failure is not null || _turnHadToolBatch || _anyContentStreamed)
+        {
+            _resumeBlockedReason = stopped.Failure is not null
+                ? "The model task failed during cancellation."
+                : _turnHadToolBatch
+                    ? "The interrupted turn started a tool batch."
+                    : "The interrupted turn emitted partial output.";
+            _log.Warning("Automatic resume blocked: {Reason}", _resumeBlockedReason);
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        var queued = _buffer.Where(static item => !item.IsReplay)
+            .Select(static item => item.Message.AdmittedInputId)
+            .ToArray();
+        if (queued.Any(static id => id is null))
+        {
+            _resumeBlockedReason = "An accepted queued input has no journal ID.";
+            _log.Error("Automatic resume blocked: {Reason}", _resumeBlockedReason);
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        PrepareResumeCandidateForPassivation(
+            _activeInputIds.ToArray(),
+            queued.Select(static id => id!).ToArray(),
+            allowNewCandidate: true);
+    }
+
+    private void PrepareQueuedCandidateForPassivation()
+    {
+        if (_activeInputIds.Count > 0 || _turnHadToolBatch)
+        {
+            _resumeBlockedReason = "The turn still has active work after compaction or tool use.";
+            _log.Warning("Automatic resume blocked: {Reason}", _resumeBlockedReason);
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        var queued = _buffer.Where(static item => !item.IsReplay)
+            .Select(static item => item.Message.AdmittedInputId)
+            .ToArray();
+        if (queued.Any(static id => id is null))
+        {
+            _resumeBlockedReason = "An accepted queued input has no journal ID.";
+            _log.Error("Automatic resume blocked: {Reason}", _resumeBlockedReason);
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        PrepareResumeCandidateForPassivation([], queued.Select(static id => id!).ToArray(),
+            allowNewCandidate: true);
+    }
+
+    private RestartResumeCandidate? GetValidResumeCandidate()
+    {
+        if (_resumeBlockedReason is not null || _resumeClaimed
+            || _resumePrepared is not { } prepared || prepared.DeadlineMs <= NowMs())
+            return null;
+
+        var ids = prepared.OriginalInputIds.Concat(prepared.QueuedInputIds).ToArray();
+        var pendingIds = _state.PendingInputs.Select(input => input.InputId).ToHashSet(StringComparer.Ordinal);
+        return ids.Length > 0 && ids.Length == pendingIds.Count && ids.All(pendingIds.Contains)
+            ? prepared.ToCandidate()
+            : null;
+    }
+
+    private void PrepareResumeCandidateForPassivation(
+        string[] originalInputIds,
+        string[] queuedInputIds,
+        bool allowNewCandidate)
+    {
+        var ids = originalInputIds.Concat(queuedInputIds).ToArray();
+        if (ids.Length == 0 && _resumePrepared is null)
+        {
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        var pending = _state.PendingInputs.ToDictionary(input => input.InputId, StringComparer.Ordinal);
+        var candidate = _resumePrepared;
+        if (candidate is not null)
+        {
+            var expectedIds = candidate.OriginalInputIds.Concat(candidate.QueuedInputIds).ToArray();
+            if (!_resumeClaimed && candidate.DeadlineMs > NowMs()
+                && expectedIds.Length == pending.Count
+                && _state.PendingInputs.Select(input => input.InputId).SequenceEqual(expectedIds))
+            {
+                _resumeBlockedReason = null;
+                ClearBufferedMessagesForRestartDrain();
+                TransitionTo(SessionPhase.Passivating);
+                return;
+            }
+
+            if (candidate.DeadlineMs <= NowMs())
+                _resumeBlockedReason = "The original resume deadline expired.";
+            else if (!allowNewCandidate || ids.Length == 0
+                     || !_resumeClaimed && expectedIds.Any(pending.ContainsKey))
+                _resumeBlockedReason = "The prior resume candidate does not match the accepted input ledger.";
+
+            if (_resumeBlockedReason is not null)
+            {
+                _log.Warning("Automatic resume blocked: {Reason}", _resumeBlockedReason);
+                ClearBufferedMessagesForRestartDrain();
+                TransitionTo(SessionPhase.Passivating);
+                return;
+            }
+        }
+
+        if (!allowNewCandidate || ids.Length == 0)
+        {
+            if (pending.Count > 0)
+                _resumeBlockedReason = "Accepted input has no eligible graceful-stop marker.";
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        if (ids.Distinct(StringComparer.Ordinal).Count() != ids.Length
+            || ids.Any(id => !pending.ContainsKey(id))
+            || pending.Count != ids.Length
+            || pending.Values.Any(input => !TurnContext.TryFromRecord(input.TurnContext, out _, out _)))
+        {
+            _resumeBlockedReason = "The accepted input ledger does not match the interrupted turn.";
+            _log.Error("Automatic resume blocked: {Reason}", _resumeBlockedReason);
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        var boundaries = pending.Values.Select(input => input.TurnContext!.Boundary).Distinct().ToArray();
+        if (boundaries.Length != 1)
+        {
+            _resumeBlockedReason = "Accepted input has incompatible trust boundaries.";
+            _log.Warning("Automatic resume blocked: {Reason}", _resumeBlockedReason);
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+            return;
+        }
+
+        var now = Math.Max(NowMs(), (candidate?.PreparedAtMs ?? 0) + 1);
+        var retainsPriorWork = candidate is not null
+            && candidate.OriginalInputIds.Concat(candidate.QueuedInputIds)
+                .Any(id => pending.ContainsKey(id));
+        Persist(new SessionResumePrepared
+        {
+            SessionId = _sessionId,
+            OriginalInputIds = originalInputIds,
+            QueuedInputIds = queuedInputIds,
+            PreparedAtMs = now,
+            DeadlineMs = retainsPriorWork
+                ? candidate!.DeadlineMs
+                : now + (long)RestartResumeAge.TotalMilliseconds
+        }, evt =>
+        {
+            _resumePrepared = evt;
+            _resumeClaimed = false;
+            _resumeBlockedReason = null;
+            ClearBufferedMessagesForRestartDrain();
+            TransitionTo(SessionPhase.Passivating);
+        });
     }
 
     private void TryStopDurableApprovalWaits()
@@ -5123,7 +5650,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
 
         _log.Warning(
-            "Dropping {BufferCount} buffered message(s) because coordinated restart drain is completing.",
+            "Clearing {BufferCount} actor-local buffered message(s); accepted input remains in the journal.",
             _buffer.Count);
         _buffer.Clear();
     }

@@ -117,7 +117,80 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             Recover<InputAdmitted>(evt => replyTo.Tell(evt));
             Recover<RecoveryCompleted>(_ => replyTo.Tell(new JournalReplayComplete()));
             RecoverAny(_ => { });
+            Command<ISessionEvent>(evt =>
+            {
+                var ackTarget = Sender;
+                Persist(evt, _ => ackTarget.Tell(CommandAck.For(evt.SessionId)));
+            });
         }
+    }
+
+    [Fact]
+    public async Task Terminal_input_cannot_resume_from_a_stale_prepared_marker()
+    {
+        var sessionId = new SessionId("admission/terminal-marker");
+        var eventProbe = CreateTestProbe("terminal-marker-events");
+        var seeder = Sys.ActorOf(Props.Create(() => new InputJournalObserver(
+            $"session-{sessionId.Value}", eventProbe.Ref)));
+        var now = _timeProvider.GetUtcNow().ToUnixTimeMilliseconds();
+        var userMessage = new SerializableChatMessage
+        {
+            Role = Netclaw.Actors.Protocol.ChatRole.User,
+            Content = "A finished task"
+        };
+        var admitted = new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = "terminal-input",
+            SourceMessageId = "terminal-event",
+            UserMessage = userMessage,
+            TurnContext = TurnContext.FromMessageSource(
+                sessionId, new Netclaw.Actors.Protocol.TurnId("terminal-turn"), null).ToRecord(),
+            AdmittedAtMs = now
+        };
+        var prepared = new SessionResumePrepared
+        {
+            SessionId = sessionId,
+            OriginalInputIds = [admitted.InputId],
+            PreparedAtMs = now,
+            DeadlineMs = now + 600_000
+        };
+        await seeder.Ask<CommandAck>(admitted, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await seeder.Ask<CommandAck>(prepared, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await seeder.Ask<CommandAck>(new TurnRecorded
+        {
+            SessionId = sessionId,
+            UserMessage = userMessage,
+            AssistantReply = new SerializableChatMessage
+            {
+                Role = Netclaw.Actors.Protocol.ChatRole.Assistant,
+                Content = "Done"
+            },
+            ConsumedInputIds = [admitted.InputId],
+            RecordedAtMs = now + 1
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(seeder);
+        Sys.Stop(seeder);
+        await ExpectTerminatedAsync(seeder, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("terminal-marker-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var route = await manager.Ask<RestartResumeRouteResult>(
+            new GetRestartResumeRoute(sessionId, prepared.ToCandidate()),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.NotNull(route.BlockedReason);
+        await manager.Ask<CommandNack>(
+            new ResumeInterruptedSession(sessionId, prepared.ToCandidate()),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(0, _fakeChatClient.CallCount);
     }
 
     protected override void ConfigureSessionServices(IServiceCollection services)
@@ -1740,8 +1813,526 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         var ack = await sessionManager.Ask<CommandAck>(new PrepareForDaemonRestart(sessionId, "config-reload"), TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
 
         Assert.Equal(sessionId, ack.SessionId);
+        Assert.Null(ack.ResumeCandidate);
         await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Contains(sessionId.Value, _lifecycleObserver.DeactivatedSessionIds);
+    }
+
+    [Fact]
+    public async Task Model_reply_during_grace_leaves_only_accepted_queue_for_resume()
+    {
+        var sessionId = new SessionId("test-channel/restart-completed-with-queue");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-completed-queue-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = gate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Complete before stop"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Queued after completion"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var child = await Sys.ActorSelection(
+                $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var drainProbe = CreateTestProbe("restart-completed-queue-drain");
+        drainProbe.Send(child, new PrepareForDaemonRestart(sessionId, "normal-stop"));
+        drainProbe.Send(child, new GetRestartResumeRoute(
+            sessionId, new RestartResumeCandidate(sessionId, [], [], 0)));
+        await drainProbe.ExpectMsgAsync<RestartResumeRouteResult>(
+            cancellationToken: TestContext.Current.CancellationToken);
+        gate.SetResult();
+
+        var drained = await drainProbe.ExpectMsgAsync<CommandAck>(
+            TimeSpan.FromSeconds(8), cancellationToken: TestContext.Current.CancellationToken);
+        var candidate = Assert.IsType<RestartResumeCandidate>(drained.ResumeCandidate);
+        Assert.Empty(candidate.OriginalInputIds);
+        Assert.Single(candidate.QueuedInputIds);
+        Assert.Equal(1, _fakeChatClient.ReceivedMessages.Count(call =>
+            call.Any(message => message.Text == "Complete before stop")));
+    }
+
+    [Fact]
+    public async Task Interrupted_model_resumes_original_input_then_one_ordered_queued_call()
+    {
+        var sessionId = new SessionId("test-channel/restart-resume-ordered-queue");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-resume-original-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var firstGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = firstGate;
+        MessageSource SourceFor(string id, string senderId = "operator-1") => new()
+        {
+            ChannelType = ChannelType.SignalR,
+            SenderId = new SenderId(senderId),
+            ChannelId = "operator-channel",
+            MessageId = id,
+            TurnId = new Netclaw.Actors.Protocol.TurnId(id),
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Principal = PrincipalClassification.Operator,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+            ReceivedAt = _timeProvider.GetUtcNow()
+        };
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Original work",
+            Source = SourceFor("original-event")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        foreach (var (content, sourceId) in new[] { ("Queued A", "queue-event-a"), ("Queued B", "queue-event-b") })
+        {
+            await manager.Ask<CommandAck>(new SendUserMessage
+            {
+                SessionId = sessionId,
+                Content = content,
+                Source = SourceFor(sourceId, "operator-2")
+            }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        }
+
+        var child = await Sys.ActorSelection(
+                $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(child);
+
+        var drained = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "normal-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        var candidate = Assert.IsType<RestartResumeCandidate>(drained.ResumeCandidate);
+        Assert.Single(candidate.OriginalInputIds);
+        Assert.Equal(2, candidate.QueuedInputIds.Length);
+        Assert.True(firstGate.Task.IsCanceled);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var recoveredSubscriber = CreateTestProbe("restart-resume-recovered-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(recoveredSubscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await recoveredSubscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Single(_fakeChatClient.ReceivedMessages, call =>
+            call.Any(message => message.Text == "Original work"));
+
+        var route = await manager.Ask<RestartResumeRouteResult>(
+            new GetRestartResumeRoute(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Null(route.BlockedReason);
+        Assert.Equal(3, route.Contexts.Count);
+        Assert.Equal(new SenderId("operator-1"), route.Contexts[0].RequesterSenderId);
+        Assert.All(route.Contexts.Skip(1), context =>
+            Assert.Equal(new SenderId("operator-2"), context.RequesterSenderId));
+        Assert.All(route.Contexts, context => Assert.Equal(TrustBoundary.Personal, context.Boundary));
+
+        await manager.Ask<CommandAck>(new ResumeInterruptedSession(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await recoveredSubscriber.FishForMessageAsync<TurnCompleted>(_ => true,
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+        await recoveredSubscriber.FishForMessageAsync<TurnCompleted>(_ => true,
+            TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
+
+        var calls = _fakeChatClient.ReceivedMessages.Where(call =>
+            call.Any(message => message.Text == "Original work")).ToArray();
+        Assert.Equal(3, calls.Length);
+        Assert.Contains(calls[1], message => message.Text == "Original work");
+        var queued = calls[2].Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User)
+            .Where(message => message.Text is "Original work" or "Queued A" or "Queued B")
+            .Select(message => message.Text).ToArray();
+        Assert.Equal(["Original work", "Queued A", "Queued B"], queued);
+
+        var duplicate = await manager.Ask<CommandNack>(
+            new ResumeInterruptedSession(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Contains("no longer eligible", duplicate.Reason, StringComparison.Ordinal);
+        Assert.Equal(3, _fakeChatClient.ReceivedMessages.Count(call =>
+            call.Any(message => message.Text == "Original work")));
+    }
+
+    [Fact]
+    public async Task Expired_interrupted_turn_stays_quiet_after_cold_recovery()
+    {
+        var sessionId = new SessionId("test-channel/restart-resume-expired");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-expired-original-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = gate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "An expired task"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var child = await Sys.ActorSelection(
+                $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(child);
+        var drained = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "normal-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        var candidate = Assert.IsType<RestartResumeCandidate>(drained.ResumeCandidate);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        _timeProvider.Advance(TimeSpan.FromMinutes(11));
+
+        var recovered = CreateTestProbe("restart-expired-recovered-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(recovered)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await recovered.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var route = await manager.Ask<RestartResumeRouteResult>(
+            new GetRestartResumeRoute(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.NotNull(route.BlockedReason);
+
+        var nack = await manager.Ask<CommandNack>(
+            new ResumeInterruptedSession(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Contains("deadline", nack.Reason, StringComparison.Ordinal);
+        Assert.Single(_fakeChatClient.ReceivedMessages, call =>
+            call.Any(message => message.Text == "An expired task"));
+    }
+
+    [Fact]
+    public async Task Model_response_after_restart_cancellation_does_not_finish_the_turn()
+    {
+        var sessionId = new SessionId("test-channel/restart-late-model-response");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-late-model-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = responseGate;
+        _fakeChatClient.IgnoreCancellationForNextResponse = true;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Resume this work"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var drain = manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "normal-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        await _fakeChatClient.CancellationObserved.Task.WaitAsync(
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        responseGate.SetResult();
+
+        var ack = await drain;
+        Assert.NotNull(ack.ResumeCandidate);
+        await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(200),
+            cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
+    public async Task Partial_model_output_blocks_automatic_resume()
+    {
+        var sessionId = new SessionId("test-channel/restart-partial-output");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-partial-output-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        _fakeChatClient.PlannedResponses.Enqueue([new TextContent("A partial reply")]);
+        _fakeChatClient.NextStreamContinuationGate = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Wait for the full reply"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.StreamContinuationBlocked.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var drained = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "normal-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        Assert.Null(drained.ResumeCandidate);
+        Assert.Contains("partial output", drained.ResumeBlockedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Completed_tool_effect_blocks_automatic_resume()
+    {
+        var sessionId = new SessionId("test-channel/restart-tool-effect");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-tool-effect-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("search-call", "search_tools",
+                new Dictionary<string, object?> { ["query"] = "browser" })
+        ];
+        _fakeToolExecutor.Results["search_tools"] = "A browser tool exists.";
+        var continuationGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.AfterToolCallResponse = _ => _fakeChatClient.NextResponseGate = continuationGate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Find a browser tool"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.FishForMessageAsync<ToolResultOutput>(_ => true,
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.True(_fakeChatClient.ReceivedMessages.Count(call =>
+                call.Any(message => message.Text == "Find a browser tool")) >= 2);
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(100),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var drained = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "normal-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        Assert.Null(drained.ResumeCandidate);
+        Assert.Contains("tool batch", drained.ResumeBlockedReason, StringComparison.Ordinal);
+        Assert.Equal(1, _fakeToolExecutor.CallCount);
+    }
+
+    [Fact]
+    public async Task Queued_input_with_a_different_trust_boundary_blocks_automatic_resume()
+    {
+        var sessionId = new SessionId("test-channel/restart-incompatible-queue");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-incompatible-queue-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        MessageSource SourceFor(string id, TrustAudience audience, TrustBoundary boundary) => new()
+        {
+            ChannelType = ChannelType.SignalR,
+            SenderId = new SenderId("operator-1"),
+            ChannelId = "operator-channel",
+            MessageId = id,
+            TurnId = new Netclaw.Actors.Protocol.TurnId(id),
+            Audience = audience,
+            Boundary = boundary,
+            Principal = audience == TrustAudience.Personal
+                ? PrincipalClassification.Operator : PrincipalClassification.UntrustedExternal,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+            ReceivedAt = _timeProvider.GetUtcNow()
+        };
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = gate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Personal work",
+            Source = SourceFor("personal-event", TrustAudience.Personal, TrustBoundary.Personal)
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Public follow-up",
+            Source = SourceFor("public-event", TrustAudience.Public, TrustBoundary.Public)
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var drained = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "normal-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        Assert.Null(drained.ResumeCandidate);
+        Assert.Contains("incompatible trust boundaries", drained.ResumeBlockedReason, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Second_graceful_stop_keeps_the_original_resume_deadline()
+    {
+        var sessionId = new SessionId("test-channel/restart-deadline-preserved");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-deadline-original-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var firstGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = firstGate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Work across short restarts"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var firstChild = await Sys.ActorSelection(
+                $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(firstChild);
+        var first = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "first-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        var firstCandidate = Assert.IsType<RestartResumeCandidate>(first.ResumeCandidate);
+        await ExpectTerminatedAsync(firstChild, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        _timeProvider.Advance(TimeSpan.FromMinutes(3));
+        var recovered = CreateTestProbe("restart-deadline-recovered-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(recovered)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await recovered.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var secondGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = secondGate;
+        await manager.Ask<CommandAck>(new ResumeInterruptedSession(sessionId, firstCandidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(2, _fakeChatClient.ReceivedMessages.Count(call =>
+                call.Any(message => message.Text == "Work across short restarts")));
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(100),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var second = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "second-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        var secondCandidate = Assert.IsType<RestartResumeCandidate>(second.ResumeCandidate);
+        Assert.Equal(firstCandidate.DeadlineMs, secondCandidate.DeadlineMs);
+        Assert.Equal(firstCandidate.OriginalInputIds, secondCandidate.OriginalInputIds);
+        Assert.True(secondGate.Task.IsCanceled);
+    }
+
+    [Fact]
+    public async Task Crash_after_resume_claim_does_not_repeat_the_model_call()
+    {
+        var sessionId = new SessionId("test-channel/restart-claimed-before-crash");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-claimed-original-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var firstGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = firstGate;
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Do not repeat this call"
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var firstChild = await Sys.ActorSelection(
+                $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(firstChild);
+        var drained = await manager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "normal-stop"),
+            TimeSpan.FromSeconds(8), TestContext.Current.CancellationToken);
+        var candidate = Assert.IsType<RestartResumeCandidate>(drained.ResumeCandidate);
+        await ExpectTerminatedAsync(firstChild, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var recovered = CreateTestProbe("restart-claimed-recovered-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(recovered)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await recovered.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var secondGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = secondGate;
+        await manager.Ask<CommandAck>(new ResumeInterruptedSession(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await AwaitAssertAsync(() =>
+        {
+            Assert.Equal(2, _fakeChatClient.ReceivedMessages.Count(call =>
+                call.Any(message => message.Text == "Do not repeat this call")));
+            return Task.CompletedTask;
+        }, TimeSpan.FromSeconds(5), TimeSpan.FromMilliseconds(100),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var resumedChild = await Sys.ActorSelection(
+                $"/user/session-manager/{Uri.EscapeDataString(sessionId.Value)}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(resumedChild);
+        Sys.Stop(resumedChild);
+        await ExpectTerminatedAsync(resumedChild, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var afterCrash = CreateTestProbe("restart-claimed-after-crash-sub");
+        await manager.Ask<SessionJoined>(new JoinSession(afterCrash)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.TextOnly
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await afterCrash.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        var route = await manager.Ask<RestartResumeRouteResult>(
+            new GetRestartResumeRoute(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.NotNull(route.BlockedReason);
+        await manager.Ask<CommandNack>(new ResumeInterruptedSession(sessionId, candidate),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(2, _fakeChatClient.ReceivedMessages.Count(call =>
+            call.Any(message => message.Text == "Do not repeat this call")));
     }
 
     [Fact]
@@ -2529,6 +3120,14 @@ internal sealed class FakeChatClient : IChatClient
 
     public TaskCompletionSource? NextResponseGate { get; set; }
 
+    public TaskCompletionSource? NextStreamContinuationGate { get; set; }
+
+    public TaskCompletionSource StreamContinuationBlocked { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    public bool IgnoreCancellationForNextResponse { get; set; }
+
+    public TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
     public async Task<ChatResponse> GetResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
@@ -2563,7 +3162,12 @@ internal sealed class FakeChatClient : IChatClient
         if (NextResponseGate is { } nextResponseGate)
         {
             NextResponseGate = null;
-            using var registration = cancellationToken.Register(() => nextResponseGate.TrySetCanceled(cancellationToken));
+            using var registration = cancellationToken.Register(() =>
+            {
+                CancellationObserved.TrySetResult();
+                if (!IgnoreCancellationForNextResponse)
+                    nextResponseGate.TrySetCanceled(cancellationToken);
+            });
             await nextResponseGate.Task;
         }
 
@@ -2719,8 +3323,16 @@ internal sealed class FakeChatClient : IChatClient
         var response = await GetResponseAsync(messages, options, cancellationToken);
         foreach (var update in response.ToChatResponseUpdates())
         {
-            cancellationToken.ThrowIfCancellationRequested();
+            if (!IgnoreCancellationForNextResponse)
+                cancellationToken.ThrowIfCancellationRequested();
             yield return update;
+            if (NextStreamContinuationGate is { } continuationGate
+                && update.Contents.OfType<TextContent>().Any(content => !string.IsNullOrEmpty(content.Text)))
+            {
+                NextStreamContinuationGate = null;
+                StreamContinuationBlocked.TrySetResult();
+                await continuationGate.Task.WaitAsync(cancellationToken);
+            }
         }
     }
 

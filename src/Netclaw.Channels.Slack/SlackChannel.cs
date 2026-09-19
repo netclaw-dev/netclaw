@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels;
 using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -24,7 +25,7 @@ namespace Netclaw.Channels.Slack;
 /// There is only one SlackChannel per process - it multiplexes all of the actual Slack conversations,
 /// irrespective of their channel / DM  etc, down to the thread binding actors that own discrete sessions.
 /// </summary>
-public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEventHandler<AppMention>
+public sealed class SlackChannel : IChannel, IRestartOutputBinder, IEventHandler<MessageEvent>, IEventHandler<AppMention>
 {
     private readonly ISessionPipeline _pipeline;
     private readonly ActorSystem _system;
@@ -113,6 +114,42 @@ public sealed class SlackChannel : IChannel, IEventHandler<MessageEvent>, IEvent
     /// <see cref="StartProactiveThread"/> messages to wire up the actor hierarchy.
     /// </summary>
     internal IActorRef? Gateway => _gateway;
+
+    public async Task<RestartOutputBindingResult> BindForRestartAsync(
+        RestartResumeRouteResult route,
+        CancellationToken cancellationToken)
+    {
+        if (!SlackGatewayActor.TryParseSlackSessionId(route.SessionId, out var channelId, out var threadTs)
+            || route.Contexts.Count == 0
+            || route.Contexts.Any(context => context.ChannelType != "slack"
+                || context.RequesterSenderId is null
+                || context.DefaultDeliveryTarget?.DestinationId != channelId.Value))
+            return new(false, "The stored Slack route or requester is invalid.");
+
+        var isDirectMessage = channelId.Value.StartsWith("D", StringComparison.Ordinal);
+        if (route.Contexts.Any(context =>
+                !SlackAclPolicy.IsAllowedUser(new SlackUserId(context.RequesterSenderId!.Value.Value), _options))
+            || isDirectMessage && !_options.AllowDirectMessages
+            || !isDirectMessage && !SlackAclPolicy.IsAllowedChannel(channelId, _options, _defaultChannelId))
+            return new(false, "The current Slack ACL rejects the stored route.");
+
+        if (_gateway is not { } gateway || !_connected || !_socketModeClient.Connected)
+            return new(false, "The Slack gateway is not ready.");
+
+        try
+        {
+            var ack = await gateway.Ask<ProactiveThreadAck>(
+                new StartProactiveThread(channelId, threadTs, route.SessionId),
+                TimeSpan.FromSeconds(10), cancellationToken);
+            return ack.SessionId == route.SessionId
+                ? new(true)
+                : new(false, "The Slack binding returned a different session.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new(false, $"The Slack output binding failed: {ex.Message}");
+        }
+    }
 
     /// <summary>
     /// The resolved default channel ID, available after <see cref="StartAsync"/> completes.

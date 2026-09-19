@@ -41,7 +41,7 @@ public static partial class SessionProtocol
         public MessageSource? Source { get; init; }
 
         /// <summary>Actor-local correlation for an input that the journal accepted.</summary>
-        public string? AdmittedInputId { get; init; }
+        internal string? AdmittedInputId { get; init; }
     }
 
     /// <summary>

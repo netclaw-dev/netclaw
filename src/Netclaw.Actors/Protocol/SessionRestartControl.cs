@@ -4,6 +4,8 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Akka.Actor;
+using Netclaw.Actors.Channels;
+using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Protocol;
 
@@ -18,3 +20,29 @@ public sealed record PrepareForDaemonRestart(SessionId SessionId, string Reason)
 /// </summary>
 public sealed record WarmSession(SessionId SessionId, string RestartNotice)
     : IWithSessionId, INoSerializationVerificationNeeded;
+
+/// <summary>
+/// The durable work that a graceful stop can resume before its fixed deadline.
+/// </summary>
+public sealed record RestartResumeCandidate(
+    SessionId SessionId,
+    string[] OriginalInputIds,
+    string[] QueuedInputIds,
+    long DeadlineMs) : INoSerializationVerificationNeeded;
+
+/// <summary>
+/// Requests a candidate only when its output subscriber is ready.
+/// </summary>
+public sealed record ResumeInterruptedSession(
+    SessionId SessionId,
+    RestartResumeCandidate Candidate) : IWithSessionId, INoSerializationVerificationNeeded;
+
+public sealed record GetRestartResumeRoute(
+    SessionId SessionId,
+    RestartResumeCandidate Candidate) : IWithSessionId, INoSerializationVerificationNeeded;
+
+public sealed record RestartResumeRouteResult(
+    SessionId SessionId,
+    IReadOnlyList<TurnContextRecord> Contexts,
+    ChannelReplyRoute? ReplyRoute,
+    string? BlockedReason) : INoSerializationVerificationNeeded;

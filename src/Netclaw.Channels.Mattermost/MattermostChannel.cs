@@ -10,12 +10,13 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Channels;
 using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Channels.Mattermost;
 
-public sealed class MattermostChannel : IChannel
+public sealed class MattermostChannel : IChannel, IRestartOutputBinder
 {
     private readonly ActorSystem _system;
     private readonly ISessionPipeline _pipeline;
@@ -40,6 +41,49 @@ public sealed class MattermostChannel : IChannel
     private volatile string? _connectFailureDetail;
 
     internal IActorRef? Gateway => _gateway;
+
+    public async Task<RestartOutputBindingResult> BindForRestartAsync(
+        RestartResumeRouteResult route,
+        CancellationToken cancellationToken)
+    {
+        if (!MattermostGatewayActor.TryParseMattermostSessionId(route.SessionId, out var channelId, out var rootPostId)
+            || route.ReplyRoute is not { } replyRoute
+            || replyRoute.ReplyChannelId != channelId.Value
+            || route.Contexts.Count == 0
+            || route.Contexts.Any(context => context.ChannelType != "mattermost"
+                || context.RequesterSenderId is null
+                || context.DefaultDeliveryTarget?.DestinationId != channelId.Value))
+            return new(false, "The stored Mattermost route or requester is invalid.");
+
+        var userId = new MattermostUserId(route.Contexts[0].RequesterSenderId!.Value.Value);
+        if (route.Contexts.Any(context =>
+                !MattermostAclPolicy.IsAllowedUser(
+                    new MattermostUserId(context.RequesterSenderId!.Value.Value), _options))
+            || replyRoute.IsDirectMessage && !_options.AllowDirectMessages
+            || !replyRoute.IsDirectMessage && !MattermostAclPolicy.IsAllowedChannel(
+                channelId, _options, DefaultChannelId))
+            return new(false, "The current Mattermost ACL rejects the stored route.");
+
+        if (_gateway is not { } gateway
+            || (await GetHealthAsync(cancellationToken)).Status != ChannelHealthStatus.Healthy)
+            return new(false, "The Mattermost gateway is not ready.");
+
+        try
+        {
+            var ack = await gateway.Ask<MattermostProactiveThreadAck>(
+                new StartMattermostProactiveThread(
+                    channelId, rootPostId, route.SessionId,
+                    replyRoute.IsDirectMessage ? userId : null),
+                TimeSpan.FromSeconds(10), cancellationToken);
+            return ack.SessionId == route.SessionId
+                ? new(true)
+                : new(false, "The Mattermost binding returned a different session.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return new(false, $"The Mattermost output binding failed: {ex.Message}");
+        }
+    }
     internal IMattermostGatewayClient GatewayClient => _gatewayClient;
 
     internal MattermostChannelId? DefaultChannelId =>

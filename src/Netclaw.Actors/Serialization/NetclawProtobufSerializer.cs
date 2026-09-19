@@ -29,6 +29,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string TurnRecordedManifest = "tr-v1";
     private const string InputAdmittedManifest = "ia-v1";
     private const string InputClosedManifest = "ic-v1";
+    private const string SessionResumePreparedManifest = "srp-v1";
+    private const string SessionResumeClaimedManifest = "src-v1";
     private const string SessionTitleSetManifest = "sts-v1";
     private const string SessionCompactedManifest = "sc-v1";
     private const string SessionSnapshotManifest = "ss-v1";
@@ -59,6 +61,8 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(TurnRecorded)] = TurnRecordedManifest,
         [typeof(InputAdmitted)] = InputAdmittedManifest,
         [typeof(InputClosed)] = InputClosedManifest,
+        [typeof(SessionResumePrepared)] = SessionResumePreparedManifest,
+        [typeof(SessionResumeClaimed)] = SessionResumeClaimedManifest,
         [typeof(SessionTitleSet)] = SessionTitleSetManifest,
         [typeof(SessionCompacted)] = SessionCompactedManifest,
         [typeof(SessionSnapshot)] = SessionSnapshotManifest,
@@ -120,6 +124,10 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.InputAdmittedProto.Parser.ParseFrom(bytes)),
             InputClosedManifest => NetclawProtoMapper.FromProto(
                 Proto.InputClosedProto.Parser.ParseFrom(bytes)),
+            SessionResumePreparedManifest => NetclawProtoMapper.FromProto(
+                Proto.SessionResumePreparedProto.Parser.ParseFrom(bytes)),
+            SessionResumeClaimedManifest => NetclawProtoMapper.FromProto(
+                Proto.SessionResumeClaimedProto.Parser.ParseFrom(bytes)),
             SessionTitleSetManifest => NetclawProtoMapper.FromProto(
                 Proto.SessionTitleSetProto.Parser.ParseFrom(bytes)),
             SessionCompactedManifest => NetclawProtoMapper.FromProto(
