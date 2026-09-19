@@ -3,6 +3,9 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Security.Cryptography;
+using System.Text;
+
 namespace Netclaw.Daemon.Services;
 
 /// <summary>
@@ -15,6 +18,11 @@ public sealed class DaemonRestartSignal
 {
     private volatile bool _restartRequested;
     private int _generation;
+    private readonly object _pluginSyncGate = new();
+    private readonly HashSet<string> _pendingPluginIds = new(StringComparer.Ordinal);
+    private string? _activeConfigHash;
+    private string? _pendingConfigHash;
+    private bool _scopeInvalid;
 
     public bool RestartRequested => _restartRequested;
 
@@ -35,4 +43,51 @@ public sealed class DaemonRestartSignal
 
     /// <summary>Advances <see cref="Generation"/>. Called once per restart-loop iteration.</summary>
     public void AdvanceGeneration() => Interlocked.Increment(ref _generation);
+
+    internal void RecordPluginConfigChange(string sourceId, string? previousHash, string currentHash)
+    {
+        lock (_pluginSyncGate)
+        {
+            if (_scopeInvalid)
+                return;
+
+            var expectedHash = _pendingPluginIds.Count == 0 ? _activeConfigHash : _pendingConfigHash;
+            if (!string.Equals(previousHash, expectedHash, StringComparison.Ordinal))
+            {
+                _scopeInvalid = true;
+                _pendingPluginIds.Clear();
+                return;
+            }
+
+            _pendingConfigHash = currentHash;
+            _pendingPluginIds.Add(sourceId);
+        }
+    }
+
+    internal (IReadOnlyList<string>? PluginIds, bool ScopeInvalid) TakePluginStartupScope(string configPath)
+    {
+        var currentHash = HashConfigFile(configPath);
+        lock (_pluginSyncGate)
+        {
+            var invalid = _scopeInvalid
+                || (_pendingPluginIds.Count > 0
+                    && !string.Equals(_pendingConfigHash, currentHash, StringComparison.Ordinal));
+            IReadOnlyList<string>? pluginIds = !invalid && _pendingPluginIds.Count > 0
+                ? _pendingPluginIds.ToArray()
+                : null;
+            _activeConfigHash = currentHash;
+            _pendingConfigHash = null;
+            _pendingPluginIds.Clear();
+            _scopeInvalid = false;
+            return (pluginIds, invalid);
+        }
+    }
+
+    internal static string? HashConfigFile(string configPath)
+        => File.Exists(configPath)
+            ? Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(configPath)))
+            : null;
+
+    internal static string HashConfigText(string content)
+        => Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(content)));
 }

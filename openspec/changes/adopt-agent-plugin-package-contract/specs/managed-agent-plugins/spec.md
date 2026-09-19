@@ -27,7 +27,8 @@ The configuration schema SHALL reject unknown or invalid source properties.
 The system SHALL support `auto`, `agent-plugin`, and `codex` package formats.
 New managed sources SHALL default to `auto`.
 
-Auto selection SHALL prefer a recognized Agent Plugins root manifest over a Codex compatibility manifest.
+Auto selection SHALL select a root `plugin.json` whenever that file exists.
+It SHALL inspect a Codex compatibility manifest only when the root file is absent.
 An explicit format SHALL inspect only its selected manifest.
 The system SHALL NOT fall through to another format after it selects a manifest that fails validation.
 
@@ -40,10 +41,18 @@ The system SHALL NOT fall through to another format after it selects a manifest 
 
 #### Scenario: Invalid selected root does not fall through
 
-- **GIVEN** an archive has a recognized but invalid Agent Plugins root manifest
+- **GIVEN** an archive has an invalid Agent Plugins root manifest
 - **AND** the archive has a valid Codex compatibility manifest
 - **WHEN** the source uses `auto`
 - **THEN** the candidate fails with the portable manifest error
+- **AND** the selector does not use the Codex manifest
+
+#### Scenario: Unsupported root schema does not fall through
+
+- **GIVEN** an archive has a root `plugin.json` with an unsupported schema
+- **AND** the archive has a valid Codex compatibility manifest
+- **WHEN** the source uses `auto`
+- **THEN** the candidate fails with the root manifest error
 - **AND** the selector does not use the Codex manifest
 
 ### Requirement: Agent Plugins manifest compliance

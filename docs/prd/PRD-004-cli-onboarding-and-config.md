@@ -203,7 +203,7 @@ Command ownership stays explicit:
 
 - `netclaw plugin install <source>` — configure, acquire, validate, and publish a managed plugin
 - `netclaw plugin list [--json]` — show configured sources and installed package state
-- `netclaw plugin update <source-id>|--all` — run the shared sync pass and report plugin results
+- `netclaw plugin update <source-id>|--all` — sync one plugin or all plugins, then report plugin results
 - `netclaw plugin enable|disable <source-id>` — change source availability
 - `netclaw plugin remove <source-id>` — remove a source and its durable sync state
 
@@ -365,13 +365,18 @@ The CLI SHALL expose managed package lifecycle operations through the top-level
 `netclaw plugin` command. The CLI SHALL use the authenticated daemon API.
 It SHALL not write daemon configuration directly.
 
-The default package format SHALL detect Agent Plugins 1.0.0 before supported
-compatibility manifests. Explicit format selection SHALL inspect one format only.
+The default package format SHALL select root `plugin.json` whenever that file exists.
+It SHALL inspect a compatibility manifest only when the root file is absent.
+Explicit format selection SHALL inspect one format only.
 A selected invalid manifest SHALL fail without a fallback to another format.
 
 `netclaw plugin list --json` SHALL emit one stable JSON document without prose.
 Safe daemon problem details SHALL remain visible in CLI error output.
 Invalid or unbounded daemon bodies SHALL produce a bounded status message.
+
+Plugin lifecycle commands SHALL sync only the selected source after a mutation.
+`plugin update --all` SHALL sync all managed plugins without a skill-server fetch.
+`skill sync` SHALL remain the complete pass for skill servers and managed plugins.
 
 The first release supports public GitHub repositories, portable Agent Plugins,
 and Codex compatibility manifests. It excludes marketplaces, private Git

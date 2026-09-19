@@ -530,137 +530,137 @@ static async Task RunAsync(string[] args)
                 return;
 
             case "pair":
-            {
-                if (args.Length > 2 && IsHelpToken(args[2]))
                 {
-                    WriteDaemonPairHelp();
-                    return;
-                }
-
-                var pairBuilder = CreateQuietHostBuilder(args);
-
-                using var pairHost = pairBuilder.Build();
-                var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
-                var proofProtector = pairHost.Services.GetRequiredService<LocalControlPairingProofProtector>();
-                var timeProvider = pairHost.Services.GetRequiredService<TimeProvider>();
-
-                try
-                {
-                    var proof = proofProtector.CreateProof(timeProvider.GetUtcNow());
-                    var response = await pairApi.RequestPairingCodeAsync(proof);
-                    if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                    if (args.Length > 2 && IsHelpToken(args[2]))
                     {
-                        Console.Error.WriteLine("error: The daemon does not support local-control pairing.");
-                        Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
-                        Environment.ExitCode = 1;
+                        WriteDaemonPairHelp();
                         return;
                     }
 
-                    if (response.StatusCode == System.Net.HttpStatusCode.BadRequest
-                        && response.Error == "unsupported_protocol_version")
-                    {
-                        Console.Error.WriteLine("error: The daemon does not support this local-control proof version.");
-                        Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
+                    var pairBuilder = CreateQuietHostBuilder(args);
 
-                    if (response.Result is null)
-                    {
-                        Console.Error.WriteLine($"error: The daemon rejected the pairing request: {response.Error ?? response.StatusCode.ToString()}");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
-
-                    var pairingResult = response.Result;
-                    Console.WriteLine($"Pairing code:  {pairingResult.FormattedCode}");
-                    Console.WriteLine($"Expires at:    {pairingResult.ExpiresAt.ToLocalTime():HH:mm:ss} (local time)");
-                    Console.WriteLine();
-                    Console.WriteLine("On the remote device, run:");
-                    Console.WriteLine($"  netclaw pair {pairApi.Endpoint}");
-                }
-                catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
-                {
-                    Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.LocalControlEndpoint}: {ex.Message}");
-                    Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
-                    Environment.ExitCode = 1;
-                }
-
-                return;
-            }
-
-            case "devices":
-            {
-                var devicesSubcmd = args.Length > 2 ? args[2] : "list";
-                if (IsHelpToken(devicesSubcmd))
-                {
-                    WriteDaemonDevicesHelp();
-                    return;
-                }
-
-                var devBuilder = CreateQuietHostBuilder(args);
-
-                using var devHost = devBuilder.Build();
-                var devApi = devHost.Services.GetRequiredService<DaemonApi>();
-
-                if (devicesSubcmd is "revoke")
-                {
-                    var deviceName = args.Length > 3 ? args[3] : null;
-                    if (string.IsNullOrWhiteSpace(deviceName))
-                    {
-                        Console.Error.WriteLine("error: device name required.");
-                        Console.Error.WriteLine("Usage: netclaw daemon devices revoke <name>");
-                        Environment.ExitCode = 1;
-                        return;
-                    }
+                    using var pairHost = pairBuilder.Build();
+                    var pairApi = pairHost.Services.GetRequiredService<DaemonApi>();
+                    var proofProtector = pairHost.Services.GetRequiredService<LocalControlPairingProofProtector>();
+                    var timeProvider = pairHost.Services.GetRequiredService<TimeProvider>();
 
                     try
                     {
-                        var removed = await devApi.RevokePairedDeviceAsync(deviceName);
-                        if (removed)
-                            Console.WriteLine($"Device '{deviceName}' revoked.");
-                        else
+                        var proof = proofProtector.CreateProof(timeProvider.GetUtcNow());
+                        var response = await pairApi.RequestPairingCodeAsync(proof);
+                        if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
                         {
-                            Console.Error.WriteLine($"Device '{deviceName}' not found.");
+                            Console.Error.WriteLine("error: The daemon does not support local-control pairing.");
+                            Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
+                            Environment.ExitCode = 1;
+                            return;
+                        }
+
+                        if (response.StatusCode == System.Net.HttpStatusCode.BadRequest
+                            && response.Error == "unsupported_protocol_version")
+                        {
+                            Console.Error.WriteLine("error: The daemon does not support this local-control proof version.");
+                            Console.Error.WriteLine("Update the daemon and CLI to the same Netclaw version.");
+                            Environment.ExitCode = 1;
+                            return;
+                        }
+
+                        if (response.Result is null)
+                        {
+                            Console.Error.WriteLine($"error: The daemon rejected the pairing request: {response.Error ?? response.StatusCode.ToString()}");
+                            Environment.ExitCode = 1;
+                            return;
+                        }
+
+                        var pairingResult = response.Result;
+                        Console.WriteLine($"Pairing code:  {pairingResult.FormattedCode}");
+                        Console.WriteLine($"Expires at:    {pairingResult.ExpiresAt.ToLocalTime():HH:mm:ss} (local time)");
+                        Console.WriteLine();
+                        Console.WriteLine("On the remote device, run:");
+                        Console.WriteLine($"  netclaw pair {pairApi.Endpoint}");
+                    }
+                    catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+                    {
+                        Console.Error.WriteLine($"error: Could not connect to daemon at {pairApi.LocalControlEndpoint}: {ex.Message}");
+                        Console.Error.WriteLine("Ensure the daemon is running: netclaw daemon start");
+                        Environment.ExitCode = 1;
+                    }
+
+                    return;
+                }
+
+            case "devices":
+                {
+                    var devicesSubcmd = args.Length > 2 ? args[2] : "list";
+                    if (IsHelpToken(devicesSubcmd))
+                    {
+                        WriteDaemonDevicesHelp();
+                        return;
+                    }
+
+                    var devBuilder = CreateQuietHostBuilder(args);
+
+                    using var devHost = devBuilder.Build();
+                    var devApi = devHost.Services.GetRequiredService<DaemonApi>();
+
+                    if (devicesSubcmd is "revoke")
+                    {
+                        var deviceName = args.Length > 3 ? args[3] : null;
+                        if (string.IsNullOrWhiteSpace(deviceName))
+                        {
+                            Console.Error.WriteLine("error: device name required.");
+                            Console.Error.WriteLine("Usage: netclaw daemon devices revoke <name>");
+                            Environment.ExitCode = 1;
+                            return;
+                        }
+
+                        try
+                        {
+                            var removed = await devApi.RevokePairedDeviceAsync(deviceName);
+                            if (removed)
+                                Console.WriteLine($"Device '{deviceName}' revoked.");
+                            else
+                            {
+                                Console.Error.WriteLine($"Device '{deviceName}' not found.");
+                                Environment.ExitCode = 1;
+                            }
+                        }
+                        catch (HttpRequestException ex)
+                        {
+                            Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
                             Environment.ExitCode = 1;
                         }
                     }
-                    catch (HttpRequestException ex)
+                    else
                     {
-                        Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
-                        Environment.ExitCode = 1;
-                    }
-                }
-                else
-                {
-                    // Default: list devices
-                    try
-                    {
-                        var devices = await devApi.ListPairedDevicesAsync();
-                        if (devices.Count == 0)
+                        // Default: list devices
+                        try
                         {
-                            Console.WriteLine("No paired devices.");
-                        }
-                        else
-                        {
-                            Console.WriteLine($"{"Name",-24} {"Created",-22} {"Last Used",-22}");
-                            Console.WriteLine(new string('-', 70));
-                            foreach (var d in devices)
+                            var devices = await devApi.ListPairedDevicesAsync();
+                            if (devices.Count == 0)
                             {
-                                Console.WriteLine(
-                                    $"{d.Name,-24} {d.CreatedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm} {d.LastUsedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm}");
+                                Console.WriteLine("No paired devices.");
+                            }
+                            else
+                            {
+                                Console.WriteLine($"{"Name",-24} {"Created",-22} {"Last Used",-22}");
+                                Console.WriteLine(new string('-', 70));
+                                foreach (var d in devices)
+                                {
+                                    Console.WriteLine(
+                                        $"{d.Name,-24} {d.CreatedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm} {d.LastUsedAt.ToLocalTime(),-22:yyyy-MM-dd HH:mm}");
+                                }
                             }
                         }
+                        catch (HttpRequestException ex)
+                        {
+                            Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
+                            Environment.ExitCode = 1;
+                        }
                     }
-                    catch (HttpRequestException ex)
-                    {
-                        Console.Error.WriteLine($"error: Could not reach daemon: {ex.Message}");
-                        Environment.ExitCode = 1;
-                    }
-                }
 
-                return;
-            }
+                    return;
+                }
 
             default:
                 WriteDaemonHelp();
@@ -846,6 +846,29 @@ static async Task RunAsync(string[] args)
         return;
     }
 
+    // ── Plugin management ──
+    if (mode is "plugin")
+    {
+        try
+        {
+            var builder = CreateQuietHostBuilder(args);
+            using var pluginHost = builder.Build();
+            Environment.ExitCode = await PluginCommand.RunAsync(
+                args,
+                pluginHost.Services.GetRequiredService<DaemonApi>(),
+                pluginHost.Services.GetRequiredService<TimeProvider>(),
+                Console.In,
+                Console.Out);
+        }
+        catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
+        {
+            Console.Error.WriteLine($"plugin: could not load local configuration: {ex.Message}");
+            Console.Error.WriteLine("Fix the file it names under ~/.netclaw/config, and retry.");
+            Environment.ExitCode = 1;
+        }
+        return;
+    }
+
     // ── Skill management ──
     if (mode is "skill")
     {
@@ -866,7 +889,12 @@ static async Task RunAsync(string[] args)
                 var skillPaths = skillHost.Services.GetRequiredService<NetclawPaths>();
                 skillPaths.EnsureDirectoriesExist();
                 var skillDaemonApi = skillHost.Services.GetRequiredService<DaemonApi>();
-                Environment.ExitCode = await SkillCommand.RunAsync(args, skillPaths, skillDaemonApi);
+                Environment.ExitCode = await SkillCommand.RunAsync(
+                    args,
+                    skillPaths,
+                    skillHost.Services.GetRequiredService<TimeProvider>(),
+                    Console.In,
+                    skillDaemonApi);
             }
             catch (Exception ex) when (ex is InvalidDataException or InvalidOperationException or FormatException)
             {
@@ -881,7 +909,7 @@ static async Task RunAsync(string[] args)
         // All other skill subcommands are offline filesystem operations — no daemon needed.
         var paths = new NetclawPaths();
         paths.EnsureDirectoriesExist();
-        Environment.ExitCode = await SkillCommand.RunAsync(args, paths);
+        Environment.ExitCode = await SkillCommand.RunAsync(args, paths, TimeProvider.System, Console.In);
         return;
     }
 
@@ -1316,6 +1344,7 @@ static void WriteGeneralHelp()
     Console.WriteLine("  reminder                 Manage scheduled reminders (daemon-required)");
     Console.WriteLine("  memory                   Manage cross-session memory (embeddings backfill, offline)");
     Console.WriteLine("  skill                    Manage skills and skill sources");
+    Console.WriteLine("  plugin                   Manage Git-based agent plugins");
     Console.WriteLine("  webhooks                 Manage inbound webhook routes");
     Console.WriteLine("  secrets                  Manage encrypted secrets (set key/value pairs)");
     Console.WriteLine("  init                     First-run setup wizard");

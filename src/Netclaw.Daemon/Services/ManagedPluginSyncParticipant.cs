@@ -39,7 +39,7 @@ internal sealed class ManagedPluginSyncParticipant(
     }
 
     public async Task<ManagedPluginSyncResult> SyncAsync(
-        bool retryRejected,
+        ServerFeedSkillSyncActor.Run request,
         CancellationToken cancellationToken)
     {
         var rows = new List<SkillSyncResult.SourceRow>();
@@ -63,11 +63,14 @@ internal sealed class ManagedPluginSyncParticipant(
             _startupCleanupComplete = true;
         }
 
-        foreach (var source in configuredSources.Where(static source => source.Enabled))
+        foreach (var source in configuredSources.Where(source =>
+                     source.Enabled
+                     && (request.Scope != ServerFeedSkillSyncActor.SyncScope.Plugin
+                         || string.Equals(source.Id, request.PluginId, StringComparison.Ordinal))))
         {
             try
             {
-                rows.Add(await SyncSourceAsync(source, retryRejected, cancellationToken));
+                rows.Add(await SyncSourceAsync(source, request.RetryRejected, cancellationToken));
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
             {
@@ -347,14 +350,14 @@ internal sealed class ManagedPluginSyncParticipant(
         string sourceId,
         string commit,
         string? version) => new()
-    {
-        Name = sourceId,
-        SourceKind = SkillSyncResult.GitPluginSourceKind,
-        UnchangedCount = 1,
-        Sidecar = "not-applicable",
-        Commit = commit,
-        Version = version,
-    };
+        {
+            Name = sourceId,
+            SourceKind = SkillSyncResult.GitPluginSourceKind,
+            UnchangedCount = 1,
+            Sidecar = "not-applicable",
+            Commit = commit,
+            Version = version,
+        };
 
     private static SkillSyncResult.SourceRow PluginRejected(string sourceId, string commit) => new()
     {

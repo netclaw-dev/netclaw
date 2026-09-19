@@ -1,6 +1,3 @@
-# Skill Management
-
-
 ## Skill Management
 
 
@@ -17,7 +14,7 @@ commands below only for explicit operator inspection and diagnostics.
 | Command | What it does |
 |---------|--------------|
 | `netclaw skill list` | List all discovered skills with source, version, status |
-| `netclaw skill sync` | Run one external source sync pass and report each source result |
+| `netclaw skill sync [--retry-rejected]` | Sync skill servers and managed plugins, then report each source result |
 | `netclaw skill show <name>` | Show skill metadata and full content |
 | `netclaw skill validate <path>` | Validate a SKILL.md file's frontmatter format |
 | `netclaw skill remove <name>` | Remove a native skill (refuses system/external) |
@@ -37,6 +34,42 @@ Register additional skill directories (e.g. `~/.claude/skills/`):
 | `netclaw skill source enable <name>` | Enable a disabled source |
 | `netclaw skill source disable <name>` | Disable without removing |
 
+### Managed agent plugins
+
+The daemon can install Agent Plugin packages from a public GitHub repository.
+Netclaw supports Agent Plugins 1.0.0 and the Codex compatibility format.
+Netclaw imports skills only.
+It does not activate hooks, MCP servers, agents, scripts, or other executable components.
+
+| Command | What it does |
+|---------|--------------|
+| `netclaw plugin install owner/repository` | Install from the repository's default branch |
+| `netclaw plugin install owner/repository --branch main` | Track a named branch |
+| `netclaw plugin install owner/repository --tag v1.2.0` | Resolve a tag once and pin its commit |
+| `netclaw plugin install owner/repository --commit <sha>` | Pin an exact commit |
+| `netclaw plugin list [--json]` | Show each source and its installed package identity |
+| `netclaw plugin update <source-id> [--retry-rejected]` | Sync only the named plugin source |
+| `netclaw plugin update --all [--retry-rejected]` | Sync all managed plugins without a skill-server fetch |
+| `netclaw plugin enable <source-id>` | Enable and sync a source |
+| `netclaw plugin disable <source-id>` | Disable a source |
+| `netclaw plugin remove <source-id>` | Remove a source |
+
+Use `--id` to set the stable source ID.
+Use `--format auto|agent-plugin|codex` to select the package contract.
+The default `auto` format selects root `plugin.json` when that file exists.
+An invalid root manifest fails without a Codex fallback.
+Use `--subdirectory` when the plugin root is below the repository root.
+Plugin mutations require confirmation unless the operator supplies `--yes`.
+The install command waits for the daemon restart and its immediate sync.
+A download failure leaves the valid source configured for a later sync.
+A scanner rejection records the commit and keeps prior installed content active.
+Use `netclaw plugin update <source-id> --retry-rejected` to retry one rejected plugin commit.
+Use `netclaw skill sync --retry-rejected` to retry rejected commits across all external sources.
+The daemon removes the rejection record after a successful explicit retry.
+
+The source ID controls later lifecycle commands.
+The package manifest supplies a separate package name after a successful sync.
+
 The daemon restores its system skills from its binary before its first scan.
 If this restore fails, confirm that Netclaw owns the skills directory and can
 write to its parent. If the error reports a reparse point, remove it from the
@@ -49,6 +82,8 @@ No restart is needed for supported mutations.
 
 `netclaw skill sync` uses the daemon's configured sources. It cannot add a
 source or write configuration. The command waits for the shared daemon pass.
+Plugin lifecycle commands request a named source pass after each mutation.
+The daemon refreshes the complete inventory after each scoped pass.
 If its wait is canceled, the daemon can still finish that pass.
 The CLI prints a wait notice before it sends the request. Ctrl+C stops only the CLI wait.
 HTTP 503 means the daemon cannot run the pass now. Check its status before a retry.
