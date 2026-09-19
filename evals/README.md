@@ -232,9 +232,32 @@ Run the assertion tests without a model:
 
 ```bash
 python3 -m unittest discover -s evals -p 'test_*evals.py' -v
+python3 -m unittest discover -s evals -p 'test_tool_loop_replay.py' -v
 bash -n evals/run-evals.sh
 bash -n evals/cycle_evals.sh
 ```
+
+#### Offline sanitized tool-loop replay
+
+The offline replay uses symbolic batches and the locked beta.3 exact detector.
+It produces deterministic JSON and needs no daemon, provider, network, or raw
+session input.
+
+```bash
+python3 evals/tool_loop_replay.py evals/fixtures/tool-loop/corpus.json
+python3 -m unittest discover -s evals -p 'test_tool_loop_replay.py' -v
+```
+
+The fixture stores no prompts, arguments, paths, results, call identifiers,
+timestamps, credentials, host data, or private identity. The source audit is
+explicit and checks the recorded release revision and source hash:
+
+```bash
+python3 evals/tool_loop_replay.py --verify-source-root . evals/fixtures/tool-loop/corpus.json
+```
+
+The corpus is a small seed set. It does not prove a false-block bound or a
+production safety rate.
 
 ## Environment Variables
 
