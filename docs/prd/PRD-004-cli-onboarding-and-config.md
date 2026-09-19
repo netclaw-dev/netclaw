@@ -11,6 +11,7 @@
   offline vs daemon-required command categorization)
 - Revised: 2026-05-24 (bootstrap-only `init`, domain-oriented `config`,
   init-owned identity re-entry, explicit reset flow)
+- Revised: 2026-09-15 (separate plugin catalogs from package lifecycle)
 - Depends on: `PRD-001`, `PRD-002`
 
 ## Goal
@@ -108,9 +109,10 @@ Top-level domains:
 The daemon restores its system skills from the installed binary. The `Skill Sources`
 domain configures local folders and private server sources. It does not configure system skill updates.
 Operators can use `netclaw skill sync` to run the configured external source
-sync pass. The command does not add sources or write configuration.
+sync pass. This pass includes private skill feeds, installed Git plugins,
+and registered plugin catalogs. The command does not add sources or write configuration.
 
-The top-level `netclaw plugin` family manages package sources from public GitHub repositories.
+The top-level `netclaw plugin` family manages packages and catalogs from public GitHub repositories.
 Agent Plugins 1.0.0 is the primary package contract.
 Host-specific package formats are explicit compatibility contracts.
 The daemon can publish supported plugin skills into the existing skill inventory.
@@ -206,6 +208,10 @@ Command ownership stays explicit:
 - `netclaw plugin update <source-id>|--all` — sync one plugin or all plugins, then report plugin results
 - `netclaw plugin enable|disable <source-id>` — change source availability
 - `netclaw plugin remove <source-id>` — remove a source and its durable sync state
+- `netclaw plugin marketplace add|list|update|remove` — manage public GitHub catalogs
+- `netclaw plugin search <query>` — find catalog entries
+- `netclaw plugin show <name>@<marketplace>` — inspect one catalog entry
+- `netclaw plugin install <name>@<marketplace>` — install one selected catalog entry
 
 ## Requirements
 
@@ -382,6 +388,30 @@ The first release supports public GitHub repositories, portable Agent Plugins,
 and Codex compatibility manifests. It excludes marketplaces, private Git
 credentials, plugin subagents, MCP activation, hooks, LSP configuration, and
 host execution.
+
+### CLI-015 Plugin Catalog Lifecycle
+
+The next capability SHALL let an operator register a public GitHub marketplace.
+Registration and catalog refresh SHALL save metadata only.
+Neither action SHALL install a package or grant runtime authority.
+
+The operator SHALL install a named catalog entry with an explicit command.
+The daemon SHALL apply the same acquisition and security checks as direct Git installation.
+The daemon SHALL retain the catalog origin in the installed source record.
+A later catalog change SHALL not silently replace that installed source location.
+
+`netclaw skill sync` SHALL refresh private feeds, installed plugins, and registered catalogs.
+Each source type SHALL have a separate result row.
+A failed catalog refresh SHALL retain the last valid snapshot and report the failure.
+Feed and plugin work SHALL continue after a catalog failure.
+
+A named plugin lifecycle command SHALL start work only for its named package.
+`netclaw plugin update --all` SHALL start plugin work without feed or catalog work.
+Marketplace update SHALL refresh catalog metadata without package work.
+Only `netclaw skill sync` SHALL start the complete external-source pass.
+
+The first catalog release SHALL support public GitHub sources only.
+Private Git credentials, automatic catalog-based installation, and executable plugin components remain out of scope.
 
 ## UX Requirements
 

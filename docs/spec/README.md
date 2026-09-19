@@ -19,5 +19,6 @@ narrow a glossary term only when it states the exception.
 - `SPEC-010-testing-and-smoke-strategy.md` (PRD-001, PRD-005)
 - `SPEC-011-daemon-architecture.md` (PRD-001, PRD-002, PRD-004)
 - `SPEC-016-tool-liveness-and-stall-detection.md` (PRD-001, PRD-006)
+- `SPEC-017-plugin-marketplace-catalogs.md` (PRD-004, PRD-002)
 
 OpenSpec equivalents live in `openspec/specs/` and should remain aligned.
