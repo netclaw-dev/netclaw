@@ -1,0 +1,10 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "type": "message",
+  "id": "ACTIVITY_PERSONAL_TEST_001",
+  "text": "personal harmless probe",
+  "from": { "id": "USER_TEST_001" },
+  "recipient": { "id": "28:BOT_TEST_001" },
+  "conversation": { "id": "CONVERSATION_PERSONAL_TEST_001", "tenantId": "TENANT_TEST_001", "conversationType": "personal" },
+  "replyToId": null
+}

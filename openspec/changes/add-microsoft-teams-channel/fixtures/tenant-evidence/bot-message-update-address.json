@@ -1,0 +1,7 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "destination": { "tenantId": "TENANT_TEST_001", "scope": "channel", "conversationId": "CONVERSATION_ROOT_TEST_001;messageid=ACTIVITY_ROOT_TEST_001", "rootActivityId": "ACTIVITY_ROOT_TEST_001" },
+  "createdActivityId": "ACTIVITY_BOT_CREATED_TEST_001",
+  "sdkMethods": [ "CreateAsync", "UpdateAsync" ],
+  "service": { "endpoint": "https://service.invalid/teams", "credentialSource": "SDK request context", "persistsAccessToken": false }
+}

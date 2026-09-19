@@ -9,6 +9,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Akka.Persistence.Hosting;
 using Akka.Persistence.Sql.Hosting;
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http.HttpResults;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.RateLimiting;
@@ -29,6 +30,8 @@ using Netclaw.Actors.Skills;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Actors.Tools;
 using Netclaw.Channels;
+using Netclaw.Channels.Teams;
+using Netclaw.Channels.Teams.Serialization;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Http;
 using Netclaw.Providers;
@@ -176,11 +179,12 @@ static async Task RunDaemonAsync(
         daemonLogLevel,
         daemonConfig,
         shellResolution);
+    builder.AddTeamsIngress();
 
-    // Authentication — a PolicyScheme selector is the default scheme.
-    // It routes to DeviceBearer when an Authorization: Bearer header is present,
-    // otherwise to Loopback (local operator).  This ensures [Authorize] endpoints
-    // are reachable by both loopback clients and paired remote devices.
+    // Authentication — a PolicyScheme selector is the default scheme. It routes
+    // an active Teams activity endpoint to AzureAd. It routes other bearer
+    // requests to DeviceBearer and local requests to Loopback. This keeps
+    // paired-device rules unchanged for the control-plane endpoints.
     builder.Services.AddSingleton<DeviceRegistry>();
     builder.Services.AddSingleton<BootstrapStateStore>();
     builder.Services.AddSingleton<BootstrapDeviceSeeder>();
@@ -283,9 +287,13 @@ static async Task RunDaemonAsync(
     // the host's IModelCapabilityResolver chain and ILoggerFactory.
     app.Services.GetRequiredService<ModelCapabilities>();
 
+    if (app.Services.GetRequiredService<TeamsIngressRegistration>().CanActivateSdk)
+        app.UseTeamsActivityBodyGuard();
+
     app.UseAuthentication();
     app.UseAuthorization();
     app.UseRateLimiter();
+    app.UseTeamsIngress();
 
     // Require authorization for the OpenAPI document so the full API surface is not
     // exposed to unauthenticated callers when the daemon binds to a non-loopback
@@ -336,6 +344,7 @@ static async Task RunDaemonAsync(
     app.MapWebhookEndpoints();
     app.MapWebhookRouteEndpoints();
     app.MapMattermostActionEndpoint();
+    app.MapTeamsActivityEndpoint();
 
     app.MapPairingEndpoints();
 
@@ -1088,6 +1097,7 @@ static void ConfigureDaemonServices(
         };
 
         akkaBuilder.WithNetclawSerialization();
+        akkaBuilder.WithTeamsPersistenceSerialization();
         akkaBuilder.WithNetclawActors(shellEnvironment, reminderStorage);
         akkaBuilder.WithPairingActor();
         akkaBuilder.WithWebhookRouteActor();

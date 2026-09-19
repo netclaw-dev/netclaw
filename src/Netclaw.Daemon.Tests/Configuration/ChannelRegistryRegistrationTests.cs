@@ -36,7 +36,7 @@ public sealed class ChannelRegistryRegistrationTests
         });
 
         Assert.Equal(
-            new[] { "discord", "mattermost", "slack", "tui" },
+            new[] { "discord", "mattermost", "slack", "teams", "tui" },
             descriptors.Keys.Order(StringComparer.Ordinal));
 
         Assert.DoesNotContain("headless", descriptors.Keys);
@@ -47,6 +47,7 @@ public sealed class ChannelRegistryRegistrationTests
         Assert.Equal(ChannelKind.RemoteChat, descriptors["slack"].Kind);
         Assert.Equal(ChannelKind.RemoteChat, descriptors["discord"].Kind);
         Assert.Equal(ChannelKind.RemoteChat, descriptors["mattermost"].Kind);
+        Assert.Equal(ChannelKind.RemoteChat, descriptors["teams"].Kind);
         Assert.Equal(ChannelKind.LocalInteractiveClient, descriptors["tui"].Kind);
 
         Assert.Equal(ChannelType.Tui, descriptors["tui"].ChannelType);
@@ -66,6 +67,7 @@ public sealed class ChannelRegistryRegistrationTests
 
         Assert.True(descriptors["slack"].Capabilities.HasFlag(ChannelCapabilities.DirectMessages));
         Assert.True(descriptors["mattermost"].Capabilities.HasFlag(ChannelCapabilities.DirectMessages));
+        Assert.False(descriptors["teams"].IsEnabled);
         Assert.True(descriptors["discord"].Capabilities.HasFlag(ChannelCapabilities.DirectMessages));
 
         Assert.Contains(ChannelAddressKind.DirectMessage, descriptors["slack"].AddressKinds);

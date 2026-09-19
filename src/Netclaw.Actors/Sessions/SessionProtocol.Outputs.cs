@@ -34,6 +34,13 @@ public static partial class SessionProtocol
         public long TimestampMs { get; init; } = TimeProvider.System.GetUtcNow().ToUnixTimeMilliseconds();
 
         public DateTimeOffset Timestamp => DateTimeOffset.FromUnixTimeMilliseconds(TimestampMs);
+
+        /// <summary>
+        /// Stable reminder correlation propagated to every output for a
+        /// reminder-sourced turn. It is transport-neutral and lets channels
+        /// associate concurrent delivery results without mutable global state.
+        /// </summary>
+        public ReminderId? SourceReminderId { get; init; }
     }
 
     /// <summary>
@@ -168,10 +175,6 @@ public static partial class SessionProtocol
         public TurnOutcome Outcome { get; init; } = TurnOutcome.Completed;
 
         /// <summary>
-        /// Reminder delivery key (<c>{reminderId}:{fireTimestampMs}</c>) for reminder-sourced turns.
-        /// Null for non-reminder turns.
-        /// </summary>
-        public ReminderId? SourceReminderId { get; init; }
     }
 
     /// <summary>

@@ -232,9 +232,9 @@ public static class ToolAudienceProfileDefaults
         ChannelAttachments = CreatePublicChannelAttachments()
     };
 
-    // Team is operator-vetted: every profile-managed tool except shell
-    // (Personal-only via the shell_requires_personal_context hard gate) and
-    // the webhook tools. MCP stays operator-opt-in (AllowedMcpServers empty).
+    // Team is operator-vetted: every profile-managed tool except shell and
+    // the webhook tools. Shell needs an explicit allow-list plus an exact
+    // Approval override. MCP stays operator-opt-in (AllowedMcpServers empty).
     // Monotonic invariant: Public ⊆ Team ⊆ Personal.
     public static ToolAudienceProfile CreateTeam() => new()
     {

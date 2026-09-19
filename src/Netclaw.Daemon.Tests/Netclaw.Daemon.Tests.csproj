@@ -14,6 +14,7 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" />
     <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="Microsoft.Teams.Apps" />
     <PackageReference Include="NSec.Cryptography" />
     <PackageReference Include="ModelContextProtocol.AspNetCore" />
     <PackageReference Include="ModelContextProtocol.Core" />
@@ -23,11 +24,20 @@
   </ItemGroup>
 
   <ItemGroup>
+    <None Remove="Fixtures/Teams/TenantEvidence/**/*" />
+    <None Include="../../openspec/changes/add-microsoft-teams-channel/fixtures/tenant-evidence/**/*.json">
+      <Link>Fixtures/Teams/TenantEvidence/%(Filename)%(Extension)</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../Netclaw.Actors/Netclaw.Actors.csproj" />
     <ProjectReference Include="../Netclaw.Channels/Netclaw.Channels.csproj" />
     <ProjectReference Include="../Netclaw.Channels.Discord/Netclaw.Channels.Discord.csproj" />
     <ProjectReference Include="../Netclaw.Channels.Mattermost/Netclaw.Channels.Mattermost.csproj" />
     <ProjectReference Include="../Netclaw.Channels.Slack/Netclaw.Channels.Slack.csproj" />
+    <ProjectReference Include="../Netclaw.Channels.Teams/Netclaw.Channels.Teams.csproj" />
     <ProjectReference Include="../Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <ProjectReference Include="../Netclaw.Daemon/Netclaw.Daemon.csproj" />
     <ProjectReference Include="../Netclaw.Providers/Netclaw.Providers.csproj" />
@@ -35,8 +45,7 @@
     <ProjectReference Include="../Netclaw.Tests.Utilities/Netclaw.Tests.Utilities.csproj" />
     <!-- Built (not linked) so SmokeMcpServerArgumentCoercionTests can launch
          the deterministic stdio MCP server as a child process. -->
-    <ProjectReference Include="../../tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj"
-                      ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../tests/Netclaw.SmokeMcpServer/Netclaw.SmokeMcpServer.csproj" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>

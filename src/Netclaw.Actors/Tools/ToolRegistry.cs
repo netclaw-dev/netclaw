@@ -172,16 +172,14 @@ public sealed class ToolRegistry
         FindRegistration(name);
 
     /// <summary>
-    /// Map a canonical tool name to the LLM-facing alias the registered
-    /// tool exposes. Returns the input unchanged for first-party tools
-    /// (where the canonical form is already LLM-safe) and for names
-    /// that don't resolve to a registered tool. Called at the outbound
-    /// LLM-request boundary to translate canonical names stored in
-    /// conversation history back to what the model expects on the
-    /// wire.
+    /// Map a canonical tool name to its registered LLM-facing alias.
+    /// For an absent registration, derive and validate the alias with
+    /// <see cref="LlmFacingToolName.FromCanonical"/>. Historical MCP calls
+    /// must remain valid provider input after their server disconnects.
+    /// This outbound conversion does not register a tool or grant access.
     /// </summary>
     public string ToLlmFacingName(string canonicalName) =>
-        FindRegistration(canonicalName)?.Tool.LlmFacingName.Value ?? canonicalName;
+        FindRegistration(canonicalName)?.Tool.LlmFacingName.Value ?? LlmFacingToolName.FromCanonical(canonicalName).Value;
 
     /// <summary>
     /// Map either a canonical or LLM-facing tool name to the canonical

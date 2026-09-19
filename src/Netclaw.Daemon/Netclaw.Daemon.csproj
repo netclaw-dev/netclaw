@@ -40,6 +40,7 @@
         <PackageReference Include="Microsoft.Extensions.AI"/>
         <PackageReference Include="Microsoft.AspNetCore.OpenApi"/>
         <PackageReference Include="Microsoft.Data.Sqlite"/>
+        <PackageReference Include="Microsoft.Teams.Apps"/>
         <PackageReference Include="ModelContextProtocol.Core"/>
         <PackageReference Include="Netclaw.SkillClient"/>
         <PackageReference Include="OpenTelemetry"/>
@@ -67,9 +68,11 @@
         <ProjectReference Include="..\Netclaw.Channels.Discord\Netclaw.Channels.Discord.csproj"/>
         <ProjectReference Include="..\Netclaw.Channels.Mattermost\Netclaw.Channels.Mattermost.csproj"/>
         <ProjectReference Include="..\Netclaw.Channels.Slack\Netclaw.Channels.Slack.csproj"/>
+        <ProjectReference Include="..\Netclaw.Channels.Teams\Netclaw.Channels.Teams.csproj"/>
         <ProjectReference Include="..\Netclaw.Providers\Netclaw.Providers.csproj"/>
         <ProjectReference Include="..\Netclaw.Search\Netclaw.Search.csproj"/>
         <ProjectReference Include="..\Netclaw.Tools.Abstractions\Netclaw.Tools.Abstractions.csproj"/>
+        <ProjectReference Include="..\Netclaw.Channels.Teams.Graph\Netclaw.Channels.Teams.Graph.csproj"/>
     </ItemGroup>
 
 </Project>

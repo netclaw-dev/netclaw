@@ -11,6 +11,7 @@
     <InternalsVisibleTo Include="Netclaw.Actors.MutationTests" />
     <InternalsVisibleTo Include="Netclaw.Daemon.Tests" />
     <InternalsVisibleTo Include="Netclaw.Benchmarks" />
+    <InternalsVisibleTo Include="Netclaw.Channels.Teams" />
   </ItemGroup>
 
   <ItemGroup>

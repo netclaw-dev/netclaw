@@ -155,6 +155,52 @@ public sealed class DoctorFixServiceTests
     }
 
     [Fact]
+    public async Task PreservesValidStructuredTeamsAudienceOverrides()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Teams": {
+                "Enabled": true,
+                "AllowedTeamIds": ["team-id"],
+                "AllowedChannelIds": ["channel-id"],
+                "AllowedUserIds": ["user-id"],
+                "ChannelAudienceOverrides": [
+                  {
+                    "TeamId": "19:team-id@thread.tacv2",
+                    "ChannelId": "19:channel-id@thread.tacv2",
+                    "Audience": "team"
+                  }
+                ]
+              },
+              "Models": {
+                "Definitions": {
+                  "primary": {
+                    "Provider": "provider",
+                    "ModelId": "model"
+                  }
+                },
+                "Roles": {
+                  "Main": "primary"
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(plan.Fixes, fix => fix.FilePath == paths.NetclawConfigPath);
+
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        var config = await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken);
+        Assert.Contains("\"ChannelAudienceOverrides\"", config, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task DynamicDescriptionReflectsAppliedFixes()
     {
         var paths = NewPaths();

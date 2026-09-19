@@ -1,0 +1,5 @@
+schema: spec-driven
+created: 2026-08-25
+goal: Apply the supplied modern Adaptive Card visual language to the Teams
+  approval transport without changing approval authority, tool policy, grants,
+  or other channels.

@@ -15,6 +15,8 @@ using Netclaw.Channels.Mattermost.Tools;
 using Netclaw.Channels.Mattermost.Transport;
 using Netclaw.Channels.Slack;
 using Netclaw.Channels.Slack.Tools;
+using Netclaw.Channels.Teams;
+using Netclaw.Channels.Teams.Graph;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -37,6 +39,7 @@ public static class ChannelIntegrationRegistrationExtensions
         AddSlackChannel(services, configuration);
         AddDiscordChannel(services, configuration);
         AddMattermostChannel(services, configuration);
+        AddTeamsChannel(services, configuration);
     }
 
     internal static void AddSlackChannel(IServiceCollection services, IConfiguration configuration)
@@ -271,6 +274,26 @@ public static class ChannelIntegrationRegistrationExtensions
             .WithLookupTool((sp, options) => new LookupMattermostUserTool(
                 () => sp.GetRequiredService<MattermostClient>(),
                 options));
+    }
+
+    internal static void AddTeamsChannel(IServiceCollection services, IConfiguration configuration)
+    {
+        var options = configuration.GetSection(nameof(ChannelType.Teams)).Get<TeamsChannelOptions>()
+            ?? new TeamsChannelOptions();
+        var registration = TeamsIngressRegistration.Evaluate(options);
+        var descriptor = ChannelDescriptor.CreateRemoteChat(
+            ChannelType.Teams,
+            "Teams",
+            options.Enabled,
+            options.AllowDirectMessages);
+
+        services.AddSingleton(options);
+        services.AddSingleton(registration);
+        services.AddTeamsDirectory(options);
+        services.AddChannelRegistry();
+        services.AddChannelDescriptor(descriptor);
+        services.AddSingleton<IChannelRuntimeSnapshotProvider>(
+            new TeamsChannelRuntimeSnapshotProvider(descriptor, registration));
     }
 
     private static string MattermostServerUrl(MattermostChannelOptions options)
