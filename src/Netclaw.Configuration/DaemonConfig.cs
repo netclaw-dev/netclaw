@@ -21,10 +21,9 @@ public sealed record DaemonConfig
     public const int DefaultPort = 5199;
 
     /// <summary>
-    /// Worst-case time the daemon's graceful shutdown drain is allotted before something gives
-    /// up and forces termination. Sized to comfortably exceed <c>SessionConfig.TurnLlmTimeout</c>'s
-    /// default (3 minutes) so a session mid-LLM-call during shutdown can finish draining instead
-    /// of being interrupted.
+    /// Worst-case time for the daemon's graceful shutdown phase. The session actor gives a
+    /// model call a short completion grace, then confirms cancellation before it grants a
+    /// restart candidate. Other work remains under the bounded drain deadline.
     ///
     /// Single source of truth shared by every shutdown-timing surface that must stay in
     /// lockstep (netclaw-dev/netclaw#1664, #1665):
@@ -48,7 +47,7 @@ public sealed record DaemonConfig
     /// SIGKILL race the daemon could not win (evidence: a production daemon force-killed ~100ms
     /// from a clean exit).
     /// </summary>
-    public static readonly TimeSpan GracefulShutdownBudget = TimeSpan.FromSeconds(200);
+    public static readonly TimeSpan GracefulShutdownBudget = TimeSpan.FromSeconds(30);
 
     /// <summary>
     /// Safety margin subtracted from <see cref="GracefulShutdownBudget"/> to produce

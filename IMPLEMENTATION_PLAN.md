@@ -446,6 +446,14 @@ If post-drain MCP teardown remains material, review open PR
 [#1681](https://github.com/netclaw-dev/netclaw/pull/1681) before a new fix.
 Keep the unexplained 26-second service gap as a separate investigation.
 
+The isolated persistent-home check on 2026-09-19 used an active model turn.
+The baseline stopped in 7.47 seconds and reached the listener after 10.05 seconds.
+The candidate stopped in 7.47 seconds and reached the listener after 9.96 seconds.
+Both stops kept their resume candidates in a mode `0600` manifest.
+The shorter limits affect stalled drains. They did not change this normal stop path.
+Set the drain, phase, CLI, and systemd limits to 20, 30, 45, and 60 seconds.
+The actor, daemon, and CLI tests cover the accepted input and duplicate action boundaries.
+
 At this review date, open PR [#1893](https://github.com/netclaw-dev/netclaw/pull/1893)
 addresses a model timeout inside one process. Open PR
 [#1987](https://github.com/netclaw-dev/netclaw/pull/1987) addresses busy

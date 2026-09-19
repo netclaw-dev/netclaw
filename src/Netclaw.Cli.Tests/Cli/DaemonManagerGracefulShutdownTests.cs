@@ -16,7 +16,7 @@ namespace Netclaw.Cli.Tests.Cli;
 /// Covers the canary daemon-stop finding: <c>systemctl --user stop netclaw.service</c> landed
 /// in <c>failed (Result: signal)</c> because <see cref="DaemonManager.StopAsync"/>'s SIGTERM
 /// grace period (previously a hardcoded 10s) was far shorter than the ~200s the daemon's own
-/// Akka CoordinatedShutdown session-drain phase is deliberately allotted — so the CLI itself
+/// Akka CoordinatedShutdown session-drain phase had been allotted — so the CLI itself
 /// gave up and force-killed the daemon long before a legitimately slow (in-flight LLM call)
 /// graceful shutdown could finish. It still died, so `netclaw daemon stop` (ExecStop) reported
 /// success, but via SIGKILL rather than a clean exit — exactly what systemd's
@@ -24,7 +24,7 @@ namespace Netclaw.Cli.Tests.Cli;
 ///
 /// These tests exercise the two testable halves of the fix: (1) the internal
 /// <see cref="DaemonManager.WaitForExitAsync"/> poll now honors an injected
-/// <see cref="TimeProvider"/> end-to-end (not just for its deadline math), so the up-to-200s
+/// <see cref="TimeProvider"/> end-to-end (not just for its deadline math), so the bounded
 /// wait can be driven with a <see cref="FakeTimeProvider"/> instead of a real sleep; and
 /// (2) the generated systemd unit's <c>TimeoutStopSec=</c> stays in lockstep with
 /// <see cref="DaemonConfig.GracefulShutdownBudget"/> so systemd itself never SIGKILLs the whole
@@ -49,7 +49,7 @@ public sealed class DaemonManagerGracefulShutdownTests : IDisposable
         var manager = new DaemonManager(_paths, TimeProvider.System);
         using var exited = StartAndWaitForRealExit();
 
-        var result = await manager.WaitForExitAsync(exited, TimeSpan.FromSeconds(200), CancellationToken.None);
+        var result = await manager.WaitForExitAsync(exited, DaemonConfig.GracefulShutdownBudget, CancellationToken.None);
 
         Assert.True(result);
     }

@@ -94,6 +94,9 @@ The daemon requires a live output route before it starts the model call.
 The candidate expires ten minutes after the first interruption, even after another short stop.
 A completed reply without accepted queued input leaves the session quiet.
 A crash does not schedule automatic resume.
+The daemon gives session drain 20 seconds within a 30 second shutdown phase.
+The CLI allows 45 seconds, and the generated systemd unit allows 60 seconds.
+A pod should set `terminationGracePeriodSeconds` to at least 60 for the full graceful stop budget.
 
 If webhook notifications are configured, daemon crash paths emit
 `daemon.crashing` operational alerts with context (PID, reason, and latest known

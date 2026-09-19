@@ -1064,11 +1064,9 @@ static void ConfigureDaemonServices(
     {
         // Prevent coordinated shutdown from calling Environment.Exit(),
         // which would kill the process before the restart loop can iterate.
-        // The before-service-unbind phase needs a generous timeout (DaemonConfig.
-        // GracefulShutdownBudget) because sessions mid-LLM-call (TurnLlmTimeout defaults to
-        // 3 minutes) must finish before passivation can begin. See DaemonConfig.
-        // GracefulShutdownBudget remarks for the full set of surfaces this must stay in
-        // lockstep with.
+        // The before-service-unbind phase gives session drain time to confirm model
+        // cancellation and write restart candidates. DaemonConfig keeps this phase,
+        // the CLI wait, and the systemd stop timeout in order.
         akkaBuilder.AddHocon(
             DaemonShutdownConfiguration.BuildCoordinatedShutdownHocon(DaemonConfig.GracefulShutdownBudget),
             HoconAddMode.Prepend);
@@ -1119,8 +1117,7 @@ static void ConfigureDaemonServices(
             // Runs in an early CoordinatedShutdown phase while actors are still alive.
             // If DaemonRestartCoordinator already drained sessions (config reload), the ingress
             // gate will be closed and this task skips its drain to avoid double-draining.
-            // The phase timeout (DaemonConfig.GracefulShutdownBudget) is generous because
-            // sessions mid-LLM-call must finish before passivation can begin.
+            // The phase timeout lets sessions confirm model cancellation before passivation.
             var cs = CoordinatedShutdown.Get(system);
             var sessionManager = registry.Get<SessionManagerActorKey>();
             var ingressGate = sp.GetRequiredService<SessionIngressGate>();
@@ -1143,8 +1140,8 @@ static void ConfigureDaemonServices(
                     // the phase timeout itself fires and abandons this task outright.
                     // netclaw-dev/netclaw#1664: a session parked on interactive tool approval
                     // never acks PrepareForDaemonRestart, so an unbounded wait here (previously
-                    // CancellationToken.None, CancellationToken.None) hung for the full 200s
-                    // phase timeout with no timeout of its own, leaking the abandoned drain task.
+                    // CancellationToken.None, CancellationToken.None) had left the drain task
+                    // active until the phase timeout, with no separate drain deadline.
                     using var drainDeadlineCts = new CancellationTokenSource(DaemonConfig.BoundedDrainTimeout, tp);
 
                     var drainResult = await SessionDrainHelper.DrainAsync(

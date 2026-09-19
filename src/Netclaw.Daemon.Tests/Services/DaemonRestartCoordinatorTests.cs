@@ -197,14 +197,9 @@ public sealed class DaemonRestartCoordinatorTests : IAsyncDisposable
     [Fact]
     public async Task SessionDrainHelper_daemon_stop_bound_times_out_instead_of_hanging_when_a_session_never_acks()
     {
-        // Mirrors the daemon-stop CoordinatedShutdown drain task wired in Program.cs
-        // (netclaw-dev/netclaw#1664): a session whose in-flight turn is parked on interactive
-        // tool approval never acks PrepareForDaemonRestart. Previously this call passed
-        // CancellationToken.None for the operation token and hung until Akka's own 200s
-        // before-service-unbind phase timeout abandoned the task. The bounded CTS below —
-        // sized from DaemonConfig.BoundedDrainTimeout (GracefulShutdownBudget minus
-        // DrainSafetyMargin) and driven by TimeProvider exactly as Program.cs constructs it —
-        // must make the drain complete with a timed-out result well before that.
+        // This test mirrors the daemon-stop drain task in Program.cs. A session task can
+        // ignore cancellation and fail to acknowledge drain. The bounded CTS must end the
+        // drain before Akka's phase timeout abandons the task.
         var time = new FakeTimeProvider();
         var activeIds = new[] { "slack/approval-parked" };
         var drain = new DrainControl(activeIds, activeIds); // never acknowledged

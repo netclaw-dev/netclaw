@@ -232,6 +232,11 @@ Any graceful stop can save a candidate in an atomic restart manifest. A candidat
 expires ten minutes after the first interruption. A normal stop hours before a
 later start leaves the session quiet. A crash does not create a candidate or repeat a claimed model call.
 
+The daemon gives session drain 20 seconds within a 30 second shutdown phase.
+The CLI allows 45 seconds before forced termination. The generated systemd unit allows 60 seconds.
+A container operator should set `terminationGracePeriodSeconds` to at least 60.
+This period gives the daemon its full stop budget to write the manifest and exit.
+
 After channel startup, the daemon checks every recorded requester against the current channel ACL.
 It then restores a supported channel output subscriber. The actor checks the deadline,
 input IDs, and recorded authority again.
