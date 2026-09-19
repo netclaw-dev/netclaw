@@ -94,6 +94,25 @@ message TurnRecordedProto {
   int64 recorded_at_ms = 4;
   optional string source_reminder_id = 5;
   optional string source_background_job_id = 6;
+  repeated string consumed_input_ids = 7;
+}
+
+message InputAdmittedProto {
+  SessionIdProto session_id = 1;
+  string input_id = 2;
+  optional string source_message_id = 3;
+  SerializableChatMessageProto user_message = 4;
+  optional string executable_text = 5;
+  ToolApprovalRequestedProto.TurnContextRecordProto turn_context = 6;
+  optional string source_reminder_id = 7;
+  optional string source_background_job_id = 8;
+  int64 admitted_at_ms = 9;
+}
+
+message InputClosedProto {
+  SessionIdProto session_id = 1;
+  repeated string input_ids = 2;
+  int64 closed_at_ms = 3;
 }
 
 message SessionTitleSetProto {
@@ -117,6 +136,7 @@ message ToolBatchStartedProto {
   SerializableChatMessageProto user_message = 2;
   SerializableChatMessageProto assistant_message = 3;
   int64 started_at_ms = 4;
+  repeated string consumed_input_ids = 5;
 }
 
 message ToolCallRecordedProto {
@@ -272,6 +292,8 @@ message SessionSnapshotProto {
   repeated ActiveJobInfoProto active_background_jobs = 7;
   repeated AdoptedContextSnapshotRecord adopted_context_records = 8;
   reserved 9;
+  repeated InputAdmittedProto pending_inputs = 10;
+  repeated string recent_source_message_keys = 11;
 }
 
 // ── Session state ──

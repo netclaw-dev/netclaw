@@ -39,6 +39,9 @@ public static partial class SessionProtocol
         /// Ephemeral channel metadata for ACL/audit. Not persisted.
         /// </summary>
         public MessageSource? Source { get; init; }
+
+        /// <summary>Actor-local correlation for an input that the journal accepted.</summary>
+        public string? AdmittedInputId { get; init; }
     }
 
     /// <summary>

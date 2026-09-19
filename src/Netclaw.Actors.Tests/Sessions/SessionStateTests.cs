@@ -22,6 +22,38 @@ public class SessionStateTests
     private static readonly SessionId TestSessionId = new("test/session");
 
     [Fact]
+    public void Admitted_input_survives_snapshot_and_closes_only_by_its_id()
+    {
+        var first = new InputAdmitted
+        {
+            SessionId = TestSessionId,
+            InputId = "first",
+            SourceMessageId = "event-1",
+            TurnContext = new TurnContextRecord
+            {
+                SessionId = TestSessionId,
+                ChannelType = "slack",
+                RequesterSenderId = new SenderId("user-1")
+            },
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "one" }
+        };
+        var second = first with
+        {
+            InputId = "second",
+            SourceMessageId = "event-2",
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "two" }
+        };
+
+        var restored = SessionState.FromSnapshot(SessionState.Empty.Apply(first).Apply(second).ToSnapshot());
+        Assert.Equal(["first", "second"], restored.PendingInputs.Select(input => input.InputId));
+        Assert.Contains("slack:user-1:event-1", restored.RecentSourceMessageKeys);
+
+        var closed = restored.CloseInputs(["first"]);
+        Assert.Equal("second", Assert.Single(closed.PendingInputs).InputId);
+        Assert.Contains("slack:user-1:event-1", closed.RecentSourceMessageKeys);
+    }
+
+    [Fact]
     public void Empty_state_has_no_history()
     {
         var state = SessionState.Empty;

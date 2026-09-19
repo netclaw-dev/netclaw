@@ -210,6 +210,13 @@ The daemon writes its PID to `~/.netclaw/netclaw.pid` for lifecycle management.
 shutdown. The daemon handles SIGTERM by draining active sessions and stopping
 the actor system cleanly.
 
+The session journals each accepted input before it acknowledges the source.
+The record retains the text, media, source message ID, and original authority.
+A completed reply, a started tool batch, or a terminal failure consumes the
+input ID. The actor restores unconsumed records from the journal after a cold
+start. A retry with the same stable source message ID does not add a second
+record. A source without a stable ID cannot use this deduplication rule.
+
 During drain, a session can stop a tool task that waits only for durable
 approval prompts. The session waits for the tool task to stop before it
 acknowledges drain. Its journal retains the prompts and completed sibling

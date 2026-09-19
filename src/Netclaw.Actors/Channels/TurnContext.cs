@@ -100,7 +100,7 @@ public sealed record TurnContext
             RequestedDeliveryTarget = RequestedDeliveryTarget,
             HasAdoptedContext = HasAdoptedContext,
             HasThirdPartyAdoptedContext = HasThirdPartyAdoptedContext,
-            AdoptedSpeakerIds = [.. AdoptedSpeakerIds],
+            AdoptedSpeakerIds = AdoptedSpeakerIds.ToArray(),
             SupportsInteractiveApproval = SupportsInteractiveApproval
         };
     }

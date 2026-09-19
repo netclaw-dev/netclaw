@@ -46,6 +46,10 @@ public sealed record SessionState
     public ImmutableList<SerializableChatMessage> History { get; init; } =
         [];
 
+    public ImmutableList<InputAdmitted> PendingInputs { get; init; } = [];
+
+    public ImmutableList<string> RecentSourceMessageKeys { get; init; } = [];
+
     public int TurnCount { get; init; }
 
     public string? Title { get; init; }
@@ -93,6 +97,36 @@ public sealed record SessionState
         ImmutableHashSet<BackgroundJobId>.Empty;
 
     // ── Event application (pure functions) ──
+
+    public SessionState Apply(InputAdmitted evt)
+    {
+        var sourceKey = SourceMessageKey(evt);
+        var keys = sourceKey is null || RecentSourceMessageKeys.Contains(sourceKey)
+            ? RecentSourceMessageKeys
+            : RecentSourceMessageKeys.Add(sourceKey);
+        if (keys.Count > 256)
+            keys = keys.RemoveRange(0, keys.Count - 256);
+
+        return this with
+        {
+            PendingInputs = PendingInputs.Add(evt),
+            RecentSourceMessageKeys = keys
+        };
+    }
+
+    public SessionState CloseInputs(IReadOnlyList<string> inputIds)
+    {
+        if (inputIds.Count == 0)
+            return this;
+
+        var ids = inputIds.ToHashSet(StringComparer.Ordinal);
+        return this with { PendingInputs = PendingInputs.RemoveAll(evt => ids.Contains(evt.InputId)) };
+    }
+
+    public static string? SourceMessageKey(InputAdmitted evt)
+        => string.IsNullOrWhiteSpace(evt.SourceMessageId)
+            ? null
+            : $"{evt.TurnContext?.ChannelType ?? string.Empty}:{evt.TurnContext?.RequesterSenderId?.Value ?? string.Empty}:{evt.SourceMessageId}";
 
     public SessionState Apply(TurnRecorded evt)
     {
@@ -432,6 +466,8 @@ public sealed record SessionState
         return new SessionSnapshot
         {
             History = new List<SerializableChatMessage>(History),
+            PendingInputs = PendingInputs.ToArray(),
+            RecentSourceMessageKeys = RecentSourceMessageKeys.ToArray(),
             TurnCount = TurnCount,
             Title = Title,
             WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
@@ -492,6 +528,8 @@ public sealed record SessionState
         return new SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
+            PendingInputs = ImmutableList.CreateRange(snapshot.PendingInputs),
+            RecentSourceMessageKeys = ImmutableList.CreateRange(snapshot.RecentSourceMessageKeys),
             TurnCount = snapshot.TurnCount,
             Title = snapshot.Title,
             WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,

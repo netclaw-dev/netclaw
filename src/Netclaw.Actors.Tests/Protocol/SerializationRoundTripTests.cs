@@ -14,6 +14,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -130,6 +131,67 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(ChatRole.Assistant, result.AssistantReply.Role);
         Assert.Equal("Hi there!", result.AssistantReply.Content);
         Assert.Equal(original.RecordedAtMs, result.RecordedAtMs);
+    }
+
+    [Fact]
+    public void Admitted_input_and_terminal_ids_survive_journal_and_snapshot_round_trips()
+    {
+        var sessionId = new SessionId("C99999/1708531200.000100");
+        var admitted = new InputAdmitted
+        {
+            SessionId = sessionId,
+            InputId = "input-1",
+            SourceMessageId = "event-1",
+            UserMessage = new SerializableChatMessage { Role = ChatRole.User, Content = "Continue the task" },
+            ExecutableText = "Continue the task",
+            TurnContext = new TurnContextRecord
+            {
+                SessionId = sessionId,
+                TurnId = "turn-1",
+                Audience = TrustAudience.Personal,
+                Boundary = new TrustBoundary("slack:C99999"),
+                ChannelType = "slack",
+                RequesterSenderId = new SenderId("U123"),
+                RequesterPrincipal = PrincipalClassification.Operator
+            },
+            AdmittedAtMs = 1_700_000_000_000
+        };
+
+        var restored = RoundTrip(admitted);
+        Assert.Equal(admitted.InputId, restored.InputId);
+        Assert.Equal(admitted.UserMessage.Content, restored.UserMessage.Content);
+        Assert.Equal(admitted.TurnContext?.Boundary, restored.TurnContext?.Boundary);
+        Assert.Equal(admitted.TurnContext?.RequesterSenderId, restored.TurnContext?.RequesterSenderId);
+
+        var snapshot = RoundTrip(new SessionSnapshot
+        {
+            PendingInputs = [admitted],
+            RecentSourceMessageKeys = ["slack:event-1"]
+        });
+        Assert.Single(snapshot.PendingInputs);
+        Assert.Equal("input-1", snapshot.PendingInputs[0].InputId);
+        Assert.Equal("slack:event-1", Assert.Single(snapshot.RecentSourceMessageKeys));
+
+        var completed = RoundTrip(new TurnRecorded
+        {
+            SessionId = sessionId,
+            UserMessage = admitted.UserMessage,
+            AssistantReply = new SerializableChatMessage { Role = ChatRole.Assistant, Content = "Done" },
+            ConsumedInputIds = ["input-1"]
+        });
+        Assert.Equal("input-1", Assert.Single(completed.ConsumedInputIds));
+
+        var closed = RoundTrip(new InputClosed { SessionId = sessionId, InputIds = ["input-1"] });
+        Assert.Equal("input-1", Assert.Single(closed.InputIds));
+
+        var toolStarted = RoundTrip(new ToolBatchStarted
+        {
+            SessionId = sessionId,
+            UserMessage = admitted.UserMessage,
+            AssistantMessage = new SerializableChatMessage { Role = ChatRole.Assistant },
+            ConsumedInputIds = ["input-1"]
+        });
+        Assert.Equal("input-1", Assert.Single(toolStarted.ConsumedInputIds));
     }
 
     [Fact]

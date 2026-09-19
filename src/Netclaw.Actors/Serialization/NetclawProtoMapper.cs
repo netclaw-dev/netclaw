@@ -28,6 +28,8 @@ internal static class NetclawProtoMapper
         SerializableMediaReference v => ToProto(v),
         SerializableToolCall v => ToProto(v),
         TurnRecorded v => ToProto(v),
+        InputAdmitted v => ToProto(v),
+        InputClosed v => ToProto(v),
         SessionTitleSet v => ToProto(v),
         SessionCompacted v => ToProto(v),
         ToolBatchStarted v => ToProto(v),
@@ -166,6 +168,7 @@ internal static class NetclawProtoMapper
             proto.SourceReminderId = reminderId.Value;
         if (evt.SourceBackgroundJobId is { } backgroundJobId)
             proto.SourceBackgroundJobId = backgroundJobId.Value;
+        proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds);
         return proto;
     }
 
@@ -176,7 +179,61 @@ internal static class NetclawProtoMapper
         AssistantReply = FromProto(proto.AssistantReply),
         RecordedAtMs = proto.RecordedAtMs,
         SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : (ReminderId?)null,
-        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : (BackgroundJobId?)null
+        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : (BackgroundJobId?)null,
+        ConsumedInputIds = proto.ConsumedInputIds.ToArray()
+    };
+
+    internal static Proto.InputAdmittedProto ToProto(InputAdmitted evt)
+    {
+        var proto = new Proto.InputAdmittedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            InputId = evt.InputId,
+            UserMessage = ToProto(evt.UserMessage),
+            AdmittedAtMs = evt.AdmittedAtMs
+        };
+        if (evt.SourceMessageId is not null)
+            proto.SourceMessageId = evt.SourceMessageId;
+        if (evt.ExecutableText is not null)
+            proto.ExecutableText = evt.ExecutableText;
+        if (evt.TurnContext is not null)
+            proto.TurnContext = ToProto(evt.TurnContext);
+        if (evt.SourceReminderId is { } reminderId)
+            proto.SourceReminderId = reminderId.Value;
+        if (evt.SourceBackgroundJobId is { } backgroundJobId)
+            proto.SourceBackgroundJobId = backgroundJobId.Value;
+        return proto;
+    }
+
+    internal static InputAdmitted FromProto(Proto.InputAdmittedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        InputId = proto.InputId,
+        SourceMessageId = proto.HasSourceMessageId ? proto.SourceMessageId : null,
+        UserMessage = FromProto(proto.UserMessage),
+        ExecutableText = proto.HasExecutableText ? proto.ExecutableText : null,
+        TurnContext = proto.TurnContext is null ? null : FromProto(proto.TurnContext),
+        SourceReminderId = proto.HasSourceReminderId ? new ReminderId(proto.SourceReminderId) : null,
+        SourceBackgroundJobId = proto.HasSourceBackgroundJobId ? new BackgroundJobId(proto.SourceBackgroundJobId) : null,
+        AdmittedAtMs = proto.AdmittedAtMs
+    };
+
+    internal static Proto.InputClosedProto ToProto(InputClosed evt)
+    {
+        var proto = new Proto.InputClosedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            ClosedAtMs = evt.ClosedAtMs
+        };
+        proto.InputIds.AddRange(evt.InputIds);
+        return proto;
+    }
+
+    internal static InputClosed FromProto(Proto.InputClosedProto proto) => new()
+    {
+        SessionId = FromProto(proto.SessionId),
+        InputIds = proto.InputIds.ToArray(),
+        ClosedAtMs = proto.ClosedAtMs
     };
 
     // ── SessionTitleSet ──
@@ -224,20 +281,26 @@ internal static class NetclawProtoMapper
 
     // ── Tool batch / approval events ──
 
-    internal static Proto.ToolBatchStartedProto ToProto(ToolBatchStarted evt) => new()
+    internal static Proto.ToolBatchStartedProto ToProto(ToolBatchStarted evt)
     {
-        SessionId = ToProto(evt.SessionId),
-        UserMessage = ToProto(evt.UserMessage),
-        AssistantMessage = ToProto(evt.AssistantMessage),
-        StartedAtMs = evt.StartedAtMs
-    };
+        var proto = new Proto.ToolBatchStartedProto
+        {
+            SessionId = ToProto(evt.SessionId),
+            UserMessage = ToProto(evt.UserMessage),
+            AssistantMessage = ToProto(evt.AssistantMessage),
+            StartedAtMs = evt.StartedAtMs
+        };
+        proto.ConsumedInputIds.AddRange(evt.ConsumedInputIds);
+        return proto;
+    }
 
     internal static ToolBatchStarted FromProto(Proto.ToolBatchStartedProto proto) => new()
     {
         SessionId = FromProto(proto.SessionId),
         UserMessage = FromProto(proto.UserMessage),
         AssistantMessage = FromProto(proto.AssistantMessage),
-        StartedAtMs = proto.StartedAtMs
+        StartedAtMs = proto.StartedAtMs,
+        ConsumedInputIds = proto.ConsumedInputIds.ToArray()
     };
 
     internal static Proto.ToolCallRecordedProto ToProto(ToolCallRecorded evt) => new()
@@ -513,6 +576,8 @@ internal static class NetclawProtoMapper
         proto.History.AddRange(snap.History.Select(ToProto));
         proto.ActiveBackgroundJobs.AddRange(snap.ActiveBackgroundJobs.Select(ToProto));
         proto.AdoptedContextRecords.AddRange(snap.AdoptedContextRecords.Select(ToAdoptedContextSnapshotRecord));
+        proto.PendingInputs.AddRange(snap.PendingInputs.Select(ToProto));
+        proto.RecentSourceMessageKeys.AddRange(snap.RecentSourceMessageKeys);
         return proto;
     }
 
@@ -526,7 +591,9 @@ internal static class NetclawProtoMapper
         WorkingContext = proto.WorkingContext is not null ? FromProto(proto.WorkingContext) : null,
         History = proto.History.Select(FromProto).ToArray(),
         ActiveBackgroundJobs = proto.ActiveBackgroundJobs.Select(FromProto).ToArray(),
-        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray()
+        AdoptedContextRecords = proto.AdoptedContextRecords.Select(FromAdoptedContextSnapshotRecord).ToArray(),
+        PendingInputs = proto.PendingInputs.Select(FromProto).ToArray(),
+        RecentSourceMessageKeys = proto.RecentSourceMessageKeys.ToArray()
     };
 
     private static Proto.SessionSnapshotProto.Types.AdoptedContextSnapshotRecord ToAdoptedContextSnapshotRecord(

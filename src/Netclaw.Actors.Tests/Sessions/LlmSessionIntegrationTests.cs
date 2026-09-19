@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Event;
 using Akka.Hosting;
+using Akka.Persistence;
 using Akka.Streams;
 using System.Text.Json;
 using Microsoft.Extensions.AI;
@@ -46,6 +47,77 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
 
     public LlmSessionIntegrationTests(ITestOutputHelper output) : base(output)
     {
+    }
+
+    [Fact]
+    public async Task Input_ack_follows_a_journal_record_with_original_authority()
+    {
+        var sessionId = new SessionId("admission/journal-before-ack");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("admission-subscriber");
+        await JoinSessionAsync(manager, subscriber, sessionId);
+
+        var source = new MessageSource
+        {
+            ChannelType = ChannelType.SignalR,
+            SenderId = new SenderId("operator-1"),
+            ChannelId = "operator-channel",
+            MessageId = "source-event-1",
+            TurnId = new Netclaw.Actors.Protocol.TurnId("source-turn-1"),
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Principal = PrincipalClassification.Operator,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+            ReceivedAt = _timeProvider.GetUtcNow()
+        };
+
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Finish the operator task",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var journalProbe = CreateTestProbe("admission-journal");
+        Sys.ActorOf(Props.Create(() => new InputJournalObserver(
+            $"session-{sessionId.Value}", journalProbe.Ref)));
+        var admitted = await journalProbe.ExpectMsgAsync<InputAdmitted>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Equal("Finish the operator task", admitted.UserMessage.Content);
+        Assert.Equal("source-event-1", admitted.SourceMessageId);
+        Assert.Equal(source.Boundary, admitted.TurnContext?.Boundary);
+        Assert.Equal(source.SenderId, admitted.TurnContext?.RequesterSenderId);
+
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Finish the operator task",
+            Source = source
+        }, TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+
+        var retryProbe = CreateTestProbe("admission-retry-journal");
+        Sys.ActorOf(Props.Create(() => new InputJournalObserver(
+            $"session-{sessionId.Value}", retryProbe.Ref)));
+        await retryProbe.ExpectMsgAsync<InputAdmitted>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await retryProbe.ExpectMsgAsync<JournalReplayComplete>(
+            TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private sealed record JournalReplayComplete : INoSerializationVerificationNeeded;
+
+    private sealed class InputJournalObserver : ReceivePersistentActor
+    {
+        public override string PersistenceId { get; }
+
+        public InputJournalObserver(string persistenceId, IActorRef replyTo)
+        {
+            PersistenceId = persistenceId;
+            Recover<InputAdmitted>(evt => replyTo.Tell(evt));
+            Recover<RecoveryCompleted>(_ => replyTo.Tell(new JournalReplayComplete()));
+            RecoverAny(_ => { });
+        }
     }
 
     protected override void ConfigureSessionServices(IServiceCollection services)
