@@ -86,6 +86,25 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
         Assert.True(runner.LifetimeToken.IsCancellationRequested);
     }
 
+    [Fact]
+    public async Task Retry_request_queues_after_an_active_ordinary_pass()
+    {
+        var runner = new SequencedRunner();
+        var actor = CreateActor(runner, Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerFeedSkillSyncActor>.Instance);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await runner.FirstStarted.Task.WaitAsync(cancellationToken);
+
+        var retry = actor.Ask<SkillSyncResult.Response>(
+            ServerFeedSkillSyncActor.Run.RetryRejectedCommits,
+            cancellationToken);
+        runner.ReleaseFirst.TrySetResult();
+        await runner.SecondStarted.Task.WaitAsync(cancellationToken);
+
+        Assert.Equal([false, true], runner.RetryModes);
+        runner.ReleaseSecond.TrySetResult();
+        Assert.NotNull(await retry);
+    }
+
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
@@ -113,7 +132,9 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
 
         public void Release() => _release.TrySetResult();
 
-        public async Task<SkillSyncResult.Response> SyncAsync(CancellationToken cancellationToken)
+        public async Task<SkillSyncResult.Response> SyncAsync(
+            bool retryRejected,
+            CancellationToken cancellationToken)
         {
             LifetimeToken = cancellationToken;
             Interlocked.Increment(ref _passCount);
@@ -131,6 +152,53 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
             return new SkillSyncResult.Response
             {
                 PassId = Guid.NewGuid().ToString("N"),
+                Sources = [],
+                Inventory = new SkillSyncResult.InventoryRow { Succeeded = true },
+            };
+        }
+    }
+
+    private sealed class SequencedRunner : IServerFeedSkillSyncRunner
+    {
+        private readonly object _gate = new();
+        private readonly List<bool> _retryModes = [];
+        private int _passCount;
+
+        public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource SecondStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseFirst { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ReleaseSecond { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IReadOnlyList<bool> RetryModes
+        {
+            get
+            {
+                lock (_gate)
+                    return _retryModes.ToArray();
+            }
+        }
+
+        public async Task<SkillSyncResult.Response> SyncAsync(
+            bool retryRejected,
+            CancellationToken cancellationToken)
+        {
+            lock (_gate)
+                _retryModes.Add(retryRejected);
+            var pass = Interlocked.Increment(ref _passCount);
+            if (pass == 1)
+            {
+                FirstStarted.TrySetResult();
+                await ReleaseFirst.Task.WaitAsync(cancellationToken);
+            }
+            else
+            {
+                SecondStarted.TrySetResult();
+                await ReleaseSecond.Task.WaitAsync(cancellationToken);
+            }
+
+            return new SkillSyncResult.Response
+            {
+                PassId = pass.ToString(System.Globalization.CultureInfo.InvariantCulture),
                 Sources = [],
                 Inventory = new SkillSyncResult.InventoryRow { Succeeded = true },
             };
