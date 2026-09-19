@@ -350,14 +350,14 @@ internal sealed class ManagedPluginSyncParticipant(
         string sourceId,
         string commit,
         string? version) => new()
-    {
-        Name = sourceId,
-        SourceKind = SkillSyncResult.GitPluginSourceKind,
-        UnchangedCount = 1,
-        Sidecar = "not-applicable",
-        Commit = commit,
-        Version = version,
-    };
+        {
+            Name = sourceId,
+            SourceKind = SkillSyncResult.GitPluginSourceKind,
+            UnchangedCount = 1,
+            Sidecar = "not-applicable",
+            Commit = commit,
+            Version = version,
+        };
 
     private static SkillSyncResult.SourceRow PluginRejected(string sourceId, string commit) => new()
     {
