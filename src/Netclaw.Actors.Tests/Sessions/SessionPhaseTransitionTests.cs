@@ -17,6 +17,7 @@ public sealed class SessionPhaseTransitionTests
     [InlineData(SessionPhase.Ready, SessionPhase.Passivating)]
     [InlineData(SessionPhase.Processing, SessionPhase.Ready)]
     [InlineData(SessionPhase.Processing, SessionPhase.Compacting)]
+    [InlineData(SessionPhase.Processing, SessionPhase.Passivating)]
     [InlineData(SessionPhase.Compacting, SessionPhase.Ready)]
     [InlineData(SessionPhase.Compacting, SessionPhase.Processing)]
     [InlineData(SessionPhase.Passivating, SessionPhase.Ready)]

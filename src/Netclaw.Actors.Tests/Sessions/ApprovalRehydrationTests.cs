@@ -69,6 +69,211 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
     }
 
     [Fact]
+    public async Task Restart_drain_stops_durable_approval_wait_and_cold_response_resumes_original_turn()
+    {
+        const string callId = "call-shell-restart-drain";
+        _toolExecutor.GatedTools.Add("shell_execute");
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(callId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+
+        var sessionId = new SessionId("test-channel/restart-drain-pending-approval");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-drain-pending-sub");
+
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(child);
+
+        var ack = await sessionManager.Ask<CommandAck>(
+            new PrepareForDaemonRestart(sessionId, "config-reload"),
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Assert.Equal(sessionId, ack.SessionId);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var recoveredSubscriber = CreateTestProbe("restart-drain-recovered-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(recoveredSubscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await recoveredSubscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(callId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("U-requester")
+        }, ActorRefs.Nobody);
+
+        await recoveredSubscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await recoveredSubscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        var completed = await recoveredSubscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+        Assert.Equal(1, _toolExecutor.SuccessfulExecutions);
+        Assert.Equal(TrustAudience.Team, _toolExecutor.LastExecutionAudience);
+    }
+
+    [Fact]
+    public async Task Restart_drain_waits_for_active_sibling_then_preserves_its_result()
+    {
+        const string shellCallId = "call-shell-restart-sibling";
+        _toolExecutor.GatedTools.Add("shell_execute");
+        _toolExecutor.BlockNextSuccessfulExecution("read_file");
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent(shellCallId, "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" }),
+            new FunctionCallContent("call-read-restart-sibling", "read_file",
+                new Dictionary<string, object?> { ["path"] = "README.md" })
+        ];
+
+        var sessionId = new SessionId("test-channel/restart-drain-active-sibling");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-drain-sibling-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Read the file and run git status",
+            Source = RequesterSource("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await _toolExecutor.BlockedExecutionStarted.Task.WaitAsync(
+            TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        Watch(child);
+        var drainProbe = CreateTestProbe("restart-drain-sibling-ack");
+        child.Tell(new PrepareForDaemonRestart(sessionId, "config-reload"), drainProbe.Ref);
+        await drainProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250),
+            TestContext.Current.CancellationToken);
+
+        _toolExecutor.ReleaseBlockedExecution();
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await drainProbe.ExpectMsgAsync<CommandAck>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await ExpectTerminatedAsync(child, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var recoveredSubscriber = CreateTestProbe("restart-drain-sibling-recovered-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(recoveredSubscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await recoveredSubscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        sessionManager.Tell(new ToolInteractionResponse
+        {
+            SessionId = sessionId,
+            CallId = new Netclaw.Tools.ToolCallId(shellCallId),
+            SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
+            SenderId = new SenderId("U-requester")
+        }, ActorRefs.Nobody);
+
+        await recoveredSubscriber.FishForMessageAsync<TurnCompleted>(
+            _ => true, TimeSpan.FromSeconds(5),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(1, _toolExecutor.ExecutionsFor("read_file"));
+        Assert.Equal(1, _toolExecutor.ExecutionsFor("shell_execute"));
+    }
+
+    [Fact]
+    public async Task Restart_drain_keeps_the_bounded_path_when_user_input_is_buffered()
+    {
+        _toolExecutor.GatedTools.Add("shell_execute");
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-shell-buffered-input", "shell_execute",
+                new Dictionary<string, object?> { ["command"] = "git status" })
+        ];
+
+        var sessionId = new SessionId("test-channel/restart-drain-buffered-input");
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("restart-drain-buffered-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run git status",
+            Source = RequesterSource("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Also check the branch",
+            Source = RequesterSource("U-requester")
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        var drainProbe = CreateTestProbe("restart-drain-buffered-ack");
+        child.Tell(new PrepareForDaemonRestart(sessionId, "config-reload"), drainProbe.Ref);
+
+        await drainProbe.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(250),
+            TestContext.Current.CancellationToken);
+        Assert.Equal(0, _toolExecutor.SuccessfulExecutions);
+    }
+
+    [Fact]
     public async Task Passivated_session_resumes_tool_batch_when_approval_arrives()
     {
         const string callId = "call-shell-1";

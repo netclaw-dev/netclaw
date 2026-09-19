@@ -37,6 +37,30 @@ public sealed class ToolApprovalStateTests
     }
 
     [Fact]
+    public void Restart_stop_requires_an_unresolved_durable_prompt_with_restored_authority()
+    {
+        var state = new ToolApprovalState();
+        var request = CreateRequest("call-1", requestedAtMs: 10);
+
+        state.Request(request, persistApprovalState: false, recovered: false);
+        Assert.False(state.HasRecoverablePending(request.CallId));
+
+        state.Request(request, persistApprovalState: true, recovered: false);
+        Assert.True(state.HasRecoverablePending(request.CallId));
+
+        Assert.True(state.Resolve(request.CallId, ApprovalDecision.ApprovedOnce, out _));
+        Assert.False(state.HasRecoverablePending(request.CallId));
+
+        var legacy = request with { CallId = "legacy-restorable", TurnContext = null };
+        state.Request(legacy, persistApprovalState: true, recovered: true);
+        Assert.False(state.HasRecoverablePending(legacy.CallId));
+
+        var incomplete = request with { CallId = "legacy-call", TurnContext = null, ChannelType = null };
+        state.Request(incomplete, persistApprovalState: true, recovered: true);
+        Assert.False(state.HasRecoverablePending(incomplete.CallId));
+    }
+
+    [Fact]
     public void Concurrent_requests_wait_until_the_last_call_resolves()
     {
         var state = new ToolApprovalState();

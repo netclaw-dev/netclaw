@@ -135,6 +135,13 @@ internal sealed class ToolApprovalState
     public bool HasPending(string callId)
         => _calls.TryGetValue(callId, out var call) && call is PendingToolApproval;
 
+    public bool HasRecoverablePending(string callId)
+        => TryGetPending(callId, out var pending)
+           && pending.PersistApprovalState
+           && pending.Request.TurnContext is not null
+           && pending.TurnContext is not null
+           && pending.TurnContextRestoreFailure is null;
+
     public bool HasResolved(string callId)
         => _calls.TryGetValue(callId, out var call) && call is ResolvedToolApproval;
 

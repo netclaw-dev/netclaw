@@ -210,6 +210,13 @@ The daemon writes its PID to `~/.netclaw/netclaw.pid` for lifecycle management.
 shutdown. The daemon handles SIGTERM by draining active sessions and stopping
 the actor system cleanly.
 
+During drain, a session can stop a tool task that waits only for durable
+approval prompts. The session waits for the tool task to stop before it
+acknowledges drain. Its journal retains the prompts and completed sibling
+results. An approval after restart resumes the original turn under its
+recorded authority. Active tools, accepted buffered input, and incomplete
+results keep the current bounded drain path.
+
 `netclaw daemon status` checks the PID file and verifies the process is alive.
 Reports: running/stopped, PID, uptime, port, number of active sessions.
 

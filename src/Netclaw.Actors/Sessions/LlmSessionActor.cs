@@ -192,6 +192,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     private bool _passivationCompleted;
     private bool _passivationFinalStopScheduled;
 
+    private sealed record ToolPipelineStoppedForRestart(long Generation, Exception? Failure)
+        : INoSerializationVerificationNeeded;
+
     // Reap-on-passivation handshake: while a KillJobsForSession ask is in
     // flight, the final snapshot is deferred so it captures the reaped marks.
     // _jobReapEpoch is bumped per reap request so a late reply from a
@@ -464,6 +467,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         Command<SpawnChildActorRequest>(msg => Sender.Tell(Context.ActorOf(msg.Props, msg.ActorName)));
         Command<DeliveryFailed>(HandleDeliveryFailedWhenReady);
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
+        Command<ToolPipelineStoppedForRestart>(_ => { });
 
         // Approval click for a tool batch that parked while the session was
         // idle (deferred passivation) or that survived cold recovery. The
@@ -553,6 +557,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 ApplyToolCallRecorded(evt);
                 ProcessToolCallResult(result);
                 TryCompleteStreamedToolBatch();
+                TryStopDurableApprovalWaits();
             });
         });
 
@@ -568,6 +573,10 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         Command<ToolExecutionFailed>(msg =>
         {
+            if (_activeToolBatch.RestartStopRequested
+                && msg.Cause is TimeoutException { InnerException: OperationCanceledException })
+                return;
+
             _watchdog.Stop(Timers);
             CancelAndDisposeToolExecutionCts();
             _mediaBuffer.Clear();
@@ -741,6 +750,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             }, OutputFilter.ToolCalls);
         });
         Command<PrepareForDaemonRestart>(_ => RequestRestartDrain());
+        Command<ToolPipelineStoppedForRestart>(HandleToolPipelineStoppedForRestart);
         CommandDistillationAckNoOp();
         CommandJobReapResolved();
     }
@@ -2089,7 +2099,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             CancellationToken = toolExecutionCt
         };
 
-        _ = pipeline.ExecuteAsync(batch);
+        _activeToolBatch.SetExecutionTask(pipeline.ExecuteAsync(batch));
     }
 
     private void HandleTextResponse(
@@ -3629,6 +3639,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         {
             ApplyToolApprovalRequested(e);
             EmitOutput(msg);
+            TryStopDurableApprovalWaits();
         });
     }
 
@@ -4977,6 +4988,55 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
         if (_phase.Current == SessionPhase.Ready)
             TransitionTo(SessionPhase.Passivating);
+        else if (_phase.Current == SessionPhase.Processing)
+            TryStopDurableApprovalWaits();
+    }
+
+    private void TryStopDurableApprovalWaits()
+    {
+        if (!_restartDrainRequested || _phase.Current != SessionPhase.Processing
+            || _buffer.Count > 0 || _deferredApprovalResponse is not null
+            || _activeToolExecutionCts is null
+            || !_activeToolBatch.CanStopForDurableApprovals(_toolApprovals.HasRecoverablePending))
+            return;
+
+        var task = _activeToolBatch.ExecutionTask
+            ?? throw new InvalidOperationException("An eligible tool batch requires an execution task.");
+        var generation = _activeToolBatch.Generation;
+        _activeToolBatch.MarkRestartStopRequested();
+        _log.Info("Stopping a tool batch that waits only for durable approvals before restart drain");
+        _activeToolExecutionCts.Cancel();
+        _ = ReportToolPipelineStopAsync(task, Self, generation);
+    }
+
+    private static async Task ReportToolPipelineStopAsync(Task task, IActorRef actor, long generation)
+    {
+        try
+        {
+            await task.ConfigureAwait(false);
+            actor.Tell(new ToolPipelineStoppedForRestart(generation, null));
+        }
+        catch (Exception ex)
+        {
+            actor.Tell(new ToolPipelineStoppedForRestart(generation, ex));
+        }
+    }
+
+    private void HandleToolPipelineStoppedForRestart(ToolPipelineStoppedForRestart stopped)
+    {
+        if (!_activeToolBatch.RestartStopRequested || stopped.Generation != _activeToolBatch.Generation)
+            return;
+
+        if (stopped.Failure is { } failure)
+        {
+            _log.Error(failure, "The tool task failed during approval-only restart drain");
+            FailCurrentTurn("The tool task failed during restart drain.", failure, ErrorCategory.ToolFailure);
+            return;
+        }
+
+        CancelAndDisposeToolExecutionCts();
+        ClearActiveToolBatchTracking();
+        TransitionTo(SessionPhase.Passivating);
     }
 
     private void ClearBufferedMessagesForRestartDrain()

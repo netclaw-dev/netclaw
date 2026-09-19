@@ -17,6 +17,12 @@ internal sealed class ActiveToolBatchTracker
     private readonly Dictionary<string, ToolCycleResult> _cycleResults = new(StringComparer.Ordinal);
     private PreparedToolCycleBatch? _preparedCycleBatch;
 
+    public long Generation { get; private set; }
+
+    public Task? ExecutionTask { get; private set; }
+
+    public bool RestartStopRequested { get; private set; }
+
     public int CompletedCount => _completedCallIds.Count;
 
     public bool HasAllResults => _expectedCallIds.Count > 0
@@ -31,6 +37,7 @@ internal sealed class ActiveToolBatchTracker
         SerializableChatMessage assistantMessage,
         IEnumerable<SerializableChatMessage> existingResults)
     {
+        ResetExecution();
         _preparedCycleBatch = null;
         _cycleResults.Clear();
         ClearExpectedCallIds();
@@ -51,6 +58,7 @@ internal sealed class ActiveToolBatchTracker
         IEnumerable<FunctionCallContent> toolCalls,
         PreparedToolCycleBatch? preparedCycleBatch)
     {
+        ResetExecution();
         _preparedCycleBatch = preparedCycleBatch;
         _cycleResults.Clear();
         ClearExpectedCallIds();
@@ -78,13 +86,51 @@ internal sealed class ActiveToolBatchTracker
     public void MarkExecutionTaskCompleted()
         => ExecutionTaskCompleted = true;
 
+    public void SetExecutionTask(Task task)
+    {
+        ArgumentNullException.ThrowIfNull(task);
+        ExecutionTask = task;
+    }
+
+    public bool CanStopForDurableApprovals(Func<string, bool> hasDurableApproval)
+    {
+        if (_expectedCallIds.Count == 0 || ExecutionTask is null
+            || ExecutionTask.IsCompleted || RestartStopRequested)
+            return false;
+
+        var hasUnfinishedApproval = false;
+        foreach (var callId in _expectedCallIds)
+        {
+            if (_completedCallIds.Contains(callId))
+                continue;
+
+            if (!hasDurableApproval(callId))
+                return false;
+
+            hasUnfinishedApproval = true;
+        }
+
+        return hasUnfinishedApproval;
+    }
+
+    public void MarkRestartStopRequested()
+        => RestartStopRequested = true;
+
     public void Clear()
     {
+        ResetExecution();
         ClearExpectedCallIds();
         ClearCompletedCallIds();
         _preparedCycleBatch = null;
         _cycleResults.Clear();
         ExecutionTaskCompleted = false;
+    }
+
+    private void ResetExecution()
+    {
+        Generation++;
+        ExecutionTask = null;
+        RestartStopRequested = false;
     }
 
     private void ClearExpectedCallIds()

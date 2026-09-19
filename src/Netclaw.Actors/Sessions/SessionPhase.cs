@@ -33,7 +33,7 @@ internal static class SessionPhaseTransitions
     {
         SessionPhase.Recovering => to == SessionPhase.Ready,
         SessionPhase.Ready => to is SessionPhase.Processing or SessionPhase.Compacting or SessionPhase.Passivating,
-        SessionPhase.Processing => to is SessionPhase.Ready or SessionPhase.Compacting,
+        SessionPhase.Processing => to is SessionPhase.Ready or SessionPhase.Compacting or SessionPhase.Passivating,
         SessionPhase.Compacting => to is SessionPhase.Ready or SessionPhase.Processing,
         SessionPhase.Passivating => to is SessionPhase.Ready,
         _ => false
