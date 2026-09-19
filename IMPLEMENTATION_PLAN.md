@@ -1,6 +1,6 @@
 # Netclaw Implementation Plan
 
-Last updated: 2026-08-28
+Execution plan last updated: 2026-08-28. Restart review proposal added: 2026-09-18.
 
 This is the execution plan for Netclaw. Autonomous agents and RALPH-style loops
 SHALL work from `NOW` by default. `NEXT` and `LATER` work belongs in
@@ -107,6 +107,358 @@ the smallest repeatable manual script plus expected output.
 - Memory/personality: `docs/prd/PRD-007-agent-personality-and-local-memory.md`, `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/project-instructions/spec.md`
 - Scheduling: `docs/prd/PRD-008-scheduling-and-periodic-tasks.md`, `openspec/specs/netclaw-scheduling/spec.md`, `openspec/specs/reminder-execution-history/spec.md`
 - Testing: `docs/spec/SPEC-010-testing-and-smoke-strategy.md`, `TOOLING.md`
+
+## Review Proposal: Shorter Daemon Restarts
+
+Status: Approved for implementation on 2026-09-18. This section does not
+authorize a live daemon restart. Baseline revision: `a4b81b5c9184d1986bfa7d872e0932ac636d4b71`.
+
+Source PRDs: [PRD-001 FR-016](docs/prd/PRD-001-netclaw-mvp.md#fr-016-config-change-restart-coordination)
+and [PRD-008](docs/prd/PRD-008-scheduling-and-periodic-tasks.md).
+Related contracts: [SPEC-011](docs/spec/SPEC-011-daemon-architecture.md),
+[session resume](openspec/specs/session-resume/spec.md),
+[reminders](openspec/specs/netclaw-scheduling/spec.md), and
+[MCP discovery](openspec/specs/netclaw-mcp/spec.md).
+Use the [engineering glossary](docs/spec/GLOSSARY.md) for shared terms.
+
+The intended outcome is a shorter stop-to-listener interval without lost
+accepted input, duplicate tool effects, stale resume requests, or wider authority.
+This proposal excludes CLI latency issue
+[#2199](https://github.com/netclaw-dev/netclaw/issues/2199), automatic recovery
+after a process crash, and replay of uncertain tool effects. It reuses the
+session journal, restart manifest, and MCP server gates. The first slice adds
+a tool-pipeline stop handshake. A later slice adds durable input admission
+events and a resume deadline. No new configuration knob is proposed.
+
+**Recommendation:** First stop sessions that wait only for durable approvals.
+Then connect independent MCP servers in parallel. Resume the original admitted
+turn after the cancellation and authority contracts are clear. Keep the global
+drain deadline until accepted input and uncertain tool effects have a safe path.
+
+**Accepted stop policy:** Any graceful stop can create a wakeup candidate for
+a confirmed interrupted model call or an accepted message that remains queued.
+The next start can deliver that wakeup only before its absolute deadline.
+This includes `netclaw update`, a quick
+manual stop/start, `systemctl --user restart netclaw`, and a pod stop/start.
+A stop followed by a start hours later leaves sessions quiet. A quick manual
+stop/start can wake a canceled model turn or an accepted queue.
+This behavior is intentional.
+An ungraceful crash has no reliable interruption record under this proposal.
+
+The initial deadline proposal is ten minutes after the actual interruption or stop.
+The recovery path checks that deadline before it resumes the original turn.
+The actor checks it again before it starts a model call. An expired candidate
+causes one warning and is removed. The deadline does not reset on each start.
+It also covers a daemon that starts promptly but cannot begin recovery before expiry.
+
+No `netclaw daemon restart` command is required for this policy. Such a
+command can improve operator use later, but it cannot define eligibility.
+The official container entrypoint forwards a stop signal to `netclawd`.
+A pod replacement needs a persistent `NETCLAW_HOME` volume and enough
+termination time for the drain and candidate write. A forced pod kill cannot
+promise an automatic wakeup. The current `daemon-container` OpenSpec text
+describes an older image entrypoint and state path; update that contract in
+the relevant OpenSpec change before implementation.
+
+**Accepted recovery contract:** Netclaw resumes the original admitted turn
+under its recorded authority. It then delivers accepted queued messages in
+one follow-up model call, in their original order. The agent does not ask
+the user for lost context.
+The current journal stores completed turns and recorded tool results. It does
+not reliably store the first model-only request before the reply. The actor
+adds that request to transient history and acknowledges it before a journal
+event records it. The actor also acknowledges buffered messages without a
+journal write. The restart drain clears that buffer. A final snapshot can
+contain the request, but drain does not wait for snapshot success.
+The session audit log truncates user text and does not serve as a recovery record.
+
+PR 3 must persist each accepted message before its input ack. The durable
+record needs a stable input ID, order, content, media references, and original
+trust and delivery context. Reuse `TurnContextRecord` where it fits. Do not
+persist the raw `SendUserMessage` or `MessageSource`; they contain runtime-only
+references. The journal must mark each input as consumed or completed.
+Admission must deduplicate a source retry after a journal write but before its ack arrives.
+A recovered actor can restore the active turn and its accepted queue without
+duplicate delivery. If a required record is absent, Netclaw reports a
+recovery failure and leaves the session quiet.
+
+The current `CurrentSession` reminder sends a new automation turn. That path
+can abandon a recovered approval and cannot claim original-turn recovery.
+Prefer the existing restart manifest as a short-lived wakeup trigger to the
+session actor. The recovery service sends an internal resume request after
+startup. This avoids a second schedule and reminder definition. The agent
+needs no restart text because the actor restores the unfinished turn.
+
+**PR 3 limits:** The first resume deadline is ten minutes. Older work stays
+quiet. A partly delivered reply gets a visible diagnostic until output
+delivery can avoid repeated text. Automatic resume can repeat text that the
+user already saw. These limits do not block PR 1 or PR 2.
+
+### One Representative Flow
+
+This pseudocode is schematic. It omits persistence callbacks,
+security gates, and the exact tool-pipeline stop handshake.
+
+```text
+Current:
+  stop -> PrepareForDaemonRestart -> set drain flag
+  Ready -> passivate
+  Processing -> wait for the whole turn -> acknowledge or reach 190s limit
+
+Proposed first slice:
+  stop -> close ingress -> ask each session
+  if every unfinished call waits on a durable approval
+     and no accepted message or deferred response remains:
+       stop the approval waits; confirm the tool pipeline stopped
+       keep approval events in the journal; passivate; acknowledge
+  else:
+       keep the current bounded drain path
+
+Proposed later recovery slice:
+  accept each input -> persist its content, order, and authority -> acknowledge
+  during any graceful stop:
+    if a model call stops before any tool batch starts
+       or accepted input remains queued:
+       record one eligible resume candidate and its absolute deadline
+  after startup:
+       recover the original turn and accepted queue from the journal
+       check deadline, completion, a newer turn, and gateway readiness
+       resume that turn once, then deliver the queued batch in order
+       warn and remove an expired candidate
+```
+
+An open approval alone does not get a resume candidate. A completed reply
+without accepted queued input does not get one. A turn that finishes during
+drain can get a candidate only for accepted queued input. A tool
+with an uncertain external effect does not get an automatic replay request.
+If channel delivery fails after turn completion, the current delivery path
+owns that failure; the agent does not repeat the model turn for that reason.
+
+### Baseline Evidence And Limits
+
+| September 17 observation | Evidence | Limit |
+|---|---|---|
+| Four active sessions entered drain at 13:30:10 UTC. Two acknowledged. Two reached the 190-second deadline at 13:33:20 UTC. | Local daemon log, lines 61920 and 61993; [SessionDrainHelper](src/Netclaw.Daemon/Services/SessionDrainHelper.cs) and [DaemonConfig](src/Netclaw.Configuration/DaemonConfig.cs). | The log links the two sessions to approval prompts, but it does not prove every actor-local field at stop time. |
+| Post-drain teardown took about 16 seconds. Browser MCP disposal took about 10 seconds within that interval. | Local daemon log, lines 62029-62038; local user-systemd journal. | Open PR #1681 proposes a related teardown change. Its effect needs a fresh process trace. |
+| The old service stopped at 13:33:36 UTC. The next service started at 13:34:02 UTC. | Local user-systemd journal. | The 26-second gap has no assigned cause. |
+| The listener appeared at 13:34:10.994 UTC, about 8.2 seconds after service start. | Local daemon log, line 62169. | One boot does not establish a stable performance result. |
+| Four sequential MCP connections occupied about 4.2 seconds. | Local daemon log, lines 62071-62084; [McpClientManager.StartAsync](src/Netclaw.Daemon/Mcp/McpClientManager.cs). | Parallel work can remove about 2.1 seconds gross on this host. Net savings remain unmeasured. |
+
+Within that boot, process setup and model probes took about 1.5 seconds.
+SQLite migration and memory work took about 1.4 seconds. MCP took about
+4.2 seconds. Final services took about 1.1 seconds. These phase bounds come
+from one log trace.
+
+The daemon sets a restart flag and passivates a `Ready` session.
+A `Processing` session waits for its turn to finish. The passivation ack occurs
+when the actor stops. The hard-stop drain limit is 200 seconds minus a
+10-second safety margin. Config-driven restarts use a 20-second drain limit.
+See [LlmSessionActor.RequestRestartDrain](src/Netclaw.Actors/Sessions/LlmSessionActor.cs),
+[SessionDrainHelper](src/Netclaw.Daemon/Services/SessionDrainHelper.cs), and
+[DaemonConfig](src/Netclaw.Configuration/DaemonConfig.cs).
+
+The [session journal](src/Netclaw.Actors/Sessions/SessionProtocol.Events.cs)
+records `TurnRecorded` after a completed reply. It records
+`ToolBatchStarted` before tool execution and individual `ToolCallRecorded`
+events after results. A model-only turn has no durable turn-start event.
+`ContinueIncomingUserMessage` puts a new request in actor memory, then sends
+an ack before the first model call. It does not journal that admission.
+The `Processing` and `Compacting` paths ack buffered input without a journal
+write. `MessageSource` is ephemeral and contains runtime-only references.
+`SaveSnapshotIfSafe` starts an asynchronous snapshot at passivation. The
+passivation ack does not wait for `SaveSnapshotSuccess`.
+The actor currently drops accepted buffered messages when a restart drain
+finishes. No proposed short deadline may hide that loss.
+
+[RestartRecoveryService](src/Netclaw.Daemon/Services/RestartRecoveryService.cs)
+uses a manifest only for config-triggered restarts.
+It warms the listed sessions and gives them a notice on the next user turn.
+It does not start a new turn. A normal stop writes no manifest.
+`CurrentSession` reminders enter through a gateway as new automation turns.
+A new turn abandons an open approval after cold recovery.
+The reminder manager rejects `ExpiresAt` on a one-shot reminder. Its current
+recovery path can retain a past one-shot reminder. The restart manifest can
+hold the resume deadline without a new reminder definition.
+
+This proposal uses inspected code and one local runtime trace. No new tests,
+process restarts, or performance comparisons ran for this plan.
+The active agent on this system remains untouched.
+If an approval-only actor cannot reproduce the long wait, revise PR 1 before
+implementation. The available log does not prove that actor-local state.
+
+### Ownership And Risk Boundaries
+
+| Decision or data | Owner and lifetime | Required boundary |
+|---|---|---|
+| Current phase, accepted buffer, active model call, and tool task | `LlmSessionActor`, actor-local | Classify the state at actual interruption, not at drain request. |
+| Each accepted input, media, ID, order, trust, and delivery context | Session journal, durable | Persist before input ack. Mark consumption durably. Restore the active turn and ordered batch. |
+| Open approvals and recorded tool results | Session journal, durable | Keep an approval usable after cold recovery. Do not replay an uncertain tool effect. |
+| Stop time, eligible session IDs, and resume deadline | Session drain and existing manifest, durable | A confirmed canceled model call or accepted queue creates a candidate. An old candidate cannot start work. |
+| Resume request and completion | Recovery service and session actor | Use the original turn ID. Reject a completed or superseded turn. |
+| Original audience, boundary, and principal | Admitted turn in the session journal | A restart cannot expand the original turn's authority. |
+| MCP catalog at readiness | MCP manager and shared registries | Publish the complete enabled catalog before the listener reports readiness. |
+
+The [reminder manager](src/Netclaw.Actors/Reminders/ReminderManagerActor.cs)
+writes a schedule and a JSON definition in separate steps.
+A process stop between those steps can leave an incomplete pair. One-shot
+reminders reject the general `ExpiresAt` field. The original-turn contract
+does not need a new reminder definition. The existing manifest can carry the
+resume candidate until the recovery service reaches gateway readiness.
+An explicit readiness signal must replace a fixed delay.
+
+### Representative Success And Failure Cases
+
+- A config restart meets a session with only durable approval waits. The
+  session stops after tool-pipeline quiescence. The original user clicks the
+  approval after restart. The original turn executes the tool once.
+- A model call finishes its reply during drain with no accepted queue.
+  The session stops, and the user receives the reply. Netclaw creates no resume candidate.
+- A pod stop cancels a model call before tool execution. A new pod starts on
+  the same state volume within ten minutes. Netclaw restores the original
+  request and authority. The agent continues without a repeated user prompt.
+- A user sends another message while the actor handles the first request.
+  Netclaw persists both before their acks. After a short stop, it resumes
+  the first turn and delivers the queued batch once, in order.
+- A model reply completes before stop, but one accepted message remains
+  queued. Netclaw resumes the queued message after a short stop. It does
+  not repeat the completed reply.
+- A normal stop lasts several hours. The next start leaves old sessions
+  quiet. Netclaw logs and removes each expired candidate.
+- A manual stop/start completes within ten minutes. Netclaw can wake only a
+  confirmed canceled model turn or an accepted queue. A completed turn with
+  no accepted queue stays quiet.
+- An older journal has no admitted-turn record for a canceled model call.
+  Netclaw reports the recovery failure and does not invent the lost request.
+- A resume candidate expires while accepted input remains queued. Netclaw
+  leaves the input durable and reports the blocked queue. It does not start
+  old work or discard that input without an explicit recovery decision.
+- A tool has an effect but no durable result. Netclaw does not ask the agent
+  to repeat it. An operator alert names the uncertain session and call.
+- A Public session creates an eligible wakeup. The resumed turn keeps its
+  Public audience and original tool grants.
+
+### Delivery
+
+After review approval, each PR starts from current upstream `dev` in a clean
+worktree. Compare that revision with the pinned baseline and relevant open PRs.
+
+**PR 1: Stop approval-only sessions without the 190-second wait.**
+Change the session actor and tool pipeline at their cancellation boundary.
+Require a durable approval for each unfinished call. Require recorded results
+for completed siblings. Exclude deferred approval responses and accepted
+buffered input. Wait for a terminal tool-pipeline signal before passivation.
+Keep the current drain deadline for all other states. This PR creates no
+reminders and changes no config property.
+
+Use `LlmSessionIntegrationTests` with a fake model, a real actor journal, and
+controlled task gates. First reproduce an approval-only drain with no ack on
+the baseline. Then require an ack after the pipeline stops. Cold-recover the
+session, approve once, and require one tool execution under the original
+trust context. Hold a sibling tool active and require no early ack. Repeat
+with a non-durable subagent approval, a resolved approval without a result,
+and accepted buffered input. Keep the current `SessionDrainHelper` timeout
+test as the fallback proof. Use actor signals; do not use sleeps.
+
+The first PR must update the session-resume OpenSpec contract through an
+OpenSpec skill, `SPEC-011`, and the `netclaw-operations` system skill.
+The approval recovery tests need an independent review of the negative cases.
+The system-skill change requires the behavioral eval suite.
+After this PR, approval waits can stop quickly. Active model calls and other
+tool states still use the current bounded drain. Revert removes the fast
+path without a journal migration.
+
+**PR 2: Connect MCP servers concurrently before readiness.**
+This PR can start independently of PR 1. Connect each enabled server through
+its current per-server gate. Keep shared registry publication safe and
+complete before readiness. A controlled fake runtime must hold two server
+connections and prove that both start before either finishes. It must prove
+that all tools appear after startup and failures stay isolated by server.
+Compare repeated daemon boot traces with the same MCP configuration.
+Do not claim a net gain from the 2.1-second gross estimate.
+Keep the complete catalog as the readiness condition between PR merges.
+Update `SPEC-011` and the `netclaw-operations` system skill. Run the
+behavioral eval suite because the system skill changes.
+
+**PR 3: Persist accepted input and resume confirmed interruptions.**
+The stop policy includes any graceful stop. Add a durable admission event for
+each accepted input, including input that arrives during a model call or
+compaction. Record stable input IDs, order, content, media, and original
+authority and delivery context. Reuse `TurnContextRecord` where it fits.
+Persist each event before its input ack. A failed write rejects admission.
+Record input consumption or completion in the journal so recovery cannot
+process an accepted message twice. Deduplicate a source retry after the
+journal write if its ack was lost. Recover the active turn and queued batch.
+Preserve one follow-up model call for messages that arrived between model turns.
+
+The actor must report an actual canceled model call, not a `Processing` phase
+at drain start. Model-turn resume must exclude approval waits, any prior tool
+batch in that turn, completed replies, and newer started user turns. Accepted
+queued messages remain eligible for ordered delivery after safe recovery.
+An unresolved approval blocks queued input until the original turn can continue.
+An uncertain tool effect also blocks queued input. Report either block to the operator.
+Give a model call a short completion grace. If that grace ends, cancel the call and wait
+for its task to stop. Keep the current global deadline as a fallback until
+the safe cancellation path has process proof. Track partial user-visible
+text. The proposed first slice skips automatic resume for that case and
+reports a diagnostic; review this user-facing limit before PR 3.
+
+Use one absolute resume deadline from the interruption time. Reuse the
+current manifest for candidates from config restarts and normal graceful
+stops. The daemon writes a candidate only after the actor confirms durable
+admission and either model cancellation or accepted queued input. The recovery
+service waits for gateway readiness, then sends a resume request to the actor.
+The actor checks the deadline, completion state, and input IDs before work.
+It uses recorded authority and sends no new user message. It resumes the
+active turn first, then delivers the accepted batch once in order. Log one warning
+and remove an expired candidate. Keep its accepted input in the journal and
+report a blocked queue. Do not extend the deadline after a restart.
+This policy needs no new `netclaw daemon restart` command or pod hook.
+Emit an operator alert for an uncertain tool result without an auto-resume.
+If a transport lacks a live output sink, exclude it with an explicit
+diagnostic until that transport has a safe delivery contract.
+
+Actor tests must prove each input ack follows its journal write. They must
+prove a source retry after a lost ack creates one accepted message. Cold recovery
+must restore the original request and accepted queue, with their media, order,
+IDs, and authority. It must process the queue once after an interrupted first
+model call or a completed reply. The resumed call must not ask the user for
+the request. Disable or fail snapshots in one test to prove journal recovery.
+Test completion versus cancellation, a later user turn, low-trust
+authority, a prior tool batch, and uncertain tool effects. Test a partial
+reply, an accepted buffer during compaction, and both sides of the deadline
+with fake time. A process restart with a disposable persistent `NETCLAW_HOME`
+must prove the original-turn path.
+A second process check must leave a normal stop quiet after a long gap.
+A container process check must prove the entrypoint forwards the stop signal
+and retains the candidate on its state volume. Update PRD-001 and PRD-008
+if the approved behavior extends their current requirements. Use OpenSpec
+skills for session resume and the stale `daemon-container` contract. Update
+the `netclaw-operations` skill and its eval cases.
+After expiry or completion, remove the candidate. A rollback must cancel
+unconsumed candidates without removal of user reminders.
+
+**PR 4: Reduce the global stop budget if evidence permits.**
+This PR depends on safe treatment of accepted buffers and canceled model
+calls. Compare full stop-to-listener traces on the same disposable home.
+Prove no lost accepted message, duplicate tool action, or false resume.
+Only then choose a shorter budget and update systemd and CLI limits together.
+If post-drain MCP teardown remains material, review open PR
+[#1681](https://github.com/netclaw-dev/netclaw/pull/1681) before a new fix.
+Keep the unexplained 26-second service gap as a separate investigation.
+
+At this review date, open PR [#1893](https://github.com/netclaw-dev/netclaw/pull/1893)
+addresses a model timeout inside one process. Open PR
+[#1987](https://github.com/netclaw-dev/netclaw/pull/1987) addresses busy
+`CurrentSession` reminders. Neither PR supplies this restart contract.
+Recheck both heads before dependent work starts.
+
+**Smaller alternative:** Deliver PR 1 and PR 2 only. This path addresses the
+observed approval timeout and part of the eight-second boot. It leaves a
+long active model call on the current deadline. It adds no automatic resume.
+
+Before any rollout, a separate verifier must review actor race tests,
+journal recovery, and the process check. A successful local test or merge
+does not authorize a restart of the active daemon on this system.
 
 ## NOW
 
