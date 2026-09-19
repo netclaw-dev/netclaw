@@ -277,7 +277,9 @@ internal static class PluginCommand
             return updateAll ? 0 : 1;
         }
 
-        var sync = await api.SyncSkillsAsync(cancellationToken, retryRejected);
+        var sync = updateAll
+            ? await api.SyncPluginsAsync(cancellationToken, retryRejected)
+            : await api.SyncPluginAsync(targets[0].SourceId, cancellationToken, retryRejected);
         if (sync?.Sources is null || sync.Inventory.Succeeded != true)
         {
             output.WriteLine("Plugin update failed: the shared skill sync did not complete.");
@@ -334,7 +336,7 @@ internal static class PluginCommand
         if (!await WaitForRestartAsync(api, timeProvider, response.RestartGeneration, output, cancellationToken))
             return 1;
 
-        var sync = await api.SyncSkillsAsync(cancellationToken);
+        var sync = await api.SyncPluginAsync(name, cancellationToken, retryRejected: false);
         if (sync?.Inventory.Succeeded != true)
         {
             output.WriteLine($"Plugin '{name}' was removed, but the skill inventory refresh failed.");
@@ -379,7 +381,7 @@ internal static class PluginCommand
         TextWriter output,
         CancellationToken cancellationToken)
     {
-        var sync = await api.SyncSkillsAsync(cancellationToken);
+        var sync = await api.SyncPluginAsync(name, cancellationToken, retryRejected: false);
         var source = sync?.Sources.FirstOrDefault(
             item => item.SourceKind == SkillSyncResult.GitPluginSourceKind
                 && string.Equals(item.Name, name, StringComparison.OrdinalIgnoreCase));

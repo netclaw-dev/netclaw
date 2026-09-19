@@ -252,7 +252,7 @@ public sealed class SkillCommandTests : IDisposable
             [
                 "POST /api/plugins",
                 "GET /api/health/ready",
-                "POST /api/skills/sync",
+                "POST /api/skills/sync?pluginId=fixture",
                 "GET /api/plugins",
             ],
             requests);
@@ -339,7 +339,7 @@ public sealed class SkillCommandTests : IDisposable
             [
                 "PATCH /api/plugins/fixture",
                 "GET /api/plugins",
-                "POST /api/skills/sync",
+                "POST /api/skills/sync?pluginId=fixture",
                 "GET /api/plugins",
             ],
             requests);
@@ -402,7 +402,7 @@ public sealed class SkillCommandTests : IDisposable
                 "PATCH /api/plugins/fixture",
                 "GET /api/plugins",
                 "GET /api/health/ready",
-                "POST /api/skills/sync",
+                "POST /api/skills/sync?pluginId=fixture",
                 "GET /api/plugins",
             ],
             requests);
@@ -578,7 +578,7 @@ public sealed class SkillCommandTests : IDisposable
     }
 
     [Fact]
-    public async Task Plugin_update_uses_the_shared_sync_and_reports_one_source()
+    public async Task Plugin_update_uses_a_named_sync_and_reports_one_source()
     {
         var requests = new List<string>();
         var daemonApi = CreateDaemonApi(request =>
@@ -624,10 +624,52 @@ public sealed class SkillCommandTests : IDisposable
 
         Assert.Equal(0, exit);
         Assert.Equal(
-            ["GET /api/plugins", "POST /api/skills/sync?retryRejected=true"],
+            ["GET /api/plugins", "POST /api/skills/sync?pluginId=fixture&retryRejected=true"],
             requests);
         Assert.Contains("fixture: changed=1", _output.ToString());
         Assert.Contains("unsupported MCP", _output.ToString());
+    }
+
+    [Fact]
+    public async Task Plugin_update_all_requests_a_plugin_only_pass()
+    {
+        var requests = new List<string>();
+        var daemonApi = CreateDaemonApi(request =>
+        {
+            requests.Add($"{request.Method} {request.RequestUri!.PathAndQuery}");
+            if (request.Method == HttpMethod.Get)
+            {
+                return FakeHttpMessageHandler.JsonResponse(new
+                {
+                    plugins = new[] { Plugin(ManagedPluginApi.PluginStatus.Installed, PluginCommit) },
+                });
+            }
+
+            return FakeHttpMessageHandler.JsonResponse(new
+            {
+                passId = "all-pass",
+                sources = new[]
+                {
+                    new
+                    {
+                        name = "fixture", sourceKind = SkillSyncResult.GitPluginSourceKind,
+                        changedCount = 0, unchangedCount = 1, rejectedCount = 0, failedCount = 0,
+                        sidecar = "not-applicable",
+                    },
+                },
+                inventory = new { succeeded = true, acceptedCount = 1, rejectedCount = 0 },
+            });
+        });
+
+        var exit = await PluginCommand.RunAsync(
+            ["plugin", "update", "--all", "--yes"],
+            daemonApi,
+            TimeProvider.System,
+            TextReader.Null,
+            _output);
+
+        Assert.Equal(0, exit);
+        Assert.Equal(["GET /api/plugins", "POST /api/skills/sync?pluginsOnly=true"], requests);
     }
 
     [Fact]

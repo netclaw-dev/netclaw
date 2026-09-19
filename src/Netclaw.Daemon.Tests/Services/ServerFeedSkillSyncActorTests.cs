@@ -8,6 +8,7 @@ using Microsoft.Extensions.Logging;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Feeds;
 using Netclaw.Daemon.Services;
+using Netclaw.Tests.Utilities;
 using Xunit;
 
 namespace Netclaw.Daemon.Tests.Services;
@@ -15,6 +16,7 @@ namespace Netclaw.Daemon.Tests.Services;
 public sealed class ServerFeedSkillSyncActorTests : IDisposable
 {
     private readonly ActorSystem _system = ActorSystem.Create($"skill-sync-tests-{Guid.NewGuid():N}");
+    private readonly DisposableTempDir _temp = new();
 
     [Fact]
     public async Task Concurrent_requests_join_the_startup_pass()
@@ -105,18 +107,140 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
         Assert.NotNull(await retry);
     }
 
+    [Fact]
+    public async Task Named_plugin_request_waits_for_complete_pass_and_gets_its_own_result()
+    {
+        var runner = new SequencedRunner();
+        var actor = CreateActor(runner, Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerFeedSkillSyncActor>.Instance);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await runner.FirstStarted.Task.WaitAsync(cancellationToken);
+
+        var named = actor.Ask<SkillSyncResult.Response>(
+            ServerFeedSkillSyncActor.Run.ForPlugin("team-tools", retryRejected: false), cancellationToken);
+        runner.ReleaseFirst.TrySetResult();
+        await runner.SecondStarted.Task.WaitAsync(cancellationToken);
+
+        Assert.Equal(ServerFeedSkillSyncActor.SyncScope.Complete, runner.Requests[0].Scope);
+        Assert.Equal(ServerFeedSkillSyncActor.SyncScope.Plugin, runner.Requests[1].Scope);
+        Assert.Equal("team-tools", runner.Requests[1].PluginId);
+        runner.ReleaseSecond.TrySetResult();
+        Assert.Equal("2", (await named).PassId);
+    }
+
+    [Fact]
+    public async Task Equal_named_requests_share_one_queued_pass()
+    {
+        var runner = new SequencedRunner();
+        var actor = CreateActor(runner, Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerFeedSkillSyncActor>.Instance);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await runner.FirstStarted.Task.WaitAsync(cancellationToken);
+
+        var request = ServerFeedSkillSyncActor.Run.ForPlugin("team-tools", retryRejected: false);
+        var first = actor.Ask<SkillSyncResult.Response>(request, cancellationToken);
+        var second = actor.Ask<SkillSyncResult.Response>(request, cancellationToken);
+        runner.ReleaseFirst.TrySetResult();
+        await runner.SecondStarted.Task.WaitAsync(cancellationToken);
+        runner.ReleaseSecond.TrySetResult();
+
+        var results = await Task.WhenAll(first, second);
+        Assert.Equal("2", results[0].PassId);
+        Assert.Equal(results[0].PassId, results[1].PassId);
+        Assert.Equal(2, runner.Requests.Count);
+    }
+
+    [Fact]
+    public async Task Distinct_queued_scopes_have_a_fixed_limit()
+    {
+        var runner = new ControlledRunner();
+        var logger = new QueueSignalLogger(44);
+        var actor = CreateActor(runner, logger);
+        var cancellationToken = TestContext.Current.CancellationToken;
+        await runner.Started.Task.WaitAsync(cancellationToken);
+
+        var queued = Enumerable.Range(0, 44)
+            .Select(index => actor.Ask<SkillSyncResult.Response>(
+                ServerFeedSkillSyncActor.Run.ForPlugin($"source-{index}", retryRejected: false),
+                cancellationToken))
+            .ToArray();
+        await logger.TargetReached.Task.WaitAsync(cancellationToken);
+        var overflow = actor.Ask<SkillSyncResult.Response>(
+            ServerFeedSkillSyncActor.Run.ForPlugin("overflow", retryRejected: false),
+            cancellationToken);
+
+        await Assert.ThrowsAsync<ServerFeedSkillSyncActor.SyncQueueFullException>(() => overflow);
+        actor.Tell(PoisonPill.Instance);
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => Task.WhenAll(queued));
+    }
+
+    [Fact]
+    public async Task Plugin_config_restart_starts_a_named_pass()
+    {
+        var paths = new NetclawPaths(_temp.Path);
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.NetclawConfigPath)!);
+        File.WriteAllText(paths.NetclawConfigPath, "{}");
+        var restartSignal = new DaemonRestartSignal();
+        restartSignal.TakePluginStartupScope(paths.NetclawConfigPath);
+        var oldHash = DaemonRestartSignal.HashConfigFile(paths.NetclawConfigPath);
+        File.WriteAllText(paths.NetclawConfigPath, "{\"SkillFeeds\":{}}");
+        restartSignal.RecordPluginConfigChange(
+            "team-tools",
+            oldHash,
+            DaemonRestartSignal.HashConfigFile(paths.NetclawConfigPath)!);
+
+        var runner = new SequencedRunner();
+        CreateActor(runner, Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerFeedSkillSyncActor>.Instance, restartSignal);
+        await runner.FirstStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ServerFeedSkillSyncActor.SyncScope.Plugin, runner.Requests[0].Scope);
+        Assert.Equal("team-tools", runner.Requests[0].PluginId);
+        runner.ReleaseFirst.TrySetResult();
+    }
+
+    [Fact]
+    public async Task Unrelated_config_change_restores_the_complete_startup_pass()
+    {
+        var paths = new NetclawPaths(_temp.Path);
+        Directory.CreateDirectory(Path.GetDirectoryName(paths.NetclawConfigPath)!);
+        File.WriteAllText(paths.NetclawConfigPath, "{}");
+        var restartSignal = new DaemonRestartSignal();
+        restartSignal.TakePluginStartupScope(paths.NetclawConfigPath);
+        var oldHash = DaemonRestartSignal.HashConfigFile(paths.NetclawConfigPath);
+        File.WriteAllText(paths.NetclawConfigPath, "{\"SkillFeeds\":{}}");
+        restartSignal.RecordPluginConfigChange(
+            "team-tools",
+            oldHash,
+            DaemonRestartSignal.HashConfigFile(paths.NetclawConfigPath)!);
+        File.WriteAllText(paths.NetclawConfigPath, "{\"Daemon\":{}}");
+
+        var runner = new SequencedRunner();
+        CreateActor(runner, Microsoft.Extensions.Logging.Abstractions.NullLogger<ServerFeedSkillSyncActor>.Instance, restartSignal);
+        await runner.FirstStarted.Task.WaitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(ServerFeedSkillSyncActor.SyncScope.Complete, runner.Requests[0].Scope);
+        runner.ReleaseFirst.TrySetResult();
+    }
+
     public void Dispose()
     {
         _system.Terminate().GetAwaiter().GetResult();
+        _temp.Dispose();
     }
 
     private IActorRef CreateActor(
         IServerFeedSkillSyncRunner runner,
         ILogger<ServerFeedSkillSyncActor> logger)
+        => CreateActor(runner, logger, new DaemonRestartSignal());
+
+    private IActorRef CreateActor(
+        IServerFeedSkillSyncRunner runner,
+        ILogger<ServerFeedSkillSyncActor> logger,
+        DaemonRestartSignal restartSignal)
     {
         return _system.ActorOf(Props.Create(() => new ServerFeedSkillSyncActor(
             runner,
             new SkillFeedsConfig { SyncIntervalMinutes = 0 },
+            restartSignal,
+            new NetclawPaths(_temp.Path),
             logger)));
     }
 
@@ -133,7 +257,7 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
         public void Release() => _release.TrySetResult();
 
         public async Task<SkillSyncResult.Response> SyncAsync(
-            bool retryRejected,
+            ServerFeedSkillSyncActor.Run request,
             CancellationToken cancellationToken)
         {
             LifetimeToken = cancellationToken;
@@ -161,7 +285,7 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
     private sealed class SequencedRunner : IServerFeedSkillSyncRunner
     {
         private readonly object _gate = new();
-        private readonly List<bool> _retryModes = [];
+        private readonly List<ServerFeedSkillSyncActor.Run> _requests = [];
         private int _passCount;
 
         public TaskCompletionSource FirstStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -174,16 +298,25 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
             get
             {
                 lock (_gate)
-                    return _retryModes.ToArray();
+                    return _requests.Select(static request => request.RetryRejected).ToArray();
+            }
+        }
+
+        public IReadOnlyList<ServerFeedSkillSyncActor.Run> Requests
+        {
+            get
+            {
+                lock (_gate)
+                    return _requests.ToArray();
             }
         }
 
         public async Task<SkillSyncResult.Response> SyncAsync(
-            bool retryRejected,
+            ServerFeedSkillSyncActor.Run request,
             CancellationToken cancellationToken)
         {
             lock (_gate)
-                _retryModes.Add(retryRejected);
+                _requests.Add(request);
             var pass = Interlocked.Increment(ref _passCount);
             if (pass == 1)
             {
@@ -223,6 +356,31 @@ public sealed class ServerFeedSkillSyncActorTests : IDisposable
             Func<TState, Exception?, string> formatter)
         {
             if (formatter(state, exception) == "Joined the active external skill sync pass."
+                && Interlocked.Increment(ref _count) == targetCount)
+            {
+                TargetReached.TrySetResult();
+            }
+        }
+    }
+
+    private sealed class QueueSignalLogger(int targetCount) : ILogger<ServerFeedSkillSyncActor>
+    {
+        private int _count;
+
+        public TaskCompletionSource TargetReached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (formatter(state, exception) == "Queued one external skill sync pass after the active pass."
                 && Interlocked.Increment(ref _count) == targetCount)
             {
                 TargetReached.TrySetResult();

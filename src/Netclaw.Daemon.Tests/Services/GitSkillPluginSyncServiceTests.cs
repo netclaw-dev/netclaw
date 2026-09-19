@@ -534,6 +534,103 @@ public sealed class GitSkillPluginSyncServiceTests : IDisposable
         Assert.NotNull(registry.GetByName("healthy-skill"));
     }
 
+    [Fact]
+    public async Task Named_plugin_sync_skips_other_plugins_and_skill_servers()
+    {
+        var skipped = Source();
+        skipped.Id = "skipped";
+        var selected = Source();
+        selected.Id = "selected";
+        var store = await CreateStoreAsync();
+        var acquirer = new TwoPluginAcquirer(_paths, skipped, selected);
+        var service = new ServerFeedSkillSyncService(
+            new SkillFeedsConfig
+            {
+                Plugins = [skipped, selected],
+                Feeds = [new SkillFeedSource { Name = "private-feed", Url = "https://127.0.0.1:1" }],
+            },
+            _paths,
+            CreateRefresher(new SkillRegistry(), static () => { }),
+            _time,
+            new NoOpSkillContentScanner(),
+            NullLogger<ServerFeedSkillSyncService>.Instance,
+            store,
+            acquirer,
+            new RecordingSink());
+
+        var result = await service.SyncAsync(
+            ServerFeedSkillSyncActor.Run.ForPlugin("selected", retryRejected: false),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal("selected", Assert.Single(result.Sources).Name);
+        Assert.Equal(1, acquirer.ResolveCount);
+    }
+
+    [Fact]
+    public async Task Plugin_only_sync_skips_skill_servers_but_checks_each_plugin()
+    {
+        var failed = Source();
+        failed.Id = "failed";
+        var healthy = Source();
+        healthy.Id = "healthy";
+        var store = await CreateStoreAsync();
+        var acquirer = new TwoPluginAcquirer(_paths, failed, healthy);
+        var service = new ServerFeedSkillSyncService(
+            new SkillFeedsConfig
+            {
+                Plugins = [failed, healthy],
+                Feeds = [new SkillFeedSource { Name = "private-feed", Url = "https://127.0.0.1:1" }],
+            },
+            _paths,
+            CreateRefresher(new SkillRegistry(), static () => { }),
+            _time,
+            new NoOpSkillContentScanner(),
+            NullLogger<ServerFeedSkillSyncService>.Instance,
+            store,
+            acquirer,
+            new RecordingSink());
+
+        var result = await service.SyncAsync(
+            ServerFeedSkillSyncActor.Run.ForPlugins(retryRejected: false),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(["failed", "healthy"], result.Sources.Select(static row => row.Name));
+        Assert.Equal(2, acquirer.ResolveCount);
+    }
+
+    [Fact]
+    public async Task Removed_plugin_scope_prunes_receipt_without_other_remote_work()
+    {
+        var removed = Source();
+        var store = await CreateStoreAsync();
+        await store.SaveReceiptAsync(
+            removed,
+            ReceiptCandidate(FirstCommit, "1.0.0"),
+            TestContext.Current.CancellationToken);
+        var other = Source();
+        other.Id = "other";
+        var acquirer = new FakeAcquirer(_paths, other, SecondCommit, "2.0.0", "other-skill");
+        var service = new ServerFeedSkillSyncService(
+            new SkillFeedsConfig { Plugins = [other] },
+            _paths,
+            CreateRefresher(new SkillRegistry(), static () => { }),
+            _time,
+            new NoOpSkillContentScanner(),
+            NullLogger<ServerFeedSkillSyncService>.Instance,
+            store,
+            acquirer,
+            new RecordingSink());
+
+        var result = await service.SyncAsync(
+            ServerFeedSkillSyncActor.Run.ForPlugin(removed.Id, retryRejected: false),
+            TestContext.Current.CancellationToken);
+
+        Assert.Empty(result.Sources);
+        Assert.True(result.Inventory.Succeeded);
+        Assert.Null(await store.GetReceiptAsync(removed.Id, TestContext.Current.CancellationToken));
+        Assert.Equal(0, acquirer.ResolveCount);
+    }
+
     private async Task<ManagedPluginStateStore> CreateStoreAsync()
     {
         await new SchemaMigrator(_paths, NullLogger<SchemaMigrator>.Instance)
@@ -688,6 +785,8 @@ public sealed class GitSkillPluginSyncServiceTests : IDisposable
     private sealed class TwoPluginAcquirer(NetclawPaths paths, ManagedPluginSource failed, ManagedPluginSource healthy)
         : IGitSkillPluginAcquirer
     {
+        public int ResolveCount { get; private set; }
+
         public Task<string> ResolveDefaultBranchAsync(
             string repository,
             CancellationToken cancellationToken)
@@ -697,7 +796,10 @@ public sealed class GitSkillPluginSyncServiceTests : IDisposable
             => AcquireAsync(source, source.Id == failed.Id ? FirstCommit : SecondCommit, cancellationToken);
 
         public Task<string> ResolveCommitAsync(ManagedPluginSource source, CancellationToken cancellationToken)
-            => Task.FromResult(source.Id == failed.Id ? FirstCommit : SecondCommit);
+        {
+            ResolveCount++;
+            return Task.FromResult(source.Id == failed.Id ? FirstCommit : SecondCommit);
+        }
 
         public Task<ManagedPluginCandidate> AcquireAsync(
             ManagedPluginSource source,

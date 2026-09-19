@@ -218,10 +218,32 @@ public sealed class DaemonApi
     public async Task<SkillSyncResult.Response?> SyncSkillsAsync(
         CancellationToken ct = default,
         bool retryRejected = false)
+        => await SyncExternalSourcesAsync(
+            retryRejected ? "?retryRejected=true" : string.Empty,
+            ct);
+
+    public Task<SkillSyncResult.Response?> SyncPluginsAsync(
+        CancellationToken ct,
+        bool retryRejected)
+        => SyncExternalSourcesAsync(
+            retryRejected ? "?pluginsOnly=true&retryRejected=true" : "?pluginsOnly=true",
+            ct);
+
+    public Task<SkillSyncResult.Response?> SyncPluginAsync(
+        string sourceId,
+        CancellationToken ct,
+        bool retryRejected)
+        => SyncExternalSourcesAsync(
+            $"?pluginId={Uri.EscapeDataString(sourceId)}"
+            + (retryRejected ? "&retryRejected=true" : string.Empty),
+            ct);
+
+    private async Task<SkillSyncResult.Response?> SyncExternalSourcesAsync(
+        string suffix,
+        CancellationToken ct)
     {
         var client = CreateHttpClient();
         client.Timeout = Timeout.InfiniteTimeSpan;
-        var suffix = retryRejected ? "?retryRejected=true" : string.Empty;
         using var request = new HttpRequestMessage(
             HttpMethod.Post,
             $"{_endpoint}/api/skills/sync{suffix}");

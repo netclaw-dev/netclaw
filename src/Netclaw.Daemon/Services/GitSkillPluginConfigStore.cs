@@ -67,7 +67,7 @@ internal sealed class GitSkillPluginConfigStore(
             }
 
             plugins.Add(source);
-            return WritePlugins(root, plugins);
+            return WritePlugins(root, plugins, source.Id);
         }
     }
 
@@ -90,7 +90,7 @@ internal sealed class GitSkillPluginConfigStore(
                 return new GitSkillPluginConfigMutation(false, restartSignal.Generation);
 
             source.Enabled = enabled;
-            return new GitSkillPluginConfigMutation(true, WritePlugins(root, plugins));
+            return new GitSkillPluginConfigMutation(true, WritePlugins(root, plugins, source.Id));
         }
     }
 
@@ -109,7 +109,7 @@ internal sealed class GitSkillPluginConfigStore(
                     $"Plugin '{name}' was not found.");
             }
 
-            return new GitSkillPluginConfigMutation(true, WritePlugins(root, plugins));
+            return new GitSkillPluginConfigMutation(true, WritePlugins(root, plugins, name));
         }
     }
 
@@ -173,7 +173,7 @@ internal sealed class GitSkillPluginConfigStore(
         }
     }
 
-    private int WritePlugins(JsonObject root, List<ManagedPluginSource> plugins)
+    private int WritePlugins(JsonObject root, List<ManagedPluginSource> plugins, string sourceId)
     {
         if (!ManagedPluginSourceValidator.TryValidateSources(plugins, out var error))
         {
@@ -197,7 +197,13 @@ internal sealed class GitSkillPluginConfigStore(
         try
         {
             var generation = restartSignal.Generation;
-            AtomicFile.WriteAllText(paths.NetclawConfigPath, root.ToJsonString(ConfigOptions));
+            var previousHash = DaemonRestartSignal.HashConfigFile(paths.NetclawConfigPath);
+            var content = root.ToJsonString(ConfigOptions);
+            AtomicFile.WriteAllText(paths.NetclawConfigPath, content);
+            restartSignal.RecordPluginConfigChange(
+                sourceId,
+                previousHash,
+                DaemonRestartSignal.HashConfigText(content));
             return generation;
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)

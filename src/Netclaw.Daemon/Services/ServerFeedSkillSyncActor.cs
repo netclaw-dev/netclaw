@@ -17,30 +17,36 @@ internal sealed class ServerFeedSkillSyncActorKey;
 internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
 {
     private const string PeriodicTimerKey = "server-feed-skill-sync";
+    private const int MaximumQueuedPasses = 2 * ManagedPluginSourceValidator.MaximumSourceCount + 4;
     private static readonly TimeSpan MaximumInitialJitter = TimeSpan.FromMinutes(5);
 
     private readonly IServerFeedSkillSyncRunner _runner;
     private readonly ILogger<ServerFeedSkillSyncActor> _logger;
+    private readonly DaemonRestartSignal _restartSignal;
+    private readonly NetclawPaths _paths;
     private readonly TimeSpan _interval;
     private readonly TimeSpan _initialJitter;
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly List<IActorRef> _activeWaiters = [];
-    private readonly List<IActorRef> _queuedRetryWaiters = [];
-    private bool _passActive;
-    private bool _activePassRetriesRejected;
+    private readonly Queue<PendingPass> _queuedPasses = new();
+    private Run? _activeRequest;
 
     public ServerFeedSkillSyncActor(
         IServerFeedSkillSyncRunner runner,
         SkillFeedsConfig feedsConfig,
+        DaemonRestartSignal restartSignal,
+        NetclawPaths paths,
         ILogger<ServerFeedSkillSyncActor> logger)
     {
         _runner = runner;
         _logger = logger;
+        _restartSignal = restartSignal;
+        _paths = paths;
         _interval = TimeSpan.FromMinutes(feedsConfig.SyncIntervalMinutes);
         _initialJitter = CreateInitialJitter();
 
         Receive<Run>(request => HandleRequest(request, Sender));
-        Receive<ScheduledRun>(_ => HandleScheduledRun());
+        Receive<ScheduledRun>(scheduled => HandleScheduledRun(scheduled.Request));
         Receive<SyncPassCompleted>(completed => CompletePass(completed.Result));
         Receive<SyncPassFailed>(failed => FailPass(failed.Cause));
     }
@@ -50,7 +56,16 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
     protected override void PreStart()
     {
         base.PreStart();
-        Self.Tell(ScheduledRun.Instance);
+        var (pluginIds, invalidScope) = _restartSignal.TakePluginStartupScope(_paths.NetclawConfigPath);
+        if (invalidScope)
+            _logger.LogWarning("Plugin config changed outside the recorded mutation. Startup will sync all sources.");
+        var startupRequest = pluginIds?.Count switch
+        {
+            1 => Run.ForPlugin(pluginIds[0], retryRejected: false),
+            > 1 => Run.ForPlugins(retryRejected: false),
+            _ => Run.Instance,
+        };
+        Self.Tell(new ScheduledRun(startupRequest));
 
         if (_interval <= TimeSpan.Zero)
         {
@@ -74,10 +89,10 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
     {
         var unavailable = new Status.Failure(
             new OperationCanceledException("The daemon stopped the active skill sync pass."));
-        foreach (var waiter in _activeWaiters.Concat(_queuedRetryWaiters))
+        foreach (var waiter in _activeWaiters.Concat(_queuedPasses.SelectMany(static pass => pass.Waiters)))
             waiter.Tell(unavailable);
         _activeWaiters.Clear();
-        _queuedRetryWaiters.Clear();
+        _queuedPasses.Clear();
 
         _lifetimeCancellation.Cancel();
         _lifetimeCancellation.Dispose();
@@ -86,40 +101,52 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
 
     private void HandleRequest(Run request, IActorRef replyTo)
     {
-        if (!_passActive)
+        if (_activeRequest is null)
         {
             _activeWaiters.Add(replyTo);
-            StartPass(request.RetryRejected);
+            StartPass(request);
             return;
         }
 
-        if (!request.RetryRejected || _activePassRetriesRejected)
+        if (_activeRequest == request)
         {
             _activeWaiters.Add(replyTo);
             _logger.LogDebug("Joined the active external skill sync pass.");
             return;
         }
 
-        _queuedRetryWaiters.Add(replyTo);
-        _logger.LogDebug("Queued one external skill retry pass after the active pass.");
+        var queued = _queuedPasses.FirstOrDefault(pass => pass.Request == request);
+        if (queued is null)
+        {
+            if (_queuedPasses.Count >= MaximumQueuedPasses)
+            {
+                replyTo.Tell(new Status.Failure(new SyncQueueFullException()));
+                return;
+            }
+
+            queued = new PendingPass(request);
+            _queuedPasses.Enqueue(queued);
+        }
+
+        queued.Waiters.Add(replyTo);
+        _logger.LogDebug("Queued one external skill sync pass after the active pass.");
     }
 
-    private void HandleScheduledRun()
+    private void HandleScheduledRun(Run request)
     {
-        if (_passActive)
+        if (_activeRequest is not null)
         {
             _logger.LogDebug("Skipped a scheduled external skill sync because a pass is active.");
             return;
         }
 
-        StartPass(retryRejected: false);
+        StartPass(request);
     }
 
-    private void StartPass(bool retryRejected)
+    private void StartPass(Run request)
     {
-        _passActive = true;
-        _activePassRetriesRejected = retryRejected;
-        _runner.SyncAsync(retryRejected, _lifetimeCancellation.Token).PipeTo(
+        _activeRequest = request;
+        _runner.SyncAsync(request, _lifetimeCancellation.Token).PipeTo(
             Self,
             success: result => new SyncPassCompleted(result),
             failure: cause => new SyncPassFailed(cause));
@@ -130,7 +157,7 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
         foreach (var waiter in _activeWaiters)
             waiter.Tell(result);
         _activeWaiters.Clear();
-        StartQueuedRetryOrStop();
+        StartQueuedPassOrStop();
     }
 
     private void FailPass(Exception cause)
@@ -140,39 +167,71 @@ internal sealed class ServerFeedSkillSyncActor : ReceiveActor, IWithTimers
         foreach (var waiter in _activeWaiters)
             waiter.Tell(failure);
         _activeWaiters.Clear();
-        StartQueuedRetryOrStop();
+        StartQueuedPassOrStop();
     }
 
-    private void StartQueuedRetryOrStop()
+    private void StartQueuedPassOrStop()
     {
-        if (_queuedRetryWaiters.Count == 0)
+        if (_queuedPasses.Count == 0)
         {
-            _passActive = false;
-            _activePassRetriesRejected = false;
+            _activeRequest = null;
             return;
         }
 
-        _activeWaiters.AddRange(_queuedRetryWaiters);
-        _queuedRetryWaiters.Clear();
-        StartPass(retryRejected: true);
+        var queued = _queuedPasses.Dequeue();
+        _activeWaiters.AddRange(queued.Waiters);
+        StartPass(queued.Request);
     }
 
     private static TimeSpan CreateInitialJitter()
         => TimeSpan.FromSeconds(Random.Shared.Next(0, (int)MaximumInitialJitter.TotalSeconds));
 
-    internal sealed record Run(bool RetryRejected) : INoSerializationVerificationNeeded
+    internal enum SyncScope
     {
-        public static Run Instance { get; } = new(false);
-        public static Run RetryRejectedCommits { get; } = new(true);
+        Complete,
+        Plugins,
+        Plugin,
     }
 
-    private sealed class ScheduledRun : INoSerializationVerificationNeeded
+    internal sealed class SyncQueueFullException : Exception
     {
-        public static ScheduledRun Instance { get; } = new();
-
-        private ScheduledRun()
+        public SyncQueueFullException()
+            : base("The skill sync queue is full. Retry after the active pass ends.")
         {
         }
+    }
+
+    internal sealed record Run : INoSerializationVerificationNeeded
+    {
+        private Run(SyncScope scope, string? pluginId, bool retryRejected)
+        {
+            Scope = scope;
+            PluginId = pluginId;
+            RetryRejected = retryRejected;
+        }
+
+        public SyncScope Scope { get; }
+        public string? PluginId { get; }
+        public bool RetryRejected { get; }
+
+        public static Run Instance { get; } = new(SyncScope.Complete, null, false);
+        public static Run RetryRejectedCommits { get; } = new(SyncScope.Complete, null, true);
+
+        public static Run ForPlugins(bool retryRejected)
+            => new(SyncScope.Plugins, null, retryRejected);
+
+        public static Run ForPlugin(string pluginId, bool retryRejected)
+            => new(SyncScope.Plugin, pluginId, retryRejected);
+    }
+
+    private sealed record PendingPass(Run Request)
+    {
+        public List<IActorRef> Waiters { get; } = [];
+    }
+
+    private sealed record ScheduledRun(Run Request) : INoSerializationVerificationNeeded
+    {
+        public static ScheduledRun Instance { get; } = new(Run.Instance);
     }
 
     private sealed record SyncPassCompleted(SkillSyncResult.Response Result)
