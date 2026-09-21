@@ -129,58 +129,42 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             timeProvider,
             migrationContext: new ApprovalStoreMigrationContext(approvalShell),
             lockTimeout: TimeSpan.Zero);
-        var approvalActor = CreateApprovalActor(actorSystem, store);
-        var approvalService = CreateApprovalService(approvalActor);
 
         var persistentSeeds = approvals.Seeds
             .Where(seed => seed.Source == ApprovalSeedSource.Persistent)
             .ToList();
-        // Seed all persistent grants in ONE Ask per audience instead of one Ask
-        // per grant. The actor's RecordStructuredToolApproval handler persists a
-        // whole grant list in a single locked, atomic write (ToolApprovalStore.AddApprovals
-        // -> one SaveLocked), so the resulting store state is equivalent to N sequential seed
-        // messages (the only divergence is per-entry CreatedAt stamping under a real clock,
-        // which is unobservable here: fixture tests run on a frozen FakeTimeProvider and no
-        // harness test asserts seed timestamps). It removes N-1 synchronous WriteThrough +
-        // Flush(flushToDisk: true) file
-        // rewrites from the test's critical path: the Ask deadline is a hard 5s wall clock,
-        // and under full-suite parallel load on Windows CI (Defender scanning each new
-        // tool-approvals.json in a fresh %TEMP% tree) per-write latency of the heaviest case
-        // (D10, 5 seeds) occasionally exceeded it. Grouping by audience preserves the
-        // per-seed audience semantics for every harness caller.
+        // Seed persistent grants SYNCHRONOUSLY into the store, before the actor
+        // exists. The actor re-loads the store fresh on each read, so a direct
+        // write is behaviorally identical to routing through the actor's
+        // RecordStructuredToolApproval handler. Critically, this moves the
+        // blocking WriteThrough + Flush(flushToDisk: true) fsync OFF the actor's
+        // 5s Ask deadline: it now runs on this test thread with no wall-clock
+        // budget, so disk latency (Windows CI Defender scanning each new
+        // tool-approvals.json in a fresh %TEMP% tree, full-suite parallel load)
+        // can no longer expire the Ask and surface as an AskTimeoutException on
+        // whichever test's seed lands in the contended window.
         foreach (var audienceGroup in persistentSeeds.GroupBy(seed => seed.Audience))
         {
-            await approvalService.RecordApprovalCandidatesAsync(
-                (ToolApprovalSessionId)"seed/persistent",
+            store.TryAddApprovals(
                 audienceGroup.Key,
-                new ToolName(ShellTool.ToolName),
+                ShellTool.ToolName,
                 audienceGroup
-                    .Select(seed => seed.Directory == ApprovalDirectoryShape.Repository
-                        ? CreateRepositoryGrant(
-                            seed.Pattern,
-                            approvalShell,
-                            scope?.RepositoryGrantWorktree ?? approvalProjectDirectory)
-                        : CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
-                            seed.Directory,
-                            approvalProjectDirectory,
-                            approvalSessionDirectory,
-                            approvalExternalDirectory)))
-                    .ToList(),
-                persistent: true,
-                ct);
+                    .Select(seed => CreatePersistentEntry(
+                        seed.Directory == ApprovalDirectoryShape.Repository
+                            ? CreateRepositoryGrant(
+                                seed.Pattern,
+                                approvalShell,
+                                scope?.RepositoryGrantWorktree ?? approvalProjectDirectory)
+                            : CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
+                                seed.Directory,
+                                approvalProjectDirectory,
+                                approvalSessionDirectory,
+                                approvalExternalDirectory))))
+                    .ToList());
         }
 
-        if (persistentSeeds.Count > 0)
-        {
-            // The stop waits for a persistence flush and the actor teardown.
-            // The budget bounds a multi-hop shutdown under a starved CI
-            // scheduler. It does not measure correctness. Every shell-approval
-            // test goes through this shared harness, so a short budget makes a
-            // whole suite flake at once.
-            await approvalActor.GracefulStop(TimeSpan.FromSeconds(15));
-            approvalActor = CreateApprovalActor(actorSystem, store);
-            approvalService = CreateApprovalService(approvalActor);
-        }
+        var approvalActor = CreateApprovalActor(actorSystem, store);
+        var approvalService = CreateApprovalService(approvalActor);
 
         foreach (var seed in approvals.Seeds.Where(seed => seed.Source == ApprovalSeedSource.Session))
         {
@@ -287,6 +271,35 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             Repository = scope!.CommonDirectory,
             RepositoryWorktree = worktree,
         };
+    }
+
+    // Mirrors ToolApprovalActor.TryCreateEntries for the persistent-shell path.
+    // Replicating this small slice lets the harness seed the store directly in
+    // CreateAsync without routing through the actor's 5s-Ask persistence write
+    // (the Windows CI flake). Only the shell cases the harness seeds are handled;
+    // the actor's non-shell and session-entry branches are not reachable here.
+    private static ApprovalEntry CreatePersistentEntry(ToolApprovalGrant grant)
+    {
+        if (grant.Candidate.Shell is not { } shell ||
+            grant.Candidate.VerbTokens is not { } tokens)
+        {
+            throw new InvalidOperationException("Persistent shell seed lacks shell/verb tokens.");
+        }
+
+        if (grant.Repository is not null)
+        {
+            if (grant.RepositoryWorktree is null
+                || !GitRepositoryApprovalScope.TryResolve(grant.RepositoryWorktree, out var scope)
+                || !ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, grant.Repository)
+                || !scope.Contains(grant.Candidate.Directory, grant.RepositoryWorktree))
+            {
+                throw new InvalidOperationException("Repository grant scope is invalid.");
+            }
+
+            return ApprovalEntry.CreateRepositoryTokenPrefix(shell, tokens, grant.Repository);
+        }
+
+        return ApprovalEntry.CreateTokenPrefix(shell, tokens, grant.Directory);
     }
 
     public async Task<ObservedApproval> EvaluateAsync(CancellationToken ct)
