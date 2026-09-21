@@ -69,21 +69,20 @@ internal static class ApprovalBucketBuilder
         ApprovalGrantContext context)
     {
         var grants = new List<ToolApprovalGrant>(candidates.Count);
-        GitRepositoryApprovalScope? repositoryScope = null;
+        var grantCandidates = candidates
+            .Where(static candidate => !ApprovalPatternMatching.IsPureSideEffect(candidate))
+            .ToArray();
+        IReadOnlyList<GitRepositoryApprovalScope>? repositoryScopes = null;
         if (context.Decision == ApprovalDecision.ApprovedRepository
-            && (!GitRepositoryApprovalScope.TryResolve(context.WorkingDirectory, out repositoryScope)
+            && (!GitRepositoryApprovalScope.TryResolveCandidates(
+                    grantCandidates, context.WorkingDirectory, out repositoryScopes)
                 || !ToolApprovalEntryComparer.Equals(
-                    repositoryScope!.CommonDirectory, context.RepositoryCommonDirectory!)))
+                    repositoryScopes![0].CommonDirectory, context.RepositoryCommonDirectory!)))
         {
             throw new InvalidOperationException("The repository identity changed after the prompt.");
         }
 
-        if (repositoryScope is not null
-            && candidates.Any(candidate => !repositoryScope.Contains(candidate.Directory, context.WorkingDirectory)))
-        {
-            throw new InvalidOperationException("An approval candidate is outside the registered worktree.");
-        }
-
+        var repositoryScopeIndex = 0;
         foreach (var candidate in candidates)
         {
             if (ApprovalPatternMatching.IsPureSideEffect(candidate))
@@ -91,12 +90,17 @@ internal static class ApprovalBucketBuilder
                 continue;
             }
 
-            if (repositoryScope is not null)
+            if (repositoryScopes is not null)
             {
-                grants.Add(new ToolApprovalGrant(candidate, Directory: null)
+                var repositoryScope = repositoryScopes[repositoryScopeIndex++];
+                var resolvedCandidate = candidate with
+                {
+                    Directory = repositoryScope.ResolvedDirectory,
+                };
+                grants.Add(new ToolApprovalGrant(resolvedCandidate, Directory: null)
                 {
                     Repository = repositoryScope.CommonDirectory,
-                    RepositoryWorktree = context.WorkingDirectory,
+                    RepositoryWorktree = repositoryScope.WorktreeRoot,
                 });
                 continue;
             }

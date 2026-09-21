@@ -93,9 +93,8 @@ public static class ApprovalPatternMatching
     {
         if (entry.Repository is not null)
         {
-            return GitRepositoryApprovalScope.TryResolve(cwd, out var scope)
+            return GitRepositoryApprovalScope.TryResolveCandidate(candidateDirectory, cwd, out var scope)
                    && ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, entry.Repository)
-                   && scope.Contains(candidateDirectory, cwd)
                 ? ShellApprovalScopeResult.Match
                 : ShellApprovalScopeResult.OutsideDirectory;
         }

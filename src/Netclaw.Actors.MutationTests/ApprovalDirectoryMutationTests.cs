@@ -101,10 +101,24 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
         var otherRepositoryGrant = grant with { Repository = Path.Combine(unrelated, ".git") };
         Assert.True(ApprovalPatternMatching.MatchesShellApproval(
             CreateCandidate(ApprovalShell.Bash, null), sibling, [grant]));
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            CreateCandidate(ApprovalShell.Bash, sibling), _outside, [grant]));
         Assert.False(ApprovalPatternMatching.MatchesShellApproval(
             CreateCandidate(ApprovalShell.Bash, null), sibling, [otherRepositoryGrant]));
         Assert.False(ApprovalPatternMatching.MatchesShellApproval(
             CreateCandidate(ApprovalShell.Bash, _outside), sibling, [grant]));
+        Assert.False(GitRepositoryApprovalScope.TryResolveCandidate("relative", cwd: null, out _));
+
+        Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
+            [CreateCandidate(ApprovalShell.Bash, main),
+                CreateCandidate(ApprovalShell.Bash, sibling)],
+            _outside,
+            out _));
+        Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
+            [CreateCandidate(ApprovalShell.Bash, main),
+                CreateCandidate(ApprovalShell.Bash, unrelated)],
+            _outside,
+            out _));
     }
 
     public void Dispose() => Directory.Delete(_basePath, recursive: true);

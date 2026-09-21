@@ -9,9 +9,70 @@ namespace Netclaw.Security;
 /// A repository grant uses reciprocal Git worktree metadata as its authority.
 /// A .git pointer alone does not register a worktree.
 /// </summary>
-internal sealed record GitRepositoryApprovalScope(string WorktreeRoot, string CommonDirectory)
+internal sealed record GitRepositoryApprovalScope(
+    string WorktreeRoot,
+    string CommonDirectory,
+    string ResolvedDirectory)
 {
     private const int MaximumPointerBytes = 4096;
+
+    internal static bool TryResolveCandidates(
+        IReadOnlyList<ApprovalCandidate> candidates,
+        string? cwd,
+        out IReadOnlyList<GitRepositoryApprovalScope>? scopes)
+    {
+        scopes = null;
+        if (candidates.Count == 0)
+            return false;
+
+        var resolved = new GitRepositoryApprovalScope[candidates.Count];
+        for (var index = 0; index < candidates.Count; index++)
+        {
+            if (!TryResolveCandidate(candidates[index].Directory, cwd, out var scope)
+                || scope is null
+                || index > 0
+                && !PathUtility.AreEquivalentPaths(resolved[0].CommonDirectory, scope.CommonDirectory))
+            {
+                return false;
+            }
+
+            resolved[index] = scope;
+        }
+
+        scopes = Array.AsReadOnly(resolved);
+        return true;
+    }
+
+    internal static bool TryResolveCandidate(
+        string? candidateDirectory,
+        string? cwd,
+        out GitRepositoryApprovalScope? scope)
+    {
+        scope = null;
+        if (candidateDirectory is not null
+            && (string.IsNullOrWhiteSpace(candidateDirectory)
+                || ShellPathRules.HasParentDirectorySegment(candidateDirectory)
+                || !Path.IsPathFullyQualified(candidateDirectory)
+                && (string.IsNullOrWhiteSpace(cwd)
+                    || !Path.IsPathFullyQualified(cwd)
+                    || ShellPathRules.HasParentDirectorySegment(cwd))))
+        {
+            return false;
+        }
+
+        try
+        {
+            var effectiveDirectory = candidateDirectory is null
+                ? cwd
+                : PathUtility.ExpandAndNormalize(candidateDirectory, cwd);
+            return TryResolve(effectiveDirectory, out scope);
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException
+                                   or UnauthorizedAccessException or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
 
     internal static bool TryResolve(string? cwd, out GitRepositoryApprovalScope? scope)
     {
@@ -36,7 +97,7 @@ internal sealed record GitRepositoryApprovalScope(string WorktreeRoot, string Co
                 {
                     if (!HasLink(dotGit) && IsGitCommonDirectory(dotGit))
                     {
-                        scope = new GitRepositoryApprovalScope(root, dotGit);
+                        scope = new GitRepositoryApprovalScope(root, dotGit, candidate);
                         return true;
                     }
 
@@ -82,7 +143,7 @@ internal sealed record GitRepositoryApprovalScope(string WorktreeRoot, string Co
                     return false;
                 }
 
-                scope = new GitRepositoryApprovalScope(root, common);
+                scope = new GitRepositoryApprovalScope(root, common, candidate);
                 return true;
             }
         }

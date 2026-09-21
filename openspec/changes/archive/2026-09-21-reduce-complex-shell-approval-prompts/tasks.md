@@ -33,4 +33,4 @@
 - [x] 5.3 Offer a distinct repository choice in approval surfaces. Verify list, revoke, persistence, and migration behavior.
 - [x] 5.4 Verify every verb, path, audience, hard-deny, and retry boundary with the real coordinator and focused mutants.
 - [x] 5.5 Update the runbook, OpenSpec contract, and operations skill. Run eval, native approval smoke, and full security tests.
-- [ ] 5.6 Open and merge the fifth PR after native CI and independent review.
+- [x] 5.6 Open and merge the fifth PR after native CI and independent review.

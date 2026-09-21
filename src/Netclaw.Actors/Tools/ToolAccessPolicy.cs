@@ -1149,16 +1149,17 @@ public sealed class ToolAccessPolicy
         IReadOnlyList<ApprovalCandidate> candidates,
         string? cwd)
     {
+        var grantCandidates = candidates
+            .Where(static candidate => !ApprovalPatternMatching.IsPureSideEffect(candidate))
+            .ToArray();
         if (isMessy || !hasReusablePhrase
             || !string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
-            || !GitRepositoryApprovalScope.TryResolve(cwd, out var scope)
-            || candidates.Count == 0
-            || candidates.Any(candidate => !scope!.Contains(candidate.Directory, cwd)))
+            || !GitRepositoryApprovalScope.TryResolveCandidates(grantCandidates, cwd, out var scopes))
         {
             return null;
         }
 
-        return scope!.CommonDirectory;
+        return scopes![0].CommonDirectory;
     }
 
     private static bool HasReusableShellPhrase(ApprovalCandidate candidate) =>

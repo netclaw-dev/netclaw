@@ -118,7 +118,7 @@ When the agent calls a tool in `Approval` mode:
 1. The system extracts a **command pattern** (for example,
    `git push origin main` from that exact call).
 2. It checks the **approval cache** — has this pattern been approved before?
-3. If a clean reusable shell call in a registered worktree remains uncovered,
+3. If all grant-bearing candidates resolve to one registered repository,
    the channel can post this prompt:
    ```
    🔒 Tool approval required
@@ -133,7 +133,7 @@ When the agent calls a tool in `Approval` mode:
      E) Always anywhere
      F) Deny
    ```
-   An ordinary directory omits `This repository`.
+   A missing or mixed repository scope omits `This repository`.
 4. The tool execution pauses until the user responds. Other tool calls in the
    same batch continue running independently.
 5. Based on the response:
@@ -160,9 +160,11 @@ decision from becoming broader reusable authority.
 ### Repository grants
 
 `This repository` creates a distinct grant for one Git common directory.
-Netclaw offers it only when Git registers the current worktree.
-Each command candidate must stay inside that worktree.
-Netclaw checks the registration again before it stores or uses the grant.
+Netclaw resolves each grant-bearing candidate's effective directory.
+Each directory must belong to a registered worktree under one Git common directory.
+The request working directory supplies scope only when a candidate has no directory.
+Netclaw checks each candidate again before it stores or uses the grant.
+Pure output side effects do not establish or suppress repository identity.
 An old `Always here` grant remains a folder grant.
 Netclaw supports an ordinary `.git` directory and registered linked worktrees.
 It does not offer this choice for a main checkout that uses `--separate-git-dir`.
@@ -172,9 +174,9 @@ registered worktree. The same command can then use that grant in a registered
 sibling worktree. A second command, such as `python3`, still needs its own
 authority. An unrelated repository cannot use the grant.
 
-Netclaw rejects a copied `.git` pointer, a moved worktree, and a path through
-an external symbolic link. Hard denies, path checks, and audience rules still
-apply. Use `netclaw approvals list` to copy the exact repository label.
+Netclaw rejects mixed repositories, copied `.git` pointers, moved worktrees,
+and paths through external symbolic links. Hard denies, path checks, and audience rules still apply.
+Use `netclaw approvals list` to copy the exact repository label.
 Use `netclaw approvals revoke '<label>'` to remove that grant.
 
 A command with an exact-tree requirement always offers only `Once` or `Deny`.

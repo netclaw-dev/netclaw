@@ -393,9 +393,14 @@ internal sealed class ToolApprovalActor : ReceiveActor
                     if (grant.Repository is not null)
                     {
                         if (grant.Directory is not null
-                            || !GitRepositoryApprovalScope.TryResolve(grant.RepositoryWorktree, out var scope)
+                            || grant.RepositoryWorktree is null
+                            || !GitRepositoryApprovalScope.TryResolveCandidate(
+                                grant.Candidate.Directory,
+                                cwd: null,
+                                out var scope)
                             || !ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, grant.Repository)
-                            || !scope.Contains(grant.Candidate.Directory, grant.RepositoryWorktree))
+                            || !PathUtility.AreEquivalentPaths(
+                                scope.WorktreeRoot, grant.RepositoryWorktree))
                         {
                             persistentEntries = [];
                             sessionEntries = [];
@@ -420,7 +425,8 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 }
                 else
                 {
-                    if (grant.Repository is not null || grant.RepositoryWorktree is not null)
+                    if (grant.Repository is not null
+                        || grant.RepositoryWorktree is not null)
                     {
                         persistentEntries = [];
                         sessionEntries = [];

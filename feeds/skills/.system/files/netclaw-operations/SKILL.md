@@ -396,9 +396,11 @@ Shell approvals store a typed phrase and a scope in `tool-approvals.json`:
     directory") — only set by `Always anywhere`.
 
 `This repository` stores a distinct Git repository scope. It applies to
-registered worktrees of one repository. Netclaw checks Git registration for
-each use. A folder grant keeps its path scope. An unapproved verb or a path
-outside the worktree still needs approval.
+registered worktrees of one repository. Netclaw derives this scope from each
+grant-bearing command candidate. The request directory supplies scope only
+when a candidate has no directory. Netclaw checks Git registration for each
+use. A folder grant keeps its path scope. An unapproved verb or a path outside
+the repository still needs approval.
 The scope supports an ordinary `.git` directory and registered linked worktrees.
 A main checkout with `--separate-git-dir` does not receive this choice.
 

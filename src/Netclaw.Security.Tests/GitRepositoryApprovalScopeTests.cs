@@ -12,6 +12,78 @@ namespace Netclaw.Security.Tests;
 public sealed class GitRepositoryApprovalScopeTests
 {
     [Fact]
+    public void Candidate_scopes_require_one_registered_repository()
+    {
+        var root = CreateTestRoot("repository-scope-fixture-");
+        try
+        {
+            var checkoutA = Path.Combine(root.FullName, "checkout-a");
+            var worktreeA = Path.Combine(root.FullName, "worktree-a");
+            var checkoutB = Path.Combine(root.FullName, "checkout-b");
+            var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session")).FullName;
+            RunGit(root.FullName, "init", checkoutA);
+            RunGit(checkoutA, "worktree", "add", "--orphan", "-b", "work-a", worktreeA);
+            RunGit(root.FullName, "init", checkoutB);
+
+            var checkoutDirectory = Directory.CreateDirectory(
+                Path.Combine(checkoutA, "tasks")).FullName;
+            var worktreeDirectory = Directory.CreateDirectory(
+                Path.Combine(worktreeA, "tasks")).FullName;
+            var otherDirectory = Directory.CreateDirectory(
+                Path.Combine(checkoutB, "tasks")).FullName;
+
+            ApprovalCandidate[] siblingCandidates =
+            [
+                new("task-a", checkoutDirectory),
+                new("task-b", worktreeDirectory),
+            ];
+            Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
+                siblingCandidates, session, out var siblingScopes));
+            Assert.Equal(2, siblingScopes!.Count);
+            Assert.Equal(checkoutA, siblingScopes[0].WorktreeRoot);
+            Assert.Equal(worktreeA, siblingScopes[1].WorktreeRoot);
+            Assert.True(PathUtility.AreEquivalentPaths(
+                siblingScopes[0].CommonDirectory, siblingScopes[1].CommonDirectory));
+
+            ApprovalCandidate[] cwdFallbackCandidates =
+            [
+                new("task-a", null),
+                new("task-b", worktreeDirectory),
+            ];
+            Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
+                cwdFallbackCandidates, checkoutDirectory, out _));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
+                cwdFallbackCandidates, session, out _));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
+                [new ApprovalCandidate("task-a", checkoutDirectory),
+                    new ApprovalCandidate("task-b", otherDirectory)],
+                session,
+                out _));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates([], checkoutA, out _));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate("tasks", cwd: null, out _));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate(" ", checkoutA, out _));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate(
+                Path.Combine(root.FullName, "missing"), session, out _));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
+                [new ApprovalCandidate("task-a", Path.Combine(checkoutDirectory, ".."))],
+                session,
+                out _));
+
+            if (!OperatingSystem.IsWindows())
+            {
+                var alias = Path.Combine(root.FullName, "linked-worktree");
+                Directory.CreateSymbolicLink(alias, worktreeA);
+                Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
+                    [new ApprovalCandidate("task-a", alias)], session, out _));
+            }
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public void Registered_sibling_uses_the_same_repository_identity()
     {
         var root = CreateTestRoot("netclaw-repository-grant-");
