@@ -4,12 +4,14 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
+using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Providers.SelfHosted;
+using Netclaw.Tools;
 using Xunit;
 using AiChatMessage = Microsoft.Extensions.AI.ChatMessage;
 using ProtocolChatRole = Netclaw.Actors.Protocol.ChatRole;
@@ -32,6 +34,59 @@ public sealed class SessionMessageAssemblerTests
 {
     private const string PersistedSystemPrompt = "You are Netclaw, a helpful assistant.";
     private static readonly SessionId TestSession = new("C99999/1708531200.000100");
+
+    [Theory]
+    [InlineData(TrustAudience.Personal)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Public)]
+    public void Recovered_history_with_an_absent_Mcp_tool_has_valid_names_and_preserves_the_snapshot(TrustAudience audience)
+    {
+        const string canonical = "helpdesk-dev/helpdesk_capabilities";
+        const string arguments = """{"category":"tickets"}""";
+        var callId = new ToolCallId("historical-call");
+        var history = SeedHistory("show capabilities")
+            .Add(new SerializableChatMessage
+            {
+                Role = ProtocolChatRole.Assistant,
+                ToolCalls = [new SerializableToolCall { CallId = callId, Name = new ToolName(canonical), ArgumentsJson = arguments }]
+            })
+            .Add(new SerializableChatMessage
+            {
+                Role = ProtocolChatRole.Tool,
+                ToolCallId = callId,
+                Name = canonical,
+                Content = "Capabilities recorded before the server was removed."
+            });
+        var snapshot = (SessionState.Empty with { History = history }).ToSnapshot();
+        var originalSnapshot = JsonSerializer.Serialize(snapshot);
+        var recovered = SessionState.FromSnapshot(snapshot);
+        var greeting = new SerializableChatMessage { Role = ProtocolChatRole.User, Content = "hello netclaw, are you there?" };
+        recovered = recovered with { History = recovered.History.Add(greeting) };
+        var originalHistory = JsonSerializer.Serialize(recovered.History);
+        var registry = new ToolRegistry();
+        var input = MakeInput(recovered.History, activeRecall: null, audience: audience) with
+        {
+            State = recovered,
+            ToolNameToLlmFacing = registry.ToLlmFacingName
+        };
+
+        var messages = SessionMessageAssembler.Assemble(input);
+
+        var call = Assert.Single(messages.SelectMany(message => message.Contents).OfType<FunctionCallContent>());
+        Assert.Equal("helpdesk-dev__helpdesk_capabilities", call.Name);
+        Assert.Matches("^[a-zA-Z0-9_-]+$", call.Name);
+        Assert.Equal(callId.Value, call.CallId);
+        Assert.Equal("tickets", Assert.IsType<JsonElement>(call.Arguments!["category"]).GetString());
+        var result = Assert.Single(messages.SelectMany(message => message.Contents).OfType<FunctionResultContent>());
+        Assert.Equal(call.CallId, result.CallId);
+        Assert.Equal(history[^1].Content, result.Result);
+        Assert.Equal(greeting.Content, messages[^1].Text);
+        Assert.Equal(originalSnapshot, JsonSerializer.Serialize(snapshot));
+        Assert.Equal(originalHistory, JsonSerializer.Serialize(recovered.History));
+        Assert.Null(registry.GetByName(canonical));
+        Assert.Null(registry.GetByName(call.Name));
+        Assert.Empty(registry.GetAllTools());
+    }
 
     [Fact]
     public void Prefix_is_stable_across_turns_for_same_session()

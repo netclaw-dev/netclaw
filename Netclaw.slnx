@@ -14,6 +14,8 @@
     <Project Path="src/Netclaw.Channels.Discord/Netclaw.Channels.Discord.csproj" />
     <Project Path="src/Netclaw.Channels.Mattermost/Netclaw.Channels.Mattermost.csproj" />
     <Project Path="src/Netclaw.Channels.Slack/Netclaw.Channels.Slack.csproj" />
+    <Project Path="src/Netclaw.Channels.Teams.Graph/Netclaw.Channels.Teams.Graph.csproj" />
+    <Project Path="src/Netclaw.Channels.Teams/Netclaw.Channels.Teams.csproj" />
     <Project Path="src/Netclaw.Configuration.Tests/Netclaw.Configuration.Tests.csproj" />
     <Project Path="src/Netclaw.Configuration/Netclaw.Configuration.csproj" />
     <Project Path="src/Netclaw.Daemon.Tests/Netclaw.Daemon.Tests.csproj" />

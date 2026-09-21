@@ -11,6 +11,7 @@ using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Secrets;
 using Netclaw.Cli.Tui.Sections;
+using Netclaw.Channels.Teams;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
 
@@ -39,6 +40,7 @@ public sealed class WizardConfigBuilder
     public SlackConfigSection? Slack { get; set; }
     public DiscordConfigSection? Discord { get; set; }
     public MattermostConfigSection? Mattermost { get; set; }
+    public TeamsConfigSection? Teams { get; set; }
     public SecurityConfigSection Security { get; set; } = new();
     public SearchConfigSection? Search { get; set; }
     public ToolConfig? Tools { get; set; }
@@ -239,6 +241,41 @@ public sealed class WizardConfigBuilder
                 mattermostSection["ChannelAudiences"] = new Dictionary<string, string>(Mattermost.ChannelAudiences);
 
             config["Mattermost"] = mattermostSection;
+        }
+
+        // Microsoft Teams section. The client secret is intentionally absent here: it is
+        // contributed exclusively through WizardSecretsBuilder by TeamsStepViewModel.
+        if (Teams is { Enabled: true })
+        {
+            var teamsSection = new Dictionary<string, object>
+            {
+                ["Enabled"] = true,
+                ["MentionOnly"] = Teams.MentionOnly
+            };
+
+            if (!string.IsNullOrWhiteSpace(Teams.TenantId))
+                teamsSection["TenantId"] = Teams.TenantId;
+            if (!string.IsNullOrWhiteSpace(Teams.ClientId))
+                teamsSection["ClientId"] = Teams.ClientId;
+            if (!string.IsNullOrWhiteSpace(Teams.BotId))
+                teamsSection["BotId"] = Teams.BotId;
+
+            if (Teams.AllowDirectMessages)
+                teamsSection["AllowDirectMessages"] = true;
+            if (Teams.AllowedTeamIds is { Count: > 0 })
+                teamsSection["AllowedTeamIds"] = Teams.AllowedTeamIds.ToArray();
+            if (Teams.AllowedChannelIds is { Count: > 0 })
+                teamsSection["AllowedChannelIds"] = Teams.AllowedChannelIds.ToArray();
+            if (Teams.AllowedUserIds is { Count: > 0 })
+                teamsSection["AllowedUserIds"] = Teams.AllowedUserIds.ToArray();
+            if (Teams.AllowedGroupIds is { Count: > 0 })
+                teamsSection["AllowedGroupIds"] = Teams.AllowedGroupIds.ToArray();
+            if (Teams.ChannelAudienceOverrides is { Count: > 0 })
+                teamsSection["ChannelAudienceOverrides"] = Teams.ChannelAudienceOverrides.ToArray();
+            if (Teams.ChannelAccessOverrides is { Count: > 0 })
+                teamsSection["ChannelAccessOverrides"] = Teams.ChannelAccessOverrides.ToArray();
+
+            config["Teams"] = teamsSection;
         }
 
         // Search section
@@ -599,6 +636,25 @@ public sealed class MattermostConfigSection
     public bool AllowDirectMessages { get; init; }
     public List<string>? AllowedUserIds { get; init; }
     public Dictionary<string, string>? ChannelAudiences { get; init; }
+}
+
+public sealed class TeamsConfigSection
+{
+    public bool Enabled { get; init; }
+    public string? TenantId { get; init; }
+    public string? ClientId { get; init; }
+    public string? BotId { get; init; }
+    public bool AllowDirectMessages { get; init; }
+    public bool AllowGroupChats { get; init; }
+    public bool AllowAttachments { get; init; }
+    public bool MentionOnly { get; init; } = true;
+    public List<string>? AllowedTeamIds { get; init; }
+    public List<string>? AllowedChannelIds { get; init; }
+    public List<string>? AllowedGroupChatIds { get; init; }
+    public List<string>? AllowedUserIds { get; init; }
+    public List<string>? AllowedGroupIds { get; init; }
+    public List<TeamsChannelAudienceOverride>? ChannelAudienceOverrides { get; init; }
+    public List<TeamsChannelAccessOverride>? ChannelAccessOverrides { get; init; }
 }
 
 public sealed class SecurityConfigSection

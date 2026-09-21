@@ -46,6 +46,9 @@ internal static class NetclawProtoMapper
         CursorAdvanced v => ToProto(v),
         PendingApprovalPromptTracked v => ToProto(v),
         PendingApprovalPromptCleared v => ToProto(v),
+        DurableActivityDispatchReserved v => ToProto(v),
+        DurableActivityDispatchReleased v => ToProto(v),
+        DurableActivityDispatchSnapshot v => ToProto(v),
         MemoriesDistilledV2 v => ToProto(v),
         _ => throw new ArgumentException($"No proto mapping for {obj.GetType().FullName}")
     };
@@ -816,6 +819,39 @@ internal static class NetclawProtoMapper
     {
         CallId = proto.CallId
     };
+
+    internal static Proto.DurableActivityDispatchReservedProto ToProto(DurableActivityDispatchReserved evt)
+    {
+        var proto = new Proto.DurableActivityDispatchReservedProto
+        {
+            ActivityFingerprint = evt.ActivityFingerprint
+        };
+        if (evt.EvictedActivityFingerprint is not null)
+            proto.EvictedActivityFingerprint = evt.EvictedActivityFingerprint;
+        return proto;
+    }
+
+    internal static DurableActivityDispatchReserved FromProto(Proto.DurableActivityDispatchReservedProto proto) => new(
+        proto.ActivityFingerprint,
+        proto.HasEvictedActivityFingerprint ? proto.EvictedActivityFingerprint : null);
+
+    internal static Proto.DurableActivityDispatchReleasedProto ToProto(DurableActivityDispatchReleased evt) => new()
+    {
+        ActivityFingerprint = evt.ActivityFingerprint
+    };
+
+    internal static DurableActivityDispatchReleased FromProto(Proto.DurableActivityDispatchReleasedProto proto) => new(
+        proto.ActivityFingerprint);
+
+    internal static Proto.DurableActivityDispatchSnapshotProto ToProto(DurableActivityDispatchSnapshot snapshot)
+    {
+        var proto = new Proto.DurableActivityDispatchSnapshotProto();
+        proto.ActivityFingerprints.AddRange(snapshot.ActivityFingerprints);
+        return proto;
+    }
+
+    internal static DurableActivityDispatchSnapshot FromProto(Proto.DurableActivityDispatchSnapshotProto proto) => new(
+        proto.ActivityFingerprints.ToArray());
 
     // ── MemoriesDistilledV2 / ProposedMemoryContext ──
 

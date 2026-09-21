@@ -4523,6 +4523,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
     private void EmitOutput(SessionOutput output, OutputFilter requiredFlag = OutputFilter.None)
     {
+        output = output with { SourceReminderId = output.SourceReminderId ?? _currentTurnSource?.ReminderId };
         _subscribers.Emit(output, requiredFlag);
         _logActor?.Tell(output);
         _observerActor?.Tell(output);

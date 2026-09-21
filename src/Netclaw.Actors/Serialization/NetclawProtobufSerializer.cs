@@ -46,6 +46,19 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
     private const string SessionBackgroundJobsReapedManifest = "sbjr-v1";
     private const string PendingApprovalPromptTrackedManifest = "papt-v1";
     private const string PendingApprovalPromptClearedManifest = "papc-v1";
+    // Decode-only manifests written by pre-migration Teams actors. New Team
+    // writes use TeamsPersistenceSerializer and never enter this type map.
+    private const string TeamsApprovalPendingCreatedManifest = "tapc-v1";
+    private const string TeamsApprovalCardDeliveredManifest = "tacd-v1";
+    private const string TeamsApprovalConsumedManifest = "taco-v1";
+    private const string TeamsProactiveDestinationCapturedManifest = "tpdc-v1";
+    private const string TeamsProactiveDestinationInvalidatedManifest = "tpdi-v1";
+    private const string TeamsProactiveDeliveryRecordedManifest = "tpdr-v1";
+    private const string DurableActivityDispatchReservedManifest = "dadr-v1";
+    private const string DurableActivityDispatchReleasedManifest = "dadl-v1";
+    private const string DurableActivityDispatchSnapshotManifest = "dads-v1";
+    private const string DurableTeamsChannelActivityMappedManifest = "dtcam-v1";
+    private const string DurableTeamsChannelActivityIndexSnapshotManifest = "dtcais-v1";
 
     private static readonly FrozenDictionary<Type, string> TypeToManifest = new Dictionary<Type, string>
     {
@@ -74,6 +87,9 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
         [typeof(SessionBackgroundJobsReaped)] = SessionBackgroundJobsReapedManifest,
         [typeof(Channels.PendingApprovalPromptTracked)] = PendingApprovalPromptTrackedManifest,
         [typeof(Channels.PendingApprovalPromptCleared)] = PendingApprovalPromptClearedManifest,
+        [typeof(Channels.DurableActivityDispatchReserved)] = DurableActivityDispatchReservedManifest,
+        [typeof(Channels.DurableActivityDispatchReleased)] = DurableActivityDispatchReleasedManifest,
+        [typeof(Channels.DurableActivityDispatchSnapshot)] = DurableActivityDispatchSnapshotManifest,
     }.ToFrozenDictionary();
 
     public override int Identifier => 150;
@@ -150,8 +166,26 @@ public sealed class NetclawProtobufSerializer : SerializerWithStringManifest
                 Proto.PendingApprovalPromptTrackedProto.Parser.ParseFrom(bytes)),
             PendingApprovalPromptClearedManifest => NetclawProtoMapper.FromProto(
                 Proto.PendingApprovalPromptClearedProto.Parser.ParseFrom(bytes)),
+            TeamsApprovalPendingCreatedManifest or TeamsApprovalCardDeliveredManifest
+                or TeamsApprovalConsumedManifest or TeamsProactiveDestinationCapturedManifest
+                or TeamsProactiveDestinationInvalidatedManifest or TeamsProactiveDeliveryRecordedManifest
+                or DurableTeamsChannelActivityMappedManifest or DurableTeamsChannelActivityIndexSnapshotManifest
+                => new LegacyChannelPersistenceEnvelope(manifest, bytes),
+            DurableActivityDispatchReservedManifest => NetclawProtoMapper.FromProto(
+                Proto.DurableActivityDispatchReservedProto.Parser.ParseFrom(bytes)),
+            DurableActivityDispatchReleasedManifest => NetclawProtoMapper.FromProto(
+                Proto.DurableActivityDispatchReleasedProto.Parser.ParseFrom(bytes)),
+            DurableActivityDispatchSnapshotManifest => DecodeLegacyAwareSnapshot(bytes),
             _ => throw new ArgumentException(
                 $"Unknown manifest '{manifest}'. Add it to NetclawProtobufSerializer.")
         };
+    }
+
+    private static object DecodeLegacyAwareSnapshot(byte[] bytes)
+    {
+        var snapshot = Proto.DurableActivityDispatchSnapshotProto.Parser.ParseFrom(bytes);
+        return snapshot.TeamsApprovals.Count > 0 || snapshot.TeamsDestination is not null || snapshot.TeamsProactiveDeliveries.Count > 0
+            ? new LegacyChannelPersistenceEnvelope(DurableActivityDispatchSnapshotManifest, bytes)
+            : NetclawProtoMapper.FromProto(snapshot);
     }
 }

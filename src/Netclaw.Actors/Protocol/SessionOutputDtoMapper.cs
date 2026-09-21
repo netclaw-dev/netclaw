@@ -23,7 +23,8 @@ public static class SessionOutputDtoMapper
             Type = SessionOutputTypes.Text,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
-            Text = msg.Text
+            Text = msg.Text,
+            SourceReminderId = msg.SourceReminderId?.Value
         },
 
         TextDeltaOutput msg => new SessionOutputDto
@@ -31,7 +32,8 @@ public static class SessionOutputDtoMapper
             Type = SessionOutputTypes.TextDelta,
             SessionId = msg.SessionId.Value,
             TimestampMs = msg.TimestampMs,
-            Text = msg.Delta
+            Text = msg.Delta,
+            SourceReminderId = msg.SourceReminderId?.Value
         },
 
         ThinkingOutput msg => new SessionOutputDto

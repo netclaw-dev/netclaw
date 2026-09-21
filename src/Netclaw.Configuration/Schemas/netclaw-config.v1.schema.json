@@ -97,6 +97,119 @@
       },
       "additionalProperties": false
     },
+    "Teams": {
+      "type": "object",
+      "description": "Microsoft Teams channel settings. The integration is disabled by default. Team and channel allow-lists are fail closed when empty. ClientSecret belongs only in secrets.json or NETCLAW_Teams__ClientSecret and is intentionally excluded from this normal configuration schema.",
+      "properties": {
+        "Enabled": { "type": "boolean", "default": false },
+        "TenantId": { "type": ["string", "null"] },
+        "ClientId": { "type": ["string", "null"] },
+        "BotId": { "type": ["string", "null"] },
+        "AuthenticationMode": {
+          "type": "string",
+          "enum": ["ClientSecret"],
+          "default": "ClientSecret"
+        },
+        "AllowDirectMessages": { "type": "boolean", "default": false },
+        "AllowGroupChats": { "type": "boolean", "default": false },
+        "AllowAttachments": { "type": "boolean", "default": false },
+        "MentionOnly": { "type": "boolean", "default": true },
+        "AllowedTeamIds": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "AllowedChannelIds": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "AllowedGroupChatIds": {
+          "type": "array",
+          "description": "Canonical Teams group chat IDs. Names are not authorization values.",
+          "default": [],
+          "items": {
+            "type": "string",
+            "maxLength": 1024,
+            "pattern": "^19:[^\\s]+@thread\\.v2$"
+          }
+        },
+        "AllowedUserIds": {
+          "type": "array",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "AllowedGroupIds": {
+          "type": "array",
+          "description": "Canonical Entra group object IDs allowed across Teams conversations. Membership is checked fail closed through Microsoft Graph.",
+          "default": [],
+          "items": { "type": "string" }
+        },
+        "ChannelAudiences": {
+          "type": "object",
+          "description": "Audience overrides keyed by canonical team/channel or team ID. Values are personal, team, or public.",
+          "default": {},
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["personal", "team", "public"]
+          }
+        },
+        "ChannelAudienceOverrides": {
+          "type": "array",
+          "description": "Delimiter-safe structured audience overrides. Exact team/channel entries take precedence over team-wide entries.",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": ["TeamId", "Audience"],
+            "properties": {
+              "TeamId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ChannelId": {
+                "type": ["string", "null"]
+              },
+              "Audience": {
+                "type": "string",
+                "enum": ["personal", "team", "public"]
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "ChannelAccessOverrides": {
+          "type": "array",
+          "description": "Delimiter-safe per-channel principal restrictions. TeamId and ChannelId are canonical IDs; names are never authorization values.",
+          "default": [],
+          "items": {
+            "type": "object",
+            "required": ["TeamId", "ChannelId"],
+            "properties": {
+              "TeamId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "ChannelId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "AllowedUserIds": {
+                "type": "array",
+                "default": [],
+                "items": { "type": "string" }
+              },
+              "AllowedGroupIds": {
+                "type": "array",
+                "default": [],
+                "items": { "type": "string" }
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
     "Logging": {
       "type": "object",
       "properties": {

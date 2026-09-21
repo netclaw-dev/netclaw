@@ -1,0 +1,8 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "type": "message",
+  "id": "ACTIVITY_ATTACHMENT_TEST_001",
+  "attachments": [
+    { "contentType": "text/html", "content": "", "name": null, "contentUrl": null }
+  ]
+}

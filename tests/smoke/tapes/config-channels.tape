@@ -17,7 +17,8 @@ Enter
 
 Type "netclaw config"
 Enter
-Wait+Screen@10s /Settings Areas/
+# The self-contained native CLI can need a cold extraction on a fresh tape HOME.
+Wait+Screen@30s /Settings Areas/
 
 # Channels is row 3 in the dashboard list.
 Down 2
@@ -74,10 +75,10 @@ Wait+Screen@10s /Credential changes saved/
 Escape
 Wait+Screen@10s /Which channels would you like to connect/
 Wait+Screen@10s /3 channels/
+Wait+Screen@10s /Microsoft Teams/
 Wait+Screen@10s /Done adding channels/
 
-Down 3
-Enter
+Type "d"
 Wait+Screen@10s /Settings Areas/
 
 Ctrl+Q

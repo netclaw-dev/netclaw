@@ -1,0 +1,108 @@
+syntax = "proto3";
+
+package netclaw.teams.persistence;
+option csharp_namespace = "Netclaw.Channels.Teams.Serialization.Proto";
+
+// This schema is the new-write format for Teams-owned durable state. Field
+// numbers are append-only. The generic Actors schema contains legacy records
+// only and must never emit any Teams persistence message.
+
+message TeamsApprovalPendingCreatedProto {
+  string call_id = 1;
+  string correlation_id = 2;
+  string nonce_hash = 3;
+  optional string requester_sender_id = 4;
+  optional int32 requester_principal = 5;
+  int64 expires_at_unix_milliseconds = 6;
+  repeated string offered_option_keys = 7;
+  bool is_mcp_tool = 8;
+  string tool_name = 9;
+  string request_display_text = 10;
+  optional bool presentation_pending = 11;
+}
+
+message TeamsApprovalCardDeliveredProto {
+  string correlation_id = 1;
+  optional string prompt_id = 2;
+}
+
+message TeamsApprovalCardReissuedProto {
+  string correlation_id = 1;
+  string nonce_hash = 2;
+  int64 expires_at_unix_milliseconds = 3;
+}
+
+message TeamsApprovalForwardingStartedProto {
+  string correlation_id = 1;
+  string decision = 2;
+  string sender_id = 3;
+  int64 started_at_unix_milliseconds = 4;
+}
+
+message TeamsApprovalConsumedProto {
+  string correlation_id = 1;
+  string decision = 2;
+  int64 consumed_at_unix_milliseconds = 3;
+}
+
+message TeamsApprovalSnapshotEntryProto {
+  string call_id = 1;
+  string correlation_id = 2;
+  string nonce_hash = 3;
+  optional string requester_sender_id = 4;
+  optional int32 requester_principal = 5;
+  int64 expires_at_unix_milliseconds = 6;
+  optional string prompt_id = 7;
+  optional string decision = 8;
+  repeated string offered_option_keys = 9;
+  bool is_mcp_tool = 10;
+  string tool_name = 11;
+  string request_display_text = 12;
+  optional string forwarding_decision = 13;
+  optional string forwarding_sender_id = 14;
+  optional bool presentation_pending = 15;
+}
+
+message TeamsProactiveDestinationCapturedProto {
+  string tenant_id = 1;
+  string conversation_id = 2;
+  int32 scope = 3;
+  string service_url = 4;
+  optional string root_activity_id = 5;
+  optional string team_id = 6;
+  optional string channel_id = 7;
+  optional string user_id = 8;
+  int64 generation = 9;
+}
+
+message TeamsProactiveDeliveryRecordedProto {
+  string delivery_key = 1;
+  int32 state = 2;
+  optional string evicted_delivery_key = 3;
+  int64 destination_generation = 4;
+  // A permanent invalidation and its terminal delivery result share one
+  // journal record. The actor invalidates only a matching generation.
+  bool invalidates_destination = 5;
+}
+
+message TeamsBindingSnapshotProto {
+  repeated string activity_fingerprints = 1;
+  repeated TeamsApprovalSnapshotEntryProto approvals = 2;
+  optional TeamsProactiveDestinationCapturedProto destination = 3;
+  repeated TeamsProactiveDeliveryRecordedProto proactive_deliveries = 4;
+  int32 migration_version = 5;
+  // Retains the invalidated generation when no destination is currently valid.
+  int64 last_destination_generation = 6;
+}
+
+message TeamsChannelActivityMappedProto {
+  string activity_fingerprint = 1;
+  string session_id = 2;
+  optional string evicted_activity_fingerprint = 3;
+  // SHA-256 of the approved human who established this channel root.
+  optional string sender_fingerprint = 4;
+}
+
+message TeamsChannelActivityIndexSnapshotProto {
+  repeated TeamsChannelActivityMappedProto entries = 1;
+}

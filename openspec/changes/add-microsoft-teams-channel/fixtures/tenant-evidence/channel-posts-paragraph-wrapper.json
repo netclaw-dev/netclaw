@@ -1,0 +1,17 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "type": "message",
+  "id": "ACTIVITY_ROOT_POSTS_PARAGRAPH_TEST_001",
+  "text": "<at>synthetic bot</at> harmless Posts channel root probe",
+  "from": { "id": "USER_TEST_001" },
+  "recipient": { "id": "28:BOT_TEST_001" },
+  "conversation": { "id": "CONVERSATION_ROOT_POSTS_PARAGRAPH_TEST_001;messageid=ACTIVITY_ROOT_POSTS_PARAGRAPH_TEST_001", "tenantId": "TENANT_TEST_001", "conversationType": "channel", "isGroup": true },
+  "channelData": { "team": { "id": "TEAM_TEST_001" }, "channel": { "id": "CHANNEL_TEST_001" } },
+  "entities": [
+    { "type": "mention", "text": "<at>synthetic bot</at>", "mentioned": { "id": "28:BOT_TEST_001", "name": "synthetic bot" } }
+  ],
+  "attachments": [
+    { "contentType": "text/html", "content": "<p>synthetic rendering metadata https://rendering.invalid/reference</p>", "name": null, "contentUrl": null }
+  ],
+  "replyToId": null
+}

@@ -1,0 +1,11 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "type": "invoke",
+  "name": "adaptiveCard/action",
+  "id": "ACTIVITY_CARD_ACTION_TEST_001",
+  "from": { "id": "USER_TEST_001" },
+  "recipient": { "id": "28:BOT_TEST_001" },
+  "conversation": { "id": "CONVERSATION_ROOT_TEST_001;messageid=ACTIVITY_ROOT_TEST_001", "tenantId": "TENANT_TEST_001", "conversationType": "channel", "isGroup": true },
+  "replyToId": "ACTIVITY_CARD_TEST_001",
+  "value": { "action": { "type": "Action.Execute", "title": "Synthetic confirmation", "verb": "tenant-evidence-confirm", "data": { "correlation": "CARD_CORRELATION_TEST_001" } }, "trigger": "manual" }
+}

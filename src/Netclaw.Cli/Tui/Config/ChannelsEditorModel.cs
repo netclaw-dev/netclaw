@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.Options;
 using Netclaw.Actors.Channels;
+using Netclaw.Channels.Teams;
 using Netclaw.Cli.Tui.Wizard.Steps;
 
 namespace Netclaw.Cli.Tui.Config;
@@ -17,11 +18,14 @@ internal sealed class ChannelsEditorModel
 
     public MattermostChannelEditorModel Mattermost { get; } = new();
 
+    public TeamsChannelEditorModel Teams { get; } = new();
+
     public static ChannelsEditorModel FromStep(ChannelPickerStepViewModel step)
     {
         var slack = step.GetAdapterViewModel<SlackStepViewModel>(ChannelType.Slack);
         var discord = step.GetAdapterViewModel<DiscordStepViewModel>(ChannelType.Discord);
         var mattermost = step.GetAdapterViewModel<MattermostStepViewModel>(ChannelType.Mattermost);
+        var teams = step.GetAdapterViewModel<TeamsStepViewModel>(ChannelType.Teams);
 
         var model = new ChannelsEditorModel
         {
@@ -46,6 +50,15 @@ internal sealed class ChannelsEditorModel
                 BotTokenDraft = Normalize(mattermost.BotToken),
                 HasPersistedBotToken = mattermost.HasPersistedBotToken,
                 CallbackUrl = Normalize(mattermost.CallbackUrl),
+            },
+            Teams =
+            {
+                Enabled = step.IsAdapterEnabled(ChannelType.Teams),
+                TenantId = Normalize(teams.TenantId),
+                ClientId = Normalize(teams.ClientId),
+                BotId = Normalize(teams.BotId),
+                ClientSecretDraft = Normalize(teams.ClientSecret),
+                HasPersistedClientSecret = teams.HasPersistedClientSecret
             }
         };
 
@@ -90,6 +103,15 @@ internal sealed class MattermostChannelEditorModel : ChannelEditorProviderModel
     public string? CallbackUrl { get; set; }
 }
 
+internal sealed class TeamsChannelEditorModel : ChannelEditorProviderModel
+{
+    public string? TenantId { get; set; }
+    public string? ClientId { get; set; }
+    public string? BotId { get; set; }
+    public string? ClientSecretDraft { get; set; }
+    public bool HasPersistedClientSecret { get; set; }
+}
+
 internal sealed class ChannelsEditorValidator : IValidateOptions<ChannelsEditorModel>
 {
     public ValidateOptionsResult Validate(string? name, ChannelsEditorModel options)
@@ -130,6 +152,18 @@ internal sealed class ChannelsEditorValidator : IValidateOptions<ChannelsEditorM
                 errors.Add(ChannelsEditorValidationMessages.MattermostCallbackUrlAbsoluteHttp);
         }
 
+        if (options.Teams.Enabled)
+        {
+            if (string.IsNullOrWhiteSpace(options.Teams.TenantId))
+                errors.Add(ChannelsEditorValidationMessages.TeamsTenantIdRequired);
+            if (string.IsNullOrWhiteSpace(options.Teams.ClientId))
+                errors.Add(ChannelsEditorValidationMessages.TeamsClientIdRequired);
+            if (string.IsNullOrWhiteSpace(options.Teams.BotId))
+                errors.Add(ChannelsEditorValidationMessages.TeamsBotIdRequired);
+            if (!HasEffectiveSecret(options.Teams.ClientSecretDraft, options.Teams.HasPersistedClientSecret))
+                errors.Add(ChannelsEditorValidationMessages.TeamsClientSecretRequired);
+        }
+
         return errors.Count > 0
             ? ValidateOptionsResult.Fail(errors)
             : ValidateOptionsResult.Success;
@@ -154,6 +188,10 @@ internal static class ChannelsEditorFieldPaths
     internal const string MattermostBotToken = "Mattermost.BotToken";
     internal const string MattermostCallbackUrl = "Mattermost.CallbackUrl";
     internal const string MattermostAllowedChannelIds = "Mattermost.AllowedChannelIds";
+    internal const string TeamsTenantId = "Teams.TenantId";
+    internal const string TeamsClientId = "Teams.ClientId";
+    internal const string TeamsBotId = "Teams.BotId";
+    internal const string TeamsClientSecret = "Teams.ClientSecret";
 }
 
 internal static class ChannelsEditorValidationMessages
@@ -167,6 +205,10 @@ internal static class ChannelsEditorValidationMessages
     internal const string MattermostServerUrlAbsoluteHttp = "Mattermost server URL must be an absolute http:// or https:// URL.";
     internal const string MattermostBotTokenRequired = "Mattermost bot token is required.";
     internal const string MattermostCallbackUrlAbsoluteHttp = "Mattermost callback URL must be an absolute http:// or https:// URL.";
+    internal const string TeamsTenantIdRequired = "Teams tenant ID is required.";
+    internal const string TeamsClientIdRequired = "Teams application / client ID is required.";
+    internal const string TeamsBotIdRequired = "Teams bot ID is required.";
+    internal const string TeamsClientSecretRequired = "Teams client secret is required.";
 }
 
 internal sealed record ChannelsEditorValidationIssue(string? FieldId, string Message, ConfigValidationSeverity Severity);
@@ -211,6 +253,10 @@ internal sealed class ChannelsEditorValidationAdapter
             ChannelsEditorValidationMessages.MattermostServerUrlAbsoluteHttp => ChannelsEditorFieldPaths.MattermostServerUrl,
             ChannelsEditorValidationMessages.MattermostBotTokenRequired => ChannelsEditorFieldPaths.MattermostBotToken,
             ChannelsEditorValidationMessages.MattermostCallbackUrlAbsoluteHttp => ChannelsEditorFieldPaths.MattermostCallbackUrl,
+            ChannelsEditorValidationMessages.TeamsTenantIdRequired => ChannelsEditorFieldPaths.TeamsTenantId,
+            ChannelsEditorValidationMessages.TeamsClientIdRequired => ChannelsEditorFieldPaths.TeamsClientId,
+            ChannelsEditorValidationMessages.TeamsBotIdRequired => ChannelsEditorFieldPaths.TeamsBotId,
+            ChannelsEditorValidationMessages.TeamsClientSecretRequired => ChannelsEditorFieldPaths.TeamsClientSecret,
             _ => null,
         };
 }

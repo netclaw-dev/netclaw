@@ -7,6 +7,8 @@ using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Serialization;
 using Google.Protobuf;
+using System.Security.Cryptography;
+using System.Text;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
@@ -14,6 +16,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Serialization;
 using Netclaw.Actors.Sessions;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -43,6 +46,23 @@ public sealed class SerializationRoundTripTests : TestKit
     {
         var serializer = Sys.Serialization.FindSerializerFor(value);
         return serializer.ToBinary(value);
+    }
+
+    [Fact]
+    public void ReminderDelivery_round_trips_teams_current_session_origin()
+    {
+        var original = new ReminderDelivery
+        {
+            Kind = DeliveryKind.CurrentSession,
+            SessionId = "teams-conversation-1",
+            OriginChannelType = ChannelType.Teams
+        };
+
+        var result = NetclawProtoMapper.FromProto(NetclawProtoMapper.ToProto(original));
+
+        Assert.Equal(original.Kind, result.Kind);
+        Assert.Equal(original.SessionId, result.SessionId);
+        Assert.Equal(ChannelType.Teams, result.OriginChannelType);
     }
 
     [Fact]
@@ -571,6 +591,54 @@ public sealed class SerializationRoundTripTests : TestKit
     }
 
     [Fact]
+    public void Durable_activity_dispatch_records_round_trip()
+    {
+        const string fingerprint = "F046E9C6D25D3B4CBE37DEEF6320CA470BA62B2799457CF16B8C1C541E2666F1";
+        const string evictedFingerprint = "E17729265FA2A3B1D16EC816E9BBA31B9FCDE6E919C50C1E7C4425F0A3B37807";
+        var reserved = new DurableActivityDispatchReserved(fingerprint, evictedFingerprint);
+        var released = new DurableActivityDispatchReleased(fingerprint);
+
+        Assert.Equal(reserved, RoundTrip(reserved));
+        Assert.Equal(released, RoundTrip(released));
+    }
+
+    [Fact]
+    public void Durable_activity_dispatch_snapshot_round_trips_empty_one_and_maximum_state()
+    {
+        var empty = RoundTrip(new DurableActivityDispatchSnapshot([]));
+        var one = new DurableActivityDispatchSnapshot(["F046E9C6D25D3B4CBE37DEEF6320CA470BA62B2799457CF16B8C1C541E2666F1"]);
+        var recoveredOne = RoundTrip(one);
+        var maximum = Enumerable.Range(0, 1_024)
+            .Select(static index => $"{index:X64}")
+            .ToArray();
+        var recoveredMaximum = RoundTrip(new DurableActivityDispatchSnapshot(maximum));
+
+        Assert.Empty(empty.ActivityFingerprints);
+        Assert.Equal(one.ActivityFingerprints, recoveredOne.ActivityFingerprints);
+        Assert.Equal(maximum, recoveredMaximum.ActivityFingerprints);
+    }
+
+    [Fact]
+    public void Durable_activity_dispatch_default_payloads_deserialize_without_raw_activity_content()
+    {
+        const string activityId = "opaque-活動-id";
+        var fingerprint = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(activityId)));
+        var serialized = Serialize(new DurableActivityDispatchReserved(fingerprint, null));
+        var serializer = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
+
+        var reserved = Assert.IsType<DurableActivityDispatchReserved>(serializer.FromBinary([], "dadr-v1"));
+        var snapshot = Assert.IsType<DurableActivityDispatchSnapshot>(serializer.FromBinary([], "dads-v1"));
+        var snapshotWithUnknownField = Assert.IsType<DurableActivityDispatchSnapshot>(
+            serializer.FromBinary([0x10, 0x01], "dads-v1"));
+
+        Assert.Empty(reserved.ActivityFingerprint);
+        Assert.Null(reserved.EvictedActivityFingerprint);
+        Assert.Empty(snapshot.ActivityFingerprints);
+        Assert.Empty(snapshotWithUnknownField.ActivityFingerprints);
+        Assert.DoesNotContain(activityId, Encoding.UTF8.GetString(serialized), StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Unknown_manifest_throws_on_deserialize()
     {
         var serializer = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
@@ -580,6 +648,27 @@ public sealed class SerializationRoundTripTests : TestKit
 
         Assert.NotNull(ex);
         Assert.Contains("Unknown manifest", ex.Message);
+    }
+
+    [Fact]
+    public void Legacy_teams_manifests_decode_only_to_a_compatibility_envelope()
+    {
+        var serializer = new Serialization.NetclawProtobufSerializer((Akka.Actor.ExtendedActorSystem)Sys);
+        var legacy = new Serialization.Proto.TeamsProactiveDestinationCapturedProto
+        {
+            TenantId = "tenant-a",
+            ConversationId = "conversation-a",
+            Scope = 0,
+            ServiceUrl = "https://service.invalid/",
+            UserId = "user-a"
+        };
+
+        var recovered = Assert.IsType<LegacyChannelPersistenceEnvelope>(
+            serializer.FromBinary(legacy.ToByteArray(), "tpdc-v1"));
+
+        Assert.Equal("tpdc-v1", recovered.Manifest);
+        Assert.Equal(legacy.ToByteArray(), recovered.Payload);
+        Assert.Throws<ArgumentException>(() => serializer.Manifest(recovered));
     }
 
     [Fact]
@@ -1114,4 +1203,5 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Empty(result.Proposals);
         Assert.Equal(0L, result.TimestampMs);
     }
+
 }

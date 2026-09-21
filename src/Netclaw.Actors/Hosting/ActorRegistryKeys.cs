@@ -87,3 +87,10 @@ public sealed class DiscordGatewayActorKey;
 /// Mode B reminder turns through the Mattermost channel's existing routing hierarchy.
 /// </summary>
 public sealed class MattermostGatewayActorKey;
+
+/// <summary>
+/// Marker type for the Teams reminder gateway. The generic reminder dispatcher
+/// uses it to route a trusted current-session turn back to its owning Teams
+/// binding without exposing Teams SDK types to the actor runtime.
+/// </summary>
+public sealed class TeamsGatewayActorKey;

@@ -357,6 +357,52 @@ public class ToolRegistryTests
     }
 
     [Fact]
+    public void Historical_Mcp_name_conversion_does_not_require_or_create_a_registration()
+    {
+        var registry = new ToolRegistry();
+        const string canonical = "helpdesk-dev/helpdesk_capabilities";
+        const string alias = "helpdesk-dev__helpdesk_capabilities";
+
+        Assert.Equal(alias, registry.ToLlmFacingName(canonical));
+        Assert.Equal(alias, registry.ToLlmFacingName(alias));
+        Assert.Equal("shell_execute", registry.ToLlmFacingName("shell_execute"));
+        Assert.Null(registry.GetByName(canonical));
+        Assert.Null(registry.GetByName(alias));
+        Assert.Empty(registry.GetAllTools());
+        Assert.Empty(registry.GetToolsForGrants(new HashSet<string> { "mcp:helpdesk-dev" }));
+    }
+
+    [Fact]
+    public void Historical_Mcp_alias_survives_server_removal_without_restoring_access()
+    {
+        var registry = new ToolRegistry();
+        var tool = new McpToolAdapter(CreateFakeTool("helpdesk_capabilities"), "helpdesk-dev", "helpdesk_capabilities");
+        registry.PublishMcpServerTools("helpdesk-dev", [tool]);
+        var alias = registry.ToLlmFacingName(tool.Name);
+        Assert.Equal(tool.LlmFacingName.Value, alias);
+        Assert.Single(registry.GetToolsForGrants(new HashSet<string> { "mcp:helpdesk-dev" }));
+
+        registry.PublishMcpServerTools("helpdesk-dev", []);
+
+        Assert.Equal(alias, registry.ToLlmFacingName(tool.Name));
+        Assert.Null(registry.GetByName(tool.Name));
+        Assert.Null(registry.GetByName(alias));
+        Assert.Empty(registry.GetToolsForGrants(new HashSet<string> { "mcp:helpdesk-dev" }));
+    }
+
+    [Theory]
+    [InlineData("helpdesk.dev/capabilities")]
+    [InlineData("helpdesk-dev/invalid name")]
+    [InlineData("")]
+    public void Historical_tool_name_conversion_rejects_names_without_a_valid_alias(string name)
+    {
+        var registry = new ToolRegistry();
+
+        Assert.Throws<ArgumentException>(() => registry.ToLlmFacingName(name));
+        Assert.Empty(registry.GetAllTools());
+    }
+
+    [Fact]
     public void Canonical_and_LlmFacing_round_trip_for_first_party_tools_is_identity()
     {
         // First-party tool names already satisfy the Anthropic regex —

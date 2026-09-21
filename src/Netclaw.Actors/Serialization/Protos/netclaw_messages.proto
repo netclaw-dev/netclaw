@@ -38,6 +38,7 @@ enum ChannelType {
   CHANNEL_TYPE_WEBHOOK = 5;
   CHANNEL_TYPE_DISCORD = 6;
   CHANNEL_TYPE_MATTERMOST = 7;
+  CHANNEL_TYPE_TEAMS = 8;
 }
 
 // ── Value types ──
@@ -332,6 +333,110 @@ message PendingApprovalPromptTrackedProto {
 
 message PendingApprovalPromptClearedProto {
   string call_id = 1;
+}
+
+// ── Legacy Teams compatibility payloads ──
+// Decode-only after the Teams dual-read migration. The generic Actors mapper
+// and serializer must never write these messages or their manifests. They
+// remain solely so a Team actor can recover an existing journal, then write a
+// Teams-owned v2 snapshot. Remove only after the persistence retention window.
+
+message TeamsApprovalPendingCreatedProto {
+  string call_id = 1;
+  string correlation_id = 2;
+  string nonce_hash = 3;
+  optional string requester_sender_id = 4;
+  optional int32 requester_principal = 5;
+  int64 expires_at_unix_milliseconds = 6;
+}
+
+message TeamsApprovalCardDeliveredProto {
+  string correlation_id = 1;
+  string prompt_id = 2;
+}
+
+message TeamsApprovalConsumedProto {
+  string correlation_id = 1;
+  string decision = 2;
+  int64 consumed_at_unix_milliseconds = 3;
+}
+
+// ── Durable channel activity dispatch ──
+
+message DurableActivityDispatchReservedProto {
+  string activity_fingerprint = 1;
+  optional string evicted_activity_fingerprint = 2;
+}
+
+message DurableActivityDispatchReleasedProto {
+  string activity_fingerprint = 1;
+}
+
+message DurableActivityDispatchSnapshotProto {
+  repeated string activity_fingerprints = 1;
+  repeated TeamsApprovalSnapshotEntryProto teams_approvals = 2;
+  optional TeamsProactiveDestinationSnapshotEntryProto teams_destination = 3;
+  repeated TeamsProactiveDeliverySnapshotEntryProto teams_proactive_deliveries = 4;
+}
+
+message TeamsApprovalSnapshotEntryProto {
+  string call_id = 1;
+  string correlation_id = 2;
+  string nonce_hash = 3;
+  optional string requester_sender_id = 4;
+  optional int32 requester_principal = 5;
+  int64 expires_at_unix_milliseconds = 6;
+  optional string prompt_id = 7;
+  optional string decision = 8;
+}
+
+// ── Legacy Teams proactive reminder delivery ──
+// Decode-only compatibility records. New proactive state is in
+// teams_persistence.proto under Netclaw.Channels.Teams.
+
+message TeamsProactiveDestinationCapturedProto {
+  string tenant_id = 1;
+  string conversation_id = 2;
+  int32 scope = 3;
+  string service_url = 4;
+  optional string root_activity_id = 5;
+  optional string team_id = 6;
+  optional string channel_id = 7;
+  optional string user_id = 8;
+}
+
+message TeamsProactiveDestinationInvalidatedProto {}
+
+message TeamsProactiveDeliveryRecordedProto {
+  string delivery_key = 1;
+  int32 state = 2;
+  optional string evicted_delivery_key = 3;
+}
+
+message TeamsProactiveDestinationSnapshotEntryProto {
+  string tenant_id = 1;
+  string conversation_id = 2;
+  int32 scope = 3;
+  string service_url = 4;
+  optional string root_activity_id = 5;
+  optional string team_id = 6;
+  optional string channel_id = 7;
+  optional string user_id = 8;
+}
+
+message TeamsProactiveDeliverySnapshotEntryProto {
+  string delivery_key = 1;
+  int32 state = 2;
+}
+
+message DurableTeamsChannelActivityMappedProto {
+  string activity_fingerprint = 1;
+  string session_id = 2;
+  optional string evicted_activity_fingerprint = 3;
+}
+
+message DurableTeamsChannelActivityIndexSnapshotProto {
+  repeated DurableTeamsChannelActivityMappedProto entries = 1;
 }
 
 // ── Memory observer events ──

@@ -1,0 +1,18 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "type": "message",
+  "id": "ACTIVITY_ROOT_LIVE_WRAPPER_VARIANT_TEST_001",
+  "text": "<at>synthetic bot</at> harmless live-wrapper channel root probe",
+  "from": { "id": "USER_TEST_001" },
+  "recipient": { "id": "28:BOT_TEST_001" },
+  "conversation": { "id": "CONVERSATION_ROOT_LIVE_WRAPPER_VARIANT_TEST_001;messageid=ACTIVITY_ROOT_LIVE_WRAPPER_VARIANT_TEST_001", "tenantId": "TENANT_TEST_001", "conversationType": "channel", "isGroup": true },
+  "channelData": null,
+  "entities": [
+    { "type": "mention", "text": "<at>synthetic bot</at>", "mentioned": { "id": "28:BOT_TEST_001", "name": "synthetic bot" } },
+    { "type": "syntheticSdkEntity" }
+  ],
+  "attachments": [
+    { "contentType": "text/html", "content": "<div><a href=\"https://rendering.invalid/metadata\">synthetic rendering metadata</a></div>", "name": null, "contentUrl": null }
+  ],
+  "replyToId": null
+}

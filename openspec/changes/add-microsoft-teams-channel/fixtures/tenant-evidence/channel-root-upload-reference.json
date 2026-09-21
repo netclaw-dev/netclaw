@@ -1,0 +1,15 @@
+{
+  "evidence": "sanitized tenant-backed evidence",
+  "capture": "bounded attachment structure only",
+  "attachment": {
+    "contentType": "text/html",
+    "contentShape": "json-string",
+    "contentNonEmpty": true,
+    "hasName": false,
+    "hasContentUrl": false,
+    "hasThumbnailUrl": false,
+    "hasEmbeddedContentReference": true,
+    "hasEmbeddedGraphBackedContentReference": false,
+    "hasChannelData": true
+  }
+}
