@@ -13,7 +13,7 @@
 
 ## 3. Delivery evidence
 
-- [ ] 3.1 Run focused and full affected tests, Slopwatch, file-header checks, and strict OpenSpec validation.
-- [ ] 3.2 Run approval native smoke or record a reproducible environment blocker.
+- [x] 3.1 Run focused and full affected tests, Slopwatch, file-header checks, and strict OpenSpec validation.
+- [x] 3.2 Run approval native smoke or record a reproducible environment blocker.
 - [ ] 3.3 Obtain an independent security review and resolve all authority findings.
 - [x] 3.4 Open a draft pull request with the contract, verification evidence, and remaining gates.
