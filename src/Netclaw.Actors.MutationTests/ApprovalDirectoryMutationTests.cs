@@ -4,8 +4,10 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.MutationTests;
@@ -119,6 +121,56 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
                 CreateCandidate(ApprovalShell.Bash, unrelated)],
             _outside,
             out _));
+    }
+
+    [Fact]
+    public void Repository_persistence_revalidates_the_candidate_worktree()
+    {
+        var main = Path.Combine(_basePath, "persistence-main");
+        var sibling = Path.Combine(_basePath, "persistence-sibling");
+        var unrelated = Path.Combine(_basePath, "persistence-unrelated");
+        var candidateDirectory = Path.Combine(sibling, "tasks");
+        RunGit(_basePath, "init", main);
+        RunGit(main, "worktree", "add", "--orphan", "-b", "persistence-sibling", sibling);
+        RunGit(_basePath, "init", unrelated);
+        Directory.CreateDirectory(candidateDirectory);
+
+        var candidate = CreateCandidate(ApprovalShell.Bash, candidateDirectory);
+        var grant = new ToolApprovalGrant(candidate, Directory: null)
+        {
+            Repository = Path.Combine(main, ".git"),
+            RepositoryWorktree = sibling,
+        };
+        Assert.True(ToolApprovalActor.TryCreateEntries(
+            new ToolName(ShellTool.ToolName), [grant], out var persistent, out _));
+        Assert.Single(persistent);
+
+        var wrongIdentity = grant with { Repository = Path.Combine(unrelated, ".git") };
+        Assert.False(ToolApprovalActor.TryCreateEntries(
+            new ToolName(ShellTool.ToolName), [wrongIdentity], out _, out _));
+        var wrongRoot = grant with { RepositoryWorktree = main };
+        Assert.False(ToolApprovalActor.TryCreateEntries(
+            new ToolName(ShellTool.ToolName), [wrongRoot], out _, out _));
+        var missingCandidate = grant with
+        {
+            Candidate = candidate with
+            {
+                Directory = Path.Combine(sibling, "missing"),
+            },
+        };
+        Assert.False(ToolApprovalActor.TryCreateEntries(
+            new ToolName(ShellTool.ToolName), [missingCandidate], out _, out _));
+
+        Directory.Delete(candidateDirectory);
+        RunGit(main, "worktree", "add", "--orphan", "-b", "nested-candidate", candidateDirectory);
+        Assert.True(GitRepositoryApprovalScope.TryResolveCandidate(
+            candidateDirectory, cwd: null, out var nestedScope));
+        Assert.True(PathUtility.AreEquivalentPaths(
+            nestedScope!.CommonDirectory, grant.Repository));
+        Assert.False(PathUtility.AreEquivalentPaths(
+            nestedScope.WorktreeRoot, grant.RepositoryWorktree));
+        Assert.False(ToolApprovalActor.TryCreateEntries(
+            new ToolName(ShellTool.ToolName), [grant], out _, out _));
     }
 
     public void Dispose() => Directory.Delete(_basePath, recursive: true);

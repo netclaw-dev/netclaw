@@ -7,7 +7,7 @@
 
 ## 2. Security gates and guidance
 
-- [ ] 2.1 Update the focused repository mutation target and `TOOLING.md`. Verify every expected mutant is killed.
+- [x] 2.1 Update the focused repository mutation target and `TOOLING.md`. Verify every expected mutant is killed.
 - [ ] 2.2 Update the operations skill and approval runbook. Verify the skill version changes and the behavioral eval suite passes.
 - [x] 2.3 Audit all new samples for PII. Verify fixtures contain only synthetic names, paths, identities, and commands.
 
@@ -16,4 +16,4 @@
 - [ ] 3.1 Run focused and full affected tests, Slopwatch, file-header checks, and strict OpenSpec validation.
 - [ ] 3.2 Run approval native smoke or record a reproducible environment blocker.
 - [ ] 3.3 Obtain an independent security review and resolve all authority findings.
-- [ ] 3.4 Open a draft pull request with the contract, verification evidence, and remaining gates.
+- [x] 3.4 Open a draft pull request with the contract, verification evidence, and remaining gates.
