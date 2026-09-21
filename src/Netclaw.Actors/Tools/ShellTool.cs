@@ -56,7 +56,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
             "The smallest shell operation that answers the request. Use one operation per call. Keep independent searches and diagnostics separate; do not join them with separators or labels. Add a pipeline only when the requested result requires it. Omit WorkingDirectory for declared-project work. Do not use shell for disposable text unless shell behavior is requested. Do not verify successful structured results with shell. If approval is required but no interactive requester is available, do not retry or substitute the call during that turn. After an access denial, do not retry that call during the same user turn. Do not change its scope or substitute another tool to evade the denial. A later explicit user request can start a new call under normal approval policy. Apply one 'Tool execution deferred:' correction unchanged.")]
         string Command,
         [param: Description(
-            "Set only for one call in a named child directory or worktree. Omit for declared-project work. Standard temporary APIs use temp_dir.")]
+            "Set for one call in a named child directory or worktree. Omit for ordinary declared-project work. After one-call directory advice, set this to project_dir if the task needs the original inline directory behavior. Standard temporary APIs use temp_dir.")]
         string? WorkingDirectory = null);
 
     public ShellTool(ToolConfig config, ToolPathPolicy pathPolicy, ShellCommandPolicy commandPolicy)

@@ -24,6 +24,9 @@ internal abstract record ToolCorrection
 
     /// <summary>Suggests declaration of the shell directory as the current project.</summary>
     internal sealed record ProjectDirectorySuggested(string Directory) : ToolCorrection;
+
+    /// <summary>Suggests a one-call shell directory without changing the project declaration.</summary>
+    internal sealed record ShellWorkingDirectorySuggested(string Directory) : ToolCorrection;
 }
 
 /// <summary>Groups compatible correction facts for one tool attempt.</summary>
@@ -79,6 +82,7 @@ internal sealed record ToolCorrectionDelivery(
         return corrections.Items switch
         {
             [ToolCorrection.ProjectDirectorySuggested project] => CreateProject(project.Directory),
+            [ToolCorrection.ShellWorkingDirectorySuggested shell] => CreateShellDirectory(shell.Directory),
             [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
             [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] when managedTemporaryCall is not null
                 => CreateTemporary(temporary.Target, managedTemporaryCall),
@@ -97,6 +101,14 @@ internal sealed record ToolCorrectionDelivery(
             "Tool execution deferred: working_directory_not_declared\n" +
             $"Project directory: '{directory}'.",
             new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
+
+    private static ToolCorrectionDelivery CreateShellDirectory(string directory)
+        => new(
+            "Tool execution deferred: use_shell_working_directory\n" +
+            $"One-call working directory: '{directory}'.",
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.UseShellWorkingDirectory),
             NativeTool: null,
             ManagedTemporaryStateChange: null);
 

@@ -55,6 +55,7 @@ internal enum ShellPolicyTraceReason
     TraceLimitReached = 21,
     PolicyDenied = 22,
     AgentCorrection = 23,
+    PersistentRepositoryGrant = 24,
 }
 
 internal enum ShellScopeRelation
@@ -67,6 +68,7 @@ internal enum ShellScopeRelation
     OutsideGrantRoot = 5,
     SymlinkBoundary = 6,
     UnderIntentRoot = 7,
+    SameRepository = 8,
 }
 
 internal sealed record ShellPolicyTraceRow(
@@ -125,9 +127,11 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             GetExecutableBasename(candidate.Candidate),
             nearMiss is null
                 ? ShellCoverageKind.Uncovered
-                : nearMiss.Grant.Directory is null
-                    ? ShellCoverageKind.PersistentGlobal
-                    : ShellCoverageKind.PersistentFolder,
+                : nearMiss.Grant.Repository is not null
+                    ? ShellCoverageKind.PersistentRepository
+                    : nearMiss.Grant.Directory is null
+                        ? ShellCoverageKind.PersistentGlobal
+                        : ShellCoverageKind.PersistentFolder,
             nearMiss is null
                 ? ShellScopeRelation.None
                 : ToScopeRelation(nearMiss),
@@ -161,6 +165,11 @@ internal sealed class ShellPolicyDecisionTraceBuilder
                 ShellCoverageKind.PersistentFolder,
                 ShellPolicyTraceReason.PersistentFolderGrant,
                 ShellScopeRelation.UnderGrantRoot),
+            ShellPolicyCoverageSource.PersistentRepository => (
+                ShellPolicyTraceStage.StoredGrantMatch,
+                ShellCoverageKind.PersistentRepository,
+                ShellPolicyTraceReason.PersistentRepositoryGrant,
+                ShellScopeRelation.SameRepository),
             ShellPolicyCoverageSource.ReviewedSafeReal => (
                 ShellPolicyTraceStage.ReviewedSafePolicy,
                 ShellCoverageKind.ReviewedSafePolicy,
@@ -326,6 +335,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ShellCoverageKind.Session => ShellPolicyTraceReason.SessionGrant,
         ShellCoverageKind.PersistentGlobal => ShellPolicyTraceReason.PersistentGlobalGrant,
         ShellCoverageKind.PersistentFolder => ShellPolicyTraceReason.PersistentFolderGrant,
+        ShellCoverageKind.PersistentRepository => ShellPolicyTraceReason.PersistentRepositoryGrant,
         _ => ShellPolicyTraceReason.None,
     };
 
@@ -362,6 +372,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ShellCoverageKind.Session => ShellScopeRelation.ThisChat,
         ShellCoverageKind.PersistentGlobal => ShellScopeRelation.Global,
         ShellCoverageKind.PersistentFolder => ShellScopeRelation.UnderGrantRoot,
+        ShellCoverageKind.PersistentRepository => ShellScopeRelation.SameRepository,
         _ => ShellScopeRelation.None,
     };
 
@@ -370,9 +381,11 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         {
             ShellApprovalNearMissReason.OutsideDirectory => ShellScopeRelation.OutsideGrantRoot,
             ShellApprovalNearMissReason.Symlink => ShellScopeRelation.SymlinkBoundary,
-            _ => nearMiss.Grant.Directory is null
-                ? ShellScopeRelation.Global
-                : ShellScopeRelation.None,
+            _ => nearMiss.Grant.Repository is not null
+                ? ShellScopeRelation.SameRepository
+                : nearMiss.Grant.Directory is null
+                    ? ShellScopeRelation.Global
+                    : ShellScopeRelation.None,
         };
 
     private static bool IsUnsafeTextCodeUnit(char value)

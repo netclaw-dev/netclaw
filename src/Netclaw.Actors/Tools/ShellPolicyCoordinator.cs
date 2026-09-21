@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
 
@@ -221,9 +222,62 @@ internal sealed class ShellPolicyCoordinator(
             return null;
 
         if (isMessy)
-            return null;
+            return candidates.Count == 0
+                ? SelectOneCallDirectoryCorrection(analysis, toolCall, context)
+                : null;
 
         return GetAvailableProjectCorrection(candidates, analysis.WorkingDirectory, context.Invocation);
+    }
+
+    private static ToolCorrection.ShellWorkingDirectorySuggested? SelectOneCallDirectoryCorrection(
+        ShellCommandAnalysis analysis,
+        FunctionCallContent toolCall,
+        ToolExecutionContext context)
+    {
+        if (analysis.Environment.Grammar != ShellGrammar.Bash
+            || !analysis.IsResolved
+            || analysis.Commands.Count < 2
+            || !string.IsNullOrWhiteSpace(ToolArgumentHelper.GetString(toolCall.Arguments, "WorkingDirectory"))
+            || context.Invocation.ProjectDirectory is not { } projectDirectory)
+        {
+            return null;
+        }
+
+        var first = analysis.Commands[0];
+        if (!first.IsComplete
+            || first.ImmediateRole != CommandOccurrenceRole.Ordinary
+            || first.WorkingDirectoryEffect is not ShellWorkingDirectoryEffect.ChangesOnSuccess
+                { Target: ShellValueDomain.Exact exact }
+            || first.Ancestry.Count != 2
+            || first.Ancestry[0] is not { Ancestor: ShellBlockSyntax, Region: CommandAncestryRegion.Root }
+            || first.Ancestry[1] is not
+                { Ancestor: CommandListSyntax list, Region: CommandAncestryRegion.Statement, ChildIndex: 0 }
+            || list.Items.Count < 2
+            || list.Items[0] is not { Operator: CompoundOperator.None, Command: SimpleCommandSyntax simple }
+            || !ReferenceEquals(simple.Clause, first.Clause)
+            || list.Items[1].Operator != CompoundOperator.AndIf
+            || exact.Value.Any(char.IsControl)
+            || !ShellPathRules.TryNormalize(exact.Value, ShellPathStyle.Posix, out var target))
+        {
+            return null;
+        }
+
+        try
+        {
+            if (!PathUtility.IsWithinRoot(target, projectDirectory)
+                || PathUtility.AreEquivalentPaths(target, projectDirectory)
+                || PathUtility.ContainsSymlinkSegment(projectDirectory, target)
+                || !Directory.Exists(target))
+            {
+                return null;
+            }
+        }
+        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+
+        return new ToolCorrection.ShellWorkingDirectorySuggested(target);
     }
 
     private ToolCorrection.ProjectDirectorySuggested? GetAvailableProjectCorrection(

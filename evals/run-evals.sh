@@ -1786,8 +1786,8 @@ assert_subagent_project_scope_declaration() {
 
     local child_log
     local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/logs/sessions" -type f \
-        -path '*_subagent_project-scope-analyst_*/session.log' \
+    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/subagents/*/logs/session.log' \
         -newer "$PROJECT_SCOPE_LOG_MARKER" 2>/dev/null)
     [[ "${#child_logs[@]}" -eq 1 ]] || return 1
     child_log="${child_logs[0]}"
@@ -1798,23 +1798,38 @@ assert_subagent_project_scope_declaration() {
         'SubAgent \[project-scope-analyst\] project directory set to /home/netclaw/.netclaw/workspaces/project-scope-target' \
         "$child_log" | head -1 | cut -d: -f1)
     shell_line=$(grep -an \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
         "$child_log" | head -1 | cut -d: -f1)
+    local -a shell_calls
+    mapfile -t shell_calls < <(grep -a \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
+        "$child_log" | sed -n 's/.* callId=\([^ ]*\) toolName=shell_execute.*/\1/p')
+    shell_count="${#shell_calls[@]}"
+    [[ "$shell_count" -eq 2 ]] || return 1
+    shell_result_count=0
+    local call_id
+    for call_id in "${shell_calls[@]}"; do
+        grep -q "callId=$call_id outcomeCategory=Success" "$child_log" || return 1
+        shell_result_count=$((shell_result_count + 1))
+    done
     shell_result_line=$(grep -an \
-        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
+        "callId=${shell_calls[0]} outcomeCategory=Success" \
         "$child_log" | head -1 | cut -d: -f1)
-    shell_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
-        "$child_log")
-    shell_result_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
-        "$child_log")
     status_command_count=$(grep -aEo \
-        'shell_execute#[^(]+\(Command=git status --short, WorkingDirectory=/home/netclaw/\.netclaw/workspaces/project-scope-target,' \
+        'shell_execute#[^(]+\(Command=git status --short,' \
         "$child_log" | wc -l | tr -d ' ')
     diff_command_count=$(grep -aEo \
-        'shell_execute#[^(]+\(Command=git diff --stat, WorkingDirectory=/home/netclaw/\.netclaw/workspaces/project-scope-target,' \
+        'shell_execute#[^(]+\(Command=git diff --stat,' \
         "$child_log" | wc -l | tr -d ' ')
+
+    local preview
+    while IFS= read -r preview; do
+        if grep -q 'WorkingDirectory=' <<<"$preview"; then
+            grep -q \
+                'WorkingDirectory=/home/netclaw/.netclaw/workspaces/project-scope-target,' \
+                <<<"$preview" || return 1
+        fi
+    done < <(grep -aEo 'shell_execute#[^(]+\([^)]*\)' "$child_log")
 
     [[ -n "$declared_line" && -n "$shell_line" && -n "$shell_result_line" \
         && "$shell_count" -eq 2 && "$shell_result_count" -eq 2 \
@@ -1837,8 +1852,8 @@ assert_approval_natural_subagent_project_review() {
 
     local child_log
     local -a child_logs
-    mapfile -t child_logs < <(find "$EVAL_HOME/logs/sessions" -type f \
-        -path '*_subagent_project-scope-analyst_*/session.log' \
+    mapfile -t child_logs < <(find "$EVAL_HOME/data/sessions" -type f \
+        -path '*/subagents/*/logs/session.log' \
         -newer "$PROJECT_SCOPE_LOG_MARKER" 2>/dev/null)
     [[ "${#child_logs[@]}" -eq 1 ]] || return 1
     child_log="${child_logs[0]}"
@@ -1848,14 +1863,19 @@ assert_approval_natural_subagent_project_review() {
         'SubAgent \[project-scope-analyst\] project directory set to /home/netclaw/.netclaw/workspaces/project-scope-target' \
         "$child_log" | head -1 | cut -d: -f1)
     first_shell_line=$(grep -an \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
         "$child_log" | head -1 | cut -d: -f1)
-    shell_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool start .* name=shell_execute' \
-        "$child_log")
-    shell_result_count=$(grep -ac \
-        'SubAgent \[project-scope-analyst\] tool \[shell_execute\] result: Exit code: 0' \
-        "$child_log")
+    local -a shell_calls
+    mapfile -t shell_calls < <(grep -a \
+        'SubAgent \[project-scope-analyst\] authorization attempt started .* toolName=shell_execute' \
+        "$child_log" | sed -n 's/.* callId=\([^ ]*\) toolName=shell_execute.*/\1/p')
+    shell_count="${#shell_calls[@]}"
+    shell_result_count=0
+    local call_id
+    for call_id in "${shell_calls[@]}"; do
+        grep -q "callId=$call_id outcomeCategory=Success" "$child_log" || return 1
+        shell_result_count=$((shell_result_count + 1))
+    done
 
     [[ -n "$first_shell_line" && "$shell_count" -ge 1 \
         && "$shell_result_count" -eq "$shell_count" ]] || return 1

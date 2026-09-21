@@ -97,6 +97,27 @@ public sealed class ToolApprovalStateTests
     }
 
     [Fact]
+    public void A_legacy_prompt_cannot_authorize_a_new_repository_scope()
+    {
+        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            [], ApprovalOptionKeys.ApproveRepository, "/work/main/.git"));
+        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+            [], ApprovalOptionKeys.ApproveOnce, repositoryCommonDirectory: null));
+        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            ApprovalOptionKeys.ApproveRepository,
+            "/work/main/.git"));
+        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            [ApprovalOptionKeys.ApproveRepository],
+            ApprovalOptionKeys.ApproveRepository,
+            repositoryCommonDirectory: null));
+        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+            [ApprovalOptionKeys.ApproveRepository],
+            ApprovalOptionKeys.ApproveRepository,
+            "/work/main/.git"));
+    }
+
+    [Fact]
     public void Approval_turn_transitions_reject_invalid_source_states()
     {
         var state = new ToolApprovalState();

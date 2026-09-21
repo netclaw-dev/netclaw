@@ -24,6 +24,10 @@ internal abstract class ApprovalEntryWire
     public string? Directory { get; init; }
 
     [JsonPropertyOrder(4)]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Repository { get; init; }
+
+    [JsonPropertyOrder(5)]
     public DateTimeOffset? CreatedAt { get; init; }
 }
 

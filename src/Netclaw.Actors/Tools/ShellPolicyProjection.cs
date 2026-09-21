@@ -19,6 +19,7 @@ internal enum ShellCoverageKind
     PersistentFolder = 4,
     ReviewedSafePolicy = 5,
     Denied = 6,
+    PersistentRepository = 7,
 }
 
 internal enum ShellPolicyCoverageSource
@@ -31,6 +32,7 @@ internal enum ShellPolicyCoverageSource
     ReviewedSafeReal = 5,
     ReviewedSafeIntent = 6,
     ApprovalExemptSideEffect = 7,
+    PersistentRepository = 8,
 }
 
 internal readonly record struct ShellPolicyCandidateId

@@ -3607,6 +3607,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             HasThirdPartyAdoptedContext = msg.HasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = msg.AdoptedSpeakerIds,
             Cwd = msg.Cwd,
+            RepositoryCommonDirectory = msg.RepositoryCommonDirectory,
             OptionKeys = msg.Options.Select(o => o.Key.Value).ToArray(),
             Candidates = msg.Candidates,
             TurnContext = _currentTurnContext?.ToRecord(),
@@ -3835,6 +3836,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
         ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
         ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
+        ApprovalOptionKeys.ApproveRepository => ApprovalDecision.ApprovedRepository,
         ApprovalOptionKeys.ApproveEverywhere => ApprovalDecision.ApprovedEverywhere,
         ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
         _ => ApprovalDecision.Denied
@@ -3914,11 +3916,12 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return (null, ApprovalNackReasons.WrongRequester);
         }
 
-        // Legacy journal entries created before option persistence landed have
-        // an empty OptionKeys list. Skip this check for that concrete recovery
-        // path only; live prompts always persist their offered option keys.
-        if (pending.Request.OptionKeys.Count > 0
-            && !pending.Request.OptionKeys.Any(key => string.Equals(key, msg.SelectedKey.Value, StringComparison.Ordinal)))
+        // Legacy journal entries lack offered option keys. They cannot prove
+        // that the new repository scope appeared in the original prompt.
+        if (!IsOfferedApprovalOption(
+                pending.Request.OptionKeys,
+                msg.SelectedKey.Value,
+                pending.Request.RepositoryCommonDirectory))
         {
             _log.Warning(
                 "Ignoring unavailable approval option {SelectedKey} for call {CallId}; offered options were [{OptionKeys}]",
@@ -3944,6 +3947,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         return (decision, null);
     }
 
+    internal static bool IsOfferedApprovalOption(
+        IReadOnlyList<string> optionKeys,
+        string selectedKey,
+        string? repositoryCommonDirectory)
+        => selectedKey == ApprovalOptionKeys.ApproveRepository
+            ? repositoryCommonDirectory is not null
+              && optionKeys.Contains(selectedKey, StringComparer.Ordinal)
+            : optionKeys.Count == 0 || optionKeys.Contains(selectedKey, StringComparer.Ordinal);
+
     private async Task PersistApprovalGrantIfNeededAsync(
         PendingToolInteraction pending,
         ApprovalDecision decision,
@@ -3953,6 +3965,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // the re-driven call itself — pass the gate without another prompt.
         if (decision is ApprovalDecision.ApprovedSession
                 or ApprovalDecision.ApprovedAlways
+                or ApprovalDecision.ApprovedRepository
                 or ApprovalDecision.ApprovedEverywhere
             && _approvalService is not null)
         {
@@ -4524,6 +4537,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return;
 
         var persistent = decision is ApprovalDecision.ApprovedAlways
+            or ApprovalDecision.ApprovedRepository
             or ApprovalDecision.ApprovedEverywhere;
         var globalWildcard = decision == ApprovalDecision.ApprovedEverywhere;
         var request = pending.Request;
@@ -4535,6 +4549,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         // matcher doesn't populate Candidates).
         if (request.Candidates.Count == 0)
         {
+            if (decision == ApprovalDecision.ApprovedRepository)
+                throw new InvalidOperationException("A repository grant requires exact shell candidates.");
+
             var fallbackCwd = globalWildcard ? null : request.Cwd;
             await _approvalService.RecordApprovalAsync(
                 (ToolApprovalSessionId)_sessionId.Value,
@@ -4564,7 +4581,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var grantContext = ApprovalGrantContext.FromDecision(
             decision,
             request.Cwd,
-            sessionDirectory);
+            sessionDirectory,
+            request.RepositoryCommonDirectory);
 
         if (_approvalService is IStructuredToolApprovalService structuredApprovalService)
         {
@@ -4584,6 +4602,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
 
             return;
         }
+
+        if (decision == ApprovalDecision.ApprovedRepository)
+            throw new InvalidOperationException("Repository grants require structured approval storage.");
 
         var grouping = ApprovalBucketBuilder.Build(
             request.Candidates,

@@ -55,6 +55,12 @@ Netclaw.Actors, Netclaw.Configuration, OllamaSharp / OpenAI client
 
 Binds: address and port from `DaemonConfig` (`Host`, `Port`); defaults to `http://127.0.0.1:5199` (loopback only). `ExposureMode` declares network reachability and tunnel infrastructure, separately from chat audience/profile selection.
 
+At startup, `McpClientManager` starts each enabled server connection concurrently.
+It waits for every initial attempt before the daemon listener starts. Each
+server uses its own connection gate. The shared registries publish complete
+catalogs before the listener accepts a session. A failed server keeps its
+error status while other server catalogs remain available.
+
 ### `Netclaw.Cli`
 
 Lightweight CLI and TUI client. No actor system, no persistence, no tool

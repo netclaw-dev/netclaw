@@ -38,7 +38,8 @@ public enum ParentApprovalDecision
     ApprovedAlways,
     ApprovedEverywhere,
     Denied,
-    TimedOut
+    TimedOut,
+    ApprovedRepository
 }
 
 /// <summary>
@@ -55,6 +56,7 @@ public static class ParentApprovalDecisionExtensions
         => decision is ParentApprovalDecision.ApprovedOnce
             or ParentApprovalDecision.ApprovedSession
             or ParentApprovalDecision.ApprovedAlways
+            or ParentApprovalDecision.ApprovedRepository
             or ParentApprovalDecision.ApprovedEverywhere;
 }
 

@@ -226,7 +226,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
     private ToolApprovalMatch? MatchApproval(SessionId? sessionId, TrustAudience audience, ToolName toolName, ApprovalCandidate candidate, string? cwd, IReadOnlyList<ApprovalEntry> persistedApprovals)
     {
         if (sessionId.HasValue &&
-            IsSessionApproved(sessionId.Value, audience, toolName, candidate))
+            IsSessionApproved(sessionId.Value, audience, toolName, candidate, cwd))
             return new ToolApprovalMatch(candidate.Verb, "session", "this chat");
 
         return MatchPersistedEntry(toolName, candidate, cwd, persistedApprovals);
@@ -241,7 +241,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
         IReadOnlyList<ApprovalEntry> persistedApprovals)
     {
         if (sessionId.HasValue
-            && IsSessionApproved(sessionId.Value, audience, toolName, candidate))
+            && IsSessionApproved(sessionId.Value, audience, toolName, candidate, cwd))
         {
             return new ShellActorGrantEvaluation(
                 new ToolApprovalMatch(candidate.Verb, "session", "this chat"),
@@ -259,9 +259,11 @@ internal sealed class ToolApprovalActor : ReceiveActor
         {
             return new ShellActorGrantEvaluation(
                 new ToolApprovalMatch(candidate.Verb, "persistent", entry.FormatScope()),
-                entry.Directory is null
-                    ? ShellCoverageKind.PersistentGlobal
-                    : ShellCoverageKind.PersistentFolder,
+                entry.Repository is not null
+                    ? ShellCoverageKind.PersistentRepository
+                    : entry.Directory is null
+                        ? ShellCoverageKind.PersistentGlobal
+                        : ShellCoverageKind.PersistentFolder,
                 entry.CreatedAt,
                 NearMisses: []);
         }
@@ -277,7 +279,8 @@ internal sealed class ToolApprovalActor : ReceiveActor
         SessionId sessionId,
         TrustAudience audience,
         ToolName toolName,
-        ApprovalCandidate candidate)
+        ApprovalCandidate candidate,
+        string? cwd)
     {
         // Walk up the scope chain: sub-agent scopes inherit parent session approvals.
         // Scope format: "{parentSessionId}/subagent/{name}/{runId}" — parent is the prefix before "/subagent/".
@@ -296,7 +299,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 && structuredTools.TryGetValue(toolName.Value, out var entries))
             {
                 var matches = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
-                    ? ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, entries)
+                    ? ApprovalPatternMatching.MatchesShellApproval(candidate, cwd, entries)
                     : ApprovalPatternMatching.MatchesAny(candidate.Verb, entries);
                 if (matches)
                 {
@@ -387,20 +390,52 @@ internal sealed class ToolApprovalActor : ReceiveActor
                         return false;
                     }
 
-                    persistedEntry = ApprovalEntry.CreateTokenPrefix(
-                        shell,
-                        tokens,
-                        grant.Directory);
+                    if (grant.Repository is not null)
+                    {
+                        if (grant.Directory is not null
+                            || !GitRepositoryApprovalScope.TryResolve(grant.RepositoryWorktree, out var scope)
+                            || !ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, grant.Repository)
+                            || !scope.Contains(grant.Candidate.Directory, grant.RepositoryWorktree))
+                        {
+                            persistentEntries = [];
+                            sessionEntries = [];
+                            return false;
+                        }
+
+                        persistedEntry = ApprovalEntry.CreateRepositoryTokenPrefix(
+                            shell, tokens, grant.Repository);
+                    }
+                    else
+                    {
+                        if (grant.RepositoryWorktree is not null)
+                        {
+                            persistentEntries = [];
+                            sessionEntries = [];
+                            return false;
+                        }
+
+                        persistedEntry = ApprovalEntry.CreateTokenPrefix(
+                            shell, tokens, grant.Directory);
+                    }
                 }
                 else
                 {
+                    if (grant.Repository is not null || grant.RepositoryWorktree is not null)
+                    {
+                        persistentEntries = [];
+                        sessionEntries = [];
+                        return false;
+                    }
+
                     persistedEntry = ApprovalEntry.CreateNonShell(
                         grant.Candidate.Verb,
                         grant.Directory);
                 }
 
                 persisted.Add(persistedEntry);
-                session.Add(persistedEntry with { Directory = null });
+                session.Add(persistedEntry.Repository is null
+                    ? persistedEntry with { Directory = null }
+                    : persistedEntry);
             }
         }
         catch (Exception ex) when (ex is ArgumentException or System.Text.Json.JsonException)

@@ -40,7 +40,10 @@ public enum ApprovalDecision
     Denied,
 
     /// <summary>No response received within the timeout window.</summary>
-    TimedOut
+    TimedOut,
+
+    /// <summary>Approved for registered worktrees of one Git repository.</summary>
+    ApprovedRepository
 }
 
 /// <summary>
@@ -60,6 +63,7 @@ public static class ApprovalDecisionExtensions
         => decision is ApprovalDecision.ApprovedOnce
             or ApprovalDecision.ApprovedSession
             or ApprovalDecision.ApprovedAlways
+            or ApprovalDecision.ApprovedRepository
             or ApprovalDecision.ApprovedEverywhere;
 }
 

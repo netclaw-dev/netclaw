@@ -79,6 +79,14 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
     public string? Directory { get; init; }
 
     /// <summary>
+    /// The canonical Git common directory for an explicit repository grant.
+    /// Folder and global grants leave this value null.
+    /// </summary>
+    [JsonPropertyName("repository")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    public string? Repository { get; init; }
+
+    /// <summary>
     /// When this grant was first persisted, or <c>null</c> for entries
     /// written before approval timestamps were tracked. Stamped by
     /// <see cref="ToolApprovalStore.AddApproval"/> at write time. This is an
@@ -113,6 +121,20 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
     }
 
     /// <summary>
+    /// Creates a typed shell phrase for registered worktrees of one repository.
+    /// </summary>
+    public static ApprovalEntry CreateRepositoryTokenPrefix(
+        ApprovalShell shell,
+        IReadOnlyList<string> verbTokens,
+        string repository,
+        DateTimeOffset? createdAt = null)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(repository);
+        var entry = CreateTokenPrefix(shell, verbTokens, createdAt: createdAt);
+        return entry with { Repository = repository };
+    }
+
+    /// <summary>
     /// Creates a typed legacy-exact shell entry.
     /// </summary>
     public static ApprovalEntry CreateLegacyExact(
@@ -142,6 +164,8 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         var phrase = Shell is { } shell && Match is { } match
             ? $"{shell} {FormatMatch(match)} {JsonSerializer.Serialize(Verb)}"
             : $"NonShell exact {JsonSerializer.Serialize(Verb)}";
+        if (Repository is not null)
+            return $"{phrase} in repository {Repository}";
         return Directory is null ? $"{phrase} anywhere" : $"{phrase} in {Directory}";
     }
 
@@ -222,7 +246,8 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
                     nonShellRemainder,
                     out var nonShellVerb,
                     out var nonShellTail) ||
-                !TryReadScopeTail(nonShellTail, out var nonShellDirectory))
+                !TryReadScopeTail(nonShellTail, out var nonShellDirectory, out var nonShellRepository) ||
+                nonShellRepository is not null)
             {
                 error = "The typed approval scope is invalid.";
                 return false;
@@ -273,7 +298,8 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         }
 
         if (!TryReadJsonString(remainder, out var verb, out var tail) ||
-            !TryReadScopeTail(tail, out var directory))
+            !TryReadScopeTail(tail, out var directory, out var repository) ||
+            repository is not null && match != ApprovalMatchKind.TokenPrefix)
         {
             error = "The typed approval scope is invalid.";
             return false;
@@ -282,7 +308,9 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         try
         {
             entry = match == ApprovalMatchKind.TokenPrefix
-                ? CreateTokenPrefix(shell, verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), directory)
+                ? repository is null
+                    ? CreateTokenPrefix(shell, verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), directory)
+                    : CreateRepositoryTokenPrefix(shell, verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), repository)
                 : CreateLegacyExact(shell, verb, directory);
             return true;
         }
@@ -343,12 +371,22 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         return false;
     }
 
-    private static bool TryReadScopeTail(string tail, out string? directory)
+    private static bool TryReadScopeTail(string tail, out string? directory, out string? repository)
     {
         const string InPrefix = " in ";
+        const string RepositoryPrefix = " in repository ";
         directory = null;
+        repository = null;
         if (string.Equals(tail, " anywhere", StringComparison.Ordinal))
         {
+            return true;
+        }
+
+        if (tail.StartsWith(RepositoryPrefix, StringComparison.Ordinal))
+        {
+            if (tail.Length == RepositoryPrefix.Length)
+                return false;
+            repository = tail[RepositoryPrefix.Length..];
             return true;
         }
 

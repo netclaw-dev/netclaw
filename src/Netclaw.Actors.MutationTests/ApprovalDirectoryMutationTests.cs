@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Xunit;
@@ -12,7 +13,8 @@ namespace Netclaw.Actors.MutationTests;
 public sealed class ApprovalDirectoryMutationTests : IDisposable
 {
     private readonly string _basePath = Path.Combine(
-        Path.GetTempPath(), "netclaw-approval-mutations", Guid.NewGuid().ToString("N"));
+        Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+        $"netclaw-approval-mutations-{Guid.NewGuid():N}");
     private readonly string _grantRoot;
     private readonly string _outside;
     private readonly ApprovalShell _shell = OperatingSystem.IsWindows() ? ApprovalShell.PowerShell : ApprovalShell.Bash;
@@ -84,6 +86,27 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
         Assert.Equal(allowed, ApprovalPatternMatching.MatchesShellApproval(candidate, @"C:\repo\app", [grant]));
     }
 
+    [Fact]
+    public void Repository_grant_requires_matching_identity_and_a_path_inside_the_worktree()
+    {
+        var main = Path.Combine(_basePath, "main");
+        var sibling = Path.Combine(_basePath, "sibling");
+        var unrelated = Path.Combine(_basePath, "unrelated");
+        RunGit(_basePath, "init", main);
+        RunGit(main, "worktree", "add", "--orphan", "-b", "sibling", sibling);
+        RunGit(_basePath, "init", unrelated);
+
+        var grant = ApprovalEntry.CreateRepositoryTokenPrefix(
+            ApprovalShell.Bash, ["git", "status"], Path.Combine(main, ".git"));
+        var otherRepositoryGrant = grant with { Repository = Path.Combine(unrelated, ".git") };
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            CreateCandidate(ApprovalShell.Bash, null), sibling, [grant]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+            CreateCandidate(ApprovalShell.Bash, null), sibling, [otherRepositoryGrant]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+            CreateCandidate(ApprovalShell.Bash, _outside), sibling, [grant]));
+    }
+
     public void Dispose() => Directory.Delete(_basePath, recursive: true);
 
     private bool Matches(string? directory, string? cwd)
@@ -98,4 +121,24 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
             Shell = shell,
             VerbTokens = Array.AsReadOnly(["git", "status"])
         };
+
+    private static void RunGit(string directory, params string[] arguments)
+    {
+        using var process = new Process
+        {
+            StartInfo = new ProcessStartInfo("git")
+            {
+                WorkingDirectory = directory,
+                RedirectStandardError = true,
+                RedirectStandardOutput = true,
+                UseShellExecute = false,
+            }
+        };
+        foreach (var argument in arguments)
+            process.StartInfo.ArgumentList.Add(argument);
+
+        Assert.True(process.Start());
+        Assert.True(process.WaitForExit(10_000), "git timed out");
+        Assert.Equal(0, process.ExitCode);
+    }
 }

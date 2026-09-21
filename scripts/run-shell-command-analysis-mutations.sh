@@ -227,6 +227,21 @@ run_target \
   "$output_path/integer-range" \
   11
 
+read -r status_start status_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool IsUnknownOutputData(" \
+    "argument.Argument.Raw == \"\$?\"" \
+    "argument.Argument.Raw == \"\$?\""
+)
+run_target \
+  "stryker-shell-command-analysis.json" \
+  "ShellCommandAnalysis.cs" \
+  "$status_start" \
+  "$status_end" \
+  "$output_path/status-parameter" \
+  2
+
 matcher_file="$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs"
 read -r candidate_start candidate_end < <(
   find_span \

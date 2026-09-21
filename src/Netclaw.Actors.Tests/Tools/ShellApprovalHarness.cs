@@ -29,7 +29,10 @@ internal sealed record ShellApprovalHarnessScope(
     string ProjectDirectory,
     string SessionDirectory,
     string InvocationSessionId,
-    IReadOnlyList<string> OneTimeApprovalKeys);
+    IReadOnlyList<string> OneTimeApprovalKeys)
+{
+    internal string? RepositoryGrantWorktree { get; init; }
+}
 
 internal sealed class ShellApprovalHarness : IAsyncDisposable
 {
@@ -152,11 +155,16 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 audienceGroup.Key,
                 new ToolName(ShellTool.ToolName),
                 audienceGroup
-                    .Select(seed => CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
-                        seed.Directory,
-                        approvalProjectDirectory,
-                        approvalSessionDirectory,
-                        approvalExternalDirectory)))
+                    .Select(seed => seed.Directory == ApprovalDirectoryShape.Repository
+                        ? CreateRepositoryGrant(
+                            seed.Pattern,
+                            approvalShell,
+                            scope?.RepositoryGrantWorktree ?? approvalProjectDirectory)
+                        : CreateGrant(seed.Pattern, approvalShell, ResolveDirectory(
+                            seed.Directory,
+                            approvalProjectDirectory,
+                            approvalSessionDirectory,
+                            approvalExternalDirectory)))
                     .ToList(),
                 persistent: true,
                 ct);
@@ -266,6 +274,21 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             directory);
     }
 
+    private static ToolApprovalGrant CreateRepositoryGrant(
+        string pattern,
+        ApprovalShell shell,
+        string worktree)
+    {
+        if (!GitRepositoryApprovalScope.TryResolve(worktree, out var scope))
+            throw new InvalidOperationException("The test repository worktree is not registered.");
+
+        return CreateGrant(pattern, shell, directory: null) with
+        {
+            Repository = scope!.CommonDirectory,
+            RepositoryWorktree = worktree,
+        };
+    }
+
     public async Task<ObservedApproval> EvaluateAsync(CancellationToken ct)
     {
         var decision = await _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
@@ -284,6 +307,19 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     public Task<ToolAuthorizationDecision> EvaluateDecisionAsync(CancellationToken ct)
         => _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
+
+    public Task<string> ExecuteAsync(CancellationToken ct)
+    {
+        var arguments = new Dictionary<string, object?>(
+            _toolCall.Arguments ?? new Dictionary<string, object?>())
+        {
+            ["_rationale"] = "Verify that directory advice stops this shell call."
+        };
+        return _executor.ExecuteAsync(
+            new FunctionCallContent(_toolCall.CallId, _toolCall.Name, arguments),
+            _context,
+            ct);
+    }
 
     internal Task<ShellAuthorizationResult> EvaluateCoordinatorAsync(CancellationToken ct)
         => new ShellPolicyCoordinator(_registry, _policy, ApprovalService).EvaluateAsync(
@@ -395,6 +431,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         {
             ApprovalDirectoryShape.None => null,
             ApprovalDirectoryShape.Project => projectDirectory,
+            ApprovalDirectoryShape.ProjectChild => Path.Combine(projectDirectory, "sub"),
             ApprovalDirectoryShape.Session => sessionDirectory,
             ApprovalDirectoryShape.External => externalDirectory,
             _ => throw new ArgumentOutOfRangeException(nameof(directory), directory, "Unknown approval directory shape.")

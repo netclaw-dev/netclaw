@@ -720,6 +720,7 @@ internal sealed class SessionToolExecutionPipeline
                 CandidateVerbs = ctx.CandidateVerbs,
                 Candidates = ctx.Candidates ?? [],
                 Cwd = ctx.Cwd,
+                RepositoryCommonDirectory = ctx.RepositoryCommonDirectory,
                 IsMessy = ctx.IsMessy,
                 AuthorizationAttemptId = authorizationAttemptId.Value,
                 Options = ctx.Options

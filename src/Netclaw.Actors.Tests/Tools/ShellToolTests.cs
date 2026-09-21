@@ -105,9 +105,10 @@ public class ShellToolTests
         Assert.Contains("A later explicit user request can start a new call", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Apply one 'Tool execution deferred:' correction unchanged", commandDescription, StringComparison.Ordinal);
         Assert.Contains("Do not use shell for disposable text unless shell behavior is requested", commandDescription, StringComparison.Ordinal);
-        Assert.Contains("Set only for one call", description, StringComparison.Ordinal);
+        Assert.Contains("Set for one call", description, StringComparison.Ordinal);
         Assert.Contains("named child directory or worktree", description, StringComparison.Ordinal);
-        Assert.Contains("Omit for declared-project work", description, StringComparison.Ordinal);
+        Assert.Contains("Omit for ordinary declared-project work", description, StringComparison.Ordinal);
+        Assert.Contains("set this to project_dir", description, StringComparison.Ordinal);
         Assert.Contains("Standard temporary APIs use temp_dir", description, StringComparison.Ordinal);
     }
 

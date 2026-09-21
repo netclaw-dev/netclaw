@@ -130,6 +130,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
     public async Task StartAsync(CancellationToken cancellationToken)
     {
+        var connections = new List<Task<bool>>(_serverEntries.Count);
         foreach (var (name, entry) in _serverEntries)
         {
             var serverName = new McpServerName(name);
@@ -142,8 +143,10 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
 
             var observed = lifecycle.Snapshot;
             if (observed is not null)
-                await ReconnectAsync(lifecycle, entry, observed, cancellationToken, null);
+                connections.Add(ReconnectAsync(lifecycle, entry, observed, cancellationToken, null));
         }
+
+        await Task.WhenAll(connections);
     }
 
     public Task StopAsync(CancellationToken cancellationToken)

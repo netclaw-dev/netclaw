@@ -418,6 +418,12 @@ public static partial class SessionProtocol
         public string? Cwd { get; init; }
 
         /// <summary>
+        /// The Git common directory that the repository option offered at prompt time.
+        /// The approval actor checks this identity again before it stores a grant.
+        /// </summary>
+        public string? RepositoryCommonDirectory { get; init; }
+
+        /// <summary>
         /// True when the invocation cannot be cleanly split into verb-chain
         /// approval units — for shell, when the command contains bash control-flow
         /// keywords (<c>for</c>/<c>while</c>/<c>do</c>/<c>done</c>/<c>then</c>/

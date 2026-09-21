@@ -118,8 +118,8 @@ When the agent calls a tool in `Approval` mode:
 1. The system extracts a **command pattern** (for example,
    `git push origin main` from that exact call).
 2. It checks the **approval cache** — has this pattern been approved before?
-3. If a clean reusable shell call in an ordinary directory remains uncovered,
-   the channel posts the default five-choice prompt:
+3. If a clean reusable shell call in a registered worktree remains uncovered,
+   the channel can post this prompt:
    ```
    🔒 Tool approval required
    > shell_execute: git push origin main
@@ -129,15 +129,18 @@ When the agent calls a tool in `Approval` mode:
      A) Once
      B) This chat
      C) Always here
-     D) Always anywhere
-     E) Deny
+     D) This repository
+     E) Always anywhere
+     F) Deny
    ```
+   An ordinary directory omits `This repository`.
 4. The tool execution pauses until the user responds. Other tool calls in the
    same batch continue running independently.
 5. Based on the response:
    - **Once** — the exact blocked call retries once; no grant is saved
    - **This chat** — the covered phrase remains valid anywhere in this session
    - **Always here** — a folder-scoped grant is saved to disk
+   - **This repository** — Netclaw saves a grant for registered worktrees
    - **Always anywhere** — a global phrase grant is saved to disk
    - **Deny** — the call returns "Command denied by user" to the LLM
 
@@ -153,6 +156,26 @@ the persistent choices when the shell parser cannot produce a clean reusable
 phrase for every uncovered command occurrence. It also omits `Always here`
 when no safe directory scope can be stored. This rule prevents a one-time
 decision from becoming broader reusable authority.
+
+### Repository grants
+
+`This repository` creates a distinct grant for one Git common directory.
+Netclaw offers it only when Git registers the current worktree.
+Each command candidate must stay inside that worktree.
+Netclaw checks the registration again before it stores or uses the grant.
+An old `Always here` grant remains a folder grant.
+Netclaw supports an ordinary `.git` directory and registered linked worktrees.
+It does not offer this choice for a main checkout that uses `--separate-git-dir`.
+
+For example, approve `./scripts/bump-version.sh` with `This repository` in a
+registered worktree. The same command can then use that grant in a registered
+sibling worktree. A second command, such as `python3`, still needs its own
+authority. An unrelated repository cannot use the grant.
+
+Netclaw rejects a copied `.git` pointer, a moved worktree, and a path through
+an external symbolic link. Hard denies, path checks, and audience rules still
+apply. Use `netclaw approvals list` to copy the exact repository label.
+Use `netclaw approvals revoke '<label>'` to remove that grant.
 
 A command with an exact-tree requirement always offers only `Once` or `Deny`.
 It cannot use reviewed-safe, session, stored, or persistent coverage. This rule
@@ -186,6 +209,20 @@ pattern.
 For **compound commands** (`&&`, `||`, `;`, `|`), each segment is checked
 independently. If any segment is unapproved, all unapproved patterns are
 batched into one prompt.
+
+Netclaw can resolve a complete static Bash list with an exact `cd` target.
+ShellSyntaxTree `0.4.0-beta.3` supplies each bounded directory and source slice.
+Netclaw checks each fact against its command policy and grant rules.
+Netclaw keeps the causal intent policy when it recognizes the list.
+It checks both the success and failure directories after each directory change.
+It checks each pipeline stage under the same entry directory.
+Every reachable verb and path needs its own grant or safe policy result.
+Unknown directory effects, dynamic syntax, linked directories, deep glob paths,
+and excess scopes retain exact approval.
+The agent receives directory advice only when this scope proof fails and the advice is safe.
+A shell working directory with a `..` segment is invalid.
+The OS can resolve that segment after a symbolic link and reach another directory.
+Use an absolute working directory without parent traversal.
 
 The selected host grammar is also the language boundary. Under Bash,
 `pwsh -Command 'Get-Content ./a.txt'` is an ordinary external `pwsh` command;
@@ -352,6 +389,21 @@ names a directory that the session can declare, Netclaw can first return a
 candidates require approval. The bare `echo` side effect does not become a
 reusable prompt choice.
 
+#### Example: one-call directory advice
+
+An eligible Bash call can start with `cd /work/sub && command` while its
+session already declares `/work`. Netclaw can return
+`use_shell_working_directory` before an approval prompt. The correction names
+`/work/sub` for the next call's typed `WorkingDirectory`. The agent must remove
+the leading `cd` when it creates that next call. The original command does not
+run. The new command passes all normal policy checks. Netclaw gives no such
+advice for an unknown target, an external path, or a symbolic link below the
+project root.
+If the task needs the original shell directory behavior, the agent can keep
+the command and set typed `WorkingDirectory` to the current project root.
+That explicit scope stops repeat advice but grants no authority. Normal
+approval policy then applies to the original command.
+
 #### Example: Bash causal directory intent
 
 Input:
@@ -470,6 +522,8 @@ authority for a peer directory.
 The dispatcher keeps the exact authorized command and directory in `ShellProcessLaunch`.
 It copies the approval state for that invocation and retains the child environment.
 The launch requires an absolute directory; its callers select that directory before construction.
+For Bash, the child environment excludes startup hooks and imported functions.
+These inputs can change a verb or a directory effect before the authored command starts.
 
 The launch follows this sequence:
 
@@ -482,6 +536,8 @@ The launch follows this sequence:
 A queued command with a valid grant can start once.
 A queued command whose grant was revoked fails without a process.
 These checks narrow filesystem races; they do not provide an OS sandbox.
+The path snapshot includes every directory and path from a proved Bash scope.
+The launch stops if a symbolic link changes in any such path during authorization.
 
 The foreground caller owns cancellation and process disposal.
 The background start task owns the process until the job actor adopts it.

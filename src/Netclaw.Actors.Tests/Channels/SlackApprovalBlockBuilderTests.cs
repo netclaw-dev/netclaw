@@ -163,6 +163,25 @@ public sealed class SlackApprovalBlockBuilderTests
     }
 
     [Fact]
+    public void Repository_prompt_renders_six_choices_and_a_repository_resolution()
+    {
+        var options = FullButtonRow().ToList();
+        options.Insert(3, new ToolInteractionOption(
+            ApprovalOptionKeys.ApproveRepositoryKey, ApprovalOptionKeys.ApproveRepositoryLabel));
+        var request = Request(
+            "./scripts/bump-version.sh", ["./scripts/bump-version.sh"], "/work/main", options);
+
+        var blocks = SlackApprovalBlockBuilder.BuildApprovalBlocks(request);
+        var buttons = blocks.OfType<ActionsBlock>().Single().Elements.OfType<Button>().ToList();
+        var resolved = SlackApprovalBlockBuilder.BuildResolvedApprovalText(
+            request, ApprovalOptionKeys.ApproveRepository, "U123");
+
+        Assert.Equal(6, buttons.Count);
+        Assert.Contains(buttons, button => button.Text.Text == ApprovalOptionKeys.ApproveRepositoryLabel);
+        Assert.Contains("Saved: ./scripts/bump-version.sh in this repository", resolved);
+    }
+
+    [Fact]
     public void Approval_blocks_omit_legacy_directory_roots_section()
     {
         var request = Request("grep error /var/log/syslog", ["grep error /var/log/syslog"], "/var/log", FullButtonRow());

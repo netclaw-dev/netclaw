@@ -185,12 +185,9 @@ public sealed class ShellExecutionEnvironment
 
         return Grammar switch
         {
-            ShellGrammar.Bash => new BashParser(new BashParserOptions
-            {
-                WorkingDirectory = workingDirectory,
-                InitialStateMode = BashInitialStateMode.Unknown,
-                PublishAuthoredSourceFacts = publishAuthoredSourceFacts
-            }).Parse(source),
+            ShellGrammar.Bash => CreateBashParser(
+                workingDirectory,
+                publishAuthoredSourceFacts).Parse(source),
             ShellGrammar.PowerShell when PowerShellDialect is { } dialect =>
                 new PwshParser(new PwshParserOptions
                 {
@@ -201,6 +198,32 @@ public sealed class ShellExecutionEnvironment
             _ => throw new InvalidOperationException("The shell environment has no supported parser identity.")
         };
     }
+
+    internal bool TryProjectFiniteBashScopes(
+        string source,
+        string? workingDirectory,
+        out BashFiniteScopeProjection? projection)
+    {
+        ArgumentNullException.ThrowIfNull(source);
+        if (Grammar != ShellGrammar.Bash)
+        {
+            projection = null;
+            return false;
+        }
+
+        return CreateBashParser(workingDirectory, publishAuthoredSourceFacts: true)
+            .TryProjectFiniteScopes(source, out projection);
+    }
+
+    private static BashParser CreateBashParser(
+        string? workingDirectory,
+        bool publishAuthoredSourceFacts)
+        => new(new BashParserOptions
+        {
+            WorkingDirectory = workingDirectory,
+            InitialStateMode = BashInitialStateMode.Unknown,
+            PublishAuthoredSourceFacts = publishAuthoredSourceFacts
+        });
 
     /// <summary>
     /// Creates fresh process-start data for one submitted command.
@@ -222,7 +245,22 @@ public sealed class ShellExecutionEnvironment
         foreach (var argument in CommandArguments)
             startInfo.ArgumentList.Add(argument);
         startInfo.ArgumentList.Add(command);
+        if (Grammar == ShellGrammar.Bash)
+            RemoveBashStartupOverrides(startInfo.Environment);
         return startInfo;
+    }
+
+    internal static void RemoveBashStartupOverrides(IDictionary<string, string?> environment)
+    {
+        // The parser starts from the authored command. A shell startup hook or imported function
+        // can change its verbs and directory effects before that command runs.
+        foreach (var key in environment.Keys.Where(static key =>
+                     key is "BASH_ENV" or "ENV" or "SHELLOPTS" or "BASHOPTS" or "CDPATH"
+                         or "GLOBIGNORE" or "IFS" or "POSIXLY_CORRECT" or "BASH_COMPAT"
+                     || key.StartsWith("BASH_FUNC_", StringComparison.Ordinal)).ToArray())
+        {
+            environment.Remove(key);
+        }
     }
 
     private static bool IsFullyQualified(string path, ShellPathStyle pathStyle) => pathStyle switch

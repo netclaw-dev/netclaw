@@ -29,8 +29,7 @@
 
 ## Focused Mutation Tests
 
-The path-access, tool authorization, approval directory, and shell analysis
-mutation jobs run on each pull request, merge group, and `dev` push.
+The path-access, tool authorization, approval directory, reminder execution, and shell analysis mutation jobs run on each pull request, merge group, and `dev` push.
 Each Linux job runs in parallel with the normal test matrix.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
@@ -44,8 +43,10 @@ coverage. They do not replace positive and negative behavior tests.
 | `PathAccessPolicy.AddSessionRoots` | Only a Personal context receives shared session roots | 2 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AuthorizeMcpInvocation` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
-| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 79 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | `ApprovalPatternMatching.EvaluateApprovalScope` | Folder grants require containment and reject link escape | 4 killed | `./scripts/run-approval-directory-mutations.sh` |
+| `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
+| `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -102,15 +103,16 @@ Run the approval directory gate:
 ```
 
 The script reuses the xUnit 2 harness and selects `Netclaw.Security.csproj` as the mutation target.
-It selects three source locations in `EvaluateApprovalScope`:
+It selects four source locations in `EvaluateApprovalScope`:
 
 | Decision | Expected mutants |
 |----------|------------------|
 | Windows path containment | 1 killed: remove the logical negation |
 | POSIX path containment | 1 killed: remove the logical negation |
 | POSIX link rejection | 2 killed: force either conditional outcome |
+| Repository identity and worktree path | 4 killed: force a result or relax a scope check |
 
-The script requires these counts at their exact source locations and four tested mutants overall.
+The script requires these counts at their exact source locations and eight tested mutants overall.
 It fails if a target is absent, survives, exceeds its time limit, or cannot compile.
 The source selector rejects an absent or duplicate boundary before Stryker starts.
 This protects the gate when the authorization code and diagnostic code contain similar conditions.
@@ -131,6 +133,54 @@ The final local run took 41 seconds after package restore.
 The separate CI job retains a 10-minute timeout and uploads `approval-directory-mutation-report`.
 Its report directory is `artifacts/stryker/approval-directory`.
 
+### Reminder Execution Gate
+
+Run the reminder execution gate:
+
+```bash
+./scripts/run-reminder-execution-mutations.sh
+```
+
+The script reuses the xUnit 2 harness and selects four mutations:
+
+| Boundary | Expected mutant |
+|----------|-----------------|
+| Manager outcome ownership | Reverse the execution-ID comparison |
+| Manager acceptance reply | Remove the reply from `finally` |
+| Tracker removal ownership | Reverse the execution-ID comparison |
+| Tracker guard cleanup | Remove the dictionary removal |
+
+Each location must produce one killed mutant. The report must contain exactly four tested mutants.
+The gate fails if a target is absent, ignored, survives, exceeds its time limit, or cannot compile.
+The selector rejects absent or duplicate source markers before Stryker starts.
+Unrelated compiler errors do not count as tested mutants.
+
+Seven cases use the real manager, execution tracker, actor mailbox, definition store, and history store.
+An isolated host supplies the local Akka.Reminders scheduler with an in-memory store.
+The fixture observes execution IDs through the existing dispatch event and holds the session pipeline on a task.
+Actor replies provide barriers. The tests use no delay or sleep to wait for state.
+
+The stale-message cases complete attempt A, start attempt B, and replay A's completion or termination.
+They require B's guard, history, failure count, and alerts to remain unchanged.
+A current-termination control must record the failure and release its guard.
+Success and failure cases require the correct acceptance ID, history, failure count, and subsequent dispatch.
+A directory at the atomic-write path causes a real save failure; cleanup and the acceptance reply must still occur.
+
+These tests preserve PRD-008 SCHED-005 and SCHED-007.
+See [the execution and settlement contract](openspec/specs/netclaw-scheduling/spec.md) and
+[the history contract](openspec/specs/reminder-execution-history/spec.md).
+The fixture injects internal outcome messages and synthetic envelopes.
+It does not prove the child outcome producer, durable scheduler settlement, restart recovery, or external delivery.
+
+Stryker 5.0.0 omits statement removal when the statement contains an `out` keyword.
+It also filters the complete `finally` deletion when the acceptance-reply mutant exists.
+Thus, the cleanup mutant targets the tracker dictionary, not the manager's `TryRemove` call.
+An explicit local deletion of that call must also make the cleanup cases fail before this gate changes.
+
+The final local run took 95 seconds after package restore.
+The separate CI job retains a 10-minute timeout and uploads `reminder-execution-mutation-report`.
+Its report directory is `artifacts/stryker/reminder-execution`.
+
 ### Shell Analysis Gate
 
 Run the shell analysis gate:
@@ -139,12 +189,16 @@ Run the shell analysis gate:
 ./scripts/run-shell-command-analysis-mutations.sh
 ```
 
-The script tests 79 mutants across execution-region accounting, denial-only
+The script tests 81 mutants across execution-region accounting, denial-only
 matching, tree traversal and root correspondence, bounded non-filesystem
-values, candidate extraction, approval mode, path facts, and reviewed-safe
-policy. The job fails unless every mutant dies.
+values, bare status-parameter output, candidate extraction, approval mode,
+path facts, and reviewed-safe policy. The job fails unless every mutant dies.
 
-The final local run took about 6 minutes. CI allows 30 minutes for
+Two status-parameter mutants test the rule that only bare `$?` can preserve
+reusable candidates. The focused test rejects other unknown output data.
+The new target took 49 seconds after package restore.
+
+The local run on 2026-09-18 took about 22 minutes. CI allows 30 minutes for
 hosted-runner variance and report upload. The report directory is
 `artifacts/stryker/shell-command-analysis`.
 
@@ -155,7 +209,7 @@ Also review it as part of each minor release.
 
 Add one focused target when all these conditions apply:
 
-- The code controls authorization, isolation, privacy, identity, or destructive access.
+- The code controls authorization, isolation, privacy, identity, destructive access, or execution ownership and cleanup.
 - A plausible mutation represents a specific unsafe behavior.
 - Deterministic tests reject that mutation.
 - A narrow source span contains the relevant decision.

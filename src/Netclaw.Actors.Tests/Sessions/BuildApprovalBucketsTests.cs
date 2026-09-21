@@ -188,5 +188,5 @@ public sealed class BuildApprovalBucketsTests
     }
 
     private static ApprovalGrantContext Context(ApprovalDecision decision) =>
-        ApprovalGrantContext.FromDecision(decision, SessionDir, SessionDir);
+        ApprovalGrantContext.FromDecision(decision, SessionDir, SessionDir, repositoryCommonDirectory: null);
 }

@@ -579,7 +579,8 @@ public sealed record ShellCommandAnalysis
                 !IsAccountedExecutionRegionArgument(
                     argument,
                     accountedRegionArguments)
-                && HasUnsupportedArgumentDomain(argument))
+                && HasUnsupportedArgumentDomain(argument)
+                && !IsUnknownOutputData(command, argument))
             // A glob in a directory segment can hide traversal or a symlink.
             // Only a leaf glob has a fixed directory scope.
             || command.Clause.Args.Any(arg =>
@@ -798,6 +799,24 @@ public sealed record ShellCommandAnalysis
                 || string.IsNullOrWhiteSpace(pattern.CoveringDirectory),
             _ => true
         };
+    }
+
+    private static bool IsUnknownOutputData(
+        CommandOccurrence command,
+        AnalyzedArgument argument)
+    {
+        // The parser proves the verb and every child command before this check.
+        // A bare status value cannot add an option or a path to an output command.
+        return command.Redirects.Count == 0
+               && !command.Clause.Verb.IsDynamic
+               && command.Clause.Verb.Tokens.Count == 1
+               && ShellTokenizer.SingleTokenSideEffectVerbs.Contains(command.Clause.Verb.Tokens[0])
+               && argument.Argument.Kind == ArgKind.EnvVar
+               && !argument.Argument.IsPath
+               && argument.Argument.Raw == "$?"
+               && argument.Value is ShellValueDomain.Unknown
+               && argument.AuthoredFileSystemValue is ShellValueDomain.Unknown
+               && argument.AuthoredNonFileSystemValue is ShellValueDomain.Unknown;
     }
 
     private static bool HasUnresolvedRedirect(CommandOccurrence occurrence)

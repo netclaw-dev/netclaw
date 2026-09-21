@@ -76,9 +76,7 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
                 grantCoverage = approvedMatch.Source switch
                 {
                     "session" => ShellCoverageKind.Session,
-                    "persistent" when approvedMatch.Scope.EndsWith(" anywhere", StringComparison.Ordinal) =>
-                        ShellCoverageKind.PersistentGlobal,
-                    "persistent" => ShellCoverageKind.PersistentFolder,
+                    "persistent" => ClassifyPersistentScope(approvedMatch.Scope),
                     _ => throw new InvalidOperationException("The approval service returned an unknown grant source."),
                 };
             }
@@ -108,6 +106,21 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
         return new ShellApprovalMatchResult(
             storeStatus,
             Array.AsReadOnly(matches));
+    }
+
+    private static ShellCoverageKind ClassifyPersistentScope(string scope)
+    {
+        if (!ApprovalEntry.TryParseScope(scope, out var entry, out _)
+            || !string.Equals(entry.FormatScope(), scope, StringComparison.Ordinal))
+        {
+            return ShellCoverageKind.Uncovered;
+        }
+
+        return entry.Repository is not null
+            ? ShellCoverageKind.PersistentRepository
+            : entry.Directory is null
+                ? ShellCoverageKind.PersistentGlobal
+                : ShellCoverageKind.PersistentFolder;
     }
 
     private static ShellApprovalMatchResult CreateEmptyResult(
@@ -247,13 +260,15 @@ internal sealed class ValidatedShellGrantEvidence
         if (candidateMatch.GrantCoverage is not
             (ShellCoverageKind.Session
             or ShellCoverageKind.PersistentGlobal
-            or ShellCoverageKind.PersistentFolder)
+            or ShellCoverageKind.PersistentFolder
+            or ShellCoverageKind.PersistentRepository)
             || candidateMatch.NearMisses.Count != 0
             || (candidateMatch.GrantCoverage == ShellCoverageKind.Session
                 && candidateMatch.GrantCreatedAt is not null)
             || (storeUnavailable
                 && candidateMatch.GrantCoverage is
-                    (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder)))
+                    (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder
+                        or ShellCoverageKind.PersistentRepository)))
         {
             return false;
         }
@@ -302,14 +317,19 @@ internal sealed class ValidatedShellGrantEvidence
         }
 
         if (coverage is not
-            (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder)
+            (ShellCoverageKind.PersistentGlobal or ShellCoverageKind.PersistentFolder
+                or ShellCoverageKind.PersistentRepository)
             || !string.Equals(match.Source, "persistent", StringComparison.Ordinal)
             || !ApprovalEntry.TryParseScope(match.Scope, out var entry, out _)
             || !string.Equals(entry.FormatScope(), match.Scope, StringComparison.Ordinal)
             || !IsCanonicalShellEntry(entry)
             || entry.Shell != candidate.Shell
             || entry.Match is null
-            || (coverage == ShellCoverageKind.PersistentGlobal) != (entry.Directory is null))
+            || coverage != (entry.Repository is not null
+                ? ShellCoverageKind.PersistentRepository
+                : entry.Directory is null
+                    ? ShellCoverageKind.PersistentGlobal
+                    : ShellCoverageKind.PersistentFolder))
         {
             return false;
         }
@@ -356,6 +376,7 @@ internal sealed class ValidatedShellGrantEvidence
     private static bool HasSameEntryFacts(ApprovalEntry first, ApprovalEntry second)
         => string.Equals(first.Verb, second.Verb, StringComparison.Ordinal)
            && string.Equals(first.Directory, second.Directory, StringComparison.Ordinal)
+           && string.Equals(first.Repository, second.Repository, StringComparison.Ordinal)
            && first.Shell == second.Shell
            && first.Match == second.Match
            && ((first.VerbTokens is null && second.VerbTokens is null)

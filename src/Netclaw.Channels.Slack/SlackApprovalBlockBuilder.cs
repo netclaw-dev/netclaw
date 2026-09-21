@@ -283,6 +283,7 @@ internal static class SlackApprovalBlockBuilder
             : selectedKey switch
             {
                 ApprovalOptionKeys.ApproveAlways => "Saved: always here",
+                ApprovalOptionKeys.ApproveRepository => "Saved: this repository",
                 ApprovalOptionKeys.ApproveEverywhere => "Saved: always anywhere",
                 ApprovalOptionKeys.ApproveSession => "Saved for this chat",
                 ApprovalOptionKeys.ApproveOnce => "Approved (no save)",
@@ -387,6 +388,7 @@ internal static class SlackApprovalBlockBuilder
         return selectedKey switch
         {
             ApprovalOptionKeys.ApproveAlways => $"Saved: {verbs} in {location}",
+            ApprovalOptionKeys.ApproveRepository => $"Saved: {verbs} in this repository",
             ApprovalOptionKeys.ApproveEverywhere => $"Saved: {verbs} anywhere",
             ApprovalOptionKeys.ApproveSession => $"Saved for this chat: {verbs} in {location}",
             ApprovalOptionKeys.ApproveOnce => "Approved (no save)",

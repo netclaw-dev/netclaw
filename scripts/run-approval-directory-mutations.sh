@@ -15,9 +15,10 @@ spans="$(
     @markers = (
       "!IsWithinWindowsRoot(normalizedCandidate, normalizedRoot)",
       "if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))\n                return ShellApprovalScopeResult.OutsideDirectory;",
-      "return PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory)\n                ? ShellApprovalScopeResult.Symlink\n                : ShellApprovalScopeResult.Match;"
+      "return PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory)\n                ? ShellApprovalScopeResult.Symlink\n                : ShellApprovalScopeResult.Match;",
+      "return GitRepositoryApprovalScope.TryResolve(cwd, out var scope)\n                   && ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, entry.Repository)\n                   && scope.Contains(candidateDirectory, cwd)\n                ? ShellApprovalScopeResult.Match\n                : ShellApprovalScopeResult.OutsideDirectory;"
     );
-    @counts = (1, 1, 2);
+    @counts = (1, 1, 2, 4);
     for $i (0 .. $#markers) {
       $marker = $markers[$i];
       $start = index($_, $marker);
@@ -57,8 +58,8 @@ while read -r _span_start _span_end line count; do
 done <<< "$spans"
 
 # Each target above must die even if Stryker reports unrelated compiler errors.
-jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 4' \
+jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 8' \
   "$report" > /dev/null || {
-  echo "Expected exactly four approval directory mutants." >&2
+  echo "Expected exactly eight approval directory mutants." >&2
   exit 1
 }

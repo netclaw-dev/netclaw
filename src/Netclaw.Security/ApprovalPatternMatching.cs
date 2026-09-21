@@ -49,7 +49,8 @@ public static class ApprovalPatternMatching
             candidateDirectory,
             cwd,
             approvedEntries.Where(entry =>
-                ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb)));
+                entry.Repository is null
+                && ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb)));
 
     private static bool MatchesApprovalScope(
         string? candidateDirectory,
@@ -69,8 +70,10 @@ public static class ApprovalPatternMatching
         {
             if (EvaluateApprovalScope(
                     effectiveDirectory,
+                    candidateDirectory,
                     entry,
                     shell,
+                    cwd,
                     ref normalizedCandidate) == ShellApprovalScopeResult.Match)
             {
                 return true;
@@ -82,10 +85,21 @@ public static class ApprovalPatternMatching
 
     private static ShellApprovalScopeResult EvaluateApprovalScope(
         string? effectiveDirectory,
+        string? candidateDirectory,
         ApprovalEntry entry,
         ApprovalShell? shell,
+        string? cwd,
         ref string? normalizedCandidate)
     {
+        if (entry.Repository is not null)
+        {
+            return GitRepositoryApprovalScope.TryResolve(cwd, out var scope)
+                   && ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, entry.Repository)
+                   && scope.Contains(candidateDirectory, cwd)
+                ? ShellApprovalScopeResult.Match
+                : ShellApprovalScopeResult.OutsideDirectory;
+        }
+
         if (entry.Directory is null)
             return ShellApprovalScopeResult.Match;
 
@@ -161,8 +175,10 @@ public static class ApprovalPatternMatching
             {
                 var scopeResult = EvaluateApprovalScope(
                     effectiveDirectory,
+                    candidate.Directory,
                     entry,
                     candidate.Shell,
+                    cwd,
                     ref normalizedCandidate);
                 if (scopeResult == ShellApprovalScopeResult.Match)
                     return new ShellApprovalEvaluation(entry, []);
@@ -412,7 +428,8 @@ public static class ApprovalPatternMatching
     {
         foreach (var approved in approvedEntries)
         {
-            if (ToolApprovalEntryComparer.Equals(approved.Verb, candidate))
+            if (approved.Repository is null
+                && ToolApprovalEntryComparer.Equals(approved.Verb, candidate))
                 return true;
         }
 
