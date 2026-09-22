@@ -3,7 +3,7 @@ name: search-citation
 description: "REQUIRED when the user asks you to search, look up, verify, buy, shop, compare, price-check, find current info, or check facts online. Contains citation format rules for web_search and web_fetch."
 metadata:
   author: netclaw
-  version: "1.1.2"
+  version: "1.1.3"
 ---
 
 ## Critical Rules Summary
@@ -108,5 +108,7 @@ summarization of article body text).
 ## Saved Fetch Files
 
 `web_fetch` saves responses in the current session workspace.
+Use `file_read` to inspect a saved response.
+Do not use `shell_execute` to read, search, or filter that file.
 It rejects output paths that use filesystem links or protected write locations.
 A denied save returns an error. Report that error instead of inventing a saved file path.
