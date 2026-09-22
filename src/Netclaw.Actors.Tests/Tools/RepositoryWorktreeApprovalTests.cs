@@ -45,6 +45,24 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 TestContext.Current.CancellationToken);
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, promptDecision.Outcome);
             Assert.False(promptDecision.ApprovalContext!.IsMessy);
+            var repositoryDiagnostics = string.Join(", ",
+                promptDecision.ApprovalContext.Candidates!.Select(candidate =>
+                {
+                    var resolved = GitRepositoryApprovalScope.TryResolveCandidate(
+                        candidate.Directory,
+                        promptDecision.ApprovalContext.Cwd,
+                        out _);
+                    return $"{candidate.Verb}:directory={candidate.Directory is not null}," +
+                           $"absolute={candidate.Directory is not null && Path.IsPathFullyQualified(candidate.Directory)}," +
+                           $"exists={candidate.Directory is not null && Directory.Exists(candidate.Directory)}," +
+                           $"repository={resolved}";
+                }));
+            Assert.True(
+                promptDecision.ApprovalContext.RepositoryCommonDirectory is not null,
+                repositoryDiagnostics);
+            Assert.True(PathUtility.AreEquivalentPaths(
+                Path.Combine(checkoutA, ".git"),
+                promptDecision.ApprovalContext.RepositoryCommonDirectory));
             Assert.Contains(
                 promptDecision.ApprovalContext.Options,
                 option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
