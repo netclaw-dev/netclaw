@@ -419,9 +419,14 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
         ? "Get-Content"
         : "touch";
 
-    private static string CreatePathCommand(string path) => OperatingSystem.IsWindows()
-        ? $"Get-Content 'FileSystem::{path.Replace("'", "''", StringComparison.Ordinal)}'"
-        : $"touch '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+    private static string CreatePathCommand(string path)
+    {
+        if (!OperatingSystem.IsWindows())
+            return $"touch '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+
+        var directory = Path.GetDirectoryName(path)! + Path.DirectorySeparatorChar;
+        return $"Get-Content 'FileSystem::{directory.Replace("'", "''", StringComparison.Ordinal)}'";
+    }
 
     private static string CreateRedirectCommand(string path) => OperatingSystem.IsWindows()
         ? $"Write-Output done > '{path.Replace("'", "''", StringComparison.Ordinal)}'"
