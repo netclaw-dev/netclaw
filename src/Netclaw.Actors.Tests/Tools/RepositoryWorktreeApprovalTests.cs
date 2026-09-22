@@ -432,7 +432,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             return $"touch '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
 
         var directory = Path.GetDirectoryName(path)! + Path.DirectorySeparatorChar;
-        return $"Set-Location 'FileSystem::{directory.Replace("'", "''", StringComparison.Ordinal)}'";
+        return $"Set-Location '{directory.Replace("'", "''", StringComparison.Ordinal)}'";
     }
 
     private static string CreateRedirectCommand(string path) => OperatingSystem.IsWindows()
