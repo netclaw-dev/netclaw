@@ -359,8 +359,8 @@ public sealed class ShellPolicyPathFactsTests
 
     private static ApprovalCandidate BashCandidate(string verb, string directory) =>
         new(verb, directory, ApprovalAssignmentConstraint.None)
-    {
-        Shell = ApprovalShell.Bash,
-        VerbTokens = Array.AsReadOnly(verb.Split(' ', StringSplitOptions.RemoveEmptyEntries))
-    };
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = Array.AsReadOnly(verb.Split(' ', StringSplitOptions.RemoveEmptyEntries))
+        };
 }

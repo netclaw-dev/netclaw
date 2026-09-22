@@ -703,7 +703,7 @@ public sealed class ToolAccessPolicy
 
         var decision = _pathAccessPolicy.Evaluate(rawPath, context, request.Operation);
         return decision is PathAccessPolicy.PathAccessDecision.Denied
-            { Failure: PathAccessPolicy.PathAccessFailure.AccessDenied } denied
+        { Failure: PathAccessPolicy.PathAccessFailure.AccessDenied } denied
             ? ToolAuthorizationDecision.Deny("path_access_denied", denied.Error)
             : null;
     }

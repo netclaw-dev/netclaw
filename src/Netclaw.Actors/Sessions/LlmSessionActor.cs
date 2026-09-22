@@ -4037,15 +4037,15 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     internal static ApprovalDecision MapApprovalDecision(string selectedKey) =>
         ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
-    {
-        ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
-        ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
-        ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
-        ApprovalOptionKeys.ApproveRepository => ApprovalDecision.ApprovedRepository,
-        ApprovalOptionKeys.ApproveEverywhere => ApprovalDecision.ApprovedEverywhere,
-        ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
-        _ => ApprovalDecision.Denied
-    };
+        {
+            ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
+            ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
+            ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
+            ApprovalOptionKeys.ApproveRepository => ApprovalDecision.ApprovedRepository,
+            ApprovalOptionKeys.ApproveEverywhere => ApprovalDecision.ApprovedEverywhere,
+            ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
+            _ => ApprovalDecision.Denied
+        };
 
     private bool HasApprovalHistory
         => _toolApprovals.ResolvedCount > 0

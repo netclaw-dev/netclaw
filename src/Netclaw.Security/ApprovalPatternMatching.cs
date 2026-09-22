@@ -480,13 +480,13 @@ public static class ApprovalPatternMatching
     private static bool AssignmentConstraintMatches(
         ApprovalAssignmentConstraint constraint,
         ApprovalAssignmentDigest? digest) => constraint.Kind switch
-    {
-        ApprovalAssignmentConstraintKind.None =>
-            constraint.Digest is null && digest is null,
-        ApprovalAssignmentConstraintKind.ExactDigest =>
-            constraint.Digest is { } exact && exact == digest,
-        _ => false,
-    };
+        {
+            ApprovalAssignmentConstraintKind.None =>
+                constraint.Digest is null && digest is null,
+            ApprovalAssignmentConstraintKind.ExactDigest =>
+                constraint.Digest is { } exact && exact == digest,
+            _ => false,
+        };
 
     /// <summary>
     /// Explains why a shell candidate that <see cref="MatchesShellApproval"/>

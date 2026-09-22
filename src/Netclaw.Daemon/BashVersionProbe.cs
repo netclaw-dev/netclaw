@@ -83,9 +83,10 @@ internal sealed class BashVersionProbe(TimeProvider timeProvider) : IBashVersion
             process.Kill(entireProcessTree: true);
             await process.WaitForExitAsync(CancellationToken.None).ConfigureAwait(false);
         }
-        catch (InvalidOperationException)
+        catch (InvalidOperationException) when (process.HasExited)
         {
             // The process exited between the state check and the stop request.
+            return;
         }
     }
 }
