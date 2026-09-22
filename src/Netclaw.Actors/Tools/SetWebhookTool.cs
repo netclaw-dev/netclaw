@@ -12,7 +12,7 @@ using static Netclaw.Actors.Webhooks.WebhookRouteProtocol;
 namespace Netclaw.Actors.Tools;
 
 [NetclawTool("set_webhook",
-    "Create or update an inbound webhook route stored in Netclaw's webhook config directory. Use this instead of raw file access for webhook definitions.",
+    "Create or update an inbound webhook route. For Stripe, set VerificationKind to HmacTimestamped and SignatureHeaderName to Stripe-Signature. Omitting that header uses X-Webhook-Signature. Set Audience to Public when the user requests a public route.",
     Grant = "webhook_admin")]
 public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
 {

@@ -1666,9 +1666,19 @@ assert_tool_rationale_contract() {
 }
 
 assert_tool_timestamped_webhook() {
+    local route_file="$EVAL_HOME/data/config/webhooks/stripe-events.json"
     stdout_tool_called 'set_webhook' \
-        && stdout_contains 'HmacTimestamped' \
-        && stdout_contains 'Stripe-Signature'
+        && jq -e '
+            .Audience == "Public"
+                and .Verification.Kind == "HmacTimestamped"
+                and .Verification.Secret == "eval-whsec-123"
+                and .Verification.SignatureHeaderName == "Stripe-Signature"
+                and (.Prompt | test("summar"; "i"))
+        ' "$route_file" >/dev/null 2>&1
+}
+
+setup_tool_timestamped_webhook() {
+    rm -f "$EVAL_HOME/data/config/webhooks/stripe-events.json"
 }
 
 assert_tool_timeout_arg_recovery() {
