@@ -45,6 +45,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 TestContext.Current.CancellationToken);
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, promptDecision.Outcome);
             Assert.False(promptDecision.ApprovalContext!.IsMessy);
+            var expectedCandidateDirectory = Path.Combine(worktreeA, "tasks");
             var repositoryDiagnostics = string.Join(", ",
                 promptDecision.ApprovalContext.Candidates!.Select(candidate =>
                 {
@@ -55,6 +56,9 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                     return $"{candidate.Verb}:directory={candidate.Directory is not null}," +
                            $"absolute={candidate.Directory is not null && Path.IsPathFullyQualified(candidate.Directory)}," +
                            $"exists={candidate.Directory is not null && Directory.Exists(candidate.Directory)}," +
+                           $"expected={candidate.Directory is not null && PathUtility.AreEquivalentPaths(candidate.Directory, expectedCandidateDirectory)}," +
+                           $"parentExists={candidate.Directory is not null && Directory.Exists(Path.GetDirectoryName(candidate.Directory))}," +
+                           $"provider={candidate.Directory?.Contains("FileSystem::", StringComparison.OrdinalIgnoreCase) == true}," +
                            $"repository={resolved}";
                 }));
             Assert.True(
@@ -282,7 +286,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 fixture.ActorSystem,
                 TestContext.Current.CancellationToken,
                 scope: new ShellApprovalHarnessScope(sibling, session.FullName,
-                    "signalr/repository-headless", []) { RepositoryGrantWorktree = main });
+                    "signalr/repository-headless", [])
+                { RepositoryGrantWorktree = main });
             var headlessDecision = await headlessHarness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
             Assert.Equal(ToolAuthorizationOutcome.Allowed, headlessDecision.Outcome);
 
@@ -294,7 +299,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 fixture.ActorSystem,
                 TestContext.Current.CancellationToken,
                 scope: new ShellApprovalHarnessScope(sibling, session.FullName,
-                    "signalr/repository-headless-other-verb", []) { RepositoryGrantWorktree = main });
+                    "signalr/repository-headless-other-verb", [])
+                { RepositoryGrantWorktree = main });
             var headlessOtherVerbDecision = await headlessOtherVerbHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, headlessOtherVerbDecision.Outcome);
@@ -318,7 +324,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 fixture.ActorSystem,
                 TestContext.Current.CancellationToken,
                 scope: new ShellApprovalHarnessScope(sibling, session.FullName,
-                    "signalr/repository-other-audience", []) { RepositoryGrantWorktree = main });
+                    "signalr/repository-other-audience", [])
+                { RepositoryGrantWorktree = main });
             var otherAudienceDecision = await otherAudienceHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
             Assert.Equal(ToolAuthorizationOutcome.Denied, otherAudienceDecision.Outcome);
@@ -416,7 +423,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             });
 
     private static string PathCommandVerb => OperatingSystem.IsWindows()
-        ? "Get-Content"
+        ? "Set-Location"
         : "touch";
 
     private static string CreatePathCommand(string path)
@@ -425,7 +432,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             return $"touch '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
 
         var directory = Path.GetDirectoryName(path)! + Path.DirectorySeparatorChar;
-        return $"Get-Content 'FileSystem::{directory.Replace("'", "''", StringComparison.Ordinal)}'";
+        return $"Set-Location 'FileSystem::{directory.Replace("'", "''", StringComparison.Ordinal)}'";
     }
 
     private static string CreateRedirectCommand(string path) => OperatingSystem.IsWindows()
