@@ -106,7 +106,7 @@ public sealed class GitRepositoryApprovalScopeTests
                 "./scripts/bump-version.sh", null, sibling, [grant]));
             var folder = ApprovalEntry.CreateTokenPrefix(
                 ApprovalShell.Bash, ["./scripts/bump-version.sh"], main);
-            var candidate = new ApprovalCandidate("./scripts/bump-version.sh", null)
+            var candidate = new ApprovalCandidate("./scripts/bump-version.sh", null, ApprovalAssignmentConstraint.None)
             {
                 Shell = ApprovalShell.Bash,
                 VerbTokens = ["./scripts/bump-version.sh"],

@@ -383,7 +383,8 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 if (string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal))
                 {
                     if (grant.Candidate.Shell is not { } shell ||
-                        grant.Candidate.VerbTokens is not { } tokens)
+                        grant.Candidate.VerbTokens is not { } tokens ||
+                        !grant.Candidate.AssignmentConstraint.IsValid)
                     {
                         persistentEntries = [];
                         sessionEntries = [];
@@ -419,7 +420,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
                         }
 
                         persistedEntry = ApprovalEntry.CreateRepositoryTokenPrefix(
-                            shell, tokens, grant.Repository);
+                            shell,
+                            tokens,
+                            grant.Repository,
+                            assignmentDigest: grant.Candidate.AssignmentConstraint.Digest);
                     }
                     else
                     {
@@ -431,13 +435,21 @@ internal sealed class ToolApprovalActor : ReceiveActor
                         }
 
                         persistedEntry = ApprovalEntry.CreateTokenPrefix(
-                            shell, tokens, grant.Directory);
+                            shell,
+                            tokens,
+                            grant.Directory,
+                            assignmentDigest: grant.Candidate.AssignmentConstraint.Digest);
                     }
                 }
                 else
                 {
                     if (grant.Repository is not null
-                        || grant.RepositoryWorktree is not null)
+                        || grant.RepositoryWorktree is not null
+                        || grant.Candidate.AssignmentConstraint is not
+                        {
+                            Kind: ApprovalAssignmentConstraintKind.None,
+                            Digest: null
+                        })
                     {
                         persistentEntries = [];
                         sessionEntries = [];

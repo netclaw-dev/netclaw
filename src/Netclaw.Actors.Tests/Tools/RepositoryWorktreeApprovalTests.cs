@@ -231,11 +231,11 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
                 promptDecision.ApprovalContext.Candidates!, swappedContext));
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
-                [new Netclaw.Security.ApprovalCandidate("touch", Path.Combine(root.FullName, "outside"))],
+                [new Netclaw.Security.ApprovalCandidate("touch", Path.Combine(root.FullName, "outside"), ApprovalAssignmentConstraint.None)],
                 grantContext));
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
-                [new Netclaw.Security.ApprovalCandidate("cd", Path.Combine(root.FullName, "outside")),
-                    new Netclaw.Security.ApprovalCandidate("./scripts/bump-version.sh", null)],
+                [new Netclaw.Security.ApprovalCandidate("cd", Path.Combine(root.FullName, "outside"), ApprovalAssignmentConstraint.None),
+                    new Netclaw.Security.ApprovalCandidate("./scripts/bump-version.sh", null, ApprovalAssignmentConstraint.None)],
                 grantContext));
 
             var grants = Approvals.Combine(

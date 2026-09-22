@@ -871,6 +871,8 @@ public sealed class SerializationRoundTripTests : TestKit
     [Fact]
     public void ToolApprovalRequested_round_trips_all_persisted_context()
     {
+        var assignmentDigest = new Netclaw.Configuration.ApprovalAssignmentDigest(
+            $"sha256:{new string('a', 64)}");
         var wrapped = new ToolApprovalRequested
         {
             SessionId = new SessionId("C123/1700000000.000001"),
@@ -887,18 +889,30 @@ public sealed class SerializationRoundTripTests : TestKit
             RequesterPrincipal = Netclaw.Configuration.PrincipalClassification.Operator,
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U-observer"],
-            Cwd = "/home/user/project",
-            RepositoryCommonDirectory = "/home/user/project/.git",
-            ManagedTemporaryDirectory = "/home/user/.netclaw/sessions/example/tmp/parent",
-            OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
+            Cwd = "/work/repository",
+            RepositoryCommonDirectory = "/work/repository/.git",
+            ManagedTemporaryDirectory = "/work/session/tmp/parent",
+            OptionKeys =
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveAssignmentEverywhereV1,
+                ApprovalOptionKeys.Deny,
+            ],
             Candidates =
             [
-                new Netclaw.Security.ApprovalCandidate("git", "/home/user/project")
+                new Netclaw.Security.ApprovalCandidate(
+                    "git",
+                    "/work/repository",
+                    Netclaw.Configuration.ApprovalAssignmentConstraint.ExactDigest(
+                        assignmentDigest))
                 {
                     Shell = Netclaw.Configuration.ApprovalShell.Bash,
                     VerbTokens = Array.AsReadOnly(["git", "push"]),
                 },
-                new Netclaw.Security.ApprovalCandidate("ls", null)
+                new Netclaw.Security.ApprovalCandidate(
+                    "ls",
+                    null,
+                    Netclaw.Configuration.ApprovalAssignmentConstraint.None)
             ],
             TurnContext = new TurnContextRecord
             {
@@ -917,13 +931,13 @@ public sealed class SerializationRoundTripTests : TestKit
                     "slack",
                     "destination",
                     "C123",
-                    "#alerts",
+                    "#operations",
                     "1700000000.000001"),
                 RequestedDeliveryTarget = new ChannelDeliveryTargetInfo(
                     "mattermost",
                     "direct_message",
                     "user1234567890123456789012",
-                    "@alice"),
+                    "@requester"),
                 HasAdoptedContext = true,
                 HasThirdPartyAdoptedContext = true,
                 AdoptedSpeakerIds = ["U12345", "U-observer"],
@@ -955,9 +969,15 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Equal(2, result.Candidates.Count);
         Assert.Equal("git", result.Candidates[0].Verb);
-        Assert.Equal("/home/user/project", result.Candidates[0].Directory);
+        Assert.Equal("/work/repository", result.Candidates[0].Directory);
         Assert.Equal(Netclaw.Configuration.ApprovalShell.Bash, result.Candidates[0].Shell);
         Assert.Equal(["git", "push"], result.Candidates[0].VerbTokens);
+        Assert.Equal(
+            Netclaw.Configuration.ApprovalAssignmentConstraintKind.ExactDigest,
+            result.Candidates[0].AssignmentConstraint.Kind);
+        Assert.Equal(
+            assignmentDigest,
+            result.Candidates[0].AssignmentConstraint.Digest);
         Assert.Equal("ls", result.Candidates[1].Verb);
         Assert.Null(result.Candidates[1].Directory);
         Assert.Null(result.Candidates[1].Shell);
@@ -981,6 +1001,105 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.TurnContext.AdoptedSpeakerIds, result.TurnContext.AdoptedSpeakerIds);
         Assert.Equal(wrapped.TurnContext.SupportsInteractiveApproval, result.TurnContext.SupportsInteractiveApproval);
         Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);
+    }
+
+    [Fact]
+    public void Assignment_prompt_wire_form_fails_closed_for_a_legacy_reader()
+    {
+        var digest = new Netclaw.Configuration.ApprovalAssignmentDigest(
+            $"sha256:{new string('a', 64)}");
+        var current = new ToolApprovalRequested
+        {
+            SessionId = new SessionId("session-1"),
+            CallId = "call-assignment",
+            ToolName = "shell_execute",
+            Cwd = "/work/repository",
+            OptionKeys =
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveAssignmentSessionV1,
+                ApprovalOptionKeys.ApproveAssignmentAlwaysV1,
+                ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+                ApprovalOptionKeys.ApproveAssignmentEverywhereV1,
+                ApprovalOptionKeys.Deny,
+            ],
+            Candidates =
+            [
+                new Netclaw.Security.ApprovalCandidate(
+                    "inspect",
+                    "/work/repository",
+                    Netclaw.Configuration.ApprovalAssignmentConstraint.ExactDigest(digest))
+                {
+                    Shell = Netclaw.Configuration.ApprovalShell.Bash,
+                    VerbTokens = ["inspect"],
+                },
+            ],
+            RequestedAtMs = 1700000000000,
+        };
+
+        var wire = Serialization.Proto.ToolApprovalRequestedProto.Parser.ParseFrom(
+            NetclawProtoMapper.ToProto(current).ToByteArray());
+        var wireCandidate = Assert.Single(wire.Candidates);
+
+        Assert.True(wireCandidate.HasAssignmentConstraintKind);
+        Assert.True(wireCandidate.HasAssignmentDigest);
+
+        // A reader from before assignment constraints sees only fields 1 through 4.
+        var legacyProjection = new Netclaw.Security.ApprovalCandidate(
+            wireCandidate.Verb,
+            wireCandidate.HasDirectory ? wireCandidate.Directory : null,
+            Netclaw.Configuration.ApprovalAssignmentConstraint.None)
+        {
+            Shell = wireCandidate.HasShell
+                ? (Netclaw.Configuration.ApprovalShell)wireCandidate.Shell
+                : null,
+            VerbTokens = wireCandidate.VerbTokens.ToArray(),
+        };
+
+        Assert.Equal(Netclaw.Configuration.ApprovalAssignmentConstraint.None, legacyProjection.AssignmentConstraint);
+        Assert.All(
+            wire.OptionKeys.Where(static key => key.StartsWith("approve_assignment_", StringComparison.Ordinal)),
+            key => Assert.Equal(ApprovalDecision.Denied, MapLegacyApprovalDecision(key)));
+    }
+
+    [Fact]
+    public void ToolApprovalRequested_maps_a_legacy_candidate_to_explicit_none()
+    {
+        var proto = new Serialization.Proto.ToolApprovalRequestedProto
+        {
+            SessionId = new Serialization.Proto.SessionIdProto { Value = "session-1" },
+            CallId = "call-legacy-candidate",
+            ToolName = "shell_execute",
+            RequestedAtMs = 1700000000000,
+        };
+        proto.Candidates.Add(new Serialization.Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto
+        {
+            Verb = "git",
+        });
+
+        var result = NetclawProtoMapper.FromProto(proto);
+
+        var candidate = Assert.Single(result.Candidates);
+        Assert.Equal(Netclaw.Configuration.ApprovalAssignmentConstraint.None, candidate.AssignmentConstraint);
+    }
+
+    [Fact]
+    public void ToolApprovalRequested_rejects_a_digest_without_a_constraint_kind()
+    {
+        var proto = new Serialization.Proto.ToolApprovalRequestedProto
+        {
+            SessionId = new Serialization.Proto.SessionIdProto { Value = "session-1" },
+            CallId = "call-invalid-candidate",
+            ToolName = "shell_execute",
+            RequestedAtMs = 1700000000000,
+        };
+        proto.Candidates.Add(new Serialization.Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto
+        {
+            Verb = "git",
+            AssignmentDigest = $"sha256:{new string('a', 64)}",
+        });
+
+        Assert.Throws<InvalidOperationException>(() => NetclawProtoMapper.FromProto(proto));
     }
 
     [Fact]
@@ -1177,4 +1296,15 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Empty(result.Proposals);
         Assert.Equal(0L, result.TimestampMs);
     }
+
+    private static ApprovalDecision MapLegacyApprovalDecision(string selectedKey) => selectedKey switch
+    {
+        ApprovalOptionKeys.ApproveOnce => ApprovalDecision.ApprovedOnce,
+        ApprovalOptionKeys.ApproveSession => ApprovalDecision.ApprovedSession,
+        ApprovalOptionKeys.ApproveAlways => ApprovalDecision.ApprovedAlways,
+        ApprovalOptionKeys.ApproveRepository => ApprovalDecision.ApprovedRepository,
+        ApprovalOptionKeys.ApproveEverywhere => ApprovalDecision.ApprovedEverywhere,
+        ApprovalOptionKeys.Deny => ApprovalDecision.Denied,
+        _ => ApprovalDecision.Denied,
+    };
 }

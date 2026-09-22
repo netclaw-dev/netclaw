@@ -84,7 +84,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     {
         if (shell != ApprovalShell.Bash)
         {
-            return new ApprovalCandidate(verb, directory)
+            return new ApprovalCandidate(verb, directory, ApprovalAssignmentConstraint.None)
             {
                 Shell = shell,
                 VerbTokens = Array.AsReadOnly(
@@ -149,6 +149,24 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
+    public void Assignment_qualified_safe_verb_does_not_short_circuit()
+    {
+        var policy = CreatePolicy(VerbList("grep"));
+        var ctx = PersonalContext(projectDir: _projectDir);
+        var parsed = Candidate("grep", _projectDir);
+        var digest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
+        var qualified = parsed with
+        {
+            AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(digest),
+        };
+
+        Assert.False(AllShortCircuit(policy, [qualified], _projectDir, ctx));
+        Assert.False(policy.IsReviewedDiagnosticInvocation(
+            [qualified],
+            ShellPathStyle.Posix));
+    }
+
+    [Fact]
     public void Safe_verb_in_session_directory_short_circuits()
     {
         var policy = CreatePolicy(VerbList("cat"));
@@ -169,7 +187,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
                     @"Get-ChildItem -Path C:\WORK\PROJECT -Recurse",
                     @"C:\WORK\PROJECT")
                 .Commands);
-        var candidate = new ApprovalCandidate("Get-ChildItem", @"C:\WORK\PROJECT")
+        var candidate = new ApprovalCandidate("Get-ChildItem", @"C:\WORK\PROJECT", ApprovalAssignmentConstraint.None)
         {
             Shell = ApprovalShell.PowerShell,
             VerbTokens = ["Get-ChildItem"],
@@ -483,7 +501,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     {
         var policy = CreatePolicy(VerbList("head"));
         var ctx = PersonalContext(projectDir: _projectDir);
-        var candidate = new ApprovalCandidate("head", _projectDir);
+        var candidate = new ApprovalCandidate("head", _projectDir, ApprovalAssignmentConstraint.None);
 
         Assert.False(AllShortCircuit(policy, [candidate], _projectDir, ctx));
     }

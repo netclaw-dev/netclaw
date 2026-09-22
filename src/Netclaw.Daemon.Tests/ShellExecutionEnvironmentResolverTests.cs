@@ -14,10 +14,11 @@ public class ShellExecutionEnvironmentResolverTests
     [Theory]
     [InlineData(ShellPlatform.Linux)]
     [InlineData(ShellPlatform.MacOS)]
-    public async Task Unix_platform_selects_Bash_without_a_probe(ShellPlatform platform)
+    public async Task Unix_platform_selects_Bash_with_the_probed_version(ShellPlatform platform)
     {
         var probe = new SequencePowerShellProbe();
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var bashProbe = new FixedBashVersionProbe(new Version(5, 2));
+        var resolver = new ShellExecutionEnvironmentResolver(bashProbe, probe);
 
         var resolution = await resolver.ResolveAsync(
             platform,
@@ -25,8 +26,26 @@ public class ShellExecutionEnvironmentResolverTests
 
         Assert.Equal(platform, resolution.Environment.Platform);
         Assert.Equal("/bin/bash", resolution.Environment.ExecutablePath);
+        Assert.Equal(new Version(5, 2), resolution.Environment.BashVersion);
+        Assert.Equal([platform], bashProbe.Calls);
         Assert.Empty(probe.Calls);
         Assert.Null(resolution.FallbackReason);
+    }
+
+    [Fact]
+    public async Task Unix_Bash_probe_failure_stops_startup()
+    {
+        var bashProbe = new FailingBashVersionProbe();
+        var resolver = new ShellExecutionEnvironmentResolver(
+            bashProbe,
+            new SequencePowerShellProbe());
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            resolver.ResolveAsync(
+                ShellPlatform.Linux,
+                TestContext.Current.CancellationToken));
+
+        Assert.Equal("Bash probe failed.", exception.Message);
     }
 
     [Theory]
@@ -36,7 +55,7 @@ public class ShellExecutionEnvironmentResolverTests
     {
         var probe = new SequencePowerShellProbe(
             ("pwsh.exe", Found("C:\\PowerShell\\7\\pwsh.exe", version)));
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var resolver = CreateResolver(probe);
 
         var resolution = await resolver.ResolveAsync(
             ShellPlatform.Windows,
@@ -56,7 +75,7 @@ public class ShellExecutionEnvironmentResolverTests
             ("powershell.exe", Found(
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "5.1.26100.1")));
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var resolver = CreateResolver(probe);
 
         var resolution = await resolver.ResolveAsync(
             ShellPlatform.Windows,
@@ -83,7 +102,7 @@ public class ShellExecutionEnvironmentResolverTests
             ("powershell.exe", Found(
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "5.1")));
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var resolver = CreateResolver(probe);
 
         var resolution = await resolver.ResolveAsync(
             ShellPlatform.Windows,
@@ -108,7 +127,7 @@ public class ShellExecutionEnvironmentResolverTests
             ("powershell.exe", Found(
                 "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
                 "5.1")));
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var resolver = CreateResolver(probe);
 
         var resolution = await resolver.ResolveAsync(
             ShellPlatform.Windows,
@@ -127,7 +146,7 @@ public class ShellExecutionEnvironmentResolverTests
             ("pwsh.exe", new PowerShellHostProbeResult.Failed(PowerShellProbeFailure.Timeout)),
             ("powershell.exe", new PowerShellHostProbeResult.Failed(
                 PowerShellProbeFailure.AccessDenied)));
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var resolver = CreateResolver(probe);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             resolver.ResolveAsync(ShellPlatform.Windows, TestContext.Current.CancellationToken));
@@ -143,7 +162,7 @@ public class ShellExecutionEnvironmentResolverTests
         var probe = new SequencePowerShellProbe(
             ("pwsh.exe", Found("C:\\PowerShell\\7\\pwsh.exe", "7.7.0")),
             ("powershell.exe", Found("C:\\Windows\\powershell.exe", "5.2")));
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var resolver = CreateResolver(probe);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             resolver.ResolveAsync(ShellPlatform.Windows, TestContext.Current.CancellationToken));
@@ -161,7 +180,7 @@ public class ShellExecutionEnvironmentResolverTests
             ("powershell.exe", new PowerShellHostProbeResult.Failed(
                 PowerShellProbeFailure.NonZeroExit,
                 9)));
-        var resolver = new ShellExecutionEnvironmentResolver(probe);
+        var resolver = CreateResolver(probe);
 
         var exception = await Assert.ThrowsAsync<InvalidOperationException>(() =>
             resolver.ResolveAsync(ShellPlatform.Windows, TestContext.Current.CancellationToken));
@@ -172,6 +191,32 @@ public class ShellExecutionEnvironmentResolverTests
 
     private static PowerShellHostProbeResult Found(string path, string version) =>
         new PowerShellHostProbeResult.Found(path, Version.Parse(version));
+
+    private static ShellExecutionEnvironmentResolver CreateResolver(
+        IPowerShellHostProbe powerShellProbe) =>
+        new(new FixedBashVersionProbe(new Version(5, 2)), powerShellProbe);
+
+    private sealed class FixedBashVersionProbe(Version version) : IBashVersionProbe
+    {
+        public List<ShellPlatform> Calls { get; } = [];
+
+        public Task<Version> ProbeAsync(
+            ShellPlatform platform,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls.Add(platform);
+            return Task.FromResult(version);
+        }
+    }
+
+    private sealed class FailingBashVersionProbe : IBashVersionProbe
+    {
+        public Task<Version> ProbeAsync(
+            ShellPlatform platform,
+            CancellationToken cancellationToken) =>
+            Task.FromException<Version>(new InvalidOperationException("Bash probe failed."));
+    }
 
     private sealed class SequencePowerShellProbe(
         params (string ExecutableName, PowerShellHostProbeResult Result)[] results)

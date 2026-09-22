@@ -250,7 +250,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var tokens = Array.AsReadOnly(
             pattern.Split(' ', StringSplitOptions.RemoveEmptyEntries));
         return new ToolApprovalGrant(
-            new ApprovalCandidate(pattern, Directory: null)
+            new ApprovalCandidate(pattern, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
             {
                 Shell = shell,
                 VerbTokens = tokens,

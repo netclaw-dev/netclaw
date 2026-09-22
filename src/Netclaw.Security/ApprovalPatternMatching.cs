@@ -50,6 +50,7 @@ public static class ApprovalPatternMatching
             cwd,
             approvedEntries.Where(entry =>
                 entry.Repository is null
+                && entry.AssignmentDigest is null
                 && ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb)));
 
     private static bool MatchesApprovalScope(
@@ -232,6 +233,12 @@ public static class ApprovalPatternMatching
             return true;
         }
 
+        if (!AssignmentConstraintMatches(candidate.AssignmentConstraint, entry.AssignmentDigest))
+        {
+            reason = ShellApprovalNearMissReason.AssignmentMismatch;
+            return true;
+        }
+
         reason = ShellApprovalNearMissReason.TokenMismatch;
         return true;
     }
@@ -247,6 +254,11 @@ public static class ApprovalPatternMatching
 
     private static bool PhraseMatches(ApprovalCandidate candidate, ApprovalEntry entry)
     {
+        if (!AssignmentConstraintMatches(candidate.AssignmentConstraint, entry.AssignmentDigest))
+        {
+            return false;
+        }
+
         if (entry.Match is null)
         {
             return ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
@@ -454,11 +466,27 @@ public static class ApprovalPatternMatching
     /// </remarks>
     public static bool IsPureSideEffect(ApprovalCandidate candidate)
     {
-        if (candidate.Directory is not null)
+        if (candidate.Directory is not null
+            || candidate.AssignmentConstraint is not
+            {
+                Kind: ApprovalAssignmentConstraintKind.None,
+                Digest: null
+            })
             return false;
 
         return ShellTokenizer.SingleTokenSideEffectVerbs.Contains(candidate.Verb);
     }
+
+    private static bool AssignmentConstraintMatches(
+        ApprovalAssignmentConstraint constraint,
+        ApprovalAssignmentDigest? digest) => constraint.Kind switch
+    {
+        ApprovalAssignmentConstraintKind.None =>
+            constraint.Digest is null && digest is null,
+        ApprovalAssignmentConstraintKind.ExactDigest =>
+            constraint.Digest is { } exact && exact == digest,
+        _ => false,
+    };
 
     /// <summary>
     /// Explains why a shell candidate that <see cref="MatchesShellApproval"/>
@@ -619,6 +647,7 @@ internal enum ShellApprovalNearMissReason
     MissingDirectory = 2,
     TokenMismatch = 3,
     ShellMismatch = 4,
+    AssignmentMismatch = 5,
 }
 
 internal sealed record ShellApprovalNearMiss(

@@ -415,6 +415,14 @@ each command in each reachable exact directory. A failed `cd` can leave a later
 command in the original directory. Each unapproved verb still needs approval.
 Dynamic effects and linked directories retain exact approval.
 
+Netclaw can reuse an approval for a bounded shell assignment.
+The grant stores a digest of the exact assignment facts.
+It does not store the assignment name or value.
+A changed assignment needs a separate approval.
+An unqualified grant cannot cover an assignment-qualified command.
+The reviewed-safe list does not cover an assignment-qualified command.
+An incomplete assignment gets only `Once` and `Deny`.
+
 The approval gate runs three layers in order:
 
 The directory order reserves `temp_dir` for disposable output.
@@ -482,9 +490,9 @@ implicit. Mutating verbs in the same directory still prompt.
 
 **When the prompt offers fewer buttons.** Two cases:
 
-- **Complex commands** (bash control-flow like `for/while/done`, unbalanced
-  quotes/brackets) get only `Once` and `Deny`. The matcher cannot extract a
-  clean verb chain to remember, so persistence is structurally impossible.
+- **Unresolved commands** get only `Once` and `Deny`.
+  These commands include dynamic assignments and unknown path facts.
+  The matcher cannot extract a complete reusable identity.
 - **Shallow cwd** (e.g. `/etc/`, `/`) hides `Always here` only. Persisting a
   too-shallow root would grant the verb across most of the filesystem;
   `This chat` and `Always anywhere` remain available.

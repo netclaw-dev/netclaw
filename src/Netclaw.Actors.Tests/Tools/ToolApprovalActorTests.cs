@@ -693,6 +693,72 @@ public sealed class ToolApprovalActorTests : TestKit
     }
 
     [Fact]
+    public async Task Persistent_assignment_grant_requires_the_same_exact_digest()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var tempFile = Path.GetTempFileName();
+        try
+        {
+            var store = CreateStore(tempFile);
+            var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
+            var service = CreateService(actor);
+            var firstDigest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
+            var secondDigest = new ApprovalAssignmentDigest($"sha256:{new string('b', 64)}");
+            var candidate = BashCandidate("inspect") with
+            {
+                AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(firstDigest),
+            };
+
+            await service.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"session-a",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [new ToolApprovalGrant(candidate, Directory: null)],
+                persistent: true,
+                ct);
+
+            var entry = Assert.Single(
+                store.GetApprovedEntries(TrustAudience.Personal, "shell_execute"));
+            Assert.Equal(firstDigest, entry.AssignmentDigest);
+            var matching = await service.CheckApprovalAsync(
+                "session-b",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [candidate],
+                cwd: null,
+                ct);
+            var changed = await service.CheckApprovalAsync(
+                "session-b",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [candidate with
+                {
+                    AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(secondDigest),
+                }],
+                cwd: null,
+                ct);
+            var unqualified = await service.CheckApprovalAsync(
+                "session-b",
+                TrustAudience.Personal,
+                new ToolName("shell_execute"),
+                [candidate with { AssignmentConstraint = ApprovalAssignmentConstraint.None }],
+                cwd: null,
+                ct);
+
+            Assert.Empty(matching.UnapprovedPatterns);
+            Assert.Single(matching.ApprovedMatches);
+            Assert.Equal(["inspect"], changed.UnapprovedPatterns);
+            Assert.Empty(changed.ApprovedMatches);
+            Assert.Equal(["inspect"], unqualified.UnapprovedPatterns);
+            Assert.Empty(unqualified.ApprovedMatches);
+        }
+        finally
+        {
+            File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
     public async Task Persistent_phrase_uses_parser_tokens_when_legacy_projection_is_shorter()
     {
         var ct = TestContext.Current.CancellationToken;
@@ -702,7 +768,7 @@ public sealed class ToolApprovalActorTests : TestKit
             var store = CreateStore(tempFile);
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
-            var candidate = new ApprovalCandidate("git ls-tree", Directory: null)
+            var candidate = new ApprovalCandidate("git ls-tree", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
             {
                 Shell = ApprovalShell.Bash,
                 VerbTokens = Array.AsReadOnly(["git", "ls-tree", "feature"]),
@@ -787,7 +853,7 @@ public sealed class ToolApprovalActorTests : TestKit
             var store = CreateStore(tempFile);
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
-            var malformed = new ApprovalCandidate("head", Directory: null)
+            var malformed = new ApprovalCandidate("head", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
             {
                 Shell = NativeShell,
             };
@@ -978,7 +1044,7 @@ public sealed class ToolApprovalActorTests : TestKit
         => new(new StubRequiredActor(actor), TestShellEnvironment.Current);
 
     private static ApprovalCandidate BashCandidate(string verb, string? directory = null) =>
-        new(verb, directory)
+        new(verb, directory, ApprovalAssignmentConstraint.None)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(
@@ -990,7 +1056,7 @@ public sealed class ToolApprovalActorTests : TestKit
         : ApprovalShell.Bash;
 
     private static ApprovalCandidate NativeCandidate(string verb, string? directory = null) =>
-        new(verb, directory)
+        new(verb, directory, ApprovalAssignmentConstraint.None)
         {
             Shell = NativeShell,
             VerbTokens = Array.AsReadOnly(

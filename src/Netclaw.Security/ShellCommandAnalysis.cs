@@ -99,9 +99,15 @@ internal sealed class ShellCommandAnalyzer
         if (_environment.Grammar == ShellGrammar.PowerShell)
         {
             commands.AddRange(parsed.Commands);
-            syntaxProofComplete &= ShellCommandAnalysis.TryCollectKnownExecutionRegionArguments(
-                parsed.Syntax,
-                knownRegionArguments);
+            syntaxProofComplete &= ShellCommandAnalysis.AssignmentSyntaxReconciliation.TryCreate(
+                    command,
+                    parsed.Commands,
+                    out var assignmentSyntax)
+                && ShellCommandAnalysis.TryCollectKnownExecutionRegionArguments(
+                    parsed.Syntax,
+                    knownRegionArguments,
+                    assignmentSyntax)
+                && assignmentSyntax.AllConsumed;
             return ShellAnalysisFailure.None;
         }
 
@@ -589,43 +595,50 @@ public sealed record ShellCommandAnalysis
 
     internal static bool TryCollectKnownExecutionRegionArguments(
         ShellSyntaxNode node,
-        ISet<ClauseElement> arguments)
+        ISet<ClauseElement> arguments,
+        AssignmentSyntaxReconciliation assignmentSyntax)
     {
         ArgumentNullException.ThrowIfNull(node);
         ArgumentNullException.ThrowIfNull(arguments);
+        ArgumentNullException.ThrowIfNull(assignmentSyntax);
 
         return node switch
         {
             ShellBlockSyntax block => block.Statements.All(statement =>
-                TryCollectKnownExecutionRegionArguments(statement, arguments)),
+                TryCollectKnownExecutionRegionArguments(statement, arguments, assignmentSyntax)),
             SimpleCommandSyntax command => command.ExecutionRegions.All(region =>
-                    TryCollectKnownExecutionRegionArguments(region, arguments))
+                    TryCollectKnownExecutionRegionArguments(region, arguments, assignmentSyntax))
                 && command.Substitutions.All(substitution =>
-                    TryCollectKnownExecutionRegionArguments(substitution, arguments)),
+                    TryCollectKnownExecutionRegionArguments(substitution, arguments, assignmentSyntax)),
             PipelineSyntax pipeline => pipeline.Stages.All(stage =>
-                TryCollectKnownExecutionRegionArguments(stage, arguments)),
+                TryCollectKnownExecutionRegionArguments(stage, arguments, assignmentSyntax)),
             CommandListSyntax list => list.Items.All(item =>
-                TryCollectKnownExecutionRegionArguments(item.Command, arguments)),
+                TryCollectKnownExecutionRegionArguments(item.Command, arguments, assignmentSyntax)),
             GroupSyntax group => TryCollectKnownExecutionRegionArguments(
                 group.Body,
-                arguments),
+                arguments,
+                assignmentSyntax),
             ForEachSyntax loop => TryCollectKnownExecutionRegionArguments(
                     loop.IteratorCommands,
-                    arguments)
-                && TryCollectKnownExecutionRegionArguments(loop.Body, arguments),
+                    arguments,
+                    assignmentSyntax)
+                && TryCollectKnownExecutionRegionArguments(loop.Body, arguments, assignmentSyntax),
             CommandSubstitutionSyntax substitution => TryCollectKnownExecutionRegionArguments(
                 substitution.Body,
-                arguments),
+                arguments,
+                assignmentSyntax),
             ExecutionRegionSyntax region => TryCollectKnownExecutionRegion(
                 region,
-                arguments),
-            _ => false
+                arguments,
+                assignmentSyntax),
+            _ => assignmentSyntax.TryConsume(node)
         };
     }
 
     private static bool TryCollectKnownExecutionRegion(
         ExecutionRegionSyntax region,
-        ISet<ClauseElement> arguments)
+        ISet<ClauseElement> arguments,
+        AssignmentSyntaxReconciliation assignmentSyntax)
     {
         if (!Enum.IsDefined(region.Origin)
             || region.Origin == ExecutionRegionOrigin.Unknown
@@ -641,13 +654,107 @@ public sealed record ShellCommandAnalysis
             return false;
         }
 
-        if (!TryCollectKnownExecutionRegionArguments(region.Body, arguments))
+        if (!TryCollectKnownExecutionRegionArguments(
+                region.Body,
+                arguments,
+                assignmentSyntax))
             return false;
 
         if (region.Origin == ExecutionRegionOrigin.CommandArgument)
             arguments.Add(region.HostArgument!);
 
         return true;
+    }
+
+    /// <summary>
+    /// Reconciles the non-exhaustive beta.4 syntax view with public assignment facts.
+    /// An exact shell-state source span can discharge one otherwise unknown syntax node.
+    /// </summary>
+    internal sealed class AssignmentSyntaxReconciliation
+    {
+        private readonly string _source;
+        private readonly Dictionary<(int Start, int Length), AssignmentIdentity> _unconsumed;
+
+        private AssignmentSyntaxReconciliation(
+            string source,
+            Dictionary<(int Start, int Length), AssignmentIdentity> unconsumed)
+        {
+            _source = source;
+            _unconsumed = unconsumed;
+        }
+
+        internal bool AllConsumed => _unconsumed.Count == 0;
+
+        internal static bool TryCreate(
+            string source,
+            IReadOnlyList<CommandOccurrence> commands,
+            out AssignmentSyntaxReconciliation reconciliation)
+        {
+            ArgumentNullException.ThrowIfNull(source);
+            ArgumentNullException.ThrowIfNull(commands);
+            var spans = new Dictionary<(int Start, int Length), AssignmentIdentity>();
+            foreach (var assignment in commands
+                         .SelectMany(static command => command.Assignments)
+                         .Where(static assignment =>
+                             assignment.Scope == ShellVariableAssignmentScope.ShellState))
+            {
+                if (assignment.SourceStart < 0
+                    || assignment.SourceLength <= 0
+                    || assignment.SourceStart > source.Length - assignment.SourceLength
+                    || assignment.AuthoredValue is not ShellValueDomain.Exact authored
+                    || assignment.EffectiveValue is not ShellValueDomain.Exact effective)
+                {
+                    reconciliation = null!;
+                    return false;
+                }
+
+                var span = (assignment.SourceStart, assignment.SourceLength);
+                var identity = new AssignmentIdentity(
+                    assignment.Name,
+                    authored.Value,
+                    effective.Value,
+                    assignment.MayAffectProcessEnvironment,
+                    source.Substring(span.SourceStart, span.SourceLength));
+                if (spans.TryGetValue(span, out var existing))
+                {
+                    if (existing != identity)
+                    {
+                        reconciliation = null!;
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                spans.Add(span, identity);
+            }
+
+            reconciliation = new AssignmentSyntaxReconciliation(source, spans);
+            return true;
+        }
+
+        internal bool TryConsume(ShellSyntaxNode node)
+        {
+            if (node.SourceStart is not { } start
+                || node.SourceLength is not { } length
+                || start < 0
+                || length <= 0
+                || start > _source.Length - length
+                || !_unconsumed.Remove((start, length), out var assignment))
+            {
+                return false;
+            }
+
+            return _source.AsSpan(start, length)
+                .SequenceEqual(assignment.Source.AsSpan());
+        }
+
+        private sealed record AssignmentIdentity(
+            string Name,
+            string AuthoredValue,
+            string EffectiveValue,
+            bool MayAffectProcessEnvironment,
+            string Source);
     }
 
     private static bool IsAccountedExecutionRegionArgument(

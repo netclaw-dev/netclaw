@@ -6,7 +6,9 @@
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -142,6 +144,48 @@ public sealed class ToolApprovalStateTests
     }
 
     [Fact]
+    public void Assignment_repository_option_requires_its_exact_offered_key()
+    {
+        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            [ApprovalOptionKeys.ApproveRepository],
+            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+            "/work/main/.git"));
+        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
+            ApprovalOptionKeys.ApproveRepository,
+            "/work/main/.git"));
+        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
+            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+            repositoryCommonDirectory: null));
+        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
+            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
+            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
+            "/work/main/.git"));
+    }
+
+    [Theory]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentSessionV1, ApprovalDecision.ApprovedSession)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentAlwaysV1, ApprovalDecision.ApprovedAlways)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentRepositoryV1, ApprovalDecision.ApprovedRepository)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentEverywhereV1, ApprovalDecision.ApprovedEverywhere)]
+    public void New_runtime_maps_assignment_option_keys(
+        string optionKey,
+        ApprovalDecision expected)
+        => Assert.Equal(expected, LlmSessionActor.MapApprovalDecision(optionKey));
+
+    [Theory]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentSessionV1)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentAlwaysV1)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentRepositoryV1)]
+    [InlineData(ApprovalOptionKeys.ApproveAssignmentEverywhereV1)]
+    public void Legacy_prompt_rejects_each_assignment_option_key(string optionKey)
+        => Assert.False(LlmSessionActor.IsOfferedApprovalOption(
+            [],
+            optionKey,
+            "/work/repository/.git"));
+
+    [Fact]
     public void Approval_turn_transitions_reject_invalid_source_states()
     {
         var state = new ToolApprovalState();
@@ -207,6 +251,43 @@ public sealed class ToolApprovalStateTests
         Assert.Equal(approved.AuthorizationAttemptId, attempts[approved.CallId].Value);
         Assert.Equal(denied.AuthorizationAttemptId, attempts[denied.CallId].Value);
         Assert.False(attempts.ContainsKey(pending.CallId));
+    }
+
+    [Fact]
+    public void Resolved_assignment_grant_redrives_only_the_exact_call_once()
+    {
+        var digest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
+        var candidate = new ApprovalCandidate(
+            "inspect",
+            "/work/repository",
+            ApprovalAssignmentConstraint.ExactDigest(digest))
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = ["inspect"],
+        };
+        var request = CreateRequest("call-assignment", requestedAtMs: 10) with
+        {
+            Patterns = ["inspect item"],
+            CandidateVerbs = ["inspect"],
+            Candidates = [candidate],
+            Cwd = "/work/repository",
+            OptionKeys =
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveAssignmentAlwaysV1,
+                ApprovalOptionKeys.Deny,
+            ],
+        };
+        var state = new ToolApprovalState();
+        state.Request(request, persistApprovalState: true, recovered: true);
+        Assert.True(state.Resolve(request.CallId, ApprovalDecision.ApprovedAlways, out _));
+
+        var plan = state.BuildRedrivePlan([request.CallId]);
+
+        Assert.Equal(
+            OneTimeApprovalKeys.Create(request.Patterns, request.Candidates, request.Cwd),
+            plan.OneTimeApprovalPreSeed![request.CallId]);
+        Assert.Null(plan.DecisionOverride);
     }
 
     private static ToolApprovalRequested CreateRequest(string callId, long requestedAtMs)

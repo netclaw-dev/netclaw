@@ -229,10 +229,9 @@ internal static class MattermostApprovalPromptBuilder
         => ((char)('A' + index)).ToString();
 
     private static string GetButtonStyle(string optionKey)
-        => optionKey switch
-        {
-            ApprovalOptionKeys.Deny => "danger",
-            ApprovalOptionKeys.ApproveOnce => "primary",
-            _ => "default"
-        };
+    {
+        if (ApprovalOptionKeys.IsDangerStyled(optionKey))
+            return "danger";
+        return optionKey == ApprovalOptionKeys.ApproveOnce ? "primary" : "default";
+    }
 }

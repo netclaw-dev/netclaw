@@ -1539,7 +1539,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     public void IsPureSideEffect_skips_echo_without_redirect()
     {
         Assert.True(ApprovalPatternMatching.IsPureSideEffect(
-            new ApprovalCandidate("echo", Directory: null)));
+            new ApprovalCandidate("echo", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)));
     }
 
     [Fact]
@@ -1548,16 +1548,16 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         // echo X > /tmp/log gets /tmp as its directory via the path-arg
         // scan, which means it's no longer "pure" side effect.
         Assert.False(ApprovalPatternMatching.IsPureSideEffect(
-            new ApprovalCandidate("echo", Directory: "/tmp")));
+            new ApprovalCandidate("echo", Directory: "/tmp", ApprovalAssignmentConstraint.None)));
     }
 
     [Fact]
     public void IsPureSideEffect_does_not_skip_action_verbs()
     {
         Assert.False(ApprovalPatternMatching.IsPureSideEffect(
-            new ApprovalCandidate("find", Directory: null)));
+            new ApprovalCandidate("find", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)));
         Assert.False(ApprovalPatternMatching.IsPureSideEffect(
-            new ApprovalCandidate("git push", Directory: null)));
+            new ApprovalCandidate("git push", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)));
     }
 
     [Fact]

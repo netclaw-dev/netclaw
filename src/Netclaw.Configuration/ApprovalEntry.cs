@@ -71,6 +71,13 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
     public IReadOnlyList<string>? VerbTokens { get; private init; }
 
     /// <summary>
+    /// The exact shell-assignment constraint, or <c>null</c> when the grant
+    /// covers a command with no bounded assignment facts.
+    /// </summary>
+    [JsonIgnore]
+    public ApprovalAssignmentDigest? AssignmentDigest { get; init; }
+
+    /// <summary>
     /// Absolute directory path the grant is scoped to, or <c>null</c> for
     /// the global wildcard. Trailing slashes are normalized away by the
     /// matcher so <c>/path/</c> and <c>/path</c> compare equal.
@@ -106,7 +113,8 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         ApprovalShell shell,
         IReadOnlyList<string> verbTokens,
         string? directory = null,
-        DateTimeOffset? createdAt = null)
+        DateTimeOffset? createdAt = null,
+        ApprovalAssignmentDigest? assignmentDigest = null)
     {
         ArgumentNullException.ThrowIfNull(verbTokens);
         ApprovalEntryValidation.ValidateTokens(verbTokens);
@@ -115,6 +123,7 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
             Shell = shell,
             Match = ApprovalMatchKind.TokenPrefix,
             VerbTokens = Array.AsReadOnly(verbTokens.ToArray()),
+            AssignmentDigest = assignmentDigest,
             Directory = directory,
             CreatedAt = createdAt,
         };
@@ -127,10 +136,15 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         ApprovalShell shell,
         IReadOnlyList<string> verbTokens,
         string repository,
-        DateTimeOffset? createdAt = null)
+        DateTimeOffset? createdAt = null,
+        ApprovalAssignmentDigest? assignmentDigest = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(repository);
-        var entry = CreateTokenPrefix(shell, verbTokens, createdAt: createdAt);
+        var entry = CreateTokenPrefix(
+            shell,
+            verbTokens,
+            createdAt: createdAt,
+            assignmentDigest: assignmentDigest);
         return entry with { Repository = repository };
     }
 
@@ -164,6 +178,8 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         var phrase = Shell is { } shell && Match is { } match
             ? $"{shell} {FormatMatch(match)} {JsonSerializer.Serialize(Verb)}"
             : $"NonShell exact {JsonSerializer.Serialize(Verb)}";
+        if (AssignmentDigest is { } assignmentDigest)
+            phrase += $" with assignment {assignmentDigest.Value}";
         if (Repository is not null)
             return $"{phrase} in repository {Repository}";
         return Directory is null ? $"{phrase} anywhere" : $"{phrase} in {Directory}";
@@ -298,7 +314,9 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         }
 
         if (!TryReadJsonString(remainder, out var verb, out var tail) ||
-            !TryReadScopeTail(tail, out var directory, out var repository) ||
+            !TryReadAssignmentDigest(tail, out var assignmentDigest, out var scopeTail) ||
+            !TryReadScopeTail(scopeTail, out var directory, out var repository) ||
+            assignmentDigest is not null && match != ApprovalMatchKind.TokenPrefix ||
             repository is not null && match != ApprovalMatchKind.TokenPrefix)
         {
             error = "The typed approval scope is invalid.";
@@ -309,8 +327,16 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         {
             entry = match == ApprovalMatchKind.TokenPrefix
                 ? repository is null
-                    ? CreateTokenPrefix(shell, verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), directory)
-                    : CreateRepositoryTokenPrefix(shell, verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), repository)
+                    ? CreateTokenPrefix(
+                        shell,
+                        verb.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                        directory,
+                        assignmentDigest: assignmentDigest)
+                    : CreateRepositoryTokenPrefix(
+                        shell,
+                        verb.Split(' ', StringSplitOptions.RemoveEmptyEntries),
+                        repository,
+                        assignmentDigest: assignmentDigest)
                 : CreateLegacyExact(shell, verb, directory);
             return true;
         }
@@ -399,10 +425,147 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         return true;
     }
 
+    private static bool TryReadAssignmentDigest(
+        string tail,
+        out ApprovalAssignmentDigest? assignmentDigest,
+        out string scopeTail)
+    {
+        const string AssignmentPrefix = " with assignment ";
+        assignmentDigest = null;
+        scopeTail = tail;
+        if (!tail.StartsWith(AssignmentPrefix, StringComparison.Ordinal))
+            return true;
+
+        var digestStart = AssignmentPrefix.Length;
+        var digestLength = ApprovalAssignmentDigest.CanonicalLength;
+        if (tail.Length < digestStart + digestLength)
+            return false;
+
+        try
+        {
+            assignmentDigest = new ApprovalAssignmentDigest(
+                tail.Substring(digestStart, digestLength));
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+
+        scopeTail = tail[(digestStart + digestLength)..];
+        return true;
+    }
+
     private static string FormatMatch(ApprovalMatchKind match) => match switch
     {
         ApprovalMatchKind.TokenPrefix => "token-prefix",
         ApprovalMatchKind.LegacyExact => "legacy-exact",
         _ => throw new ArgumentOutOfRangeException(nameof(match), match, "The approval match kind is invalid."),
     };
+}
+
+/// <summary>
+/// Identifies the exact bounded shell assignments that qualify one approval.
+/// </summary>
+public readonly record struct ApprovalAssignmentDigest
+{
+    internal const int CanonicalLength = 71;
+    private const string Prefix = "sha256:";
+
+    public ApprovalAssignmentDigest(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        if (!IsCanonical(value))
+        {
+            throw new ArgumentException(
+                "The assignment digest must use canonical SHA-256 text.",
+                nameof(value));
+        }
+
+        Value = value;
+    }
+
+    /// <summary>Gets the canonical digest text.</summary>
+    public string Value { get; }
+
+    /// <inheritdoc />
+    public override string ToString() => Value;
+
+    internal static bool IsCanonical(string? value)
+    {
+        if (value is null || value.Length != CanonicalLength ||
+            !value.StartsWith(Prefix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        foreach (var character in value.AsSpan(Prefix.Length))
+        {
+            if (character is not (>= '0' and <= '9' or >= 'a' and <= 'f'))
+                return false;
+        }
+
+        return true;
+    }
+}
+
+/// <summary>
+/// Identifies whether a reusable approval has a bounded assignment constraint.
+/// </summary>
+public readonly record struct ApprovalAssignmentConstraint
+{
+    public ApprovalAssignmentConstraint(
+        ApprovalAssignmentConstraintKind kind,
+        ApprovalAssignmentDigest? digest)
+    {
+        var isValid = kind switch
+        {
+            ApprovalAssignmentConstraintKind.None => digest is null,
+            ApprovalAssignmentConstraintKind.ExactDigest =>
+                digest is { } exact && ApprovalAssignmentDigest.IsCanonical(exact.Value),
+            _ => false,
+        };
+        if (!isValid)
+        {
+            throw new ArgumentException("The assignment constraint state is invalid.");
+        }
+
+        Kind = kind;
+        Digest = digest;
+    }
+
+    /// <summary>A candidate with no bounded shell assignments.</summary>
+    public static ApprovalAssignmentConstraint None { get; } =
+        new(ApprovalAssignmentConstraintKind.None, digest: null);
+
+    /// <summary>Creates an exact bounded shell-assignment constraint.</summary>
+    public static ApprovalAssignmentConstraint ExactDigest(
+        ApprovalAssignmentDigest digest) =>
+        new(ApprovalAssignmentConstraintKind.ExactDigest, digest);
+
+    /// <summary>Gets the constraint discriminator.</summary>
+    public ApprovalAssignmentConstraintKind Kind { get; }
+
+    /// <summary>Gets the exact digest for an exact constraint.</summary>
+    public ApprovalAssignmentDigest? Digest { get; }
+
+    internal bool IsValid => Kind switch
+    {
+        ApprovalAssignmentConstraintKind.None => Digest is null,
+        ApprovalAssignmentConstraintKind.ExactDigest =>
+            Digest is { } exact && ApprovalAssignmentDigest.IsCanonical(exact.Value),
+        _ => false,
+    };
+}
+
+/// <summary>Identifies one bounded shell-assignment constraint form.</summary>
+public enum ApprovalAssignmentConstraintKind
+{
+    /// <summary>The constraint was not initialized.</summary>
+    Unknown = 0,
+
+    /// <summary>The candidate has no bounded assignment facts.</summary>
+    None = 1,
+
+    /// <summary>The candidate requires one exact assignment digest.</summary>
+    ExactDigest = 2,
 }

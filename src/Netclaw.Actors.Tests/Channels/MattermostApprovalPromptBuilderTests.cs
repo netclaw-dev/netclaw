@@ -210,6 +210,32 @@ public sealed class MattermostApprovalPromptBuilderTests
     }
 
     [Fact]
+    public void BuildButtonPrompt_assignment_everywhere_button_has_danger_style()
+    {
+        var request = CreateStandardRequest() with
+        {
+            Options =
+            [
+                new ToolInteractionOption(
+                    ApprovalOptionKeys.ApproveAssignmentEverywhereV1Key,
+                    ApprovalOptionKeys.ApproveEverywhereLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel),
+            ],
+        };
+
+        var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request,
+            "http://localhost/api/mattermost/actions",
+            "ch-1",
+            "root-post-1",
+            "prompt-corr-1");
+
+        var everywhere = attachments[0].Actions!.Single(action =>
+            action.Id == $"tool_approval_{ApprovalOptionKeys.ApproveAssignmentEverywhereV1}");
+        Assert.Equal("danger", everywhere.Style);
+    }
+
+    [Fact]
     public void BuildButtonPrompt_approve_once_has_primary_style()
     {
         var request = CreateStandardRequest();

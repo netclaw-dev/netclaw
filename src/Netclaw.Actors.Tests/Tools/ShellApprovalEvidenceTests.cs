@@ -158,7 +158,7 @@ public sealed class ShellApprovalEvidenceTests
         string? directory)
         => new(
             new ShellPolicyCandidateId(id),
-            new ApprovalCandidate(verb, directory)
+            new ApprovalCandidate(verb, directory, ApprovalAssignmentConstraint.None)
             {
                 Shell = shell,
                 VerbTokens = Array.AsReadOnly(

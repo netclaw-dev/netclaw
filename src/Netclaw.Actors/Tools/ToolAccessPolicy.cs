@@ -851,7 +851,8 @@ public sealed class ToolAccessPolicy
                     isMessy,
                     hasReusablePhrase,
                     directoryApprovalAvailable),
-                repository is not null);
+                repository is not null,
+                HasAssignmentConstraint(candidates));
         }
 
         var approvalContext = new ToolApprovalContext(
@@ -983,7 +984,8 @@ public sealed class ToolAccessPolicy
                         context.Cwd,
                         sessionOwnedDirectories,
                         pathStyle)),
-                repository is not null);
+                repository is not null,
+                HasAssignmentConstraint(unapprovedCandidates));
         }
 
         return context with
@@ -1107,7 +1109,8 @@ public sealed class ToolAccessPolicy
     /// </summary>
     private static IReadOnlyList<ToolApprovalOption> BuildApprovalOptions(
         ApprovalOptionProfile profile,
-        bool includeRepository)
+        bool includeRepository,
+        bool hasAssignmentConstraint)
     {
         if (profile is ApprovalOptionProfile.OneShotOnly)
         {
@@ -1121,26 +1124,48 @@ public sealed class ToolAccessPolicy
         var options = new List<ToolApprovalOption>(6)
         {
             new ToolApprovalOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
-            new ToolApprovalOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel)
+            new ToolApprovalOption(
+                hasAssignmentConstraint
+                    ? ApprovalOptionKeys.ApproveAssignmentSessionV1Key
+                    : ApprovalOptionKeys.ApproveSessionKey,
+                ApprovalOptionKeys.ApproveSessionLabel)
         };
 
         if (profile is ApprovalOptionProfile.StandardWithDirectory)
         {
-            options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel));
+            options.Add(new ToolApprovalOption(
+                hasAssignmentConstraint
+                    ? ApprovalOptionKeys.ApproveAssignmentAlwaysV1Key
+                    : ApprovalOptionKeys.ApproveAlwaysKey,
+                ApprovalOptionKeys.ApproveAlwaysLabel));
         }
 
         if (includeRepository)
-            options.Add(new ToolApprovalOption(ApprovalOptionKeys.ApproveRepositoryKey, ApprovalOptionKeys.ApproveRepositoryLabel));
+        {
+            options.Add(new ToolApprovalOption(
+                hasAssignmentConstraint
+                    ? ApprovalOptionKeys.ApproveAssignmentRepositoryV1Key
+                    : ApprovalOptionKeys.ApproveRepositoryKey,
+                ApprovalOptionKeys.ApproveRepositoryLabel));
+        }
 
         options.Add(new ToolApprovalOption(
-            ApprovalOptionKeys.ApproveEverywhereKey,
+            hasAssignmentConstraint
+                ? ApprovalOptionKeys.ApproveAssignmentEverywhereV1Key
+                : ApprovalOptionKeys.ApproveEverywhereKey,
             ApprovalOptionKeys.LabelFor(
-                ApprovalOptionKeys.ApproveEverywhere,
+                hasAssignmentConstraint
+                    ? ApprovalOptionKeys.ApproveAssignmentEverywhereV1
+                    : ApprovalOptionKeys.ApproveEverywhere,
                 profile is ApprovalOptionProfile.McpTool)));
         options.Add(new ToolApprovalOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel));
 
         return options;
     }
+
+    internal static bool HasAssignmentConstraint(IReadOnlyList<ApprovalCandidate> candidates)
+        => candidates.Any(static candidate =>
+            candidate.AssignmentConstraint.Kind == ApprovalAssignmentConstraintKind.ExactDigest);
 
     private static string? ResolveOfferedRepository(
         ToolName toolName,

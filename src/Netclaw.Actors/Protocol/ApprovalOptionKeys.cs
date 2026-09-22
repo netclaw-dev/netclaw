@@ -34,6 +34,10 @@ public static class ApprovalOptionKeys
     public const string ApproveAlways = "approve_always";
     public const string ApproveRepository = "approve_repository";
     public const string ApproveEverywhere = "approve_everywhere";
+    public const string ApproveAssignmentSessionV1 = "approve_assignment_session_v1";
+    public const string ApproveAssignmentAlwaysV1 = "approve_assignment_always_v1";
+    public const string ApproveAssignmentRepositoryV1 = "approve_assignment_repository_v1";
+    public const string ApproveAssignmentEverywhereV1 = "approve_assignment_everywhere_v1";
     public const string Deny = "deny";
 
     public static ApprovalOptionKey ApproveOnceKey { get; } = new(ApproveOnce);
@@ -41,6 +45,10 @@ public static class ApprovalOptionKeys
     public static ApprovalOptionKey ApproveAlwaysKey { get; } = new(ApproveAlways);
     public static ApprovalOptionKey ApproveRepositoryKey { get; } = new(ApproveRepository);
     public static ApprovalOptionKey ApproveEverywhereKey { get; } = new(ApproveEverywhere);
+    public static ApprovalOptionKey ApproveAssignmentSessionV1Key { get; } = new(ApproveAssignmentSessionV1);
+    public static ApprovalOptionKey ApproveAssignmentAlwaysV1Key { get; } = new(ApproveAssignmentAlwaysV1);
+    public static ApprovalOptionKey ApproveAssignmentRepositoryV1Key { get; } = new(ApproveAssignmentRepositoryV1);
+    public static ApprovalOptionKey ApproveAssignmentEverywhereV1Key { get; } = new(ApproveAssignmentEverywhereV1);
     public static ApprovalOptionKey DenyKey { get; } = new(Deny);
 
     public const string ApproveOnceLabel = "Once";
@@ -67,7 +75,25 @@ public static class ApprovalOptionKeys
     /// reduce fat-finger risk.
     /// </summary>
     public static bool IsDangerStyled(string optionKey)
-        => optionKey is ApproveEverywhere or Deny;
+        => CanonicalDecisionKey(optionKey) is ApproveEverywhere or Deny;
+
+    /// <summary>
+    /// Returns true when two option keys produce the same approval decision.
+    /// Assignment variants remain unknown to older binaries and fail closed after rollback.
+    /// </summary>
+    public static bool HasSameDecision(string first, string second)
+        => string.Equals(CanonicalDecisionKey(first), CanonicalDecisionKey(second), StringComparison.Ordinal);
+
+    /// <summary>Returns true for the repository variants.</summary>
+    public static bool IsRepository(string optionKey)
+        => CanonicalDecisionKey(optionKey) == ApproveRepository;
+
+    /// <summary>Returns true for a versioned assignment option.</summary>
+    public static bool IsAssignmentVariant(string optionKey) => optionKey is
+        ApproveAssignmentSessionV1
+        or ApproveAssignmentAlwaysV1
+        or ApproveAssignmentRepositoryV1
+        or ApproveAssignmentEverywhereV1;
 
     /// <summary>
     /// Maps an approval option key to its short human-readable label. Returns
@@ -80,7 +106,7 @@ public static class ApprovalOptionKeys
     /// tool-scoped rather than directory-scoped, so the global persistence key
     /// is rendered as "Always allow this tool" instead of "Always anywhere".
     /// </summary>
-    public static string LabelFor(string optionKey, bool isMcpTool) => optionKey switch
+    public static string LabelFor(string optionKey, bool isMcpTool) => CanonicalDecisionKey(optionKey) switch
     {
         ApproveOnce => ApproveOnceLabel,
         ApproveSession => ApproveSessionLabel,
@@ -89,5 +115,15 @@ public static class ApprovalOptionKeys
         ApproveEverywhere => isMcpTool ? ApproveMcpToolLabel : ApproveEverywhereLabel,
         Deny => DenyLabel,
         _ => optionKey
+    };
+
+    /// <summary>Maps an option variant to its approval decision key.</summary>
+    public static string CanonicalDecisionKey(string optionKey) => optionKey switch
+    {
+        ApproveAssignmentSessionV1 => ApproveSession,
+        ApproveAssignmentAlwaysV1 => ApproveAlways,
+        ApproveAssignmentRepositoryV1 => ApproveRepository,
+        ApproveAssignmentEverywhereV1 => ApproveEverywhere,
+        _ => optionKey,
     };
 }

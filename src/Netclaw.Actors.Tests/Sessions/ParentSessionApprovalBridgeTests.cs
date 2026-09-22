@@ -39,6 +39,7 @@ public sealed class ParentSessionApprovalBridgeTests
             adoptedSpeakerIds: ["user-123", "user-456"]);
 
         var authorizationAttemptId = AuthorizationAttemptId.New();
+        var assignmentDigest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
         var decision = await ((IAuthorizationAttemptAwareParentApprovalBridge)bridge).RequestApprovalAsync(
             new ParentApprovalRequest(
                 authorizationAttemptId,
@@ -58,7 +59,10 @@ public sealed class ParentSessionApprovalBridgeTests
                     Cwd: "/home/user/repos/foo",
                     Candidates:
                     [
-                        new ApprovalCandidate("grep", "/home/user/repos/foo")
+                        new ApprovalCandidate(
+                            "grep",
+                            "/home/user/repos/foo",
+                            ApprovalAssignmentConstraint.ExactDigest(assignmentDigest))
                         {
                             Shell = ApprovalShell.Bash,
                             VerbTokens = Array.AsReadOnly(["grep", "timeout"]),
@@ -85,6 +89,7 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.Equal("/home/user/repos/foo", emitted.Candidates[0].Directory);
         Assert.Equal(ApprovalShell.Bash, emitted.Candidates[0].Shell);
         Assert.Equal(["grep", "timeout"], emitted.Candidates[0].VerbTokens);
+        Assert.Equal(assignmentDigest, emitted.Candidates[0].AssignmentConstraint.Digest);
         Assert.Equal(ApprovalOptionKeys.ApproveSessionLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveSession).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveAlwaysLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveAlways).Label);
         Assert.Equal(ApprovalOptionKeys.ApproveEverywhereLabel, emitted.Options.Single(o => o.Key.Value == ApprovalOptionKeys.ApproveEverywhere).Label);
@@ -116,7 +121,7 @@ public sealed class ParentSessionApprovalBridgeTests
             "cat logs/app.log",
             ["cat logs/app.log"],
             ["cat logs/app.log"],
-            [new ParentApprovalCandidate("cat logs/app.log", null)],
+            [new ParentApprovalCandidate("cat logs/app.log", null, ApprovalAssignmentConstraint.None)],
             cwd: null,
             [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
             isMessy: false,
@@ -152,7 +157,7 @@ public sealed class ParentSessionApprovalBridgeTests
             "git push origin main",
             ["git push origin main"],
             ["git push origin main"],
-            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo", ApprovalAssignmentConstraint.None)],
             "/home/user/repos/foo",
             [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
             isMessy: false,
@@ -185,7 +190,7 @@ public sealed class ParentSessionApprovalBridgeTests
             "git push origin main",
             ["git push origin main"],
             ["git push origin main"],
-            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo", ApprovalAssignmentConstraint.None)],
             "/home/user/repos/foo",
             [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
             isMessy: false,
@@ -221,7 +226,7 @@ public sealed class ParentSessionApprovalBridgeTests
             "git push origin main",
             ["git push origin main"],
             ["git push origin main"],
-            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo", ApprovalAssignmentConstraint.None)],
             "/home/user/repos/foo",
             [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
             isMessy: false,
@@ -306,7 +311,7 @@ public sealed class ParentSessionApprovalBridgeTests
             "git push origin main",
             ["git push origin main"],
             ["git push origin main"],
-            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo", ApprovalAssignmentConstraint.None)],
             "/home/user/repos/foo",
             [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
             isMessy: false,
@@ -333,7 +338,7 @@ public sealed class ParentSessionApprovalBridgeTests
             "git push origin main",
             ["git push origin main"],
             ["git push origin main"],
-            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo")],
+            [new ParentApprovalCandidate("git push origin main", "/home/user/repos/foo", ApprovalAssignmentConstraint.None)],
             "/home/user/repos/foo",
             [new ParentApprovalOption(ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveOnceLabel)],
             isMessy: false,

@@ -48,7 +48,8 @@ internal static class ApprovalEntryValidation
             }
         }
 
-        if (entry.Match is null && entry.Shell is null && entry.VerbTokens is null)
+        if (entry.Match is null && entry.Shell is null && entry.VerbTokens is null
+            && entry.AssignmentDigest is null)
         {
             return;
         }
@@ -63,13 +64,19 @@ internal static class ApprovalEntryValidation
         {
             case ApprovalMatchKind.TokenPrefix when entry.VerbTokens is not null:
                 ValidateTokens(entry.VerbTokens);
+                if (entry.AssignmentDigest is { } assignmentDigest
+                    && !ApprovalAssignmentDigest.IsCanonical(assignmentDigest.Value))
+                {
+                    throw new JsonException("The assignment digest is invalid.");
+                }
                 if (!string.Equals(entry.Verb, string.Join(" ", entry.VerbTokens), StringComparison.Ordinal))
                 {
                     throw new JsonException("The token phrase and display verb differ.");
                 }
 
                 return;
-            case ApprovalMatchKind.LegacyExact when entry.VerbTokens is null:
+            case ApprovalMatchKind.LegacyExact when entry.VerbTokens is null
+                                                     && entry.AssignmentDigest is null:
                 return;
             default:
                 throw new JsonException("The approval entry has an invalid phrase form.");

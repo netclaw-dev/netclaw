@@ -24,6 +24,13 @@ public sealed class ToolApprovalGateTests
         "netclaw-approval-test");
 
     private static ToolAccessPolicy CreatePolicy(ToolApprovalMode shellApprovalMode)
+        => CreatePolicy(
+            shellApprovalMode,
+            ShellExecutionEnvironmentDefaults.Bash);
+
+    private static ToolAccessPolicy CreatePolicy(
+        ToolApprovalMode shellApprovalMode,
+        ShellExecutionEnvironment environment)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         config.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -42,8 +49,8 @@ public sealed class ToolApprovalGateTests
                 TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed,
                 UsedStrictFallback: false),
-                new ShellCommandPolicy(),
-                new ToolPathPolicy([]));
+                new ShellCommandPolicy(environment),
+                new ToolPathPolicy(environment, []));
     }
 
     private static ToolExecutionContext PersonalContext(bool supportsApproval = true, string sessionId = "signalr/thread-1") =>
@@ -51,9 +58,15 @@ public sealed class ToolApprovalGateTests
         { Audience = TrustAudience.Personal, InteractiveApproval = TestToolExecutionContext.InteractiveApproval(supportsApproval) });
 
     private static INetclawTool ShellTool()
+        => ShellTool(ShellExecutionEnvironmentDefaults.Bash);
+
+    private static INetclawTool ShellTool(ShellExecutionEnvironment environment)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        return new ShellTool(config, new ToolPathPolicy([]), new ShellCommandPolicy());
+        return new ShellTool(
+            config,
+            new ToolPathPolicy(environment, []),
+            new ShellCommandPolicy(environment));
     }
 
     [Theory]
@@ -296,12 +309,12 @@ public sealed class ToolApprovalGateTests
     [Fact]
     public void One_time_keys_bind_parser_tokens_not_only_the_legacy_projection()
     {
-        var first = new ApprovalCandidate("whoami", Directory: null)
+        var first = new ApprovalCandidate("whoami", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(["whoami", "user"]),
         };
-        var second = new ApprovalCandidate("whoami", Directory: null)
+        var second = new ApprovalCandidate("whoami", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(["whoami", "admin"]),
@@ -311,6 +324,127 @@ public sealed class ToolApprovalGateTests
         var secondKeys = OneTimeApprovalKeys.Create([], [second], cwd: null);
 
         Assert.NotEqual(Assert.Single(firstKeys), Assert.Single(secondKeys));
+    }
+
+    [Fact]
+    public void One_time_keys_bind_the_exact_assignment_constraint()
+    {
+        var firstDigest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
+        var secondDigest = new ApprovalAssignmentDigest($"sha256:{new string('b', 64)}");
+        var candidate = new ApprovalCandidate(
+            "inspect",
+            Directory: null,
+            AssignmentConstraint: ApprovalAssignmentConstraint.ExactDigest(firstDigest))
+        {
+            Shell = ApprovalShell.Bash,
+            VerbTokens = ["inspect"],
+        };
+
+        var firstKeys = OneTimeApprovalKeys.Create([], [candidate], cwd: "/work/repo");
+        var secondKeys = OneTimeApprovalKeys.Create(
+            [],
+            [candidate with
+            {
+                AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(secondDigest),
+            }],
+            cwd: "/work/repo");
+        var unqualifiedKeys = OneTimeApprovalKeys.Create(
+            [],
+            [candidate with { AssignmentConstraint = ApprovalAssignmentConstraint.None }],
+            cwd: "/work/repo");
+
+        Assert.NotEqual(Assert.Single(firstKeys), Assert.Single(secondKeys));
+        Assert.NotEqual(Assert.Single(firstKeys), Assert.Single(unqualifiedKeys));
+    }
+
+    [Fact]
+    public void Invalid_assignment_digest_input_offers_only_once_and_deny()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2));
+        var policy = CreatePolicy(ToolApprovalMode.Approval, environment);
+
+        var decision = policy.GetShellPreflightDecision(
+            ShellTool(environment),
+            PersonalContext(),
+            ToolInput.Create(
+                "Command",
+                "mode='\ud800'; inspect item",
+                "WorkingDirectory",
+                "/work"));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.True(decision.ApprovalContext!.IsMessy);
+        Assert.Empty(decision.ApprovalContext.Candidates!);
+        Assert.Equal(
+            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+            decision.ApprovalContext.Options.Select(static option => option.Key.Value));
+    }
+
+    [Fact]
+    public void Assignment_prompt_uses_rollback_safe_reusable_option_keys()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2));
+        var policy = CreatePolicy(ToolApprovalMode.Approval, environment);
+
+        var decision = policy.GetShellPreflightDecision(
+            ShellTool(environment),
+            PersonalContext(),
+            ToolInput.Create(
+                "Command",
+                "mode='fast'; inspect item",
+                "WorkingDirectory",
+                "/work/project"));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.Equal(
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveAssignmentSessionV1,
+                ApprovalOptionKeys.ApproveAssignmentAlwaysV1,
+                ApprovalOptionKeys.ApproveAssignmentEverywhereV1,
+                ApprovalOptionKeys.Deny,
+            ],
+            decision.ApprovalContext!.Options.Select(static option => option.Key.Value));
+        Assert.DoesNotContain(
+            decision.ApprovalContext.Options,
+            static option => option.Key.Value is
+                ApprovalOptionKeys.ApproveSession
+                or ApprovalOptionKeys.ApproveAlways
+                or ApprovalOptionKeys.ApproveRepository
+                or ApprovalOptionKeys.ApproveEverywhere);
+    }
+
+    [Fact]
+    public void Unqualified_prompt_keeps_legacy_reusable_option_keys()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2));
+        var policy = CreatePolicy(ToolApprovalMode.Approval, environment);
+
+        var decision = policy.GetShellPreflightDecision(
+            ShellTool(environment),
+            PersonalContext(),
+            ToolInput.Create(
+                "Command",
+                "inspect item",
+                "WorkingDirectory",
+                "/work/project"));
+
+        Assert.True(decision.NeedsApproval);
+        Assert.Equal(
+            [
+                ApprovalOptionKeys.ApproveOnce,
+                ApprovalOptionKeys.ApproveSession,
+                ApprovalOptionKeys.ApproveAlways,
+                ApprovalOptionKeys.ApproveEverywhere,
+                ApprovalOptionKeys.Deny,
+            ],
+            decision.ApprovalContext!.Options.Select(static option => option.Key.Value));
     }
 
     private const string ControlPlaneRoot = "/home/user/.netclaw/config";
@@ -1450,7 +1584,7 @@ public sealed class ToolApprovalGateTests
     [Fact]
     public void Narrow_shell_context_omits_reusable_options_for_incomplete_phrase_facts()
     {
-        var candidate = new ApprovalCandidate("status-report", Directory: null)
+        var candidate = new ApprovalCandidate("status-report", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
         {
             Shell = ApprovalShell.Bash,
         };
@@ -1497,7 +1631,7 @@ public sealed class ToolApprovalGateTests
             "worktree" => storage.WorktreeDirectory.Value,
             _ => throw new ArgumentOutOfRangeException(nameof(directoryKind))
         };
-        var candidate = new ApprovalCandidate("git status", selectedDirectory)
+        var candidate = new ApprovalCandidate("git status", selectedDirectory, ApprovalAssignmentConstraint.None)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["git", "status"]
@@ -1549,7 +1683,7 @@ public sealed class ToolApprovalGateTests
         ShellPathStyle pathStyle,
         bool offersAlwaysHere)
     {
-        var candidate = new ApprovalCandidate("git status", cwd)
+        var candidate = new ApprovalCandidate("git status", cwd, ApprovalAssignmentConstraint.None)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["git", "status"]

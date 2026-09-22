@@ -259,6 +259,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  shell-assignment-mutation:
+    name: Shell Assignment Mutation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Test shell-assignment mutants"
+        run: ./scripts/run-shell-assignment-mutations.sh
+
+      - name: "Upload shell-assignment mutation report"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: shell-assignment-mutation-report
+          path: ./artifacts/stryker/shell-assignment
+          if-no-files-found: ignore
+          retention-days: 14
+
   approval-directory-mutation:
     name: Approval Directory Mutation Tests
     runs-on: ubuntu-latest

@@ -182,7 +182,7 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
     }
 
     private static ApprovalCandidate CreateCandidate(ApprovalShell shell, string? directory) =>
-        new("git status", directory)
+        new("git status", directory, ApprovalAssignmentConstraint.None)
         {
             Shell = shell,
             VerbTokens = Array.AsReadOnly(["git", "status"])

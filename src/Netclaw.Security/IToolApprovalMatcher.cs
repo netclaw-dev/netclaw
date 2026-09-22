@@ -20,7 +20,10 @@ namespace Netclaw.Security;
 /// One shell clause can produce multiple candidates when it accesses multiple
 /// authorization scopes.
 /// </summary>
-public sealed record ApprovalCandidate(string Verb, string? Directory)
+public sealed record ApprovalCandidate(
+    string Verb,
+    string? Directory,
+    ApprovalAssignmentConstraint AssignmentConstraint)
 {
     /// <summary>The immutable parser-owned canonical verb tokens.</summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
@@ -33,16 +36,16 @@ public sealed record ApprovalCandidate(string Verb, string? Directory)
     internal CommandOccurrence? SourceOccurrence { get; init; }
 
     /// <summary>
-    /// Retains the released candidate identity contract. Parser metadata does
-    /// not change occurrence identity.
+    /// Parser source metadata does not change occurrence identity.
     /// </summary>
     public bool Equals(ApprovalCandidate? other) =>
         other is not null &&
         string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
-        string.Equals(Directory, other.Directory, StringComparison.Ordinal);
+        string.Equals(Directory, other.Directory, StringComparison.Ordinal) &&
+        AssignmentConstraint == other.AssignmentConstraint;
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(Verb, Directory);
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentConstraint);
 }
 
 /// <summary>
@@ -295,8 +298,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var shell = Environment.Grammar == ShellGrammar.Bash
             ? ApprovalShell.Bash
             : ApprovalShell.PowerShell;
+        if (!ShellAssignmentConstraintFactory.TryCreate(
+                shell,
+                occurrence.Assignments,
+                out var assignmentConstraint))
+        {
+            return null;
+        }
+
         return directories
-            .Select(directory => new ApprovalCandidate(verb, directory)
+            .Select(directory => new ApprovalCandidate(verb, directory, assignmentConstraint)
             {
                 VerbTokens = GetCanonicalVerbTokens(clause),
                 Shell = shell,
@@ -1242,6 +1253,18 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return true;
 
         var workingDirectory = analysis.WorkingDirectory;
+        var shell = Environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+
+        if (analysis.Commands.Any(command =>
+                !ShellAssignmentConstraintFactory.TryCreate(
+                    shell,
+                    command.Assignments,
+                    out _)))
+        {
+            return true;
+        }
 
         if (analysis.Commands
             .SelectMany(static command => command.Clause.Args)
@@ -1338,6 +1361,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // Fast path: a command with no embedded line break renders verbatim.
         if (!ContainsLineBreak(command))
             return command;
+
+        // The operator must see each assignment that qualifies a reusable grant.
+        // Assignment-only statements do not occur in the reconstructed command list.
+        if (analysis.Commands.Any(static occurrence => occurrence.Assignments.Count > 0))
+            return command.ReplaceLineEndings(" ⏎ ");
 
         // Issue #1402: channel renderers embed DisplayText in single-line
         // code fences, so a multi-line quoted string (a message body, an
@@ -1505,7 +1533,7 @@ public sealed class DefaultApprovalMatcher : IToolApprovalMatcher
         => [toolName.Value];
 
     public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
-        => [new ApprovalCandidate(toolName.Value, Directory: null)];
+        => [new ApprovalCandidate(toolName.Value, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)];
 
     public bool IsApproved(
         ToolName toolName,

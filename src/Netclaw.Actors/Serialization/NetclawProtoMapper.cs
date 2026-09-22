@@ -445,9 +445,13 @@ internal static class NetclawProtoMapper
     private static Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto ToApprovalCandidateProto(
         Netclaw.Security.ApprovalCandidate c)
     {
+        if (!c.AssignmentConstraint.IsValid)
+            throw new InvalidOperationException("The approval assignment constraint is invalid.");
+
         var proto = new Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto
         {
-            Verb = c.Verb
+            Verb = c.Verb,
+            AssignmentConstraintKind = (int)c.AssignmentConstraint.Kind,
         };
         if (c.Directory is not null)
             proto.Directory = c.Directory;
@@ -455,12 +459,17 @@ internal static class NetclawProtoMapper
             proto.VerbTokens.AddRange(c.VerbTokens);
         if (c.Shell is not null)
             proto.Shell = (int)c.Shell.Value;
+        if (c.AssignmentConstraint.Digest is { } digest)
+            proto.AssignmentDigest = digest.Value;
         return proto;
     }
 
     private static Netclaw.Security.ApprovalCandidate FromApprovalCandidateProto(
         Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto proto) =>
-        new(proto.Verb, proto.HasDirectory ? proto.Directory : null)
+        new(
+            proto.Verb,
+            proto.HasDirectory ? proto.Directory : null,
+            FromApprovalAssignmentConstraintProto(proto))
         {
             VerbTokens = proto.VerbTokens.Count == 0
                 ? null
@@ -469,6 +478,40 @@ internal static class NetclawProtoMapper
                 ? (ApprovalShell)proto.Shell
                 : null,
         };
+
+    private static ApprovalAssignmentConstraint FromApprovalAssignmentConstraintProto(
+        Proto.ToolApprovalRequestedProto.Types.ApprovalCandidateProto proto)
+    {
+        if (!proto.HasAssignmentConstraintKind && !proto.HasAssignmentDigest)
+            return ApprovalAssignmentConstraint.None;
+
+        if (!proto.HasAssignmentConstraintKind)
+        {
+            throw new InvalidOperationException(
+                "The approval assignment constraint has an invalid wire form.");
+        }
+
+        var kind = (ApprovalAssignmentConstraintKind)proto.AssignmentConstraintKind;
+        try
+        {
+            return kind switch
+            {
+                ApprovalAssignmentConstraintKind.None when !proto.HasAssignmentDigest =>
+                    ApprovalAssignmentConstraint.None,
+                ApprovalAssignmentConstraintKind.ExactDigest when proto.HasAssignmentDigest =>
+                    ApprovalAssignmentConstraint.ExactDigest(
+                        new ApprovalAssignmentDigest(proto.AssignmentDigest)),
+                _ => throw new InvalidOperationException(
+                    "The approval assignment constraint has an invalid wire form."),
+            };
+        }
+        catch (ArgumentException ex)
+        {
+            throw new InvalidOperationException(
+                "The approval assignment constraint has an invalid wire form.",
+                ex);
+        }
+    }
 
     private static Proto.ToolApprovalRequestedProto.Types.TurnContextRecordProto ToProto(TurnContextRecord record)
     {

@@ -72,6 +72,7 @@ public static class ToolApprovalEntryComparer
                 ? Equals(left.Verb, right.Verb, shell)
                 : Equals(left.Verb, right.Verb);
         return phraseMatches &&
+               left.AssignmentDigest == right.AssignmentDigest &&
                Equals(
                    NormalizeDirectory(left.Repository),
                    NormalizeDirectory(right.Repository)) &&

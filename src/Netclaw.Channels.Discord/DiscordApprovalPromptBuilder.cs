@@ -154,7 +154,7 @@ internal static class DiscordApprovalPromptBuilder
 
     private static string BuildGenericResolutionLine(string selectedKey, bool isMcpTool)
         => isMcpTool
-            ? selectedKey switch
+            ? ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
             {
                 ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => "Always allowed this MCP tool",
                 ApprovalOptionKeys.ApproveSession => "Allowed this MCP tool for this chat",
@@ -162,7 +162,7 @@ internal static class DiscordApprovalPromptBuilder
                 ApprovalOptionKeys.Deny => "Denied",
                 _ => "Resolved"
             }
-            : selectedKey switch
+            : ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
             {
                 ApprovalOptionKeys.ApproveAlways => "Saved: always here",
                 ApprovalOptionKeys.ApproveRepository => "Saved: this repository",
@@ -221,7 +221,7 @@ internal static class DiscordApprovalPromptBuilder
     {
         if (request.ToolName.IsMcp)
         {
-            return selectedKey switch
+            return ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
             {
                 ApprovalOptionKeys.ApproveAlways or ApprovalOptionKeys.ApproveEverywhere => $"Always allowed: {request.ToolName}",
                 ApprovalOptionKeys.ApproveSession => $"Allowed for this chat: {request.ToolName}",
@@ -234,7 +234,7 @@ internal static class DiscordApprovalPromptBuilder
         var verbs = string.Join(", ", ResolveDisplayVerbs(request));
         var location = ResolveHeaderLocation(request);
 
-        return selectedKey switch
+        return ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
         {
             ApprovalOptionKeys.ApproveAlways => $"Saved: {verbs} in {location}",
             ApprovalOptionKeys.ApproveRepository => $"Saved: {verbs} in this repository",
@@ -299,16 +299,7 @@ internal static class DiscordApprovalPromptBuilder
         => ((char)('A' + index)).ToString();
 
     private static string GetDecisionLabel(string selectedKey)
-        => selectedKey switch
-        {
-            ApprovalOptionKeys.ApproveOnce => ApprovalOptionKeys.ApproveOnceLabel,
-            ApprovalOptionKeys.ApproveSession => ApprovalOptionKeys.ApproveSessionLabel,
-            ApprovalOptionKeys.ApproveAlways => ApprovalOptionKeys.ApproveAlwaysLabel,
-            ApprovalOptionKeys.ApproveRepository => ApprovalOptionKeys.ApproveRepositoryLabel,
-            ApprovalOptionKeys.ApproveEverywhere => ApprovalOptionKeys.ApproveEverywhereLabel,
-            ApprovalOptionKeys.Deny => ApprovalOptionKeys.DenyLabel,
-            _ => selectedKey
-        };
+        => ApprovalOptionKeys.LabelFor(selectedKey);
 
     internal static string BuildButtonValue(ToolInteractionRequest request, ToolInteractionOption option)
         => ApprovalButtonValueCodec.Encode(request, option);

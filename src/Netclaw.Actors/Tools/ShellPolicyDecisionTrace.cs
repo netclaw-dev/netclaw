@@ -56,6 +56,7 @@ internal enum ShellPolicyTraceReason
     PolicyDenied = 22,
     AgentCorrection = 23,
     PersistentRepositoryGrant = 24,
+    AssignmentMismatch = 25,
 }
 
 internal enum ShellScopeRelation
@@ -346,6 +347,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ShellApprovalNearMissReason.MissingDirectory => ShellPolicyTraceReason.MissingDirectory,
         ShellApprovalNearMissReason.TokenMismatch => ShellPolicyTraceReason.TokenMismatch,
         ShellApprovalNearMissReason.ShellMismatch => ShellPolicyTraceReason.ShellMismatch,
+        ShellApprovalNearMissReason.AssignmentMismatch => ShellPolicyTraceReason.AssignmentMismatch,
         _ => ShellPolicyTraceReason.None,
     };
 

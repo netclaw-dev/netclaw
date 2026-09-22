@@ -77,7 +77,10 @@ public sealed class ParentApprovalUnavailableException : InvalidOperationExcepti
 /// session can record folder-scoped grants from the actual paths the sub-agent
 /// touched, not just the cwd.
 /// </summary>
-public sealed record ParentApprovalCandidate(string Verb, string? Directory)
+public sealed record ParentApprovalCandidate(
+    string Verb,
+    string? Directory,
+    ApprovalAssignmentConstraint AssignmentConstraint)
 {
     /// <summary>The immutable parser-owned canonical verb tokens.</summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
@@ -85,14 +88,15 @@ public sealed record ParentApprovalCandidate(string Verb, string? Directory)
     /// <summary>The native shell grammar that produced the candidate.</summary>
     public ApprovalShell? Shell { get; init; }
 
-    /// <summary>Retains the released candidate identity contract.</summary>
+    /// <summary>Compares the complete reusable approval identity.</summary>
     public bool Equals(ParentApprovalCandidate? other) =>
         other is not null &&
         string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
-        string.Equals(Directory, other.Directory, StringComparison.Ordinal);
+        string.Equals(Directory, other.Directory, StringComparison.Ordinal) &&
+        AssignmentConstraint == other.AssignmentConstraint;
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(Verb, Directory);
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentConstraint);
 }
 
 /// <summary>

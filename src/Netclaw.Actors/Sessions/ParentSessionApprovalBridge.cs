@@ -100,7 +100,8 @@ internal sealed class ParentSessionApprovalBridge :
                     IsMessy: isMessy,
                     Candidates: candidates.Select(static candidate => new ApprovalCandidate(
                         candidate.Verb,
-                        candidate.Directory)
+                        candidate.Directory,
+                        candidate.AssignmentConstraint)
                     {
                         Shell = candidate.Shell,
                         VerbTokens = candidate.VerbTokens,
@@ -139,7 +140,10 @@ internal sealed class ParentSessionApprovalBridge :
             Patterns = request.Approval.Patterns,
             CandidateVerbs = request.Approval.CandidateVerbs,
             Candidates = (request.Approval.Candidates ?? [])
-                .Select(static candidate => new ApprovalCandidate(candidate.Verb, candidate.Directory)
+                .Select(static candidate => new ApprovalCandidate(
+                    candidate.Verb,
+                    candidate.Directory,
+                    candidate.AssignmentConstraint)
                 {
                     Shell = candidate.Shell,
                     VerbTokens = candidate.VerbTokens,
@@ -152,7 +156,7 @@ internal sealed class ParentSessionApprovalBridge :
             AdoptedSpeakerIds = _adoptedSpeakerIds,
             PersistedAdoptedContext = _hasAdoptedContext,
             Options = request.Approval.Options
-                .Where(option => option.Key.Value != ApprovalOptionKeys.ApproveRepository
+                .Where(option => !ApprovalOptionKeys.IsRepository(option.Key.Value)
                                  || request.Approval.RepositoryCommonDirectory is not null)
                 .Select(static option => new ToolInteractionOption(option.Key, option.Label))
                 .ToList()

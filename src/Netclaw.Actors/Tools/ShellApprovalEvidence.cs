@@ -142,6 +142,7 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
         string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
         string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
         first.Shell == second.Shell &&
+        first.AssignmentConstraint == second.AssignmentConstraint &&
         ((first.VerbTokens is null && second.VerbTokens is null) ||
          (first.VerbTokens is not null &&
           second.VerbTokens is not null &&
@@ -379,6 +380,7 @@ internal sealed class ValidatedShellGrantEvidence
            && string.Equals(first.Repository, second.Repository, StringComparison.Ordinal)
            && first.Shell == second.Shell
            && first.Match == second.Match
+           && first.AssignmentDigest == second.AssignmentDigest
            && ((first.VerbTokens is null && second.VerbTokens is null)
                || (first.VerbTokens is not null
                    && second.VerbTokens is not null

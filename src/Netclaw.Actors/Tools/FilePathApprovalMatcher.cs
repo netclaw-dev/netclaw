@@ -49,7 +49,7 @@ public sealed class FilePathApprovalMatcher : IToolApprovalMatcher
 
     public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
         => ExtractCandidateVerbs(toolName, arguments)
-            .Select(v => new ApprovalCandidate(v, Directory: null))
+            .Select(v => new ApprovalCandidate(v, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None))
             .ToList();
 
     public bool IsApproved(

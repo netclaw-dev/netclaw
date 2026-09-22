@@ -323,7 +323,7 @@ public sealed class ShellPolicyPathFactsTests
         params string[] verbTokens)
         => new(
             new ShellPolicyCandidateId(0),
-            new ApprovalCandidate(string.Join(' ', verbTokens), directory)
+            new ApprovalCandidate(string.Join(' ', verbTokens), directory, ApprovalAssignmentConstraint.None)
             {
                 Shell = shell,
                 VerbTokens = Array.AsReadOnly(verbTokens)
@@ -357,7 +357,8 @@ public sealed class ShellPolicyPathFactsTests
         return new ShellPolicyEvaluation(Assert.IsType<ShellPolicyProjection>(projection));
     }
 
-    private static ApprovalCandidate BashCandidate(string verb, string directory) => new(verb, directory)
+    private static ApprovalCandidate BashCandidate(string verb, string directory) =>
+        new(verb, directory, ApprovalAssignmentConstraint.None)
     {
         Shell = ApprovalShell.Bash,
         VerbTokens = Array.AsReadOnly(verb.Split(' ', StringSplitOptions.RemoveEmptyEntries))

@@ -212,6 +212,18 @@ For **compound commands** (`&&`, `||`, `;`, `|`), each segment is checked
 independently. If any segment is unapproved, all unapproved patterns are
 batched into one prompt.
 
+ShellSyntaxTree `0.4.0-beta.4` supplies bounded assignment facts.
+Netclaw can reuse a grant when each assignment fact is exact and complete.
+The grant stores a SHA-256 digest of the canonical assignment facts.
+It does not store an assignment name, source value, or effective value.
+A changed assignment produces a different digest and needs separate authority.
+An old unqualified grant cannot authorize an assignment-qualified command.
+The reviewed-safe catalog does not authorize assignment-qualified commands.
+
+PowerShell finite loops can project more than one path scope.
+Netclaw checks every scope when ShellSyntaxTree supplies complete public path facts.
+An incomplete cmdlet operand path keeps the complete call one-time-only.
+
 Netclaw can resolve a complete static Bash list with an exact `cd` target.
 ShellSyntaxTree `0.4.0-beta.3` supplies each bounded directory and source slice.
 Netclaw checks each fact against its command policy and grant rules.
@@ -612,6 +624,7 @@ Persistent decisions are stored in
           "shell": "Bash",
           "match": "TokenPrefix",
           "verbTokens": ["git", "push"],
+          "assignmentDigest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           "directory": "/work/project",
           "createdAt": "2026-08-11T12:00:00+00:00"
         },
@@ -641,6 +654,10 @@ entry matches the same canonical tokens with optional later tokens. A legacy
 entry matches only its exact phrase. Version-2 shell entries convert to
 `LegacyExact`, so an upgrade does not add authority.
 
+The optional `assignmentDigest` member qualifies one token-prefix shell grant.
+The codec rejects this member on legacy or non-shell entries.
+It also rejects malformed digest text and makes the complete store unavailable.
+
 Use the CLI instead of direct file edits:
 
 ```bash
@@ -661,6 +678,16 @@ On the first version-2 load, Netclaw creates a byte-identical
 stop the daemon, copy the backup over the active file, and start the current
 daemon. The current daemon can convert that backup again. Do not run an old
 version-2 daemon against a version-3 file.
+
+An older version-3 binary can reject an entry with `assignmentDigest`.
+Remove qualified entries before a rollback, or restore the approval-store backup.
+
+Pending assignment prompts use versioned keys for all reusable options.
+An older binary treats those keys as unknown and denies them.
+The `Once` and `Deny` keys keep their existing values.
+A current binary rejects those keys for a legacy prompt that did not offer them.
+A resolved approval can redrive only its exact assignment-qualified call once.
+The approval store controls later calls.
 
 Malformed, partial, or future-version files stay untouched. Netclaw marks the
 persistent store unavailable. An uncovered call is denied instead of shown as
