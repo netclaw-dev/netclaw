@@ -219,6 +219,8 @@ It does not store an assignment name, source value, or effective value.
 A changed assignment produces a different digest and needs separate authority.
 An old unqualified grant cannot authorize an assignment-qualified command.
 The reviewed-safe catalog does not authorize assignment-qualified commands.
+An assignment inside an opaque fallback shell wrapper remains one-time.
+Netclaw still expands that wrapper for hard-deny review.
 
 PowerShell finite loops can project more than one path scope.
 Netclaw checks every scope when ShellSyntaxTree supplies complete public path facts.

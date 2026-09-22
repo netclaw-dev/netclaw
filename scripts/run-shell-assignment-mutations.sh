@@ -91,6 +91,21 @@ run_target \
   "$output_path/assignment-span" \
   1
 
+read -r wrapper_start wrapper_end < <(
+  find_span \
+    "$analysis_file" \
+    "if (commands.Skip(innerCommandStart).Any" \
+    "if (commands.Skip(innerCommandStart).Any" \
+    "return ShellAnalysisFailure.Unresolved;"
+)
+run_target \
+  "stryker-shell-command-analysis.json" \
+  "ShellCommandAnalysis.cs" \
+  "$wrapper_start" \
+  "$wrapper_end" \
+  "$output_path/fallback-wrapper-assignments" \
+  4
+
 environment_file="$repo_root/src/Netclaw.Security/ShellExecutionEnvironment.cs"
 read -r mode_start mode_end < <(
   find_span \

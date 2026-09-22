@@ -29,6 +29,14 @@ All parsing, approval, hard-deny, path, and final launch checks SHALL use that s
 - **THEN** it uses the fresh noninteractive no-startup mode
 - **AND** execution uses the same sanitized child environment
 
+#### Scenario: A fallback shell wrapper cannot reuse assignment facts
+
+- **GIVEN** Netclaw expands a shell wrapper that ShellSyntaxTree leaves opaque
+- **AND** the wrapper payload contains an assignment
+- **WHEN** Netclaw analyzes the payload for approval
+- **THEN** the complete call remains one-time
+- **AND** hard-deny review still sees each expanded inner command
+
 #### Scenario: A Bash probe failure stops startup
 
 - **GIVEN** Netclaw cannot get a valid version from the Bash probe

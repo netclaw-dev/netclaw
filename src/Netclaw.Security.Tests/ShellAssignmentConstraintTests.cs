@@ -93,6 +93,63 @@ public sealed class ShellAssignmentConstraintTests
     }
 
     [Theory]
+    [InlineData("bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("/bin/bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("dash -c \"mode='fast'; inspect item\"")]
+    [InlineData("/bin/dash -c \"mode='fast'; inspect item\"")]
+    [InlineData("ksh -c \"mode='fast'; inspect item\"")]
+    [InlineData("command bash -lc \"mode='fast'; inspect item\"")]
+    public void Assignment_in_a_fallback_shell_wrapper_stays_one_time(string command)
+    {
+        var analysis = BashMatcher.AnalyzeInvocation(
+            ShellToolName,
+            Args(command, "/work"));
+
+        Assert.True(analysis.IsMessy);
+        Assert.Empty(analysis.Candidates);
+    }
+
+    [Theory]
+    [InlineData("env bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("nohup bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("timeout 5 bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("nice -n 5 bash -lc \"mode='fast'; inspect item\"")]
+    public void Assignment_in_a_prefixed_fallback_shell_wrapper_stays_one_time(string command)
+    {
+        var analysis = BashMatcher.AnalyzeInvocation(
+            ShellToolName,
+            Args(command, "/work"));
+
+        Assert.True(analysis.IsMessy);
+        Assert.Empty(analysis.Candidates);
+    }
+
+    [Fact]
+    public void Fallback_wrapper_with_an_assignment_keeps_hard_deny_review()
+    {
+        var policy = new ShellCommandPolicy(BashMatcher.Environment);
+
+        var decision = policy.Evaluate(
+            "bash -lc \"mode='fast'; netclaw daemon stop\"",
+            "/work");
+
+        Assert.False(decision.Allowed);
+        Assert.Equal(DenyCategory.SelfDestructive, decision.DenyCategory);
+    }
+
+    [Fact]
+    public void Fallback_wrapper_without_assignments_remains_reusable()
+    {
+        var analysis = BashMatcher.AnalyzeInvocation(
+            ShellToolName,
+            Args("bash -lc \"inspect item\"", "/work"));
+
+        Assert.False(analysis.IsMessy);
+        var candidate = Assert.Single(analysis.Candidates);
+        Assert.Equal(ApprovalAssignmentConstraint.None, candidate.AssignmentConstraint);
+    }
+
+    [Theory]
     [InlineData(PwshDialect.PowerShell7, "C:\\PowerShell\\7\\pwsh.exe")]
     [InlineData(
         PwshDialect.WindowsPowerShell51,

@@ -109,6 +109,39 @@ public sealed class ShellAssignmentMutationTests
     }
 
     [Fact]
+    public void Fallback_wrapper_assignment_fails_closed_without_hiding_hard_denies()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(
+            ShellPlatform.Linux,
+            new Version(5, 2));
+        var analyzer = new ShellCommandAnalyzer(environment);
+        var assigned = analyzer.Analyze(
+            "bash -lc \"mode='fast'; inspect item\"",
+            "/work");
+        var mixed = analyzer.Analyze(
+            "bash -lc \"mode='fast' inspect item; report item\"",
+            "/work");
+        var plain = analyzer.Analyze(
+            "bash -lc \"inspect item\"",
+            "/work");
+        var topLevel = analyzer.Analyze(
+            "mode='fast'; inspect item",
+            "/work");
+        var policy = new ShellCommandPolicy(environment);
+
+        Assert.False(assigned.IsResolved);
+        Assert.Contains(assigned.Commands, static command => command.Assignments.Count > 0);
+        Assert.False(mixed.IsResolved);
+        Assert.Contains(mixed.Commands, static command => command.Assignments.Count > 0);
+        Assert.Contains(mixed.Commands, static command => command.Assignments.Count == 0);
+        Assert.True(plain.IsResolved);
+        Assert.True(topLevel.IsResolved);
+        Assert.False(policy.Evaluate(
+            "bash -lc \"mode='fast'; netclaw daemon stop\"",
+            "/work").Allowed);
+    }
+
+    [Fact]
     public void Bash_strong_initial_state_requires_the_complete_host_identity()
     {
         AssertBounded(ShellExecutionEnvironment.CreateBash(

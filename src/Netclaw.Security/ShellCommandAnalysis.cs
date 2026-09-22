@@ -157,6 +157,7 @@ internal sealed class ShellCommandAnalyzer
                 return ShellAnalysisFailure.Unresolved;
             }
 
+            var innerCommandStart = commands.Count;
             var failure = Analyze(
                 innerCommands[innerIndex++],
                 innerWorkingDirectory,
@@ -167,6 +168,9 @@ internal sealed class ShellCommandAnalyzer
                 ref syntaxProofComplete);
             if (failure != ShellAnalysisFailure.None)
                 return failure;
+
+            if (commands.Skip(innerCommandStart).Any(static inner => inner.Assignments.Count > 0))
+                return ShellAnalysisFailure.Unresolved;
         }
 
         return ShellAnalysisFailure.None;
