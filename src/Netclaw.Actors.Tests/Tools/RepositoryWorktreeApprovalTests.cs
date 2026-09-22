@@ -17,6 +17,113 @@ namespace Netclaw.Actors.Tests.Tools;
 public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture fixture)
 {
     [Fact]
+    public async Task Assignment_repository_grant_requires_the_same_assignment_in_a_registered_sibling()
+    {
+        var root = CreateTestRoot("repository-assignment-fixture-");
+        try
+        {
+            var main = Path.Combine(root.FullName, "main");
+            var sibling = Path.Combine(root.FullName, "sibling");
+            var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session"));
+            RunGit(root.FullName, "init", main);
+            RunGit(main, "worktree", "add", "--orphan", "-b", "sibling", sibling);
+
+            var mainTasks = Directory.CreateDirectory(Path.Combine(main, "tasks")).FullName;
+            var siblingTasks = Directory.CreateDirectory(Path.Combine(sibling, "tasks")).FullName;
+            await using var promptHarness = await CreateHarnessAsync(
+                "repository-assignment-prompt",
+                main,
+                main,
+                session.FullName,
+                CreateAssignedPathCommand("release", Path.Combine(mainTasks, "output.txt")),
+                Approvals.None,
+                AssignmentTestHost);
+            var promptDecision = await promptHarness.EvaluateDecisionAsync(
+                TestContext.Current.CancellationToken);
+
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, promptDecision.Outcome);
+            Assert.False(
+                promptDecision.ApprovalContext!.IsMessy,
+                string.Join(", ", promptDecision.ApprovalContext.Candidates!.Select(
+                    candidate => $"{candidate.Verb}:{candidate.Directory}:{candidate.AssignmentConstraint.Kind}")));
+            Assert.Contains(
+                promptDecision.ApprovalContext.Options,
+                option => option.Key.Value ==
+                          Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveAssignmentRepositoryV1);
+            var promptCandidate = Assert.Single(promptDecision.ApprovalContext.Candidates!);
+            Assert.Equal(
+                ApprovalAssignmentConstraintKind.ExactDigest,
+                promptCandidate.AssignmentConstraint.Kind);
+
+            var grantContext = ApprovalGrantContext.FromDecision(
+                ApprovalDecision.ApprovedRepository,
+                main,
+                session.FullName,
+                promptDecision.ApprovalContext.RepositoryCommonDirectory);
+            var repositoryGrant = Assert.Single(ApprovalBucketBuilder.BuildGrants(
+                promptDecision.ApprovalContext.Candidates!, grantContext));
+            Assert.Equal(promptCandidate.AssignmentConstraint, repositoryGrant.Candidate.AssignmentConstraint);
+            Assert.Equal(Path.Combine(main, ".git"), repositoryGrant.Repository);
+            Assert.Equal(main, repositoryGrant.RepositoryWorktree);
+            Assert.True(ToolApprovalActor.TryCreateEntries(
+                new ToolName(ShellTool.ToolName),
+                [repositoryGrant],
+                out var entries,
+                out _));
+            var entry = Assert.Single(entries);
+            Assert.Equal(promptCandidate.AssignmentConstraint.Digest, entry.AssignmentDigest);
+            Assert.Equal(repositoryGrant.Repository, entry.Repository);
+
+            await using var siblingHarness = await CreateHarnessAsync(
+                "repository-assignment-sibling",
+                sibling,
+                main,
+                session.FullName,
+                CreateAssignedPathCommand("release", Path.Combine(siblingTasks, "output.txt")),
+                Approvals.None,
+                AssignmentTestHost);
+            var siblingDecision = await siblingHarness.EvaluateDecisionAsync(
+                TestContext.Current.CancellationToken);
+            var siblingCandidate = Assert.Single(siblingDecision.ApprovalContext!.Candidates!);
+            Assert.Equal(promptCandidate.AssignmentConstraint, siblingCandidate.AssignmentConstraint);
+            Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+                siblingCandidate,
+                sibling,
+                entries));
+
+            await using var changedHarness = await CreateHarnessAsync(
+                "repository-assignment-changed",
+                sibling,
+                main,
+                session.FullName,
+                CreateAssignedPathCommand("debug", Path.Combine(siblingTasks, "output.txt")),
+                Approvals.None,
+                AssignmentTestHost);
+            var changedDecision = await changedHarness.EvaluateDecisionAsync(
+                TestContext.Current.CancellationToken);
+            var changedCandidate = Assert.Single(changedDecision.ApprovalContext!.Candidates!);
+            Assert.NotEqual(promptCandidate.AssignmentConstraint, changedCandidate.AssignmentConstraint);
+            Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+                changedCandidate,
+                sibling,
+                entries));
+
+            var unqualifiedCandidate = siblingCandidate with
+            {
+                AssignmentConstraint = ApprovalAssignmentConstraint.None,
+            };
+            Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+                unqualifiedCandidate,
+                sibling,
+                entries));
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task Repository_choice_and_reuse_follow_candidate_worktrees()
     {
         var root = CreateTestRoot("repository-candidate-fixture-");
@@ -410,10 +517,11 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
         string grantWorktree,
         string session,
         string command,
-        ApprovalState grants)
+        ApprovalState grants,
+        ShellApprovalHost host = ShellApprovalHost.Bash)
         => ShellApprovalHarness.CreateAsync(
             id,
-            new ShellApprovalInvocation(command, ApprovalDirectoryShape.None),
+            new ShellApprovalInvocation(command, ApprovalDirectoryShape.None, Host: host),
             grants,
             fixture.ActorSystem,
             TestContext.Current.CancellationToken,
@@ -421,6 +529,10 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             {
                 RepositoryGrantWorktree = grantWorktree,
             });
+
+    private static ShellApprovalHost AssignmentTestHost => OperatingSystem.IsWindows()
+        ? ShellApprovalHost.PowerShell7
+        : ShellApprovalHost.Bash52;
 
     private static string PathCommandVerb => OperatingSystem.IsWindows()
         ? "Set-Location"
@@ -434,6 +546,11 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
         var directory = Path.GetDirectoryName(path)! + Path.DirectorySeparatorChar;
         return $"Set-Location '{directory.Replace("'", "''", StringComparison.Ordinal)}'";
     }
+
+    private static string CreateAssignedPathCommand(string value, string path) =>
+        OperatingSystem.IsWindows()
+            ? $"$mode = '{value}'; {CreatePathCommand(path)}"
+            : $"mode='{value}' {CreatePathCommand(path)}";
 
     private static string CreateRedirectCommand(string path) => OperatingSystem.IsWindows()
         ? $"Write-Output done > '{path.Replace("'", "''", StringComparison.Ordinal)}'"

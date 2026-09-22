@@ -65,6 +65,7 @@ internal enum ApprovalSessionShape
 internal enum ShellApprovalHost
 {
     Bash,
+    Bash52,
     PowerShell7,
     WindowsPowerShell51
 }
@@ -80,6 +81,9 @@ internal sealed record ShellApprovalInvocation(
         => Host switch
         {
             ShellApprovalHost.Bash => ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            ShellApprovalHost.Bash52 => ShellExecutionEnvironment.CreateBash(
+                ShellPlatform.Linux,
+                new Version(5, 2)),
             ShellApprovalHost.PowerShell7 => ShellExecutionEnvironment.CreatePowerShell(
                 @"C:\Program Files\PowerShell\7\pwsh.exe",
                 PwshDialect.PowerShell7),
@@ -1883,11 +1887,13 @@ public static class ShellApprovalCases
         CreateRow(testCase));
 
     public static IEnumerable<TheoryDataRow<string>> BashRows => All
-        .Where(testCase => testCase.Invocation.Host == ShellApprovalHost.Bash)
+        .Where(testCase => testCase.Invocation.Host is
+            ShellApprovalHost.Bash or ShellApprovalHost.Bash52)
         .Select(CreateRow);
 
     public static IEnumerable<TheoryDataRow<string>> PowerShellRows => All
-        .Where(testCase => testCase.Invocation.Host != ShellApprovalHost.Bash)
+        .Where(testCase => testCase.Invocation.Host is
+            ShellApprovalHost.PowerShell7 or ShellApprovalHost.WindowsPowerShell51)
         .Select(CreateRow);
 
     private static TheoryDataRow<string> CreateRow(ShellApprovalCase testCase) =>
