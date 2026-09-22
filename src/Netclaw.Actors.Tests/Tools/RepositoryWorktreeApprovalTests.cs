@@ -39,7 +39,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 session.FullName,
                 checkoutA,
                 session.FullName,
-                $"cd {worktreeA} && touch {Path.Combine(worktreeA, "tasks", "output-b.txt")}",
+                CreatePathCommand(Path.Combine(worktreeA, "tasks", "output-b.txt")),
                 Approvals.None);
             var promptDecision = await promptHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
@@ -56,7 +56,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 promptDecision.ApprovalContext.RepositoryCommonDirectory);
             var repositoryGrants = ApprovalBucketBuilder.BuildGrants(
                 promptDecision.ApprovalContext.Candidates!, grantContext);
-            Assert.Equal(2, repositoryGrants.Count);
+            Assert.Single(repositoryGrants);
             Assert.All(repositoryGrants, repositoryGrant =>
             {
                 Assert.Equal(Path.Combine(checkoutA, ".git"), repositoryGrant.Repository);
@@ -71,10 +71,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 session.FullName,
                 checkoutA,
                 session.FullName,
-                $"cd {worktreeA} && touch {Path.Combine(worktreeA, "tasks", "output-b.txt")}",
-                Approvals.Combine(
-                    Approvals.PersistentRepository("cd"),
-                    Approvals.PersistentRepository("touch")));
+                CreatePathCommand(Path.Combine(worktreeA, "tasks", "output-b.txt")),
+                Approvals.PersistentRepository(PathCommandVerb));
             var reuseDecision = await reuseHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
             Assert.Equal(ToolAuthorizationOutcome.Allowed, reuseDecision.Outcome);
@@ -85,8 +83,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 session.FullName,
                 checkoutA,
                 session.FullName,
-                $"cd {checkoutA} && touch {Path.Combine(checkoutA, "tasks", "output-a.txt")}; " +
-                $"cd {worktreeA} && touch {Path.Combine(worktreeA, "tasks", "output-b.txt")}",
+                $"{CreatePathCommand(Path.Combine(checkoutA, "tasks", "output-a.txt"))}; " +
+                CreatePathCommand(Path.Combine(worktreeA, "tasks", "output-b.txt")),
                 Approvals.None);
             var siblingCandidatesDecision = await siblingCandidatesHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
@@ -99,8 +97,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 session.FullName,
                 checkoutA,
                 session.FullName,
-                $"cd {worktreeA} && touch {Path.Combine(worktreeA, "tasks", "output-b.txt")}; " +
-                $"cd {checkoutB} && touch {Path.Combine(checkoutB, "tasks", "output-c.txt")}",
+                $"{CreatePathCommand(Path.Combine(worktreeA, "tasks", "output-b.txt"))}; " +
+                CreatePathCommand(Path.Combine(checkoutB, "tasks", "output-c.txt")),
                 Approvals.None);
             var mixedCandidatesDecision = await mixedCandidatesHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
@@ -113,7 +111,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 checkoutA,
                 checkoutA,
                 session.FullName,
-                $"git status; cd {worktreeA} && touch {Path.Combine(worktreeA, "tasks", "output-b.txt")}",
+                $"git status; {CreatePathCommand(Path.Combine(worktreeA, "tasks", "output-b.txt"))}",
                 Approvals.None);
             var fallbackDecision = await fallbackHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
@@ -121,26 +119,30 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 fallbackDecision.ApprovalContext!.Options,
                 option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
 
-            await using var sideEffectHarness = await CreateHarnessAsync(
-                "repository-pure-side-effect",
-                session.FullName,
-                checkoutA,
-                session.FullName,
-                $"cd {worktreeA} && touch {Path.Combine(worktreeA, "tasks", "output-b.txt")}; echo done",
-                Approvals.None);
-            var sideEffectDecision = await sideEffectHarness.EvaluateDecisionAsync(
-                TestContext.Current.CancellationToken);
-            Assert.Contains(
-                sideEffectDecision.ApprovalContext!.Options,
-                option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
+            // Netclaw does not classify a PowerShell command as a pure side effect.
+            if (!OperatingSystem.IsWindows())
+            {
+                await using var sideEffectHarness = await CreateHarnessAsync(
+                    "repository-pure-side-effect",
+                    session.FullName,
+                    checkoutA,
+                    session.FullName,
+                    $"{CreatePathCommand(Path.Combine(worktreeA, "tasks", "output-b.txt"))}; echo done",
+                    Approvals.None);
+                var sideEffectDecision = await sideEffectHarness.EvaluateDecisionAsync(
+                    TestContext.Current.CancellationToken);
+                Assert.Contains(
+                    sideEffectDecision.ApprovalContext!.Options,
+                    option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
+            }
 
             await using var redirectHarness = await CreateHarnessAsync(
                 "repository-external-redirect",
                 session.FullName,
                 checkoutA,
                 session.FullName,
-                $"cd {worktreeA} && touch {Path.Combine(worktreeA, "tasks", "output-b.txt")}; " +
-                $"echo done > {Path.Combine(session.FullName, "output.txt")}",
+                $"{CreatePathCommand(Path.Combine(worktreeA, "tasks", "output-b.txt"))}; " +
+                CreateRedirectCommand(Path.Combine(session.FullName, "output.txt")),
                 Approvals.None);
             var redirectDecision = await redirectHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
@@ -149,7 +151,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
 
             var taskGrant = Assert.Single(repositoryGrants,
-                grant => grant.Candidate.Verb == "touch");
+                grant => grant.Candidate.Verb == PathCommandVerb);
             Assert.Equal(Path.Combine(worktreeA, "tasks"), taskGrant.Candidate.Directory);
             RunGit(root.FullName, "init", taskGrant.Candidate.Directory!);
             var persistenceFailure = await Assert.ThrowsAsync<InvalidOperationException>(() =>
@@ -394,6 +396,18 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             {
                 RepositoryGrantWorktree = grantWorktree,
             });
+
+    private static string PathCommandVerb => OperatingSystem.IsWindows()
+        ? "Get-Content"
+        : "touch";
+
+    private static string CreatePathCommand(string path) => OperatingSystem.IsWindows()
+        ? $"Get-Content 'FileSystem::{path.Replace("'", "''", StringComparison.Ordinal)}'"
+        : $"touch '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
+
+    private static string CreateRedirectCommand(string path) => OperatingSystem.IsWindows()
+        ? $"Write-Output done > '{path.Replace("'", "''", StringComparison.Ordinal)}'"
+        : $"echo done > '{path.Replace("'", "'\"'\"'", StringComparison.Ordinal)}'";
 
     private static void RunGit(string directory, params string[] arguments)
     {
