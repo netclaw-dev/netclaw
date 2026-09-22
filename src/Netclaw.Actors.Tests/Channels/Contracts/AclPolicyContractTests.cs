@@ -23,6 +23,16 @@ public abstract class AclPolicyContractTests
 
     protected abstract string ExpectedSourceKind { get; }
 
+    /// <summary>
+    /// Whether the channel supports a default-channel allow exception that is
+    /// distinct from explicit allowlisting: the default channel passes the
+    /// channel gate without an <c>AllowedChannelIds</c> entry, and audience
+    /// resolution still treats it as unvetted. Channels whose ACL requires
+    /// explicit channel allowlisting with no exception path override this to
+    /// false.
+    /// </summary>
+    protected virtual bool SupportsDefaultChannelId => true;
+
     // --- Deny cases ---
 
     [Fact]
@@ -85,6 +95,9 @@ public abstract class AclPolicyContractTests
     [Fact]
     public void Allows_default_channel_id()
     {
+        if (!SupportsDefaultChannelId)
+            return;
+
         var options = new ChannelOptionsBuilder
         {
             AllowedChannelIds = [],
@@ -152,6 +165,9 @@ public abstract class AclPolicyContractTests
     [Fact]
     public void Non_explicit_channel_defaults_to_Public_audience()
     {
+        if (!SupportsDefaultChannelId)
+            return;
+
         var options = new ChannelOptionsBuilder
         {
             DefaultChannelId = "ch-default"

@@ -29,10 +29,15 @@ public abstract class ProactiveOutboundClientContractTests : TestKit
 {
     protected ProactiveOutboundClientContractTests(ITestOutputHelper output) : base(output: output) { }
 
-    protected const string AllowedUserId = "user-allowed";
-    protected const string DisallowedUserId = "user-bad";
-    protected const string AllowedChannelId = "chan-allowed";
-    protected const string DisallowedChannelId = "chan-bad";
+    // Channel-varying ids are virtual, not const, because channels whose
+    // target ids have a restricted alphabet (Telegram's numeric ids) must
+    // override them. Every expected string below is built from the same
+    // property the request uses, so the canonical assertions stay
+    // self-consistent under any override.
+    protected virtual string AllowedUserId => "user-allowed";
+    protected virtual string DisallowedUserId => "user-bad";
+    protected virtual string AllowedChannelId => "chan-allowed";
+    protected virtual string DisallowedChannelId => "chan-bad";
 
     protected override void ConfigureServices(HostBuilderContext context, IServiceCollection services)
     {
@@ -42,7 +47,7 @@ public abstract class ProactiveOutboundClientContractTests : TestKit
     {
     }
 
-    /// <summary>Channel name exactly as it appears in the canonical strings ("Slack", "Discord", "Mattermost").</summary>
+    /// <summary>Channel name exactly as it appears in the canonical strings ("Slack", "Discord", "Mattermost", "Telegram").</summary>
     protected abstract string ChannelDisplayName { get; }
 
     /// <summary>
