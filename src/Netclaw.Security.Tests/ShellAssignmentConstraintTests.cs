@@ -70,6 +70,26 @@ public sealed class ShellAssignmentConstraintTests
     }
 
     [Fact]
+    public void PowerShell_assignment_with_an_absolute_directory_remains_reusable()
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreatePowerShell(
+                "C:\\PowerShell\\7\\pwsh.exe",
+                PwshDialect.PowerShell7));
+
+        var candidate = ExtractSingle(
+            matcher,
+            "$mode = 'release'; Set-Location 'C:\\work\\project\\tasks'",
+            "C:\\work\\project");
+
+        Assert.Equal("Set-Location", candidate.Verb);
+        Assert.Equal("C:/work/project/tasks", candidate.Directory);
+        Assert.Equal(
+            ApprovalAssignmentConstraintKind.ExactDigest,
+            candidate.AssignmentConstraint.Kind);
+    }
+
+    [Fact]
     public void Invalid_UTF16_assignment_value_keeps_the_call_one_time()
     {
         var analysis = BashMatcher.AnalyzeInvocation(

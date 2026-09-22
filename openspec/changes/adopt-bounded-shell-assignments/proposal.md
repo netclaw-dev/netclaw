@@ -1,11 +1,11 @@
 ## Why
 
 Static shell assignments currently make complete commands one-time approvals.
-ShellSyntaxTree beta.4 supplies bounded assignment facts that can reduce these prompts without hiding environment effects.
+ShellSyntaxTree beta.5 supplies bounded assignment facts that can reduce these prompts without hiding environment effects.
 
 ## What Changes
 
-- Netclaw will adopt ShellSyntaxTree `0.4.0-beta.4` after the public package exists.
+- Netclaw will adopt ShellSyntaxTree `0.4.0-beta.5` after the public package exists.
 - Bash analysis will use the fresh noninteractive parser contract that the launch environment enforces.
 - PowerShell analysis will use the existing isolated no-profile contract that the launch environment enforces.
 - Netclaw will consume assignment facts without parsing executable-specific environment variable rules.
@@ -39,5 +39,5 @@ All hard-deny, path, audience, repository, and launch checks will continue for e
 
 ## Scope
 
-The MVP scope covers only assignment forms that ShellSyntaxTree beta.4 marks complete.
+The MVP scope covers only assignment forms that ShellSyntaxTree beta.5 marks complete.
 It excludes executable-specific environment semantics, dynamic assignment values, provider assignments, and hidden execution.

@@ -1,6 +1,6 @@
 ## 1. Parser and Process Contract
 
-- [x] 1.1 Update ShellSyntaxTree to `0.4.0-beta.4` and verify restore uses the public package.
+- [x] 1.1 Update ShellSyntaxTree to `0.4.0-beta.5` and verify restore uses the public package.
 - [x] 1.2 Bind Bash analysis to the sanitized launch contract and verify a missing condition returns unknown state.
 - [x] 1.3 Bind PowerShell analysis to the isolated no-profile launch contract and verify its fixed arguments match.
 - [x] 1.4 Recheck the parser mode before process start and verify a changed launch contract blocks execution.

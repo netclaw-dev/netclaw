@@ -2,7 +2,7 @@
 
 See [proposal.md](proposal.md) for the reason for this change.
 
-ShellSyntaxTree `0.4.0-beta.4` supplies typed facts for a small set of exact shell assignments.
+ShellSyntaxTree `0.4.0-beta.5` supplies typed facts for a small set of exact shell assignments.
 Netclaw currently treats those forms as unresolved and offers only a one-time approval.
 The native shell environment already owns both parser construction and child process construction.
 Approval candidates already cross the policy, parent bridge, actor, and store boundaries.
@@ -168,7 +168,7 @@ An administrator must restart Netclaw after a shell upgrade or replacement.
 
 ## Migration Plan
 
-1. Publish ShellSyntaxTree `0.4.0-beta.4` after its security and release gates pass.
+1. Publish ShellSyntaxTree `0.4.0-beta.5` after its security and release gates pass.
 2. Update Netclaw to the public package.
 3. Add the typed digest across the existing approval path.
 4. Update the version-3 codec, operations skill, runbook, and tests.
