@@ -2970,7 +2970,7 @@ run_all() {
         "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and file_search under /home/netclaw/.netclaw/workspaces/file-tool-selection for the exact text local-search-eval-token in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."
 
     run_case tool_timestamped_webhook "set_webhook called with Stripe timestamp verification" \
-        "Create a public inbound webhook route named stripe-events for Stripe. Use secret eval-whsec-123 and have it summarize each payment event."
+        "Create an inbound webhook route named stripe-events. Set Audience to Public, VerificationKind to HmacTimestamped, SignatureHeaderName to Stripe-Signature, and Secret to eval-whsec-123. Have it summarize each payment event."
 
     run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
         "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \

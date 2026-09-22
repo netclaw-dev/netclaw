@@ -1,9 +1,9 @@
 ---
 name: netclaw-operations
-description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, inbound webhooks, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
+description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.74.11"
+  version: "2.74.9"
 ---
 
 # Netclaw Operations
