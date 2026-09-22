@@ -1661,7 +1661,7 @@ assert_tool_known_image_metadata() {
 assert_tool_rationale_contract() {
     stdout_json_envelope_valid \
         && stdout_json_tool_call_sequence_matches \
-            '["file_list","list_reminders","file_read","skill_load"]' \
+            '["file_list","file_search","file_read","skill_load"]' \
         && stdout_json_all_tool_calls_have_rationale 4
 }
 
@@ -2956,7 +2956,7 @@ run_all() {
         "Report the exact dimensions of /home/netclaw/.netclaw/workspaces/file-tool-selection/dimensions.png."
 
     run_case --json tool_rationale_contract "all calls retain rationales across two parallel tool iterations" \
-        "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and list_reminders in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."
+        "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and file_search under /home/netclaw/.netclaw/workspaces/file-tool-selection for the exact text local-search-eval-token in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."
 
     run_case tool_timestamped_webhook "set_webhook called with Stripe timestamp verification" \
         "Create a public inbound webhook route named stripe-events for Stripe. Use secret eval-whsec-123 and have it summarize each payment event."
