@@ -1177,6 +1177,13 @@ daemon_log_no_skill_loaded() {
     ! daemon_log_tail | grep -qaE "turn_skill_loaded" 2>/dev/null
 }
 
+daemon_log_no_unexpected_skill_loaded() {
+    local expected_skill="$1"
+    ! daemon_log_tail \
+        | grep -aE "turn_skill_loaded" 2>/dev/null \
+        | grep -qavE "turn_skill_loaded skill=$expected_skill method=skill_load" 2>/dev/null
+}
+
 stdout_tool_called() {
     grep -qaE "\\[tool:call\\] $1\\(" "$STDOUT_FILE" 2>/dev/null
 }
@@ -1292,7 +1299,8 @@ assert_identity_file_routing() {
     stdout_response_contains 'SOUL.md' && \
         stdout_response_contains 'AGENTS.md' && \
         stdout_response_contains 'TOOLING.md' && \
-        daemon_log_no_skill_loaded
+        daemon_log_no_unexpected_skill_loaded 'netclaw-operations' && \
+        stdout_no_skill_file_read_called
 }
 
 # Category 2: Skill Discovery — tests that the model retrieves procedural
@@ -2758,7 +2766,7 @@ run_all() {
         "What is your session ID?" \
         "What session are we in?"
 
-    run_case identity_file_routing "routes all three identity concerns without loading a skill" \
+    run_case identity_file_routing "routes all three identity concerns without unrelated skill access" \
         "Which identity file should hold each of these: my communication style, this deployment's recurring sales workflow, and the tools available on this host?" \
         "Map personality and operator context, deployment mission and review rules, and environment capabilities to the correct Netclaw identity files."
 
