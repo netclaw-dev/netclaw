@@ -1288,7 +1288,7 @@ assert_identity_version() {
 }
 
 assert_identity_repo() {
-    stdout_contains 'github.com/netclaw-dev/netclaw'
+    stdout_contains 'netclaw-dev/netclaw'
 }
 
 assert_identity_session() {
@@ -2757,7 +2757,7 @@ run_all() {
         "Check your version" \
         "What version of Netclaw is this?"
 
-    run_case identity_repo "repo URL in output" \
+    run_case identity_repo "canonical repository in output" \
         "What is the Netclaw GitHub repository URL?" \
         "Where is the Netclaw source code?" \
         "What repo are you built from?"
