@@ -6,6 +6,7 @@
 
 - **Static shell assignments can use exact reusable approvals.** Netclaw binds each grant to a digest of the complete Bash or PowerShell assignment facts.
 - **Shell launch facts stay aligned with parser facts.** Netclaw probes Bash versions and uses isolated PowerShell processes for bounded assignment analysis.
+- **Finite PowerShell loops can reuse exact grants.** Netclaw checks all public path facts before it reuses a stored verb.
 
 ## 0.27.1-beta.1 (2026-09-24)
 

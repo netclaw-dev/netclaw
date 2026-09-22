@@ -980,10 +980,13 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("Get-ChildItem"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "powershell7-foreach-inherited-state-prompts",
+            "powershell7-foreach-public-path-facts-reuse",
             PowerShell7("foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f }"),
             Approvals.PersistentAnywhere("Get-Content"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                approvalChecks: 1,
+                "persistent:Get-Content")),
         Case(
             "powershell7-foreach-mutation-inherited-state-prompts",
             PowerShell7("foreach ($f in @('a.txt', 'b.txt')) { Remove-Item -LiteralPath $f }"),
@@ -1025,10 +1028,13 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("Set-Location", "Get-Content"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "powershell51-foreach-inherited-state-prompts",
+            "powershell51-foreach-public-path-facts-reuse",
             WindowsPowerShell51("foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f }"),
             Approvals.PersistentAnywhere("Get-Content"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                approvalChecks: 1,
+                "persistent:Get-Content")),
         Case(
             "powershell51-foreach-child-grant-does-not-cover-unknown-state",
             WindowsPowerShell51("powershell.exe -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a.txt\", \"b.txt\")) { Remove-Item -LiteralPath $f }'"),
