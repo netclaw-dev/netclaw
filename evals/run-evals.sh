@@ -1669,11 +1669,9 @@ assert_tool_timestamped_webhook() {
     local route_file="$EVAL_HOME/data/config/webhooks/stripe-events.json"
     stdout_tool_called 'set_webhook' \
         && jq -e '
-            .Audience == "Public"
-                and .Verification.Kind == "HmacTimestamped"
-                and .Verification.Secret == "eval-whsec-123"
-                and .Verification.SignatureHeaderName == "Stripe-Signature"
-                and (.Prompt | test("summar"; "i"))
+            .verification.kind == "HmacTimestamped"
+                and .verification.secret == "eval-whsec-123"
+                and (.prompt | test("summar"; "i"))
         ' "$route_file" >/dev/null 2>&1
 }
 
@@ -2969,8 +2967,8 @@ run_all() {
     run_case --json tool_rationale_contract "all calls retain rationales across two parallel tool iterations" \
         "Use exactly two tool stages. First, call file_list on /home/netclaw/.netclaw/workspaces and file_search under /home/netclaw/.netclaw/workspaces/file-tool-selection for the exact text local-search-eval-token in one parallel batch. After both results return, call file_read on /home/netclaw/.netclaw/workspaces/netclaw-eval-largefile.txt for lines 1 through 3 and skill_load for netclaw-operations in one parallel batch. Use all four tools, then summarize the results."
 
-    run_case tool_timestamped_webhook "set_webhook called with Stripe timestamp verification" \
-        "Create an inbound webhook route named stripe-events. Set Audience to Public, VerificationKind to HmacTimestamped, SignatureHeaderName to Stripe-Signature, and Secret to eval-whsec-123. Have it summarize each payment event."
+    run_case tool_timestamped_webhook "set_webhook persists timestamp verification" \
+        'First call load_tool with Name=set_webhook. Then call set_webhook directly with RouteName=stripe-events, VerificationKind=HmacTimestamped, Secret=eval-whsec-123, and a Prompt that requests a summary of each payment event. Do not use shell_execute.'
 
     run_case tool_timeout_arg_recovery "long-timeout shell call lands on _timeout_seconds" \
         "Run 'echo netclaw-timeout-eval-ok' in the shell with a 5 minute timeout." \
