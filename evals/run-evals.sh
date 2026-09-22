@@ -1678,7 +1678,8 @@ assert_tool_timestamped_webhook() {
 }
 
 setup_tool_timestamped_webhook() {
-    rm -f "$EVAL_HOME/data/config/webhooks/stripe-events.json"
+    docker exec --user root "$EVAL_CONTAINER_NAME" \
+        rm -f /home/netclaw/.netclaw/config/webhooks/stripe-events.json
 }
 
 assert_tool_timeout_arg_recovery() {
