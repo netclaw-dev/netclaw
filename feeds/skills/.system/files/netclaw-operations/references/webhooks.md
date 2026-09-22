@@ -48,6 +48,7 @@ also changes.
 For Stripe, call `set_webhook` with `verification_kind: HmacTimestamped`,
 `signature_header_name: Stripe-Signature`, and the Stripe endpoint secret. For
 TextForge, use `signature_header_name: X-TextForge-Signature`. The timestamped
+verifier otherwise uses `X-Webhook-Signature`, which Stripe does not send. The
 defaults are `timestamp_field: t`, `signature_field: v1`,
 `signed_payload_separator: .`, and `tolerance_seconds: 300`; only override them
 when the sender documents a different wire format. Multiple `v1` values are

@@ -29,7 +29,7 @@ public sealed partial class SetWebhookTool : NetclawTool<SetWebhookTool.Params>
         string VerificationKind,
         [property: Description("Shared secret used to verify incoming requests.")]
         string Secret,
-        [property: Description("Optional HMAC signature header name. Defaults to X-Webhook-Signature for Hmac routes.")]
+        [property: Description("Optional HMAC signature header name. Use 'Stripe-Signature' for Stripe. Other Hmac routes default to 'X-Webhook-Signature'.")]
         string? SignatureHeaderName = null,
         [property: Description("Optional HMAC signature prefix such as 'sha256='. Leave empty for raw hex signatures.")]
         string? SignaturePrefix = null,
