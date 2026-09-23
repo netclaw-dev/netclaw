@@ -62,3 +62,39 @@ jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "Compile
   echo "Expected exactly three authorization mutants." >&2
   exit 1
 }
+
+evidence_source="$repo_root/src/Netclaw.Actors/Tools/ToolApprovalMessages.cs"
+read -r evidence_start evidence_end evidence_line < <(
+  python3 - "$evidence_source" <<'PY'
+from pathlib import Path
+import sys
+
+source = Path(sys.argv[1])
+text = source.read_text(encoding="utf-8")
+marker = "!SourceCandidate.Candidate.HasSameApprovalFacts(candidate.Candidate)"
+start = text.find(marker)
+if start < 0 or text.find(marker, start + 1) >= 0:
+    raise SystemExit("The shell evidence identity boundary is missing or duplicated.")
+print(start, start + len(marker), text.count("\n", 0, start) + 1)
+PY
+)
+
+evidence_output="$output_path/evidence-facts"
+(
+  cd "$test_project"
+  dotnet stryker \
+    --config-file stryker-config.json \
+    --mutate "Tools/ToolApprovalMessages.cs{$evidence_start..$evidence_end}" \
+    --output "$evidence_output" \
+    --skip-version-check
+)
+
+evidence_report="$evidence_output/reports/mutation-report.json"
+jq -e --arg source "$evidence_source" --argjson line "$evidence_line" '
+  [.files[$source].mutants[] | select(.status != "Ignored" and .status != "CompileError")
+    | select(.location.start.line == $line)] as $mutants
+  | ($mutants | length) == 1 and all($mutants[]; .status == "Killed")
+' "$evidence_report" > /dev/null || {
+  echo "Expected one killed shell evidence identity mutant." >&2
+  exit 1
+}

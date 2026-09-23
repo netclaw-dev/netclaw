@@ -71,9 +71,10 @@ internal sealed class ShellPolicyCoordinator(
     {
         var analysis = preflight switch
         {
-            ShellPolicyPreflightResult.Complete preflightComplete => preflightComplete.AuthorizedAnalysis,
+            ShellPolicyPreflightResult.Complete
+            { Result: ToolAuthorizationResult.ShellExecution execution } => execution.Analysis,
             ShellPolicyPreflightResult.Continue preflightContinuation => preflightContinuation.Analysis,
-            _ => throw new InvalidOperationException("Unsupported shell policy preflight result."),
+            _ => null,
         };
         cancellationToken.ThrowIfCancellationRequested();
         var corrections = analysis is null
@@ -90,7 +91,7 @@ internal sealed class ShellPolicyCoordinator(
 
         if (preflight is ShellPolicyPreflightResult.Complete complete)
         {
-            var preflightDecision = complete.Decision;
+            var preflightDecision = complete.Result.Decision;
             // Auto permits execution, but the agent must first receive any applicable directory advice.
             if (preflightDecision.AllowReason == ToolAllowReason.PolicyAuto && corrections is not null)
             {
@@ -109,9 +110,9 @@ internal sealed class ShellPolicyCoordinator(
                 preflightDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
             }
 
-            return ToolAuthorizationResult.Create(
+            return ToolAuthorizationResult.CreateShell(
                 Complete(preflightDecision, [], trace),
-                complete.AuthorizedAnalysis);
+                analysis);
         }
 
         if (preflight is not ShellPolicyPreflightResult.Continue continuation
@@ -148,7 +149,7 @@ internal sealed class ShellPolicyCoordinator(
             corrections,
             cancellationToken);
 
-        return ToolAuthorizationResult.Create(
+        return ToolAuthorizationResult.CreateShell(
             decision,
             decision.Outcome == ToolAuthorizationOutcome.Allowed
                 ? continuation.Analysis
@@ -164,7 +165,7 @@ internal sealed class ShellPolicyCoordinator(
     {
         // Denial and approval without command analysis cannot become advice to submit a different call.
         if (preflight is ShellPolicyPreflightResult.Complete
-            { Decision.Outcome: not ToolAuthorizationOutcome.Allowed })
+            { Result.Decision.Outcome: not ToolAuthorizationOutcome.Allowed })
             return null;
 
         var native = NativeToolShellCorrectionDetector.Detect(analysis, registry, policy, context.Invocation);
@@ -361,7 +362,7 @@ internal sealed class ShellPolicyCoordinator(
                 {
                     evaluation.Cover(
                         candidate,
-                        ShellPolicyCoverageSource.ApprovalExemptSideEffect);
+                        ShellCoverageKind.ApprovalExemptSideEffect);
                 }
             }
             cancellationToken.ThrowIfCancellationRequested();
@@ -488,7 +489,7 @@ internal sealed class ShellPolicyCoordinator(
 
             evaluation.Cover(
                 candidate,
-                ShellPolicyCoverageSource.ReviewedSafeReal);
+                ShellCoverageKind.ReviewedSafeReal);
         }
 
         foreach (var candidate in evaluation.Candidates)
@@ -512,7 +513,7 @@ internal sealed class ShellPolicyCoordinator(
 
             evaluation.Cover(
                 candidate,
-                ShellPolicyCoverageSource.ReviewedSafeIntent);
+                ShellCoverageKind.ReviewedSafeIntent);
         }
     }
 
@@ -555,7 +556,7 @@ internal sealed class ShellPolicyCoordinator(
             if (hasExactOneTimeApproval)
             {
                 foreach (var candidate in remaining)
-                    evaluation.Cover(candidate, ShellPolicyCoverageSource.OneTime);
+                    evaluation.Cover(candidate, ShellCoverageKind.OneTime);
 
                 cancellationToken.ThrowIfCancellationRequested();
                 return evaluation.Complete(

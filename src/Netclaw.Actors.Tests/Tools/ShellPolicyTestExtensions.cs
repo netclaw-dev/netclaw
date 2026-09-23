@@ -15,5 +15,14 @@ internal static class ShellPolicyTestExtensions
         INetclawTool tool,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments = null)
-        => policy.AuthorizeShellPreflight(tool, context, arguments).Decision;
+        => policy.AuthorizeShellPreflight(tool, context, arguments).GetDecision();
+
+    internal static ToolAuthorizationDecision GetDecision(this ShellPolicyPreflightResult result)
+        => result switch
+        {
+            ShellPolicyPreflightResult.Complete complete => complete.Result.Decision,
+            ShellPolicyPreflightResult.Continue continuation =>
+                ToolAuthorizationDecision.RequiresApproval(continuation.ApprovalContext),
+            _ => throw new ArgumentOutOfRangeException(nameof(result))
+        };
 }

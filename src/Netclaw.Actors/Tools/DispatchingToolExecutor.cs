@@ -199,14 +199,22 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         {
             var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
             var tool = authorized.Tool;
-            var result = tool is ShellTool shellTool
-                         && authorized.Authorization is ToolAuthorizationResult.ShellExecution shellAuthorization
-                ? await shellTool.ExecuteAuthorizedAsync(
-                    toolCall.Arguments,
-                    context.Invocation,
-                    CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
-                    ct)
-                : await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct);
+            var result = (tool, authorized.Authorization) switch
+            {
+                (ShellTool shellTool, ToolAuthorizationResult.ShellExecution shellAuthorization) =>
+                    await shellTool.ExecuteAuthorizedAsync(
+                        toolCall.Arguments,
+                        context.Invocation,
+                        CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
+                        ct),
+                (ShellTool shellTool, ToolAuthorizationResult.ShellValidation) =>
+                    shellTool.ValidateUnanalyzedArguments(toolCall.Arguments),
+                (ShellTool, _) => throw new InvalidOperationException(
+                    "Shell execution requires an authorized analysis or a validation result."),
+                (_, ToolAuthorizationResult.DirectExecution) =>
+                    await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct),
+                _ => throw new InvalidOperationException("Unsupported tool authorization result.")
+            };
 
             context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
 
@@ -320,14 +328,22 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         }
 
         var tool = authorized.Tool;
-        var updates = tool is ShellTool shellTool
-                      && authorized.Authorization is ToolAuthorizationResult.ShellExecution shellAuthorization
-            ? shellTool.ExecuteAuthorizedStreamAsync(
-                toolCall.Arguments,
-                context.Invocation,
-                CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
-                ct)
-            : tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct);
+        var updates = (tool, authorized.Authorization) switch
+        {
+            (ShellTool shellTool, ToolAuthorizationResult.ShellExecution shellAuthorization) =>
+                shellTool.ExecuteAuthorizedStreamAsync(
+                    toolCall.Arguments,
+                    context.Invocation,
+                    CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
+                    ct),
+            (ShellTool shellTool, ToolAuthorizationResult.ShellValidation) =>
+                SingleCompletion(shellTool.ValidateUnanalyzedArguments(toolCall.Arguments)),
+            (ShellTool, _) => throw new InvalidOperationException(
+                "Shell execution requires an authorized analysis or a validation result."),
+            (_, ToolAuthorizationResult.DirectExecution) =>
+                tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct),
+            _ => throw new InvalidOperationException("Unsupported tool authorization result.")
+        };
         var sw = Stopwatch.StartNew();
         await foreach (var update in updates)
         {
@@ -359,6 +375,12 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                     break;
             }
         }
+    }
+
+    private static async IAsyncEnumerable<ToolCallUpdate> SingleCompletion(string result)
+    {
+        await Task.CompletedTask;
+        yield return new ToolCompletedUpdate(result);
     }
 
     private static void CompleteExceptionOutcome(
@@ -497,7 +519,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
         var authorizationDecision = accessDecision.WithApprovalMatches(approvalMatches);
         LogAuthorizationDecision(toolCall, context, authorizationDecision);
-        return ToolAuthorizationResult.Create(authorizationDecision, authorizedAnalysis: null);
+        return ToolAuthorizationResult.CreateDirect(authorizationDecision);
     }
 
     public async Task<ShellProcessLaunch> PrepareShellLaunchAsync(
@@ -608,7 +630,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         {
             var check = candidateChecks[index];
             var checkedCandidate = checkedCandidates[index];
-            if (!HasSameCandidateFacts(check.Candidate, checkedCandidate))
+            if (!checkedCandidate.HasSameApprovalFacts(check.Candidate))
                 return false;
 
             if (check.ApprovedMatch is { } approvedMatch)
@@ -631,18 +653,6 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         unapprovedCandidates = exactUnapprovedCandidates;
         return true;
     }
-
-    private static bool HasSameCandidateFacts(
-        ApprovalCandidate first,
-        ApprovalCandidate second) =>
-        string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
-        string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
-        first.Shell == second.Shell &&
-        first.AssignmentDigest == second.AssignmentDigest &&
-        ((first.VerbTokens is null && second.VerbTokens is null) ||
-         (first.VerbTokens is not null &&
-          second.VerbTokens is not null &&
-          first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
 
     private void LogAuthorizationDecision(
         FunctionCallContent toolCall,

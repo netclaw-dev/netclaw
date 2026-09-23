@@ -130,9 +130,7 @@ internal sealed class ShellApprovalMatchResult
 
         if (persistentStoreFailure is not null
             && candidateSnapshot.Any(static candidate =>
-                candidate.Coverage is ShellCoverageKind.PersistentGlobal
-                    or ShellCoverageKind.PersistentFolder
-                    or ShellCoverageKind.PersistentRepository
+                candidate.HasPersistentEvidence
                 || candidate.NearMiss is not null))
         {
             throw new ArgumentException("An unavailable approval store cannot supply persistent evidence.");
@@ -150,12 +148,12 @@ internal sealed class ShellGrantCandidateResult
 
     private ShellGrantCandidateResult(
         ShellGrantCandidate sourceCandidate,
-        bool sessionGrant,
+        ShellCoverageKind coverage,
         ApprovalEntry? persistentGrant,
         ShellApprovalNearMiss? nearMiss)
     {
         SourceCandidate = sourceCandidate;
-        IsSessionGrant = sessionGrant;
+        Coverage = coverage;
         _persistentGrant = persistentGrant;
         NearMiss = nearMiss;
     }
@@ -164,19 +162,11 @@ internal sealed class ShellGrantCandidateResult
 
     private ShellGrantCandidate SourceCandidate { get; }
 
-    private bool IsSessionGrant { get; }
-
     internal ShellApprovalNearMiss? NearMiss { get; }
 
-    internal ShellCoverageKind Coverage => _persistentGrant is { } grant
-        ? grant.Repository is not null
-            ? ShellCoverageKind.PersistentRepository
-            : grant.Directory is null
-                ? ShellCoverageKind.PersistentGlobal
-                : ShellCoverageKind.PersistentFolder
-        : IsSessionGrant
-            ? ShellCoverageKind.Session
-            : ShellCoverageKind.Uncovered;
+    internal ShellCoverageKind Coverage { get; }
+
+    internal bool HasPersistentEvidence => _persistentGrant is not null;
 
     internal DateTimeOffset? GrantCreatedAt => _persistentGrant?.CreatedAt;
 
@@ -190,7 +180,7 @@ internal sealed class ShellGrantCandidateResult
             : ValidateNearMiss(candidate, nearMiss);
         return new ShellGrantCandidateResult(
             candidate,
-            sessionGrant: false,
+            ShellCoverageKind.Uncovered,
             persistentGrant: null,
             validatedNearMiss);
     }
@@ -200,7 +190,7 @@ internal sealed class ShellGrantCandidateResult
         ArgumentNullException.ThrowIfNull(candidate);
         return new ShellGrantCandidateResult(
             candidate,
-            sessionGrant: true,
+            ShellCoverageKind.Session,
             persistentGrant: null,
             nearMiss: null);
     }
@@ -216,12 +206,14 @@ internal sealed class ShellGrantCandidateResult
                 candidate.RealDirectory,
                 [validatedGrant]))
         {
-            throw new ArgumentException("The persistent grant does not match its shell candidate.", nameof(grant));
+            throw new ArgumentException(
+                "The persistent grant does not match its shell candidate.",
+                nameof(grant));
         }
 
         return new ShellGrantCandidateResult(
             candidate,
-            sessionGrant: false,
+            PersistentCoverage(validatedGrant),
             validatedGrant,
             nearMiss: null);
     }
@@ -234,9 +226,7 @@ internal sealed class ShellGrantCandidateResult
                 SourceCandidate.RealDirectory,
                 candidate.RealDirectory,
                 StringComparison.Ordinal)
-            || !HasSameCandidateFacts(
-                SourceCandidate.Candidate,
-                candidate.Candidate))
+            || !SourceCandidate.Candidate.HasSameApprovalFacts(candidate.Candidate))
         {
             return false;
         }
@@ -266,6 +256,13 @@ internal sealed class ShellGrantCandidateResult
             _ => throw new InvalidOperationException("An uncovered candidate has no approval match."),
         };
     }
+
+    private static ShellCoverageKind PersistentCoverage(ApprovalEntry grant)
+        => grant.Repository is not null
+            ? ShellCoverageKind.PersistentRepository
+            : grant.Directory is null
+                ? ShellCoverageKind.PersistentGlobal
+                : ShellCoverageKind.PersistentFolder;
 
     private static ShellApprovalNearMiss ValidateNearMiss(
         ShellGrantCandidate candidate,
@@ -312,15 +309,4 @@ internal sealed class ShellGrantCandidateResult
         return grant;
     }
 
-    private static bool HasSameCandidateFacts(
-        ApprovalCandidate first,
-        ApprovalCandidate second) =>
-        string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
-        string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
-        first.Shell == second.Shell &&
-        first.AssignmentDigest == second.AssignmentDigest &&
-        ((first.VerbTokens is null && second.VerbTokens is null) ||
-         (first.VerbTokens is not null &&
-          second.VerbTokens is not null &&
-          first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
 }

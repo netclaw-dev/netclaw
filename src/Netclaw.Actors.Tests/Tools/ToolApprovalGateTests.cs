@@ -107,12 +107,12 @@ public sealed class ToolApprovalGateTests
             args);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        var decision = complete.Decision;
+        var execution = Assert.IsType<ToolAuthorizationResult.ShellExecution>(complete.Result);
+        var decision = execution.Decision;
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
-        Assert.NotNull(complete.AuthorizedAnalysis);
-        Assert.Equal("git push", complete.AuthorizedAnalysis.Source);
+        Assert.Equal("git push", execution.Analysis.Source);
     }
 
     [Fact]
@@ -127,10 +127,28 @@ public sealed class ToolApprovalGateTests
             args);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        Assert.True(complete.Decision.Allowed);
-        Assert.False(complete.Decision.NeedsApproval);
-        Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
-        Assert.NotNull(complete.AuthorizedAnalysis);
+        var execution = Assert.IsType<ToolAuthorizationResult.ShellExecution>(complete.Result);
+        Assert.True(execution.Decision.Allowed);
+        Assert.False(execution.Decision.NeedsApproval);
+        Assert.Equal(ToolAllowReason.PolicyAuto, execution.Decision.AllowReason);
+    }
+
+    [Fact]
+    public void Shell_preflight_rejects_direct_tool_execution()
+    {
+        var direct = new ToolAuthorizationResult.DirectExecution(
+            ToolAuthorizationDecision.Allow(ToolAllowReason.PolicyAuto));
+
+        Assert.Throws<ArgumentException>(() => new ShellPolicyPreflightResult.Complete(direct));
+    }
+
+    [Fact]
+    public void Shell_validation_cannot_execute_a_late_command()
+    {
+        var shell = Assert.IsType<Netclaw.Actors.Tools.ShellTool>(ShellTool());
+
+        Assert.Throws<InvalidOperationException>(() =>
+            shell.ValidateUnanalyzedArguments(ToolInput.Create("Command", "git status")));
     }
 
     [Theory]
@@ -149,8 +167,8 @@ public sealed class ToolApprovalGateTests
             arguments);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        Assert.True(complete.Decision.NeedsApproval);
-        Assert.Null(complete.AuthorizedAnalysis);
+        Assert.True(complete.Result.Decision.NeedsApproval);
+        Assert.IsType<ToolAuthorizationResult.Stopped>(complete.Result);
     }
 
     [Theory]

@@ -1700,7 +1700,7 @@ public partial class DispatchingToolExecutorTests
         for (var index = 0; index < 300; index++)
         {
             builder.AddCoverage(
-                ShellPolicyCoverageSource.ReviewedSafeReal,
+                ShellCoverageKind.ReviewedSafeReal,
                 new ShellPolicyCandidate(
                     new ShellPolicyCandidateId(index),
                     BashCandidate($"/usr/bin/tool-{index}"),
@@ -1756,7 +1756,7 @@ public partial class DispatchingToolExecutorTests
         var executor = CreateApprovalGatedShellExecutor(logger: logger);
         var builder = new ShellPolicyDecisionTraceBuilder();
         builder.AddCoverage(
-                ShellPolicyCoverageSource.ReviewedSafeReal,
+                ShellCoverageKind.ReviewedSafeReal,
             new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(0),
                 BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
@@ -1849,15 +1849,27 @@ public partial class DispatchingToolExecutorTests
             expected.CandidateId,
             BashCandidate("git status"),
             RealDirectory: null);
-        var grant = ApprovalEntry.CreateTokenPrefix(
-            ApprovalShell.Bash,
-            ["git", "status"]);
-        var foreignResult = ShellGrantCandidateResult.Persistent(foreign, grant);
+        var foreignResult = ShellGrantCandidateResult.Session(foreign);
 
         Assert.Throws<ArgumentException>(() => ShellApprovalMatchResult.Create(
             [expected],
             persistentStoreFailure: null,
             [foreignResult]));
+    }
+
+    [Fact]
+    public void Persistent_shell_result_rejects_a_grant_for_another_candidate()
+    {
+        var candidate = new ShellGrantCandidate(
+            new ShellPolicyCandidateId(0),
+            BashCandidate("git push"),
+            RealDirectory: null);
+        var grant = ApprovalEntry.CreateTokenPrefix(
+            ApprovalShell.Bash,
+            ["git", "status"]);
+
+        Assert.Throws<ArgumentException>(() =>
+            ShellGrantCandidateResult.Persistent(candidate, grant));
     }
 
     [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]

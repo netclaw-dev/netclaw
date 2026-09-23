@@ -494,7 +494,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
 
         var preflight = policy.AuthorizeShellPreflight(shellTool, context, arguments);
         if (preflight is not ShellPolicyPreflightResult.Continue continuation)
-            return preflight.Decision;
+            return preflight.GetDecision();
 
         var correction = policy.EvaluateShellTemporaryCorrection(
             continuation.Analysis,
@@ -502,7 +502,7 @@ public sealed class TemporaryPathCorrectionPolicyTests
             arguments,
             context.Invocation);
         return correction is null
-            ? preflight.Decision
+            ? preflight.GetDecision()
             : ToolAuthorizationDecision.RequireAgentCorrection(correction);
     }
 

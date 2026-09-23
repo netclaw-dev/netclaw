@@ -36,6 +36,7 @@ namespace Netclaw.Actors.Tools;
 public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
 {
     public const string ToolName = "shell_execute";
+    private const string MissingCommandError = "Error: 'command' parameter is required.";
 
     // The required execution context carries the session default or the
     // agent's validated _timeout_seconds hint as a semantic value.
@@ -91,6 +92,17 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         return await ExecuteCoreAsync(args, context, launch, ct);
     }
 
+    internal string ValidateUnanalyzedArguments(IDictionary<string, object?>? arguments)
+    {
+        if (!TryParse(arguments, out var error, out var args))
+            return error;
+
+        if (string.IsNullOrWhiteSpace(args.Command))
+            return MissingCommandError;
+
+        throw new InvalidOperationException("Unanalyzed shell input cannot execute.");
+    }
+
     private async Task<string> ExecuteCoreAsync(
         Params args,
         ToolInvocationContext context,
@@ -98,7 +110,7 @@ public sealed partial class ShellTool : NetclawTool<ShellTool.Params>
         CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(args.Command))
-            return "Error: 'command' parameter is required.";
+            return MissingCommandError;
 
         var launch = authorizedLaunch ?? CreateDirectLaunch(args.Command, args.WorkingDirectory, context);
         var effectiveTimeout = context.ExecutionTimeout.Value;

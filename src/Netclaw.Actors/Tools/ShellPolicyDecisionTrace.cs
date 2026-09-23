@@ -105,18 +105,9 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ShellPolicyCandidate candidate,
         ShellGrantCandidateResult actorMatch)
     {
-        var coverage = actorMatch.Coverage;
-        if (coverage != ShellCoverageKind.Uncovered)
+        if (actorMatch.Coverage != ShellCoverageKind.Uncovered)
         {
-            AddDetail(new ShellPolicyTraceRow(
-                ShellPolicyTraceStage.StoredGrantMatch,
-                ShellPolicyTraceOutcome.Covered,
-                ToTraceReason(coverage),
-                candidate.Id,
-                GetExecutableBasename(candidate.Candidate),
-                coverage,
-                ToScopeRelation(coverage),
-                actorMatch.GrantCreatedAt));
+            AddCoverage(actorMatch.Coverage, candidate, actorMatch.GrantCreatedAt);
             return;
         }
 
@@ -141,53 +132,53 @@ internal sealed class ShellPolicyDecisionTraceBuilder
     }
 
     internal void AddCoverage(
-        ShellPolicyCoverageSource source,
+        ShellCoverageKind coverage,
         ShellPolicyCandidate candidate,
         DateTimeOffset? grantTimestamp = null)
     {
-        var (stage, coverage, reason, scope) = source switch
+        var (stage, displayCoverage, reason, scope) = coverage switch
         {
-            ShellPolicyCoverageSource.OneTime => (
+            ShellCoverageKind.OneTime => (
                 ShellPolicyTraceStage.OneTimeApproval,
                 ShellCoverageKind.OneTime,
                 ShellPolicyTraceReason.OneTimeGrant,
                 ShellScopeRelation.None),
-            ShellPolicyCoverageSource.Session => (
+            ShellCoverageKind.Session => (
                 ShellPolicyTraceStage.StoredGrantMatch,
                 ShellCoverageKind.Session,
                 ShellPolicyTraceReason.SessionGrant,
                 ShellScopeRelation.ThisChat),
-            ShellPolicyCoverageSource.PersistentGlobal => (
+            ShellCoverageKind.PersistentGlobal => (
                 ShellPolicyTraceStage.StoredGrantMatch,
                 ShellCoverageKind.PersistentGlobal,
                 ShellPolicyTraceReason.PersistentGlobalGrant,
                 ShellScopeRelation.Global),
-            ShellPolicyCoverageSource.PersistentFolder => (
+            ShellCoverageKind.PersistentFolder => (
                 ShellPolicyTraceStage.StoredGrantMatch,
                 ShellCoverageKind.PersistentFolder,
                 ShellPolicyTraceReason.PersistentFolderGrant,
                 ShellScopeRelation.UnderGrantRoot),
-            ShellPolicyCoverageSource.PersistentRepository => (
+            ShellCoverageKind.PersistentRepository => (
                 ShellPolicyTraceStage.StoredGrantMatch,
                 ShellCoverageKind.PersistentRepository,
                 ShellPolicyTraceReason.PersistentRepositoryGrant,
                 ShellScopeRelation.SameRepository),
-            ShellPolicyCoverageSource.ReviewedSafeReal => (
+            ShellCoverageKind.ReviewedSafeReal => (
                 ShellPolicyTraceStage.ReviewedSafePolicy,
                 ShellCoverageKind.ReviewedSafePolicy,
                 ShellPolicyTraceReason.ReviewedSafePhrase,
                 ShellScopeRelation.UnderRealRoot),
-            ShellPolicyCoverageSource.ReviewedSafeIntent => (
+            ShellCoverageKind.ReviewedSafeIntent => (
                 ShellPolicyTraceStage.ReviewedSafePolicy,
                 ShellCoverageKind.ReviewedSafePolicy,
                 ShellPolicyTraceReason.ReviewedSafePhrase,
                 ShellScopeRelation.UnderIntentRoot),
-            ShellPolicyCoverageSource.ApprovalExemptSideEffect => (
+            ShellCoverageKind.ApprovalExemptSideEffect => (
                 ShellPolicyTraceStage.ReviewedSafePolicy,
                 ShellCoverageKind.ReviewedSafePolicy,
                 ShellPolicyTraceReason.ApprovalExemptSideEffect,
                 ShellScopeRelation.None),
-            _ => throw new ArgumentOutOfRangeException(nameof(source))
+            _ => throw new ArgumentOutOfRangeException(nameof(coverage))
         };
         AddDetail(new ShellPolicyTraceRow(
             stage,
@@ -195,7 +186,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             reason,
             candidate.Id,
             GetExecutableBasename(candidate.Candidate),
-            coverage,
+            displayCoverage,
             scope,
             grantTimestamp));
     }
@@ -332,15 +323,6 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         return SanitizeText(basename);
     }
 
-    private static ShellPolicyTraceReason ToTraceReason(ShellCoverageKind coverage) => coverage switch
-    {
-        ShellCoverageKind.Session => ShellPolicyTraceReason.SessionGrant,
-        ShellCoverageKind.PersistentGlobal => ShellPolicyTraceReason.PersistentGlobalGrant,
-        ShellCoverageKind.PersistentFolder => ShellPolicyTraceReason.PersistentFolderGrant,
-        ShellCoverageKind.PersistentRepository => ShellPolicyTraceReason.PersistentRepositoryGrant,
-        _ => ShellPolicyTraceReason.None,
-    };
-
     private static ShellPolicyTraceReason ToTraceReason(ShellApprovalNearMissReason reason) => reason switch
     {
         ShellApprovalNearMissReason.OutsideDirectory => ShellPolicyTraceReason.OutsideDirectory,
@@ -368,15 +350,6 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         "approval_store_unavailable" => ShellPolicyTraceReason.ApprovalStoreUnavailable,
         "internal_policy_failure" => ShellPolicyTraceReason.InternalPolicyFailure,
         _ => ShellPolicyTraceReason.PolicyDenied,
-    };
-
-    private static ShellScopeRelation ToScopeRelation(ShellCoverageKind coverage) => coverage switch
-    {
-        ShellCoverageKind.Session => ShellScopeRelation.ThisChat,
-        ShellCoverageKind.PersistentGlobal => ShellScopeRelation.Global,
-        ShellCoverageKind.PersistentFolder => ShellScopeRelation.UnderGrantRoot,
-        ShellCoverageKind.PersistentRepository => ShellScopeRelation.SameRepository,
-        _ => ShellScopeRelation.None,
     };
 
     private static ShellScopeRelation ToScopeRelation(ShellApprovalNearMiss nearMiss)

@@ -62,7 +62,7 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
             var expected = candidates[index];
             var check = checks[index]
                 ?? throw new InvalidOperationException("The approval service returned a null candidate check.");
-            if (!HasSameCandidateFacts(check.Candidate, expected.Candidate))
+            if (!expected.Candidate.HasSameApprovalFacts(check.Candidate))
                 throw new InvalidOperationException("The approval service changed candidate facts.");
 
             if (check.ApprovedMatch is not { } approvedMatch)
@@ -150,15 +150,4 @@ internal sealed class ShellApprovalEvidenceAdapter(IToolApprovalService? approva
             result.Candidates);
     }
 
-    private static bool HasSameCandidateFacts(
-        ApprovalCandidate first,
-        ApprovalCandidate second) =>
-        string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
-        string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
-        first.Shell == second.Shell &&
-        first.AssignmentDigest == second.AssignmentDigest &&
-        ((first.VerbTokens is null && second.VerbTokens is null) ||
-         (first.VerbTokens is not null &&
-          second.VerbTokens is not null &&
-          first.VerbTokens.SequenceEqual(second.VerbTokens, StringComparer.Ordinal)));
 }
