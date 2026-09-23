@@ -42,9 +42,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Equal(testCase.Expected.Outcome, observed.Outcome);
         Assert.Equal(testCase.Expected.AllowReason, observed.AllowReason);
         Assert.Equal(testCase.Expected.DenyReason, observed.DenyReason);
-        Assert.Equal(testCase.Expected.Candidates, observed.CandidateVerbs);
-        Assert.Equal(testCase.Expected.IsMessy, observed.IsMessy);
-        Assert.Equal(testCase.Expected.ApprovalChecks, harness.ApprovalService.CheckCount);
+        Assert.Equal(testCase.Expected.Candidates, observed.Prompt?.CandidateVerbs ?? []);
+        Assert.Equal(testCase.Expected.IsMessy, observed.Prompt?.IsMessy);
+        Assert.Equal(testCase.Expected.ApprovalChecks, observed.ApprovalChecks);
         Assert.Equal(testCase.Expected.ApprovalMatches, observed.ApprovalMatches);
     }
 
@@ -60,7 +60,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             "interactive-reviewed-safe-allows",
             invocation,
             Approvals.None,
-            ExpectedApproval.Allow(ToolAllowReason.ReviewedSafePolicy)));
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             new ShellApprovalInvocation("git status", Interactive: false),
             Approvals.PersistentAnywhere("git status"),
             ExpectedApproval.Allow(
-                ToolAllowReason.StoredApproval,
+                ApprovalAllowReason.StoredApproval,
                 1,
                 "persistent:git status")));
 
@@ -607,10 +607,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
         var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, observed.Outcome);
-        Assert.Equal(expectedCandidates.Split('|'), observed.CandidateVerbs);
-        Assert.False(observed.IsMessy);
-        Assert.Equal(1, harness.ApprovalService.CheckCount);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
+        Assert.False(observed.Prompt?.IsMessy);
+        Assert.Equal(1, observed.ApprovalChecks);
     }
 
     [Fact]
