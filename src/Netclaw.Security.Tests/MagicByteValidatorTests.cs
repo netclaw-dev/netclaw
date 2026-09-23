@@ -113,6 +113,7 @@ public sealed class MagicByteValidatorTests
     [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.wordprocessingml.document", "report.docx")]
     [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "budget.xlsx")]
     [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.presentationml.presentation", "slides.pptx")]
+    [InlineData(nameof(ZipHeader), "application/vnd.openxmlformats-officedocument.presentationml.template", "master.potx")]
     [InlineData(nameof(ZipHeader), "application/vnd.oasis.opendocument.text", "notes.odt")]
     [InlineData(nameof(OleHeader), "application/msword", "legacy.doc")]
     [InlineData(nameof(OleHeader), "application/vnd.ms-excel", "legacy.xls")]
