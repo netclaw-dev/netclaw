@@ -19,13 +19,16 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Error_result_is_surfaced_as_an_attributed_tool_error()
     {
+        // Arrange
         // What the MCP SDK hands back when a tool sets isError=true: the whole
         // CallToolResult serialized. Without this formatting the model would see
         // the raw JSON blob and could not tell it from a netclaw failure (#1495).
         var result = Json("""{"content":[{"type":"text","text":"old_string not found"}],"isError":true}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "memorizer/edit");
 
+        // Assert
         Assert.StartsWith("Error: MCP tool 'memorizer/edit' reported a failure:", message);
         Assert.Contains("old_string not found", message);
         Assert.DoesNotContain("isError", message);
@@ -34,10 +37,13 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Error_result_with_multiple_text_blocks_joins_them()
     {
+        // Arrange
         var result = Json("""{"content":[{"type":"text","text":"line one"},{"type":"text","text":"line two"}],"isError":true}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Contains("line one", message);
         Assert.Contains("line two", message);
     }
@@ -45,12 +51,15 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Error_detail_falls_back_to_structured_content_when_no_text_block()
     {
+        // Arrange
         // The error's actionable detail lives in structuredContent with no text
         // block — a bare content[].text scan would drop it and report "no detail".
         var result = Json("""{"content":[],"structuredContent":{"field":"name","reason":"required"},"isError":true}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Contains("reported a failure", message);
         Assert.Contains("required", message);
         Assert.DoesNotContain("no detail provided", message);
@@ -59,27 +68,33 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Error_result_without_any_detail_reports_no_detail()
     {
+        // Arrange
         var result = Json("""{"content":[],"isError":true}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Contains("no detail provided", message);
     }
 
     [Fact]
     public void Typed_error_completes_a_transient_failure_receipt()
     {
+        // Arrange
         var result = Json("""{"content":[{"type":"text","text":"declared failure"}],"isError":true}""");
         var context = TestToolExecutionContext.CreateBound(
             "test/thread",
             null,
             TrustAudience.Personal);
 
+        // Act
         var message = McpToolResultFormatter.FormatWithReceipt(
             result,
             "srv/tool",
             context.Invocation);
 
+        // Assert
         Assert.Contains("declared failure", message);
         Assert.Equal(ToolInvocationOutcomeCategory.TransientFailure, context.Receipt?.Category);
         Assert.IsType<ToolInvocationReceipt.OtherOutcome>(context.Receipt);
@@ -88,17 +103,20 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Error_prefix_with_typed_success_keeps_the_success_path()
     {
+        // Arrange
         var result = Json("""{"content":[{"type":"text","text":"Error: this is data"}],"isError":false}""");
         var context = TestToolExecutionContext.CreateBound(
             "test/thread",
             null,
             TrustAudience.Personal);
 
+        // Act
         var message = McpToolResultFormatter.FormatWithReceipt(
             result,
             "srv/tool",
             context.Invocation);
 
+        // Assert
         Assert.Equal("Error: this is data", message);
         Assert.Null(context.Receipt);
     }
@@ -106,12 +124,15 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Structured_success_surfaces_clean_text_not_the_wrapper()
     {
+        // Arrange
         // Success WITH structuredContent is also serialized to a full
         // CallToolResult; surface the readable text, not the isError:false wrapper.
         var result = Json("""{"content":[{"type":"text","text":"42 results found"}],"structuredContent":{"count":42},"isError":false}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Equal("42 results found", message);
         Assert.DoesNotContain("isError", message);
         Assert.DoesNotContain("reported a failure", message);
@@ -120,10 +141,13 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Structured_success_without_text_surfaces_the_structured_content()
     {
+        // Arrange
         var result = Json("""{"content":[],"structuredContent":{"count":42},"isError":false}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Contains("42", message);
         Assert.DoesNotContain("reported a failure", message);
     }
@@ -131,10 +155,13 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Structured_success_with_image_preserves_marker_and_structured_content()
     {
+        // Arrange
         var result = Json("""{"content":[{"type":"image","data":"AQID","mimeType":"image/png"}],"structuredContent":{"caption":"critical detail"},"isError":false}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Equal("[image: image/png]\n{\"caption\":\"critical detail\"}", message);
         Assert.DoesNotContain("AQID", message);
     }
@@ -142,6 +169,7 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Metadata_success_projects_content_without_binary_data()
     {
+        // Arrange
         var result = Json("""
                           {
                             "content": [
@@ -152,8 +180,10 @@ public class McpToolResultFormatterTests
                           }
                           """);
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Equal("[image: image/png]", message);
         Assert.DoesNotContain("AQID", message);
         Assert.DoesNotContain("_meta", message);
@@ -185,8 +215,13 @@ public class McpToolResultFormatterTests
         string json,
         string expected)
     {
-        var message = McpToolResultFormatter.Format(Json(json), "srv/tool");
+        // Arrange
+        var result = Json(json);
 
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
         Assert.Equal(expected, message);
         Assert.DoesNotContain("SECRET", message);
     }
@@ -194,25 +229,47 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Success_without_model_readable_content_reports_that_state()
     {
+        // Arrange
         var result = Json("""{"content":[],"isError":false,"_meta":{"vendor/example":true}}""");
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Equal("MCP tool 'srv/tool' returned no model-readable content.", message);
         Assert.DoesNotContain("vendor/example", message);
     }
 
     [Fact]
     public void Plain_string_result_is_passed_through()
-        => Assert.Equal("Message sent.", McpToolResultFormatter.Format("Message sent.", "srv/tool"));
+    {
+        // Arrange
+        const string result = "Message sent.";
+
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal("Message sent.", message);
+    }
 
     [Fact]
     public void Null_result_is_empty()
-        => Assert.Equal(string.Empty, McpToolResultFormatter.Format(null, "srv/tool"));
+    {
+        // Arrange
+        object? result = null;
+
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal(string.Empty, message);
+    }
 
     [Fact]
     public void Multi_content_AIContent_array_projects_text_and_image_marker()
     {
+        // Arrange
         var chartJson = """{"title":"Example title","series":[]}""";
         var result = new AIContent[]
         {
@@ -220,8 +277,10 @@ public class McpToolResultFormatterTests
             new TextContent(chartJson),
         };
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/chart");
 
+        // Assert
         Assert.Equal($"[image: image/png]\n{chartJson}", message);
         Assert.DoesNotContain("AIContent", message);
     }
@@ -229,42 +288,72 @@ public class McpToolResultFormatterTests
     [Fact]
     public void Image_only_AIContent_array_projects_marker_only()
     {
+        // Arrange
         var result = new AIContent[] { new DataContent(Array.Empty<byte>(), "image/jpeg") };
 
-        Assert.Equal("[image: image/jpeg]", McpToolResultFormatter.Format(result, "srv/tool"));
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal("[image: image/jpeg]", message);
     }
 
     [Fact]
     public void Text_only_AIContent_array_projects_text()
     {
+        // Arrange
         var result = new AIContent[] { new TextContent("hello world") };
 
-        Assert.Equal("hello world", McpToolResultFormatter.Format(result, "srv/tool"));
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal("hello world", message);
     }
 
     [Fact]
     public void Single_TextContent_is_passed_through()
-        => Assert.Equal("done", McpToolResultFormatter.Format(new TextContent("done"), "srv/tool"));
+    {
+        // Arrange
+        var result = new TextContent("done");
+
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal("done", message);
+    }
 
     [Fact]
     public void Single_DataContent_projects_marker_without_binary_data()
     {
+        // Arrange
         var result = new DataContent(new byte[] { 1, 2, 3 }, "image/png");
 
-        Assert.Equal("[image: image/png]", McpToolResultFormatter.Format(result, "srv/tool"));
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal("[image: image/png]", message);
     }
 
     [Fact]
     public void Non_image_DataContent_projects_attachment_marker()
     {
+        // Arrange
         var result = new AIContent[] { new DataContent(new byte[] { 4, 5 }, "application/pdf") };
 
-        Assert.Equal("[attachment: application/pdf]", McpToolResultFormatter.Format(result, "srv/tool"));
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal("[attachment: application/pdf]", message);
     }
 
     [Fact]
     public void Unsupported_AIContent_is_reported_instead_of_dropped()
     {
+        // Arrange
         var result = new AIContent[]
         {
             new TextContent("before"),
@@ -273,8 +362,10 @@ public class McpToolResultFormatterTests
             new TextContent("after"),
         };
 
+        // Act
         var message = McpToolResultFormatter.Format(result, "srv/tool");
 
+        // Assert
         Assert.Equal(
             "before\n[unsupported MCP content: FunctionCallContent]" +
             "\n[unsupported MCP content: FunctionResultContent]\nafter",
