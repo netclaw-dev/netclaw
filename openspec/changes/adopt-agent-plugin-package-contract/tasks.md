@@ -48,6 +48,15 @@
 - [ ] 7.4 Run the behavioral eval suite and the native smoke harness with the required environment.
 - [x] 7.5 Run OpenSpec verification and record all remaining evidence limits before archive.
 
+## 8. Scoped plugin sync correction
+
+- [x] 8.1 Align PRD-004, SPEC-004, and OpenSpec with source-scoped and plugin-only passes.
+- [x] 8.2 Keep one sync actor and queue requests when the scope or retry policy differs.
+- [x] 8.3 Scope plugin lifecycle and update requests without a skill-server fetch.
+- [x] 8.4 Carry a plugin-only config mutation scope through an in-process daemon restart.
+- [x] 8.5 Test startup scope, unrelated config changes, source selection, route validation, and CLI requests.
+- [x] 8.6 Run the available quality gates and record the resulting evidence.
+
 ## Verification evidence limits
 
 - The full .NET suite passed 8,543 tests and skipped 22 environment-specific tests.
@@ -56,3 +65,8 @@
 - The native tapes cannot run because Chromium reports `No usable sandbox` in this container.
 - OpenSpec verification found no implementation or design divergence.
 - Task 7.4 remains incomplete until an eligible environment runs both blocked gates.
+- The scoped sync correction passed the full .NET solution test command.
+- The scoped daemon tests passed 49 cases, and the CLI command tests passed 36 cases.
+- The native plugin-management smoke scenario passed four checks.
+- Slopwatch found zero issues, file headers passed, and strict OpenSpec validation passed.
+- The eval provider type, endpoint, and model variables remain unset in this environment.

@@ -168,12 +168,22 @@ The CLI never writes plugin configuration on the client host.
 |---|---|
 | `netclaw plugin install <owner/repository> [options]` | Configure a source, restart the daemon, run a sync, and verify installation |
 | `netclaw plugin list [--json]` | List configured sources and installed package state |
-| `netclaw plugin update <source-id> [--retry-rejected]` | Run the shared sync pass and report one source result |
-| `netclaw plugin update --all [--retry-rejected]` | Run the shared sync pass and report all plugin results |
+| `netclaw plugin update <source-id> [--retry-rejected]` | Sync one plugin source and report its result |
+| `netclaw plugin update --all [--retry-rejected]` | Sync all plugin sources without a skill-server fetch |
 | `netclaw plugin enable <source-id>` | Enable a source and verify its installation |
 | `netclaw plugin disable <source-id>` | Disable a source and remove it from the live inventory |
 | `netclaw plugin remove <source-id>` | Remove a source and its durable sync state |
 | `netclaw skill sync --retry-rejected` | Retry rejected commits during the requested sync pass |
+
+Install, enable, disable, and remove request a pass for only the selected plugin source.
+The daemon refreshes the complete skill inventory after every scoped pass.
+`netclaw skill sync` still fetches skill servers and managed plugins.
+The shared actor coalesces only equal scopes and retry policies.
+It queues a request when either value differs from the active pass.
+The actor bounds distinct queued scopes and returns HTTP 503 when that queue is full.
+For a plugin-only config mutation, the restart signal records the source ID and config hash.
+The next startup pass uses that scope only when the config file still matches.
+If another config change occurs, startup uses a complete pass.
 
 The install command accepts `--branch`, `--tag`, or `--commit`.
 The operator can select only one reference option.
