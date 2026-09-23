@@ -70,7 +70,12 @@ public interface IStructuredToolApprovalService
 /// </summary>
 public sealed record ToolApprovalGrant(
     ApprovalCandidate Candidate,
-    string? Directory);
+    string? Directory)
+{
+    public string? Repository { get; init; }
+
+    public string? RepositoryWorktree { get; init; }
+}
 
 /// <summary>
 /// Approval-service session identity. Kept in the security layer because

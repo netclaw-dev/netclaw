@@ -34,6 +34,13 @@ tool access, and ambient channel behavior.
 - policy engine exception -> deny result
 - missing grant for requested tool/data -> deny result
 
+## Shell Approval Completeness
+
+Netclaw keeps static shell candidates reusable when an approval-exempt output command has a bare `$?` argument and no redirect.
+The parser must still account for every executable region. Unknown paths, redirects, and unapproved verbs keep their normal gates.
+
+See the [shell approval contract](../../openspec/specs/tool-approval-gates/spec.md) for the complete authority rules.
+
 ## Audit Events
 
 - policy allow/deny decision (with reason)

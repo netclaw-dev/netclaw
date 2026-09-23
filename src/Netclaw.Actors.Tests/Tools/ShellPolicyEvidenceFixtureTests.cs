@@ -6,6 +6,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -120,7 +121,56 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var liveCase = Assert.Single(
             catalog.LiveRegressionCases,
             item => item.PolicyCase.Id == caseId);
-        await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
+        var policyCase = liveCase.PolicyCase with
+        {
+            Expected = CurrentStaticScopeExpected(liveCase.PolicyCase)
+        };
+        await AssertPolicyCaseAsync(catalog, timeProvider, policyCase);
+    }
+
+    private static PolicyAdversarialExpected CurrentStaticScopeExpected(
+        PolicyAdversarialCase policyCase)
+    {
+        // The archived fixture keeps the prior exact-only result.
+        // These rows state the current finite-scope contract.
+        // macOS resolves /tmp through a link, so the redirect paths in L17 stay exact.
+        if (OperatingSystem.IsMacOS() && policyCase.Id == "L17")
+            return policyCase.Expected;
+
+        List<string>? candidates = policyCase.Id switch
+        {
+            "L12" => ["mkdir", "cd", "git clone"],
+            "L14" => ["cd", "git remote", "git fetch origin", "git fetch upstream"],
+            "L15" => ["cd", "find", "head"],
+            "L16" => ["cd", "git add", "git rebase"],
+            "L17" => ["cd", "git diff", "sort", "comm"],
+            "L18" => ["cd", "ls", "head"],
+            "L21" => ["cd", "git log", "grep"],
+            "L22" => ["cd", "python3"],
+            "L29" => ["cd", "docker compose config", "git diff"],
+            "L30" => ["cd", "sed", "git show"],
+            _ => null
+        };
+        if (candidates is null)
+            return policyCase.Expected;
+
+        var optionKeys = new List<string>
+        {
+            ApprovalOptionKeys.ApproveOnce,
+            ApprovalOptionKeys.ApproveSession
+        };
+        if (policyCase.Id is "L18" or "L21")
+            optionKeys.Add(ApprovalOptionKeys.ApproveAlways);
+        optionKeys.Add(ApprovalOptionKeys.ApproveEverywhere);
+        optionKeys.Add(ApprovalOptionKeys.Deny);
+
+        return policyCase.Expected with
+        {
+            ApprovalCandidates = candidates,
+            IsMessy = false,
+            OptionKeys = optionKeys,
+            ActorCheckCount = 1
+        };
     }
 
     [SlopwatchSuppress(
@@ -182,6 +232,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             + $"deny={decision.DenyReason}; "
             + $"candidates={string.Join(", ", decision.ApprovalContext?.CandidateVerbs ?? [])}; "
             + $"messy={decision.ApprovalContext?.IsMessy}; "
+            + $"options={string.Join(",", decision.ApprovalContext?.Options.Select(option => option.Key.Value) ?? [])}; "
             + $"correction={decision.AgentCorrection?.GetType().Name}; "
             + $"checks={harness.ApprovalService.CheckCount}; "
             + $"allow={decision.AllowReason}; "

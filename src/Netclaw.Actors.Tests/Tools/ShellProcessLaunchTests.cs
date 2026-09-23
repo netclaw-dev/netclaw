@@ -31,6 +31,39 @@ public sealed class ShellProcessLaunchTests
     }
 
     [Fact]
+    public void Launch_rejects_a_parent_directory_segment()
+    {
+        using var temp = new DisposableTempDir();
+        var directory = Path.Combine(temp.Path, "alias", "..");
+        var environment = TestShellEnvironment.Current;
+        var context = TestToolExecutionContext.CreateBound("launch/parent-segment", temp.Path, TrustAudience.Personal);
+
+        var error = Assert.Throws<ShellProcessStartException>(() => new ShellProcessLaunch(
+            "echo unexpected", directory, context.Invocation,
+            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []),
+            static _ => Task.CompletedTask));
+        Assert.Contains("parent traversal segments", error.Message);
+    }
+
+    [SlopwatchSuppress("SW001", "A POSIX directory name can contain a literal backslash.")]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "POSIX directory name semantics")]
+    public void Launch_accepts_a_literal_backslash_in_a_posix_directory()
+    {
+        using var temp = new DisposableTempDir();
+        var directory = Directory.CreateDirectory(Path.Combine(temp.Path, @"a\..\b"));
+        var environment = TestShellEnvironment.Current;
+        var context = TestToolExecutionContext.CreateBound("launch/literal-backslash", temp.Path, TrustAudience.Personal);
+
+        var launch = new ShellProcessLaunch(
+            "echo expected", directory.FullName, context.Invocation,
+            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, []),
+            static _ => Task.CompletedTask);
+
+        Assert.Equal(directory.FullName, launch.WorkingDirectory);
+    }
+
+    [Fact]
     public async Task Child_environment_remains_the_submission_snapshot()
     {
         using var directory = new DisposableTempDir();
@@ -80,6 +113,34 @@ public sealed class ShellProcessLaunchTests
 
         await Assert.ThrowsAsync<ShellProcessStartException>(() => launch.StartAsync(TestContext.Current.CancellationToken));
         Assert.False(File.Exists(Path.Combine(denied.FullName, "output.txt")));
+    }
+
+    [SlopwatchSuppress("SW001", "This test requires native POSIX symbolic-link behavior.")]
+    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsPosix),
+        Skip = "POSIX-only symbolic-link semantics")]
+    public async Task Final_start_rejects_a_link_in_a_projected_child_scope()
+    {
+        using var directory = new DisposableTempDir();
+        var child = Directory.CreateDirectory(Path.Combine(directory.Path, "sub"));
+        var nested = Directory.CreateDirectory(Path.Combine(child.FullName, "nested"));
+        var denied = Directory.CreateDirectory(Path.Combine(directory.Path, "denied"));
+        var environment = TestShellEnvironment.Current;
+        var context = TestToolExecutionContext.CreateBound("launch/projected-path", directory.Path,
+            TrustAudience.Personal);
+        var command = $"cd {child.FullName} && true; touch nested/marker.txt";
+        var launch = new ShellProcessLaunch(command, directory.Path, context.Invocation,
+            new ShellCommandPolicy(environment), new ToolPathPolicy(environment, [denied.FullName]), _ =>
+            {
+                Directory.Delete(nested.FullName);
+                Directory.CreateSymbolicLink(nested.FullName, denied.FullName);
+                return Task.CompletedTask;
+            });
+
+        var error = await Assert.ThrowsAsync<ToolAccessDeniedException>(() =>
+            launch.StartAsync(TestContext.Current.CancellationToken));
+
+        Assert.Equal("shell_launch_paths_changed", error.DenyReason);
+        Assert.False(File.Exists(Path.Combine(denied.FullName, "marker.txt")));
     }
 
     [SlopwatchSuppress("SW001", "This test uses the native Bash TCP redirection and process identifiers.")]

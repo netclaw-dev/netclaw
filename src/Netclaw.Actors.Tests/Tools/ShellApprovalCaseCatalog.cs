@@ -24,11 +24,16 @@ internal enum ApprovalDirectoryShape
     /// <summary>The case uses the active project directory.</summary>
     Project,
 
+    /// <summary>The case uses a child of the active project directory.</summary>
+    ProjectChild,
+
     /// <summary>The case uses the active session directory.</summary>
     Session,
 
     /// <summary>The case uses a directory outside the project and session roots.</summary>
-    External
+    External,
+    /// <summary>The grant uses registered worktrees of one Git repository.</summary>
+    Repository
 }
 
 /// <summary>
@@ -133,6 +138,9 @@ internal static class Approvals
 
     public static ApprovalState PersistentHere(ApprovalDirectoryShape directory, params string[] patterns)
         => CreatePersistent(TrustAudience.Personal, directory, patterns);
+
+    public static ApprovalState PersistentRepository(params string[] patterns)
+        => CreatePersistent(TrustAudience.Personal, ApprovalDirectoryShape.Repository, patterns);
 
     public static ApprovalState PersistentForOtherAudience(params string[] patterns)
         => CreatePersistent(TrustAudience.Team, ApprovalDirectoryShape.None, patterns);
@@ -473,7 +481,7 @@ public static class ShellApprovalCases
                 "persistent:gh run view")),
 
         Case(
-            "live-inline-cd-mixed-read-chain-remains-complex",
+            "live-inline-cd-mixed-read-chain-has-scoped-candidates",
             Bash(
                 "cd /work/netclaw-worktrees/fix-probe-timeout "
                 + "&& sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; "
@@ -482,7 +490,7 @@ public static class ShellApprovalCases
                 + "grep -rn \"ProbeTimeout\\|WaitForExitAsync\" "
                 + "src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null | head"),
             Approvals.None,
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["cd", "sed", "ls", "grep", "head"])),
 
         Case(
             "post-334cb4c-independent-read-batch-remains-complex",
@@ -493,13 +501,13 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["grep"])),
 
         Case(
-            "post-334cb4c-inline-cd-read-batch-remains-complex",
+            "post-334cb4c-inline-cd-read-batch-has-scoped-candidates",
             Bash(
                 "cd /work/project && git log --oneline -5 -- src/Alpha.cs "
                 + "&& grep -n \"Timeout\" src/Alpha.cs tests/AlphaTests.cs 2>/dev/null | head -5; "
                 + "cat Project.csproj"),
             Approvals.None,
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["cd", "git log", "grep", "head", "cat"])),
 
         Case(
             "live-typed-cwd-mixed-read-chain-prompts-for-sed-and-pattern",
@@ -868,6 +876,40 @@ public static class ShellApprovalCases
                 ApprovalDirectoryShape.External,
                 "ForEach-Object"),
             ExpectedApproval.Require(["ForEach-Object"])),
+        Case(
+            "powershell7-split-index-join-region-reuses-host-grant",
+            PowerShell7("Get-ChildItem | ForEach-Object { ($_ -split '/')[0..3] -join '/' }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "ForEach-Object"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:ForEach-Object")),
+        Case(
+            "powershell7-dynamic-split-index-join-region-stays-strict",
+            PowerShell7("Get-ChildItem | ForEach-Object { ($_ -split $separator)[0] -join '/' }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "ForEach-Object"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "powershell51-split-index-join-fallback-reuses-host-grant",
+            WindowsPowerShell51("Get-ChildItem | ForEach-Object { ($_ -split '/')[0..3] -join '/' }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "ForEach-Object"),
+            ExpectedApproval.Allow(
+                ToolAllowReason.StoredApproval,
+                1,
+                "persistent:ForEach-Object")),
+        Case(
+            "powershell51-dynamic-split-index-join-fallback-stays-strict",
+            WindowsPowerShell51("Get-ChildItem | ForEach-Object { ($_ -split $separator)[0] -join '/' }"),
+            Approvals.PersistentHere(
+                ApprovalDirectoryShape.Project,
+                "ForEach-Object"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "powershell7-method-expression-with-host-grant-stays-strict",
             PowerShell7("Get-ChildItem | ForEach-Object { $_.Delete() }"),
@@ -1469,6 +1511,21 @@ public static class ShellApprovalCases
             Bash("echo done"),
             Approvals.None,
             ExpectedApproval.Allow(ToolAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "unquoted-status-output-reuses-session-grant",
+            Bash("git push; echo $?"),
+            Approvals.Session("git push"),
+            ExpectedApproval.Allow(ToolAllowReason.StoredApproval, 1, "session:git push")),
+        Case(
+            "unquoted-status-output-prompts-for-unapproved-verb",
+            Bash("git push; echo $?"),
+            Approvals.None,
+            ExpectedApproval.Require(["git push"])),
+        Case(
+            "unquoted-status-output-redirect-remains-complex",
+            Bash("echo $? > /tmp/marker"),
+            Approvals.PersistentAnywhere("echo"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "control-flow-fails-closed",
             Bash("for f in *.txt; do cat \"$f\"; done"),

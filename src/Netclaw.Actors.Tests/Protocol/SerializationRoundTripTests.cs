@@ -825,6 +825,7 @@ public sealed class SerializationRoundTripTests : TestKit
             HasThirdPartyAdoptedContext = true,
             AdoptedSpeakerIds = ["U12345", "U-observer"],
             Cwd = "/home/user/project",
+            RepositoryCommonDirectory = "/home/user/project/.git",
             ManagedTemporaryDirectory = "/home/user/.netclaw/sessions/example/tmp/parent",
             OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.ApproveEverywhere, ApprovalOptionKeys.Deny],
             Candidates =
@@ -885,6 +886,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.HasThirdPartyAdoptedContext, result.HasThirdPartyAdoptedContext);
         Assert.Equal(wrapped.AdoptedSpeakerIds, result.AdoptedSpeakerIds);
         Assert.Equal(wrapped.Cwd, result.Cwd);
+        Assert.Equal(wrapped.RepositoryCommonDirectory, result.RepositoryCommonDirectory);
         Assert.Null(result.SessionScratchDirectory);
         Assert.Equal(wrapped.ManagedTemporaryDirectory, result.ManagedTemporaryDirectory);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
@@ -1016,6 +1018,7 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(wrapped.RequesterSenderId, result.RequesterSenderId);
         Assert.Equal(wrapped.RequesterPrincipal, result.RequesterPrincipal);
         Assert.Null(result.AuthorizationAttemptId);
+        Assert.Null(result.RepositoryCommonDirectory);
         Assert.Equal(wrapped.OptionKeys, result.OptionKeys);
         Assert.Null(result.TurnContext);
         Assert.Equal(wrapped.RequestedAtMs, result.RequestedAtMs);

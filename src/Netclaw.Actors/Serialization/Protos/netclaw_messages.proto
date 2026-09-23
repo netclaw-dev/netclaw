@@ -182,6 +182,7 @@ message ToolApprovalRequestedProto {
   optional string session_scratch_directory = 19;
   optional string authorization_attempt_id = 20;
   optional string managed_temporary_directory = 21;
+  optional string repository_common_directory = 22;
 }
 
 message ToolApprovalResolvedProto {

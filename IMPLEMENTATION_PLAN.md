@@ -260,6 +260,54 @@ Done when:
 **Surface area:** shell authorization, approval matching, security corpus
 **Verification:** L2
 
+#### Active delivery: complete compound scopes
+
+The `0.27.0-beta.4` session declared its project root. Later calls still used
+inline `cd` with a pipeline and later statements. ShellSyntaxTree parsed the
+source, but Netclaw lost reusable candidates after a directory join. The
+source also contains `rm`, `python3`, and `dotnet new install` prompts with no
+matching grant. Those prompts remain subject to approval.
+
+The approved contract is in
+`openspec/changes/reduce-complex-shell-approval-prompts/`. The goal is to
+reuse existing grants only when every reachable verb, directory, and path
+scope has proof. A parent folder grant covers descendants after each concrete
+path passes symlink and protected-path checks. A deep glob cannot use that
+rule without proof for every possible match.
+
+**Delivery:** Five reviewable PRs are planned. The first Netclaw PR adds a
+typed one-call directory correction and sanitized evidence. The second
+Netclaw PR adds conservative coverage for complete static compounds. The
+ShellSyntaxTree PR publishes bounded syntax facts, then tag
+`0.4.0-beta.3` publishes the public package. The fourth PR pins that
+package and consumes only proved facts. The user authorized automatic merge
+after CI and independent security review.
+The fifth PR adds an explicit repository grant for ordinary Git checkouts
+and their registered linked worktrees. Existing folder grants retain their
+path meaning. A main checkout with `--separate-git-dir` keeps folder scope.
+
+**Delivery evidence:** ShellSyntaxTree PR #184 merged. Its `0.4.0-beta.3`
+package passed the publish job and is available on NuGet. Netclaw PRs #2191,
+#2193, and #2194 merged after their CI checks passed. PR #2194 pins the public
+beta. PR #2195 adds the explicit repository grant and has passed local tests,
+focused mutants, native approval smoke, and independent authority review.
+Its final merge depends on CI for the branch after the PR #2194 merge.
+
+The full hosted eval for PR #2195 passed 73 of 91 cases, so that suite remains
+red. The isolated typed-directory case passed five of five runs. Several
+failed worktree cases used successful read-only `git -C` calls, which the
+typed-directory oracle rejects. The worktree creation case denied an
+unapproved `git worktree add`, as required. The live daemon still runs
+`0.27.0-beta.4`; these changes need a later Netclaw rollout.
+
+**Gates:** Prove both outcomes of a directory change, every pipeline stage,
+an ungranted verb, each possible path, redirects, hard denials, protected
+paths, symbolic links, audience and session boundaries, and exact retries.
+Run focused mutation tests at the authority boundary. Restore the public
+beta from NuGet before the fourth PR. Keep unknown syntax, runtime
+values, and deep globs under exact approval. Do not add executable-specific
+argument parsers to Netclaw.
+
 The user promoted this work into `NOW`. The work must reduce repeat prompts
 without allowing an incomplete or unknown shell form.
 
@@ -342,6 +390,11 @@ Done when:
   Release build, Security tests, Actors tests, Configuration tests, and 79
   focused mutants passed against the official package. The Netclaw beta
   remains unpublished.
+- [x] Adopt ShellSyntaxTree `0.4.0-beta.2` with analyzer and approval-catalog
+  coverage for bounded PowerShell split/index/join projections on PowerShell 7
+  and Windows PowerShell 5.1. Dynamic projection operands stay strict. The
+  public package restore, Release build, full test suite, and all 79 focused
+  shell-policy mutants pass.
 - [x] A prompt excludes a safe stage from the approval candidates that the user
   can persist.
 - [x] A prompt excludes candidates that existing session or persistent grants

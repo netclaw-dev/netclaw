@@ -15,6 +15,7 @@ public sealed class ToolCorrectionDeliveryTests
     private static readonly ToolCorrection.ManagedTemporaryDirectorySuggested Temporary = new(
         new ManagedTemporaryCorrectionTarget("/session/tmp", "/tmp"));
     private static readonly ToolCorrection.ProjectDirectorySuggested Project = new("/project");
+    private static readonly ToolCorrection.ShellWorkingDirectorySuggested ShellDirectory = new("/project/sub");
     private static readonly ManagedTemporaryCallSemantics.ShellCall Call = new(
         ApprovalShell.Bash, "printf result > /tmp/result.txt", "/tmp", false, TimeSpan.FromSeconds(30));
 
@@ -57,6 +58,17 @@ public sealed class ToolCorrectionDeliveryTests
     }
 
     [Fact]
+    public void One_call_directory_advice_does_not_arm_a_shell_retry_or_change_the_project()
+    {
+        var delivery = ToolCorrectionDelivery.Create(new ToolCorrectionCollection([ShellDirectory]), Call);
+
+        Assert.Equal(ToolRemediationCode.UseShellWorkingDirectory, delivery.Receipt.RemediationCode);
+        Assert.Contains(ShellDirectory.Directory, delivery.Content, StringComparison.Ordinal);
+        Assert.Null(delivery.NativeTool);
+        Assert.Null(delivery.ManagedTemporaryStateChange);
+    }
+
+    [Fact]
     public void Temporary_only_advice_arms_the_exact_call_and_target()
     {
         var delivery = ToolCorrectionDelivery.Create(new ToolCorrectionCollection([Temporary]), Call);
@@ -87,7 +99,8 @@ public sealed class ToolCorrectionDeliveryTests
             [Native, Temporary, Project],
             [Native, new ToolCorrection.NativeToolSuggested(new ToolName("file_read"))],
             [Temporary, new ToolCorrection.ManagedTemporaryDirectorySuggested(new ManagedTemporaryCorrectionTarget("/other/tmp", "/tmp"))],
-            [Project, new ToolCorrection.ProjectDirectorySuggested("/other/project")]
+            [Project, new ToolCorrection.ProjectDirectorySuggested("/other/project")],
+            [Project, ShellDirectory]
         ];
 
         foreach (var corrections in invalidCombinations)

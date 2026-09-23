@@ -72,6 +72,9 @@ public static class ToolApprovalEntryComparer
                 ? Equals(left.Verb, right.Verb, shell)
                 : Equals(left.Verb, right.Verb);
         return phraseMatches &&
+               Equals(
+                   NormalizeDirectory(left.Repository),
+                   NormalizeDirectory(right.Repository)) &&
                (left.Shell is { } directoryShell
                    ? Equals(
                        NormalizeDirectory(left.Directory, directoryShell),
@@ -139,13 +142,15 @@ public static class ToolApprovalEntryComparer
     public static ApprovalEntry Normalize(ApprovalEntry entry)
     {
         var normalizedDir = NormalizeDirectory(entry.Directory, entry.Shell);
+        var normalizedRepository = NormalizeDirectory(entry.Repository);
 
         var dirChanged = !string.Equals(normalizedDir, entry.Directory, StringComparison.Ordinal);
+        var repositoryChanged = !string.Equals(normalizedRepository, entry.Repository, StringComparison.Ordinal);
 
-        if (!dirChanged)
+        if (!dirChanged && !repositoryChanged)
             return entry;
 
-        return entry with { Directory = normalizedDir };
+        return entry with { Directory = normalizedDir, Repository = normalizedRepository };
     }
 
     private static bool TokenSequencesEqual(

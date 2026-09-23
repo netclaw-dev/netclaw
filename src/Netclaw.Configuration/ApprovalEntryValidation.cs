@@ -35,6 +35,19 @@ internal static class ApprovalEntryValidation
             }
         }
 
+        if (entry.Repository is not null)
+        {
+            ValidatePersistedString(entry.Repository, "repository", allowWhitespace: true);
+            if (entry.Directory is not null
+                || entry.Shell is null
+                || entry.Match != ApprovalMatchKind.TokenPrefix
+                || !IsCanonicalPosixAbsolutePath(entry.Repository)
+                   && !IsCanonicalWindowsAbsolutePath(entry.Repository))
+            {
+                throw new JsonException("A repository grant requires one canonical Git directory and a token-prefix shell phrase.");
+            }
+        }
+
         if (entry.Match is null && entry.Shell is null && entry.VerbTokens is null)
         {
             return;

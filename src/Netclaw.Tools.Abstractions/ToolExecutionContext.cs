@@ -35,7 +35,8 @@ internal enum ToolRemediationCode
     UseManagedTemporaryDirectory,
     ProvideUniqueOldString,
     UseNativeTool,
-    BreakToolCycle
+    BreakToolCycle,
+    UseShellWorkingDirectory
 }
 
 internal enum ToolFileActivityKind

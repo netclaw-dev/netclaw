@@ -173,7 +173,8 @@ internal static class ApprovalsCommand
                     {
                         exactTargets.Add(candidateTarget);
                     }
-                    else if (ScopeLabelEquals(entry, FormatLegacyScope(entry), opts.Pattern))
+                    else if (FormatLegacyScope(entry) is { } legacyScope
+                             && ScopeLabelEquals(entry, legacyScope, opts.Pattern))
                     {
                         legacyTargets.Add(candidateTarget);
                     }
@@ -215,10 +216,12 @@ internal static class ApprovalsCommand
         return 0;
     }
 
-    private static string FormatLegacyScope(ApprovalEntry entry) =>
-        entry.Directory is null
-            ? $"{entry.Verb} anywhere"
-            : $"{entry.Verb} in {entry.Directory}";
+    private static string? FormatLegacyScope(ApprovalEntry entry) =>
+        entry.Repository is not null
+            ? null
+            : entry.Directory is null
+                ? $"{entry.Verb} anywhere"
+                : $"{entry.Verb} in {entry.Directory}";
 
     private static bool ScopeLabelEquals(ApprovalEntry entry, string label, string supplied) =>
         entry.Shell is { } shell

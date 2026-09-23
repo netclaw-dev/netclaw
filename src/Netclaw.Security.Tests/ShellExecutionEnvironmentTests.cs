@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics;
 using ShellSyntaxTree;
 using Xunit;
 
@@ -182,5 +183,37 @@ public class ShellExecutionEnvironmentTests
 
         Assert.NotSame(first, second);
         Assert.Equal(["-c", "git diff"], second.ArgumentList);
+    }
+
+    [Fact]
+    public async Task Bash_startup_overrides_cannot_replace_an_authored_directory_change()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        var environment = ShellExecutionEnvironment.CreateBash(
+            OperatingSystem.IsMacOS() ? ShellPlatform.MacOS : ShellPlatform.Linux);
+        var startInfo = environment.CreateProcessStartInfo("cd / && pwd");
+        startInfo.Environment["BASH_ENV"] = "/dev/stdin";
+        startInfo.Environment["BASH_FUNC_cd%%"] = "() { builtin cd /tmp; }";
+        startInfo.Environment["SHELLOPTS"] = "physical";
+        startInfo.Environment["BASHOPTS"] = "lastpipe";
+        startInfo.Environment["POSIXLY_CORRECT"] = "y";
+        startInfo.Environment["BASH_COMPAT"] = "4.2";
+        startInfo.Environment["PATH"] = "/usr/bin:/bin";
+        ShellExecutionEnvironment.RemoveBashStartupOverrides(startInfo.Environment);
+
+        using var process = Process.Start(startInfo)!;
+        process.StandardInput.Close();
+        var output = await process.StandardOutput.ReadToEndAsync(TestContext.Current.CancellationToken);
+        await process.WaitForExitAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(0, process.ExitCode);
+        Assert.Equal("/", output.Trim());
+        Assert.Equal("/usr/bin:/bin", startInfo.Environment["PATH"]);
+        Assert.DoesNotContain(startInfo.Environment.Keys, static key =>
+            key is "BASH_ENV" or "ENV" or "SHELLOPTS" or "BASHOPTS" or "CDPATH"
+                or "GLOBIGNORE" or "IFS" or "POSIXLY_CORRECT" or "BASH_COMPAT"
+            || key.StartsWith("BASH_FUNC_", StringComparison.Ordinal));
     }
 }

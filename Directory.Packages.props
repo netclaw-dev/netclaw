@@ -22,7 +22,7 @@
          integration tests. The 13.x line is the .NET 10 generation of Aspire;
          9.x pulls a vulnerable KubernetesClient 17.0.4 (GHSA-w7r3-mgwf-4mqq)
          that trips NU1902 under our TreatWarningsAsErrors policy. -->
-    <AspireHostingVersion>13.5.3</AspireHostingVersion>
+    <AspireHostingVersion>13.5.4</AspireHostingVersion>
     <CommunityToolkitAspireVersion>13.5.0</CommunityToolkitAspireVersion>
     <ModelContextProtocolVersion>2.2.0</ModelContextProtocolVersion>
   </PropertyGroup>
@@ -79,14 +79,14 @@
     <PackageVersion Include="SlackNet.Extensions.DependencyInjection" Version="$(SlackNetVersion)" />
     <PackageVersion Include="Cronos" Version="0.13.0" />
     <PackageVersion Include="Netclaw.SkillClient" Version="0.4.1" />
-    <PackageVersion Include="ShellSyntaxTree" Version="0.4.0-beta.1" />
+    <PackageVersion Include="ShellSyntaxTree" Version="0.4.0-beta.3" />
     <PackageVersion Include="Termina" Version="0.16.2" />
     <PackageVersion Include="xunit" Version="2.9.3" />
     <PackageVersion Include="xunit.v3.mtp-off" Version="4.0.0" />
   </ItemGroup>
   <!-- Serialization -->
   <ItemGroup>
-    <PackageVersion Include="Google.Protobuf" Version="3.36.1" />
+    <PackageVersion Include="Google.Protobuf" Version="3.36.2" />
     <PackageVersion Include="Grpc.Tools" Version="2.83.0" />
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
@@ -96,7 +96,7 @@
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />
     <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="18.10.0" />
-    <PackageVersion Include="CsCheck" Version="4.8.0" />
+    <PackageVersion Include="CsCheck" Version="4.9.1" />
     <PackageVersion Include="Verify.XunitV3" Version="31.28.0" />
     <PackageVersion Include="Testcontainers" Version="4.14.0" />
     <!-- Transitive security pin: Testcontainers 4.13.0 pulls SSH.NET 2025.1.0,
@@ -136,7 +136,7 @@
        ships linux-x64 + linux-arm64 native assets. -->
   <ItemGroup>
     <PackageVersion Include="Microsoft.ML.OnnxRuntime" Version="1.30.0" />
-    <PackageVersion Include="FastBertTokenizer" Version="1.0.28" />
+    <PackageVersion Include="FastBertTokenizer" Version="1.2.6" />
     <!-- Pinned to 10.0.10 (matches $(MicrosoftAspNetCoreVersion)), not the lowest version that
          compiles: Microsoft.Extensions.AI 10.8.0 already pulls System.Numerics.Tensors
          >= 10.0.10 transitively, and CentralPackageTransitivePinningEnabled requires the

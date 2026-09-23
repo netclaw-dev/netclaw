@@ -3,7 +3,7 @@ name: search-citation
 description: "REQUIRED when the user asks you to search, look up, verify, buy, shop, compare, price-check, find current info, or check facts online. Contains citation format rules for web_search and web_fetch."
 metadata:
   author: netclaw
-  version: "1.1.2"
+  version: "1.1.4"
 ---
 
 ## Critical Rules Summary
@@ -12,6 +12,7 @@ metadata:
 2. Every claim from search results gets an inline hyperlink. No URL = do not state.
 3. Never use footnotes, endnotes, or [1]-style references. Inline links only.
 4. When web grant is disabled, tell the user — do not fall back to training data.
+5. Use `file_read` and `tool_output_read` for saved fetch files. Never use `shell_execute` to inspect them.
 
 ## When to Search
 
@@ -97,8 +98,7 @@ If a search returns no useful results:
 
 `web_fetch` defaults to raw HTML mode, preserving page structure including links
 and images. This is ideal for crawling and extracting specific information. Use
-`format='text'` only when you need plain text without markup (e.g., for
-summarization of article body text).
+`format='text'` when you need plain text without markup, such as an article summary.
 
 ## Cross-References
 
@@ -108,5 +108,7 @@ summarization of article body text).
 ## Saved Fetch Files
 
 `web_fetch` saves responses in the current session workspace.
+Use `file_read` to inspect a saved response.
+Do not use `shell_execute` to read, search, or filter that file.
 It rejects output paths that use filesystem links or protected write locations.
 A denied save returns an error. Report that error instead of inventing a saved file path.

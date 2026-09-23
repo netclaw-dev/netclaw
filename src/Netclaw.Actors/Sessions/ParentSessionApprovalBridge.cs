@@ -145,12 +145,15 @@ internal sealed class ParentSessionApprovalBridge :
                     VerbTokens = candidate.VerbTokens,
                 }).ToList(),
             Cwd = request.Approval.Cwd,
+            RepositoryCommonDirectory = request.Approval.RepositoryCommonDirectory,
             IsMessy = request.Approval.IsMessy,
             HasAdoptedContext = _hasAdoptedContext,
             HasThirdPartyAdoptedContext = _hasThirdPartyAdoptedContext,
             AdoptedSpeakerIds = _adoptedSpeakerIds,
             PersistedAdoptedContext = _hasAdoptedContext,
             Options = request.Approval.Options
+                .Where(option => option.Key.Value != ApprovalOptionKeys.ApproveRepository
+                                 || request.Approval.RepositoryCommonDirectory is not null)
                 .Select(static option => new ToolInteractionOption(option.Key, option.Label))
                 .ToList()
         }, PersistApprovalState: false));
@@ -162,6 +165,7 @@ internal sealed class ParentSessionApprovalBridge :
             ApprovalDecision.ApprovedOnce => ParentApprovalDecision.ApprovedOnce,
             ApprovalDecision.ApprovedSession => ParentApprovalDecision.ApprovedSession,
             ApprovalDecision.ApprovedAlways => ParentApprovalDecision.ApprovedAlways,
+            ApprovalDecision.ApprovedRepository => ParentApprovalDecision.ApprovedRepository,
             ApprovalDecision.ApprovedEverywhere => ParentApprovalDecision.ApprovedEverywhere,
             ApprovalDecision.TimedOut => ParentApprovalDecision.TimedOut,
             _ => ParentApprovalDecision.Denied

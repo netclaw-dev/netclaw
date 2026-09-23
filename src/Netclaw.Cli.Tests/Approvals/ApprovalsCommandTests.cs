@@ -244,6 +244,32 @@ public sealed class ApprovalsCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Repository_grant_uses_a_distinct_list_and_revoke_scope()
+    {
+        var repository = ApprovalEntry.CreateRepositoryTokenPrefix(
+            ApprovalShell.Bash, ["./scripts/bump-version.sh"], "/work/main/.git");
+        var folder = InDir("./scripts/bump-version.sh", "/work/main");
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", repository);
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", folder);
+
+        var listExit = await ApprovalsCommand.RunAsync(["approvals", "list"], _paths, _output);
+        var label = repository.FormatScope();
+
+        Assert.Equal(0, listExit);
+        Assert.Contains(label, _output.ToString());
+        Assert.Contains(folder.FormatScope(), _output.ToString());
+
+        _output.GetStringBuilder().Clear();
+        var revokeExit = await ApprovalsCommand.RunAsync(
+            ["approvals", "revoke", label, "--tool", "shell_execute"], _paths, _output);
+
+        Assert.Equal(0, revokeExit);
+        var remaining = _store.GetApprovedEntries(TrustAudience.Personal, "shell_execute");
+        Assert.DoesNotContain(remaining, entry => ToolApprovalEntryComparer.Equals(entry, repository));
+        Assert.Contains(remaining, entry => ToolApprovalEntryComparer.Equals(entry, folder));
+    }
+
+    [Fact]
     public async Task Revoke_no_match_exits_one_and_does_not_modify_file()
     {
         SeedDefault();

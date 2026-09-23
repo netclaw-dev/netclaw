@@ -158,6 +158,8 @@ public static partial class SessionProtocol
 
         public string? Cwd { get; init; }
 
+        public string? RepositoryCommonDirectory { get; init; }
+
         public IReadOnlyList<string> OptionKeys { get; init; } = Array.Empty<string>();
 
         public IReadOnlyList<ApprovalCandidate> Candidates { get; init; } =

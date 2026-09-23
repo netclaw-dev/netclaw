@@ -115,6 +115,29 @@ public sealed class DiscordApprovalPromptBuilderTests
     }
 
     [Fact]
+    public void Repository_prompt_renders_six_choices_and_a_repository_resolution()
+    {
+        var request = V2Request(
+            "./scripts/bump-version.sh", ["./scripts/bump-version.sh"], "/work/main",
+            [
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveSessionKey, ApprovalOptionKeys.ApproveSessionLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveAlwaysKey, ApprovalOptionKeys.ApproveAlwaysLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveRepositoryKey, ApprovalOptionKeys.ApproveRepositoryLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.ApproveEverywhereKey, ApprovalOptionKeys.ApproveEverywhereLabel),
+                new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+            ]);
+
+        var (_, buttons) = DiscordApprovalPromptBuilder.BuildButtonPrompt(request);
+        var resolved = DiscordApprovalPromptBuilder.BuildResolvedPromptText(
+            request, ApprovalOptionKeys.ApproveRepository, "user-42");
+
+        Assert.Equal(6, buttons.Count);
+        Assert.Equal(ApprovalOptionKeys.ApproveRepositoryLabel, buttons[3].Label);
+        Assert.Contains("Saved: ./scripts/bump-version.sh in this repository", resolved);
+    }
+
+    [Fact]
     public void BuildButtonValue_roundtrips_with_TryParseButtonValue()
     {
         var request = new ToolInteractionRequest

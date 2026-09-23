@@ -10,7 +10,7 @@ namespace Netclaw.Configuration;
 internal static class ApprovalEntryWireCodec
 {
     private static readonly HashSet<string> AllowedMembers =
-        ["shell", "match", "verbTokens", "verb", "directory", "createdAt"];
+        ["shell", "match", "verbTokens", "verb", "directory", "repository", "createdAt"];
 
     internal static ApprovalEntry ReadVersion3(JsonElement element)
     {
@@ -57,6 +57,13 @@ internal static class ApprovalEntryWireCodec
             };
         }
 
+        if (members.TryGetValue("repository", out var repositoryElement))
+        {
+            if (repositoryElement.ValueKind != JsonValueKind.String)
+                throw new JsonException("The repository must be a canonical path.");
+            entry = entry with { Repository = repositoryElement.GetString() };
+        }
+
         ApprovalEntryValidation.ValidateVersion3(entry);
         return entry;
     }
@@ -74,6 +81,7 @@ internal static class ApprovalEntryWireCodec
                 Match = ApprovalMatchKind.TokenPrefix.ToString(),
                 VerbTokens = entry.VerbTokens!.Cast<string?>().ToArray(),
                 Directory = entry.Directory,
+                Repository = entry.Repository,
                 CreatedAt = entry.CreatedAt,
             },
             ApprovalMatchKind.LegacyExact => new LegacyExactApprovalEntryWire

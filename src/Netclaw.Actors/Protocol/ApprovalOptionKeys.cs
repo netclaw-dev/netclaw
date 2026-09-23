@@ -12,13 +12,15 @@ namespace Netclaw.Actors.Protocol;
 /// <see cref="ToolInteractionResponse.SelectedKey"/>. Renaming a key is a
 /// breaking change to every channel adapter.
 ///
-/// The five-button row and its scope semantics:
+/// The approval options and their scope semantics:
 /// <list type="bullet">
 /// <item><see cref="ApproveOnce"/> — run this one time only; persist nothing.</item>
 /// <item><see cref="ApproveSession"/> — allow the extracted verbs in the prompt's
 /// directory for the rest of the session, in session-scoped memory only.</item>
 /// <item><see cref="ApproveAlways"/> — persist <c>(verb, prompt's directory)</c>
 /// entries to <c>tool-approvals.json</c>. Folder-scoped grant.</item>
+/// <item><see cref="ApproveRepository"/> — persist a grant for one Git repository.
+/// Registered worktrees of that repository share the grant.</item>
 /// <item><see cref="ApproveEverywhere"/> — persist <c>(verb, null)</c> entries.
 /// Global wildcard. Channel adapters render this as danger styling.</item>
 /// <item><see cref="Deny"/> — refuse this call only; do NOT ban the verb for
@@ -30,18 +32,21 @@ public static class ApprovalOptionKeys
     public const string ApproveOnce = "approve_once";
     public const string ApproveSession = "approve_session";
     public const string ApproveAlways = "approve_always";
+    public const string ApproveRepository = "approve_repository";
     public const string ApproveEverywhere = "approve_everywhere";
     public const string Deny = "deny";
 
     public static ApprovalOptionKey ApproveOnceKey { get; } = new(ApproveOnce);
     public static ApprovalOptionKey ApproveSessionKey { get; } = new(ApproveSession);
     public static ApprovalOptionKey ApproveAlwaysKey { get; } = new(ApproveAlways);
+    public static ApprovalOptionKey ApproveRepositoryKey { get; } = new(ApproveRepository);
     public static ApprovalOptionKey ApproveEverywhereKey { get; } = new(ApproveEverywhere);
     public static ApprovalOptionKey DenyKey { get; } = new(Deny);
 
     public const string ApproveOnceLabel = "Once";
     public const string ApproveSessionLabel = "This chat";
     public const string ApproveAlwaysLabel = "Always here";
+    public const string ApproveRepositoryLabel = "This repository";
     public const string ApproveEverywhereLabel = "Always anywhere";
     public const string ApproveMcpToolLabel = "Always allow this tool";
     public const string DenyLabel = "Deny";
@@ -80,6 +85,7 @@ public static class ApprovalOptionKeys
         ApproveOnce => ApproveOnceLabel,
         ApproveSession => ApproveSessionLabel,
         ApproveAlways => ApproveAlwaysLabel,
+        ApproveRepository => ApproveRepositoryLabel,
         ApproveEverywhere => isMcpTool ? ApproveMcpToolLabel : ApproveEverywhereLabel,
         Deny => DenyLabel,
         _ => optionKey

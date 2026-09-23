@@ -74,6 +74,35 @@ public sealed class ShellApprovalMatcherTests
             analysis.Candidates.Select(static candidate => candidate.Verb));
     }
 
+    [Fact]
+    public void Bash_unquoted_status_output_preserves_static_candidates()
+    {
+        var analysis = _matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args("git status --short; echo $?", "/work"));
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            ["git status", "echo"],
+            analysis.Candidates.Select(static candidate => candidate.Verb));
+    }
+
+    [Theory]
+    [InlineData("echo \"$(touch /tmp/marker)\"")]
+    [InlineData("echo $? > /tmp/marker")]
+    [InlineData("grep \"$TARGET\"; echo $?")]
+    [InlineData("echo $@")]
+    [InlineData("printf $@")]
+    public void Bash_output_exception_rejects_unknown_values_and_side_effects(string command)
+    {
+        var analysis = _matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, "/work"));
+
+        Assert.True(analysis.IsMessy);
+        Assert.Empty(analysis.Candidates);
+    }
+
     [Theory]
     [InlineData("head -c 20 /tmp/work/site.css | xxd | head -3")]
     [InlineData("rg -rn \"operation failed\" src/ tests/ | head -20; echo \"---\"; rg -rln \"upload\" src/ | head -20")]

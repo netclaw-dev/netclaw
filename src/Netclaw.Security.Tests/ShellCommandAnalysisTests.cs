@@ -345,9 +345,24 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
+    [InlineData("ForEach-Object { ($_ -split '/')[0..3] -join '/' }")]
+    [InlineData("ForEach-Object { ($PSItem -split \"/\")[2] -join \"/\" }")]
+    public void Power_shell_split_index_join_projection_region_is_complete(string command)
+    {
+        var analyzer = new ShellCommandAnalyzer(PowerShellEnvironment);
+        var analysis = analyzer.Analyze(command, @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
+        Assert.False(analysis.RequiresExactTreeApproval);
+    }
+
+    [Theory]
     [InlineData("ForEach-Object { $_.Delete() }")]
     [InlineData("ForEach-Object { $path = '.\\victim.txt' }")]
     [InlineData("ForEach-Object { \"$(Remove-Item .\\victim.txt)\" }")]
+    [InlineData("ForEach-Object { ($_ -split $separator)[0] -join '/' }")]
+    [InlineData("ForEach-Object { ($_ -split '/')[0..$(Get-Date)] -join '/' }")]
     public void Power_shell_unsupported_command_argument_expression_stays_strict(
         string command)
     {

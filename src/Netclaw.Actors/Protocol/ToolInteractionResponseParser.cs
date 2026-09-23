@@ -102,6 +102,7 @@ public static class ToolInteractionResponseParser
             "a" or "1" or "approve" or "approve once" or "approve_once" or "once" or "yes" => ApprovalOptionKeys.ApproveOnce,
             "b" or "2" or "approve session" or "approve_session" or "session" or "approve for this chat" or "this chat" or "approve for this thread" or "this thread" => ApprovalOptionKeys.ApproveSession,
             "approve always" or "approve_always" or "always" or "always here" => ApprovalOptionKeys.ApproveAlways,
+            "approve repository" or "approve_repository" or "this repository" => ApprovalOptionKeys.ApproveRepository,
             "approve everywhere" or "approve_everywhere" or "everywhere" or "always anywhere" => ApprovalOptionKeys.ApproveEverywhere,
             "deny" or "no" or "reject" => ApprovalOptionKeys.Deny,
             _ => null

@@ -145,6 +145,26 @@ public sealed class ApprovalEntryWireCodecTests
         Assert.Equal("/work/repo", entry.Directory);
     }
 
+    [Fact]
+    public void Repository_grant_round_trips_as_a_distinct_scope()
+    {
+        var entry = ApprovalEntry.CreateRepositoryTokenPrefix(
+            ApprovalShell.Bash,
+            ["./scripts/bump-version.sh"],
+            "/work/main/.git");
+
+        var wire = ReadEntry(WriteEntry(entry));
+        var parsed = ApprovalEntry.TryParseScope(entry.FormatScope(), out var labelEntry, out var error);
+
+        Assert.True(parsed, error);
+        Assert.Equal("Bash token-prefix \"./scripts/bump-version.sh\" in repository /work/main/.git", entry.FormatScope());
+        Assert.True(ToolApprovalEntryComparer.Equals(entry, wire));
+        Assert.True(ToolApprovalEntryComparer.Equals(entry, Assert.IsType<ApprovalEntry>(labelEntry)));
+        Assert.False(ToolApprovalEntryComparer.Equals(
+            entry,
+            ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["./scripts/bump-version.sh"])));
+    }
+
     [Theory]
     [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":[],"directory":null,"createdAt":null}""")]
     [InlineData("""{"shell":null,"match":"TokenPrefix","verbTokens":["git"],"directory":null,"createdAt":null}""")]
@@ -168,6 +188,11 @@ public sealed class ApprovalEntryWireCodecTests
     [InlineData("""{"shell":"PowerShell","match":"TokenPrefix","verbTokens":["git"],"directory":"C:/work/repo","createdAt":null}""")]
     [InlineData("""{"shell":"PowerShell","match":"TokenPrefix","verbTokens":["git"],"directory":"C:\\work\\repo\\","createdAt":null}""")]
     [InlineData("""{"verb":"git","directory":null,"createdAt":null,"extra":true}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"directory":null,"repository":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"directory":"/work","repository":"/work/.git","createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"LegacyExact","verb":"git","directory":null,"repository":"/work/.git","createdAt":null}""")]
+    [InlineData("""{"verb":"git","directory":null,"repository":"/work/.git","createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"directory":null,"repository":"/work/../repo/.git","createdAt":null}""")]
     public void Invalid_closed_form_fails(string json)
     {
         Assert.ThrowsAny<Exception>(() => ReadEntry(json));

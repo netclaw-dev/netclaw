@@ -264,7 +264,8 @@ internal sealed class ShellPolicyEvaluation
             || grantTimestamp is not null
             && source is not
                 (ShellPolicyCoverageSource.PersistentGlobal
-                or ShellPolicyCoverageSource.PersistentFolder))
+                or ShellPolicyCoverageSource.PersistentFolder
+                or ShellPolicyCoverageSource.PersistentRepository))
         {
             throw new InvalidOperationException("Invalid shell candidate coverage.");
         }
@@ -304,6 +305,7 @@ internal sealed class ShellPolicyEvaluation
             ShellCoverageKind.Session => ShellPolicyCoverageSource.Session,
             ShellCoverageKind.PersistentGlobal => ShellPolicyCoverageSource.PersistentGlobal,
             ShellCoverageKind.PersistentFolder => ShellPolicyCoverageSource.PersistentFolder,
+            ShellCoverageKind.PersistentRepository => ShellPolicyCoverageSource.PersistentRepository,
             _ => throw new InvalidOperationException("Invalid actor coverage kind."),
         };
 }

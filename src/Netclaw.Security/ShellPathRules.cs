@@ -9,6 +9,10 @@ namespace Netclaw.Security;
 
 internal static class ShellPathRules
 {
+    internal static bool HasParentDirectorySegment(string path)
+        => (OperatingSystem.IsWindows() ? path.Split(['/', '\\']) : path.Split('/'))
+            .Any(static segment => segment == "..");
+
     internal static bool TryNormalize(
         string? path,
         ShellPathStyle pathStyle,

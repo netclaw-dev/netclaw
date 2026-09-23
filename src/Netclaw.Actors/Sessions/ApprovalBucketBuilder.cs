@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Sessions;
@@ -12,11 +13,13 @@ internal sealed record ApprovalGrantContext
     private ApprovalGrantContext(
         ApprovalDecision decision,
         string? workingDirectory,
-        string sessionDirectory)
+        string sessionDirectory,
+        string? repositoryCommonDirectory)
     {
         Decision = decision;
         WorkingDirectory = workingDirectory;
         SessionDirectory = sessionDirectory;
+        RepositoryCommonDirectory = repositoryCommonDirectory;
     }
 
     public ApprovalDecision Decision { get; }
@@ -25,17 +28,21 @@ internal sealed record ApprovalGrantContext
 
     public string SessionDirectory { get; }
 
+    public string? RepositoryCommonDirectory { get; }
+
     public bool IsPersistent => Decision is not ApprovalDecision.ApprovedSession;
 
     public static ApprovalGrantContext FromDecision(
         ApprovalDecision decision,
         string? workingDirectory,
-        string sessionDirectory)
+        string sessionDirectory,
+        string? repositoryCommonDirectory)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionDirectory);
         if (decision is not (
                 ApprovalDecision.ApprovedSession
                 or ApprovalDecision.ApprovedAlways
+                or ApprovalDecision.ApprovedRepository
                 or ApprovalDecision.ApprovedEverywhere))
         {
             throw new ArgumentOutOfRangeException(
@@ -44,7 +51,14 @@ internal sealed record ApprovalGrantContext
                 "The approval decision cannot create a reusable grant.");
         }
 
-        return new ApprovalGrantContext(decision, workingDirectory, sessionDirectory);
+        if (decision == ApprovalDecision.ApprovedRepository
+            && string.IsNullOrWhiteSpace(repositoryCommonDirectory))
+        {
+            throw new InvalidOperationException("The repository option lacks its offered identity.");
+        }
+
+        return new ApprovalGrantContext(
+            decision, workingDirectory, sessionDirectory, repositoryCommonDirectory);
     }
 }
 
@@ -55,10 +69,35 @@ internal static class ApprovalBucketBuilder
         ApprovalGrantContext context)
     {
         var grants = new List<ToolApprovalGrant>(candidates.Count);
+        GitRepositoryApprovalScope? repositoryScope = null;
+        if (context.Decision == ApprovalDecision.ApprovedRepository
+            && (!GitRepositoryApprovalScope.TryResolve(context.WorkingDirectory, out repositoryScope)
+                || !ToolApprovalEntryComparer.Equals(
+                    repositoryScope!.CommonDirectory, context.RepositoryCommonDirectory!)))
+        {
+            throw new InvalidOperationException("The repository identity changed after the prompt.");
+        }
+
+        if (repositoryScope is not null
+            && candidates.Any(candidate => !repositoryScope.Contains(candidate.Directory, context.WorkingDirectory)))
+        {
+            throw new InvalidOperationException("An approval candidate is outside the registered worktree.");
+        }
+
         foreach (var candidate in candidates)
         {
             if (ApprovalPatternMatching.IsPureSideEffect(candidate))
             {
+                continue;
+            }
+
+            if (repositoryScope is not null)
+            {
+                grants.Add(new ToolApprovalGrant(candidate, Directory: null)
+                {
+                    Repository = repositoryScope.CommonDirectory,
+                    RepositoryWorktree = context.WorkingDirectory,
+                });
                 continue;
             }
 
@@ -95,6 +134,9 @@ internal static class ApprovalBucketBuilder
         IReadOnlyList<ApprovalCandidate> candidates,
         ApprovalGrantContext context)
     {
+        if (context.Decision == ApprovalDecision.ApprovedRepository)
+            throw new InvalidOperationException("Repository grants require structured approval storage.");
+
         var grouping = new Dictionary<string, List<string>>(StringComparer.Ordinal);
 
         foreach (var candidate in candidates)
