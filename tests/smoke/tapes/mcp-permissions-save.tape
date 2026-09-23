@@ -15,7 +15,7 @@ Wait+Screen@10s /TAPE\$/
 Type "netclaw daemon start"
 Enter
 Wait+Screen@20s /TAPE\$/
-Type "until netclaw mcp list 2>/dev/null | grep -q 'connected (4 tools)'; do sleep 2; done"
+Type "until netclaw mcp list 2>/dev/null | grep -q 'smoke-math.*connected ([0-9][0-9]* tools)'; do sleep 2; done"
 Enter
 Wait+Screen@60s /TAPE\$/
 Show
@@ -23,7 +23,7 @@ Show
 Type "netclaw mcp permissions; status=$?; echo MCP_PERMISSIONS_SAVE_EXIT=$status"
 Enter
 Wait+Screen@15s /MCP Permissions/
-Wait+Screen@10s /Connected, 4 tools/
+Wait+Screen@10s /Connected, 6 tools/
 Enter
 Wait+Screen@30s /record-tasks/
 Wait+Screen@10s /Server default:/
@@ -33,7 +33,7 @@ Wait+Screen@5s /\[✓\] Server enabled for personal/
 Enter
 Wait+Screen@5s /Enter\/Y.*Save/
 Enter
-Wait+Screen@10s /Connected, 4 tools/
+Wait+Screen@10s /Connected, 6 tools/
 Ctrl+Q
 Wait+Screen@5s /MCP_PERMISSIONS_SAVE_EXIT=0/
 Type "exit"

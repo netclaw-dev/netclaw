@@ -16,7 +16,7 @@ Wait+Screen@10s /TAPE\$/
 Type "mkdir -p __NETCLAW_HOME__/logs && netclaw daemon start >__NETCLAW_HOME__/logs/daemon-stdio.log 2>&1"
 Enter
 Wait+Screen@20s /TAPE\$/
-Type "until netclaw mcp list 2>/dev/null | grep -q 'connected (4 tools)'; do sleep 2; done"
+Type "until netclaw mcp list 2>/dev/null | grep -q 'smoke-math.*connected ([0-9][0-9]* tools)'; do sleep 2; done"
 Enter
 Wait+Screen@60s /TAPE\$/
 Show
@@ -24,5 +24,5 @@ Show
 Type "netclaw mcp permissions"
 Enter
 Wait+Screen@15s /MCP Permissions/
-Wait+Screen@10s /Connected, 4 tools/
+Wait+Screen@10s /Connected, 6 tools/
 Sleep 250ms
