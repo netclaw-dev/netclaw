@@ -7,6 +7,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using Xunit;
 
@@ -209,6 +210,69 @@ public class McpToolResultFormatterTests
         Assert.DoesNotContain("_meta", message);
     }
 
+    [Fact]
+    public void Metadata_success_preserves_image_bytes_as_an_artifact_candidate()
+    {
+        // The SDK uses a JSON envelope when an MCP result contains application metadata.
+        // This test proves that the projection keeps its bytes outside the model text.
+        // Arrange
+        var result = Json("""
+                          {
+                            "content": [
+                              { "type": "image", "data": "AQID", "mimeType": "image/png" }
+                            ],
+                            "isError": false,
+                            "_meta": { "vendor/example": true }
+                          }
+                          """);
+
+        // Act
+        var projection = McpToolResultFormatter.Project(result, "srv/tool");
+
+        // Assert
+        var artifact = Assert.Single(projection.Artifacts);
+        Assert.Equal(new byte[] { 1, 2, 3 }, artifact.Data.ToArray());
+        Assert.Equal("image/png", artifact.DeclaredMimeType.Value);
+        Assert.DoesNotContain("AQID", projection.Text);
+        Assert.Empty(projection.ArtifactNotes);
+    }
+
+    [Fact]
+    public void Invalid_Base64_keeps_the_marker_and_reports_a_safe_artifact_note()
+    {
+        // An MCP server can send a readable content block with malformed binary data.
+        // This test proves that the text survives and no candidate reaches content admission.
+        // Arrange
+        var result = Json("""{"content":[{"type":"image","data":"not-base64","mimeType":"image/png"}],"isError":false}""");
+
+        // Act
+        var projection = McpToolResultFormatter.Project(result, "srv/tool");
+
+        // Assert
+        Assert.Equal("[image: image/png]", projection.Text);
+        Assert.Empty(projection.Artifacts);
+        Assert.Contains("invalid Base64", Assert.Single(projection.ArtifactNotes));
+        Assert.DoesNotContain("not-base64", projection.Text);
+    }
+
+    [Fact]
+    public void Declared_tool_error_discards_artifact_candidates()
+    {
+        // A tool error can include a binary block beside its diagnostic text.
+        // This test proves that a declared failure cannot create an artifact output.
+        // Arrange
+        var result = Json("""{"content":[{"type":"image","data":"AQID","mimeType":"image/png"},{"type":"text","text":"failed"}],"isError":true}""");
+
+        // Act
+        var projection = McpToolResultFormatter.Project(result, "srv/tool");
+
+        // Assert
+        Assert.True(projection.IsError);
+        Assert.Empty(projection.Artifacts);
+        Assert.Empty(projection.ArtifactNotes);
+        Assert.Contains("failed", projection.ErrorDetail);
+    }
+
     [Theory]
     [InlineData(
         """{"content":[{"type":"audio","data":"SECRET","mimeType":"audio/wav"}],"isError":false,"_meta":{}}""",
@@ -317,6 +381,61 @@ public class McpToolResultFormatterTests
     }
 
     [Fact]
+    public void Typed_DataContent_projection_copies_candidate_bytes()
+    {
+        // The SDK can expose mutable source storage through a DataContent result.
+        // This test proves that later source changes cannot change the projected candidate.
+        // Arrange
+        var source = new byte[] { 1, 2, 3 };
+        var result = new DataContent(source, "image/png") { Name = "chart.png" };
+
+        // Act
+        var projection = McpToolResultFormatter.Project(result, "srv/tool");
+        source[0] = 9;
+
+        // Assert
+        var artifact = Assert.Single(projection.Artifacts);
+        Assert.Equal(new byte[] { 1, 2, 3 }, artifact.Data.ToArray());
+        Assert.Equal("chart.png", artifact.Name);
+        Assert.Equal("[image: image/png]", projection.Text);
+    }
+
+    [Fact]
+    public void Projection_bounds_candidate_count_before_it_copies_each_result()
+    {
+        // An MCP result can contain an unbounded number of data blocks.
+        // This test proves that projection copies only the shared attachment-count limit.
+        // Arrange
+        var result = Enumerable.Range(1, ChannelAttachmentPolicy.DefaultMaxFilesPerMessage + 1)
+            .Select(index => (AIContent)new DataContent(new byte[] { (byte)index }, "image/png"))
+            .ToArray();
+
+        // Act
+        var projection = McpToolResultFormatter.Project(result, "srv/tool");
+
+        // Assert
+        Assert.Equal(ChannelAttachmentPolicy.DefaultMaxFilesPerMessage, projection.Artifacts.Count);
+        Assert.Contains("accepted only the first", Assert.Single(projection.ArtifactNotes));
+    }
+
+    [Fact]
+    public void Projection_rejects_aggregate_bytes_before_it_copies_a_candidate()
+    {
+        // An MCP server can return a data block that exceeds the shared byte ceiling.
+        // This test proves that projection rejects the bytes before it creates a candidate.
+        // Arrange
+        var bytes = new byte[checked((int)(ContentPolicy.DefaultMaxFileSizeBytes + 1))];
+        var result = new DataContent(bytes, "image/png");
+
+        // Act
+        var projection = McpToolResultFormatter.Project(result, "srv/tool");
+
+        // Assert
+        Assert.Empty(projection.Artifacts);
+        Assert.Contains("byte limit", Assert.Single(projection.ArtifactNotes));
+    }
+
+    [Fact]
     public void Image_only_AIContent_array_projects_marker_only()
     {
         // An image-only AIContent[] has no text fallback.
@@ -359,6 +478,21 @@ public class McpToolResultFormatterTests
 
         // Assert
         Assert.Equal("done", message);
+    }
+
+    [Fact]
+    public void Empty_TextContent_keeps_the_existing_empty_result()
+    {
+        // The prior formatter ignored an empty text block.
+        // This test prevents artifact projection from changing that text-only contract.
+        // Arrange
+        var result = new TextContent(string.Empty);
+
+        // Act
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        // Assert
+        Assert.Equal(string.Empty, message);
     }
 
     [Fact]

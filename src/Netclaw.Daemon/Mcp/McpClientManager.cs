@@ -44,6 +44,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
     private readonly IOperationalNotificationSink _notificationSink;
     private readonly TimeProvider _timeProvider;
     private readonly IMcpClientRuntime _clientRuntime;
+    private readonly McpArtifactMaterializer _artifactMaterializer;
     private readonly ILogger<McpClientManager> _logger;
     private readonly int _maxToolDescriptionChars;
     private readonly int _maxToolSchemaWarnChars;
@@ -89,6 +90,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         IOperationalNotificationSink notificationSink,
         TimeProvider timeProvider,
         IMcpClientRuntime clientRuntime,
+        McpArtifactMaterializer artifactMaterializer,
         ILogger<McpClientManager> logger,
         SessionConfig sessionConfig)
     {
@@ -105,6 +107,7 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
         _notificationSink = notificationSink;
         _timeProvider = timeProvider;
         _clientRuntime = clientRuntime;
+        _artifactMaterializer = artifactMaterializer;
         _logger = logger;
         _maxToolDescriptionChars = sessionConfig.Tuning.MaxToolDescriptionChars;
         _maxToolSchemaWarnChars = sessionConfig.Tuning.MaxToolSchemaWarnChars;
@@ -1115,13 +1118,36 @@ internal sealed class McpClientManager : IHostedService, IDisposable, IMcpToolIn
             ? new AIFunctionArguments(arguments)
             : null;
         var result = await _clientRuntime.InvokeAsync(function, aiArgs, ct);
+        var projection = McpToolResultFormatter.Project(result, qualifiedToolName);
 
-        if (McpToolResultFormatter.TryGetErrorDetail(result, out var detail))
+        if (projection.IsError)
         {
-            ReportToolFailure(serverName, qualifiedToolName, detail);
+            ReportToolFailure(serverName, qualifiedToolName, projection.ErrorDetail);
+            return McpToolResultFormatter.FormatWithReceipt(projection, context);
         }
 
-        return McpToolResultFormatter.FormatWithReceipt(result, qualifiedToolName, context);
+        var materializationNotes = await _artifactMaterializer.MaterializeAsync(
+            projection.Artifacts,
+            qualifiedToolName,
+            context,
+            ct);
+        return AppendArtifactNotes(projection.Text, projection.ArtifactNotes, materializationNotes);
+    }
+
+    private static string AppendArtifactNotes(
+        string text,
+        IReadOnlyList<string> projectionNotes,
+        IReadOnlyList<string> materializationNotes)
+    {
+        if (projectionNotes.Count == 0 && materializationNotes.Count == 0)
+            return text;
+
+        return string.Join(
+            "\n",
+            new[] { text }
+                .Concat(projectionNotes)
+                .Concat(materializationNotes)
+                .Where(static part => !string.IsNullOrWhiteSpace(part)));
     }
 
     /// <summary>

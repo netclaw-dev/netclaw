@@ -91,6 +91,7 @@ internal sealed class McpSmokeHarness : IAsyncDisposable
             NullNotificationSink.Instance,
             TimeProvider.System,
             new McpClientRuntime(),
+            dependencies.ArtifactMaterializer,
             // Real logger wired to test output: when a connect fails the manager
             // logs the full exception via ReportConnectionFailure, and NullLogger
             // was discarding it — leaving only the generic status ErrorMessage.

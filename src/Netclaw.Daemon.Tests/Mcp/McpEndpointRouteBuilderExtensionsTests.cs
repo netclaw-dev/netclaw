@@ -88,6 +88,7 @@ public sealed class McpEndpointRouteBuilderExtensionsTests : IDisposable
             NullNotificationSink.Instance,
             TimeProvider.System,
             new McpClientRuntime(),
+            dependencies.ArtifactMaterializer,
             NullLogger<McpClientManager>.Instance,
             new SessionConfig());
 

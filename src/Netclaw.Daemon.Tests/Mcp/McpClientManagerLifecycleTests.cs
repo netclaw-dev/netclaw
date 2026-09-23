@@ -1085,6 +1085,7 @@ public sealed class McpClientManagerLifecycleTests
                 notificationSink,
                 timeProvider,
                 runtime,
+                dependencies.ArtifactMaterializer,
                 Logger,
                 new SessionConfig());
         }

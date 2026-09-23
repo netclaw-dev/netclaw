@@ -7,7 +7,7 @@ namespace Netclaw.Security;
 
 /// <summary>
 /// Scans file content for security threats before it enters the pipeline.
-/// Called at the channel adapter boundary (e.g., Slack file downloads).
+/// Callers include channel adapters and MCP result admission.
 /// </summary>
 public interface IContentScanner
 {

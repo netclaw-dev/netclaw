@@ -874,6 +874,7 @@ static void ConfigureDaemonServices(
         sp.GetRequiredService<TimeProvider>(),
         sp.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping));
     services.AddSingleton<IMcpClientRuntime, McpClientRuntime>();
+    services.AddSingleton<McpArtifactMaterializer>();
     services.AddSingleton<McpClientManager>();
     services.AddSingleton<IMcpPromptSkillLoader>(sp => sp.GetRequiredService<McpClientManager>());
     services.AddHostedService(sp => sp.GetRequiredService<McpClientManager>());

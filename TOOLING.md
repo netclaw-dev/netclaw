@@ -47,6 +47,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ApprovalPatternMatching.EvaluateApprovalScope` | Folder grants require containment and reject link escape | 4 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
+| `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -61,6 +62,29 @@ A cold CI runner should take two to four minutes.
 
 The harness uses xUnit 2 because Stryker's VSTest adapter does not support xUnit 3 correctly.
 The script requires `perl` and `jq`, which the Linux CI image supplies.
+
+### MCP Artifact Admission Gate
+
+Run the MCP artifact admission gate:
+
+```bash
+./scripts/run-mcp-artifact-admission-mutations.sh
+```
+
+The script selects the two fail-closed checks in
+`McpArtifactMaterializer.TryAdmit`. It requires two killed mutants for scanner
+approval and two killed mutants for verified MIME presence.
+
+The tests supply inconsistent scanner results on purpose. One result has a
+verified MIME with an explicit rejection. The other has approval without a
+verified MIME. Neither result can authorize storage.
+
+The source selector rejects a missing or duplicate boundary before Stryker
+starts. The gate also rejects a changed mutant count, a survivor, or a compile
+error in the selected span.
+
+The local run took 1 minute 40 seconds after package restore. The separate CI
+job retains a 10-minute timeout and uploads `mcp-artifact-admission-mutation-report`.
 
 ### Tool Authorization Gate
 

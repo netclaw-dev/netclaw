@@ -197,6 +197,37 @@ jobs:
           if-no-files-found: ignore
           retention-days: 14
 
+  mcp-artifact-admission-mutation:
+    name: MCP Artifact Admission Mutation Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: "Install .NET SDK"
+        uses: actions/setup-dotnet@v6
+        with:
+          global-json-file: "./global.json"
+
+      - name: "Restore .NET tools"
+        run: dotnet tool restore
+
+      - name: "Test MCP artifact admission mutants"
+        run: ./scripts/run-mcp-artifact-admission-mutations.sh
+
+      - name: "Upload MCP artifact admission mutation report"
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: mcp-artifact-admission-mutation-report
+          path: ./artifacts/stryker/mcp-artifact-admission
+          if-no-files-found: ignore
+          retention-days: 14
+
   shell-analysis-mutation:
     name: Shell Analysis Mutation Tests
     runs-on: ubuntu-latest

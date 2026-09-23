@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.74.9"
+  version: "2.75.0"
 ---
 
 # Netclaw Operations
@@ -229,6 +229,22 @@ The argument hint marks values that the MCP server requires. Supply those
 values exactly. Do not invent a missing value. A loaded prompt can name MCP
 tools, but it does not grant them. Use the normal `search_tools` and
 `load_tool` flow for each required tool.
+
+### MCP Result Artifacts
+
+An MCP tool can return a file artifact with its text result. Netclaw applies the
+same supported file types, magic-byte checks, and size limit as other content.
+
+A verified artifact reaches the user through the normal file-output path. It
+also reaches the active model when the media catalog and model modality permit
+that input.
+
+A text-only model does not receive image bytes. The result keeps the file for
+the user and states the modality limit.
+
+Netclaw rejects invalid, unsupported, or oversized artifact data. The result
+keeps readable text and includes a rejection note. Do not decode Base64 from the
+tool text or use shell to bypass that rejection.
 
 ## MCP OAuth
 

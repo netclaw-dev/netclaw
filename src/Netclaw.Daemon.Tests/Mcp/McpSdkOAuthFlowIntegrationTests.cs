@@ -869,6 +869,7 @@ public sealed class McpSdkOAuthFlowIntegrationTests
             NullNotificationSink.Instance,
             timeProvider,
             runtime,
+            dependencies.ArtifactMaterializer,
             logger,
             new SessionConfig());
         return new ManagerOAuthHarness(manager, credentials, broker, runtime, logger, serverName);
