@@ -248,11 +248,11 @@ internal sealed class ShellPolicyCoordinator(
         if (!first.IsComplete
             || first.ImmediateRole != CommandOccurrenceRole.Ordinary
             || first.WorkingDirectoryEffect is not ShellWorkingDirectoryEffect.ChangesOnSuccess
-                { Target: ShellValueDomain.Exact exact }
+            { Target: ShellValueDomain.Exact exact }
             || first.Ancestry.Count != 2
             || first.Ancestry[0] is not { Ancestor: ShellBlockSyntax, Region: CommandAncestryRegion.Root }
             || first.Ancestry[1] is not
-                { Ancestor: CommandListSyntax list, Region: CommandAncestryRegion.Statement, ChildIndex: 0 }
+            { Ancestor: CommandListSyntax list, Region: CommandAncestryRegion.Statement, ChildIndex: 0 }
             || list.Items.Count < 2
             || list.Items[0] is not { Operator: CompoundOperator.None, Command: SimpleCommandSyntax simple }
             || !ReferenceEquals(simple.Clause, first.Clause)
