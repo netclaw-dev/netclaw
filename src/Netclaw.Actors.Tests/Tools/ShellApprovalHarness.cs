@@ -6,6 +6,7 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Pattern;
+using System.Globalization;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Tools;
@@ -17,13 +18,47 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-internal sealed record ObservedApproval(
-    ToolAuthorizationOutcome Outcome,
-    ToolAllowReason? AllowReason,
-    string? DenyReason,
+internal enum ApprovalOutcome
+{
+    Allowed,
+    RequiresApproval,
+    RequiresAgentCorrection,
+    Denied
+}
+
+internal enum ApprovalAllowReason
+{
+    PolicyAuto,
+    BackgroundJobLifecycle,
+    ReviewedSafePolicy,
+    ApprovalExemptShellCandidates,
+    StoredApproval,
+    OneTimeApproval
+}
+
+internal enum ApprovalCorrection
+{
+    ManagedTemporaryDirectory,
+    NativeTool,
+    ProjectDirectory,
+    ShellWorkingDirectory
+}
+
+internal sealed record ApprovalPromptObservation(
     IReadOnlyList<string> CandidateVerbs,
-    bool? IsMessy,
-    IReadOnlyList<string> ApprovalMatches);
+    bool IsMessy,
+    IReadOnlyList<string> OptionKeys);
+
+internal sealed record ApprovalObservation(
+    ApprovalOutcome Outcome,
+    ApprovalAllowReason? AllowReason,
+    string? DenyReason,
+    ApprovalCorrection? AgentCorrection,
+    ApprovalPromptObservation? Prompt,
+    int ApprovalChecks,
+    IReadOnlyList<string> ApprovalMatches,
+    IReadOnlyList<string> TraceRows,
+    IReadOnlyList<(int CandidateId, string Coverage)> CandidateCoverage);
 
 internal sealed record ShellApprovalHarnessScope(
     string ProjectDirectory,
@@ -302,21 +337,91 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         return ApprovalEntry.CreateTokenPrefix(shell, tokens, grant.Directory);
     }
 
-    public async Task<ObservedApproval> EvaluateAsync(CancellationToken ct)
+    public async Task<ApprovalObservation> EvaluateAsync(CancellationToken ct)
     {
         var decision = await _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
+        return Observe(decision, ApprovalService.CheckCount);
+    }
+
+    private static ApprovalObservation Observe(
+        ToolAuthorizationDecision decision,
+        int approvalChecks)
+    {
         var approvalContext = decision.ApprovalContext;
 
-        return new ObservedApproval(
-            decision.Outcome,
-            decision.AllowReason,
+        return new ApprovalObservation(
+            MapOutcome(decision.Outcome),
+            decision.AllowReason is { } reason ? MapAllowReason(reason) : null,
             decision.DenyReason,
-            approvalContext?.CandidateVerbs ?? [],
-            approvalContext?.IsMessy,
+            MapCorrection(decision.AgentCorrection),
+            approvalContext is null
+                ? null
+                : new ApprovalPromptObservation(
+                    approvalContext.CandidateVerbs,
+                    approvalContext.IsMessy,
+                    approvalContext.Options.Select(option => option.Key.Value).ToList()),
+            approvalChecks,
             decision.ApprovalMatches
                 .Select(match => $"{match.Source}:{match.Pattern}")
+                .ToList(),
+            decision.ShellPolicyTrace.Rows.Select(FormatTraceRow).ToList(),
+            decision.ShellPolicyTrace.Rows
+                .Where(row => row.CandidateId is not null && row.Coverage is not null)
+                .Select(row => (
+                    row.CandidateId!.Value.Value,
+                    row.Coverage!.Value.ToString()))
                 .ToList());
     }
+
+    internal static ApprovalOutcome ObserveOutcome(
+        ToolAuthorizationDecision decision)
+        => MapOutcome(decision.Outcome);
+
+    private static ApprovalOutcome MapOutcome(ToolAuthorizationOutcome outcome)
+        => outcome switch
+        {
+            ToolAuthorizationOutcome.Allowed => ApprovalOutcome.Allowed,
+            ToolAuthorizationOutcome.RequiresApproval => ApprovalOutcome.RequiresApproval,
+            ToolAuthorizationOutcome.RequiresAgentCorrection => ApprovalOutcome.RequiresAgentCorrection,
+            ToolAuthorizationOutcome.Denied => ApprovalOutcome.Denied,
+            _ => throw new ArgumentOutOfRangeException(nameof(outcome), outcome, "Unknown authorization outcome.")
+        };
+
+    private static ApprovalAllowReason MapAllowReason(ToolAllowReason reason)
+        => reason switch
+        {
+            ToolAllowReason.PolicyAuto => ApprovalAllowReason.PolicyAuto,
+            ToolAllowReason.BackgroundJobLifecycle => ApprovalAllowReason.BackgroundJobLifecycle,
+            ToolAllowReason.ReviewedSafePolicy => ApprovalAllowReason.ReviewedSafePolicy,
+            ToolAllowReason.ApprovalExemptShellCandidates => ApprovalAllowReason.ApprovalExemptShellCandidates,
+            ToolAllowReason.StoredApproval => ApprovalAllowReason.StoredApproval,
+            ToolAllowReason.OneTimeApproval => ApprovalAllowReason.OneTimeApproval,
+            _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown allow reason.")
+        };
+
+    private static ApprovalCorrection? MapCorrection(ToolCorrection? correction)
+        => correction switch
+        {
+            null => null,
+            ToolCorrection.ManagedTemporaryDirectorySuggested => ApprovalCorrection.ManagedTemporaryDirectory,
+            ToolCorrection.NativeToolSuggested => ApprovalCorrection.NativeTool,
+            ToolCorrection.ProjectDirectorySuggested => ApprovalCorrection.ProjectDirectory,
+            ToolCorrection.ShellWorkingDirectorySuggested => ApprovalCorrection.ShellWorkingDirectory,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(correction), correction, "Unknown approval correction.")
+        };
+
+    private static string FormatTraceRow(ShellPolicyTraceRow row)
+        => string.Join(
+            '|',
+            row.Stage,
+            row.CandidateId?.Value.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            row.ExecutableBasename ?? string.Empty,
+            row.Outcome,
+            row.Reason,
+            row.Coverage?.ToString() ?? string.Empty,
+            row.ScopeRelation,
+            row.GrantTimestamp?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty);
 
     public Task<ToolAuthorizationDecision> EvaluateDecisionAsync(CancellationToken ct)
         => _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
