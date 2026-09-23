@@ -392,6 +392,7 @@ jobs:
           bash -n evals/cycle_evals.sh
           python3 -m unittest discover -s evals -p test_background_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
+          python3 -m unittest discover -s evals -p test_tool_loop_replay.py -v
 
   semver-conformance:
     name: SemVer Conformance
