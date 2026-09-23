@@ -96,29 +96,33 @@ Behavior:
 
 ### 7) External Skill Sync
 
-`netclaw skill sync` runs the daemon's configured external source job immediately.
+`netclaw skill sync` runs the daemon's complete external source job immediately.
 It does not save configuration or add sources. System skills come from the installed binary.
 See the [engineering glossary](GLOSSARY.md) for shared terms.
 
 The command sends an authenticated `POST /api/skills/sync` request.
 The endpoint uses the existing daemon authorization policy.
 An unauthenticated request receives HTTP 401 and cannot start a pass.
-An authenticated request can join a pass that the startup path, timer, or another operator started.
+An authenticated complete request can join a compatible pass that the startup path, timer, or another operator started.
 
 `ServerFeedSkillSyncActor` owns the timer, active pass state, waiters, and lifetime token.
 This state is actor-local. The CLI owns only its call-local request wait.
-The external sync coordinator runs one pass through server-feed and managed plugin participants.
+The external sync coordinator runs one pass through server-feed, managed plugin, and catalog participants.
 The feed helpers retain the existing durable files and sync receipts.
 
 ```text
 CLI -> daemon authorization -> ServerFeedSkillSyncActor
   actor stops during a pass: return HTTP 503
-  add the caller to the actor-local waiter set
-  active pass exists: wait for that pass
+  compatible active pass exists: join its actor-local waiter set
+  incompatible active pass exists: queue this request
   otherwise: call ServerFeedSkillSyncService with the actor lifetime token
   for each enabled feed:
     run the existing RFC skill and native sub-agent sync
     collect its result; continue after a source failure
+  for each enabled installed plugin:
+    run the managed plugin participant; continue after a source failure
+  for each registered catalog:
+    refresh validated metadata; retain its prior snapshot after failure
   refresh the complete inventory through SkillInventoryRefresher
   send the result to the actor
   actor -> send the same result to all waiters
@@ -146,7 +150,9 @@ The response includes one pass ID, per-source counts, source type, sidecar statu
 The source type distinguishes a server feed from a Git plugin when both sources use the same name.
 The service assigns the pass ID before source work and includes it in its start and completion logs.
 The response contains no derived overall success field. The CLI computes its exit code from the source and inventory results.
-Overlapping callers receive the same pass ID. Source errors in this response do not include credentials or remote response bodies.
+Compatible overlapping callers receive the same pass ID.
+Incompatible callers receive a later pass ID.
+Source errors in this response do not include credentials or remote response bodies.
 Inventory rejection counts can include pre-existing source conflicts. They do not make a completed inventory refresh fail.
 This command does not add a transaction across feed files, the registry, and the prompt index.
 It preserves the existing per-skill replacement and prune rules.
@@ -204,7 +210,7 @@ CLI -> authenticated daemon route
   write the canonical source to SkillFeeds.Plugins
   return the current restart generation
 CLI -> wait for a later healthy daemon generation
-CLI -> request one immediate skill sync
+CLI -> request one source-scoped plugin pass
 daemon -> download, inspect, scan, and publish the candidate
 CLI -> read the plugin state and report success or failure
 ```
@@ -270,6 +276,20 @@ The daemon exposes plugin lifecycle routes at `/api/plugins`.
 Each route uses the existing authenticated daemon policy.
 The daemon returns safe RFC 9457 problem details for expected failures.
 The CLI shows a valid safe detail and otherwise shows a bounded status message.
+
+### 9) Plugin Marketplace Catalogs
+
+`netclaw plugin marketplace add|list|update|remove` manages public GitHub catalog sources.
+`netclaw plugin search` reads validated catalog snapshots.
+`netclaw plugin show <name>@<marketplace>` shows one catalog entry.
+`netclaw plugin install <name>@<marketplace>` installs only the selected package.
+Catalog add and update never install a package.
+
+The complete `netclaw skill sync` pass refreshes feeds, installed plugins, and catalogs.
+Named plugin lifecycle commands start only source-scoped plugin work.
+Marketplace update starts catalog-only work.
+The sync actor owns incompatible request queues and compatible waiter sets.
+See [SPEC-017](SPEC-017-plugin-marketplace-catalogs.md) for source rules and durable state.
 
 ## Output and Exit Codes
 
