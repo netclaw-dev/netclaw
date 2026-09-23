@@ -439,7 +439,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ct);
     }
 
-    internal Task<ShellAuthorizationResult> EvaluateCoordinatorAsync(CancellationToken ct)
+    internal Task<ToolAuthorizationResult> EvaluateCoordinatorAsync(CancellationToken ct)
         => new ShellPolicyCoordinator(_registry, _policy, ApprovalService).EvaluateAsync(
             _registry.GetByName(_toolCall.Name)
                 ?? throw new InvalidOperationException("The shell tool is not registered."),

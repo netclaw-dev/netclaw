@@ -200,11 +200,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
             var tool = authorized.Tool;
             var result = tool is ShellTool shellTool
-                         && authorized.AuthorizedAnalysis is { } shellAnalysis
+                         && authorized.Authorization is ToolAuthorizationResult.ShellExecution shellAuthorization
                 ? await shellTool.ExecuteAuthorizedAsync(
                     toolCall.Arguments,
                     context.Invocation,
-                    CreateShellLaunch(shellTool, toolCall.CallId, context, shellAnalysis),
+                    CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
                     ct)
                 : await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct);
 
@@ -308,7 +308,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
         toolCall = interpretation.Cleaned;
 
-        (INetclawTool Tool, ShellCommandAnalysis? AuthorizedAnalysis) authorized;
+        (INetclawTool Tool, ToolAuthorizationResult Authorization) authorized;
         try
         {
             authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
@@ -321,11 +321,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
         var tool = authorized.Tool;
         var updates = tool is ShellTool shellTool
-                      && authorized.AuthorizedAnalysis is { } shellAnalysis
+                      && authorized.Authorization is ToolAuthorizationResult.ShellExecution shellAuthorization
             ? shellTool.ExecuteAuthorizedStreamAsync(
                 toolCall.Arguments,
                 context.Invocation,
-                CreateShellLaunch(shellTool, toolCall.CallId, context, shellAnalysis),
+                CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
                 ct)
             : tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct);
         var sw = Stopwatch.StartNew();
@@ -396,8 +396,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         CancellationToken ct)
         => (await EvaluateAuthorizationResultAsync(toolCall, context, ct)).Decision;
 
-    private async Task<(ToolAuthorizationDecision Decision, ShellCommandAnalysis? AuthorizedAnalysis)>
-        EvaluateAuthorizationResultAsync(
+    private async Task<ToolAuthorizationResult> EvaluateAuthorizationResultAsync(
             FunctionCallContent toolCall,
             ToolExecutionContext context,
             CancellationToken ct)
@@ -409,7 +408,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         {
             var missingToolDecision = ToolAuthorizationDecision.Deny("tool_not_found");
             LogAuthorizationDecision(toolCall, context, missingToolDecision);
-            return (missingToolDecision, null);
+            return ToolAuthorizationResult.Stop(missingToolDecision);
         }
 
         if (string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal))
@@ -421,16 +420,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 ct);
 
             LogAuthorizationDecision(toolCall, context, shellAuthorization.Decision);
-            return shellAuthorization switch
-            {
-                ShellAuthorizationResult.Authorized authorized =>
-                    (authorized.Decision, authorized.Analysis),
-                ShellAuthorizationResult.ToolValidation toolValidation =>
-                    (toolValidation.Decision, null),
-                ShellAuthorizationResult.Stopped stopped =>
-                    (stopped.Decision, null),
-                _ => throw new InvalidOperationException("Unsupported shell authorization result.")
-            };
+            return shellAuthorization;
         }
 
         var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);
@@ -505,9 +495,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 approvalMatches);
         }
 
-        var authorizationDecision = CompleteAuthorizationDecision(accessDecision, approvalMatches);
+        var authorizationDecision = accessDecision.WithApprovalMatches(approvalMatches);
         LogAuthorizationDecision(toolCall, context, authorizationDecision);
-        return (authorizationDecision, null);
+        return ToolAuthorizationResult.Create(authorizationDecision, authorizedAnalysis: null);
     }
 
     public async Task<ShellProcessLaunch> PrepareShellLaunchAsync(
@@ -519,10 +509,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             throw new InvalidOperationException("A background launch requires a bound session and a trust boundary.");
 
         var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
-        if (authorized.Tool is not ShellTool shellTool || authorized.AuthorizedAnalysis is not { } analysis)
+        if (authorized.Tool is not ShellTool shellTool
+            || authorized.Authorization is not ToolAuthorizationResult.ShellExecution shellAuthorization)
             throw new InvalidOperationException("Background execution requires an authorized shell tool.");
 
-        return CreateShellLaunch(shellTool, toolCall.CallId, context, analysis);
+        return CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis);
     }
 
     private ShellProcessLaunch CreateShellLaunch(
@@ -561,7 +552,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
     ApprovalShell IApprovalShellProvider.Shell => _policy.Shell;
 
-    private async Task<(INetclawTool Tool, ShellCommandAnalysis? AuthorizedAnalysis)>
+    private async Task<(INetclawTool Tool, ToolAuthorizationResult Authorization)>
         GetAuthorizedToolAsync(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
@@ -595,13 +586,8 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         var tool = _registry.GetByName(toolCall.Name)
                    ?? throw new InvalidOperationException(
                        "Allowed decision is missing its registered tool.");
-        return (tool, authorization.AuthorizedAnalysis);
+        return (tool, authorization);
     }
-
-    private static ToolAuthorizationDecision CompleteAuthorizationDecision(
-        ToolAuthorizationDecision accessDecision,
-        IReadOnlyList<ToolApprovalMatch> approvalMatches)
-        => accessDecision.WithApprovalMatches(approvalMatches);
 
     private static bool TryGetExactUnapprovedCandidates(
         ToolApprovalCheckResult result,
