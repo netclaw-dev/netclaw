@@ -200,7 +200,7 @@ static async Task RunAsync(string[] args)
             // On an existing install, `netclaw init` opens an explicit action menu instead
             // of silently re-walking setup (simplify-netclaw-init). First run starts the
             // bootstrap wizard directly.
-            var initStartRoute = File.Exists(initPaths.NetclawConfigPath)
+            var initStartRoute = initPaths.HasCompletedSetup()
                 ? InitExistingInstallViewModel.MenuRoute
                 : "/init";
 
