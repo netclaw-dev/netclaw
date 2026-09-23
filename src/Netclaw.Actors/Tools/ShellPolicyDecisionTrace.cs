@@ -103,9 +103,10 @@ internal sealed class ShellPolicyDecisionTraceBuilder
 
     internal void AddActorEvidence(
         ShellPolicyCandidate candidate,
-        ShellGrantCandidateMatch actorMatch)
+        ShellGrantCandidateResult actorMatch)
     {
-        if (actorMatch.Match is not null && actorMatch.GrantCoverage is { } coverage)
+        var coverage = actorMatch.Coverage;
+        if (coverage != ShellCoverageKind.Uncovered)
         {
             AddDetail(new ShellPolicyTraceRow(
                 ShellPolicyTraceStage.StoredGrantMatch,
@@ -119,7 +120,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             return;
         }
 
-        var nearMiss = actorMatch.NearMisses.FirstOrDefault();
+        var nearMiss = actorMatch.NearMiss;
         AddDetail(new ShellPolicyTraceRow(
             ShellPolicyTraceStage.StoredGrantMatch,
             ShellPolicyTraceOutcome.Uncovered,

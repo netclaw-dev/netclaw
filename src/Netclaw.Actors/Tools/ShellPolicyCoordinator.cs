@@ -379,17 +379,7 @@ internal sealed class ShellPolicyCoordinator(
             projection.ApprovalContext.Cwd,
             cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        if (!ValidatedShellGrantEvidence.TryCreate(
-                actorResult,
-                grantCandidates,
-                projection.ApprovalContext.Cwd,
-                out var grantEvidence)
-            || grantEvidence is null)
-        {
-            throw new InvalidOperationException("Invalid shell approval evidence.");
-        }
-
-        evaluation.ApplyActorEvidence(grantEvidence);
+        evaluation.ApplyActorEvidence(actorResult);
         cancellationToken.ThrowIfCancellationRequested();
         if (_approvalEvidence.IsAvailable)
         {
@@ -425,8 +415,7 @@ internal sealed class ShellPolicyCoordinator(
         cancellationToken.ThrowIfCancellationRequested();
 
         if (evaluation.UncoveredCandidates.Count > 0
-            && evaluation.GrantEvidence?.PersistentStore
-            is PersistentGrantStoreStatus.Unavailable)
+            && evaluation.GrantEvidence?.PersistentStoreFailure is not null)
         {
             return evaluation.Complete(
                 ToolAuthorizationDecision.Deny("approval_store_unavailable"));

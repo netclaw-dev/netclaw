@@ -197,10 +197,12 @@ public partial class DispatchingToolExecutorTests
     }
 
     private static ShellApprovalMatchResult LaunchGrantResult(ShellApprovalMatchRequest request, bool approved)
-        => new(new PersistentGrantStoreStatus.Ready(),
-            request.Candidates.Select(candidate => approved
-                ? new ShellGrantCandidateMatch(candidate.CandidateId,
-                    new ToolApprovalMatch(candidate.Candidate.Verb, "session", "this chat"),
-                    ShellCoverageKind.Session, [])
-                : new ShellGrantCandidateMatch(candidate.CandidateId, null, null, [])).ToArray());
+        => ShellApprovalMatchResult.Create(
+            request.Candidates,
+            persistentStoreFailure: null,
+            request.Candidates
+                .Select(candidate => approved
+                    ? ShellGrantCandidateResult.Session(candidate)
+                    : ShellGrantCandidateResult.Uncovered(candidate))
+                .ToArray());
 }

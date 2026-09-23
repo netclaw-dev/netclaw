@@ -834,8 +834,8 @@ public sealed class ToolApprovalActorTests : TestKit
                     ]),
                 ct);
 
-            Assert.All(result.CandidateMatches, match =>
-                Assert.Equal(ShellCoverageKind.PersistentGlobal, match.GrantCoverage));
+            Assert.All(result.Candidates, candidate =>
+                Assert.Equal(ShellCoverageKind.PersistentGlobal, candidate.Coverage));
         }
         finally
         {
@@ -922,13 +922,11 @@ public sealed class ToolApprovalActorTests : TestKit
                     candidates),
                 ct);
 
-            var unavailable = Assert.IsType<PersistentGrantStoreStatus.Unavailable>(result.PersistentStore);
-            Assert.Equal(ApprovalStoreFailure.InvalidData, unavailable.Failure);
-            Assert.Equal([7, 11], result.CandidateMatches.Select(match => match.CandidateId.Value));
-            Assert.Equal(ShellCoverageKind.Session, result.CandidateMatches[0].GrantCoverage);
-            Assert.NotNull(result.CandidateMatches[0].Match);
-            Assert.Null(result.CandidateMatches[1].GrantCoverage);
-            Assert.Null(result.CandidateMatches[1].Match);
+            Assert.Equal(ApprovalStoreFailure.InvalidData, result.PersistentStoreFailure);
+            Assert.Equal([7, 11], result.Candidates.Select(candidate => candidate.CandidateId.Value));
+            Assert.Equal(ShellCoverageKind.Session, result.Candidates[0].Coverage);
+            Assert.Equal(ShellCoverageKind.Uncovered, result.Candidates[1].Coverage);
+            Assert.Null(result.Candidates[1].NearMiss);
         }
         finally
         {
@@ -975,8 +973,8 @@ public sealed class ToolApprovalActorTests : TestKit
                     ]),
                 ct);
 
-            var match = Assert.Single(result.CandidateMatches);
-            Assert.Equal(ShellCoverageKind.PersistentGlobal, match.GrantCoverage);
+            var match = Assert.Single(result.Candidates);
+            Assert.Equal(ShellCoverageKind.PersistentGlobal, match.Coverage);
             Assert.Equal(grantTimestamp, match.GrantCreatedAt);
         }
         finally
@@ -1026,11 +1024,10 @@ public sealed class ToolApprovalActorTests : TestKit
                     ]),
                 ct);
 
-            var match = Assert.Single(result.CandidateMatches);
-            Assert.Null(match.Match);
-            Assert.Null(match.GrantCoverage);
+            var match = Assert.Single(result.Candidates);
+            Assert.Equal(ShellCoverageKind.Uncovered, match.Coverage);
             Assert.Null(match.GrantCreatedAt);
-            var nearMiss = Assert.Single(match.NearMisses);
+            var nearMiss = Assert.IsType<ShellApprovalNearMiss>(match.NearMiss);
             Assert.Equal(ShellApprovalNearMissReason.OutsideDirectory, nearMiss.Reason);
             Assert.Equal(grantTimestamp, nearMiss.Grant.CreatedAt);
         }

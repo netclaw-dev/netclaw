@@ -156,7 +156,7 @@ internal sealed class ShellPolicyEvaluation
 {
     private readonly ShellPolicyCoverageSource[] _coverage;
     private readonly ShellPolicyDecisionTraceBuilder _trace = new();
-    private ValidatedShellGrantEvidence? _grantEvidence;
+    private ShellApprovalMatchResult? _grantEvidence;
 
     internal ShellPolicyEvaluation(ShellPolicyProjection projection)
     {
@@ -177,10 +177,13 @@ internal sealed class ShellPolicyEvaluation
             .Where((_, index) => _coverage[index] == ShellPolicyCoverageSource.Uncovered)
             .ToArray());
 
-    internal ValidatedShellGrantEvidence? GrantEvidence => _grantEvidence;
+    internal ShellApprovalMatchResult? GrantEvidence => _grantEvidence;
 
     internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches =>
-        _grantEvidence?.ApprovalMatches ?? [];
+        _grantEvidence?.Candidates
+            .Where(static result => result.Coverage != ShellCoverageKind.Uncovered)
+            .Select(result => result.FormatMatch(Candidates[result.CandidateId.Value].Candidate))
+            .ToArray() ?? [];
 
     internal bool HasOneTimeCoverage => _coverage.Contains(ShellPolicyCoverageSource.OneTime);
 
@@ -214,29 +217,30 @@ internal sealed class ShellPolicyEvaluation
         return CoverageFor(candidateId) != ShellPolicyCoverageSource.Uncovered;
     }
 
-    internal void ApplyActorEvidence(ValidatedShellGrantEvidence evidence)
+    internal void ApplyActorEvidence(ShellApprovalMatchResult evidence)
     {
         ArgumentNullException.ThrowIfNull(evidence);
-        if (_grantEvidence is not null
-            || !ReferenceEquals(evidence.SourceCandidates, Projection.GrantCandidates))
-        {
+        if (_grantEvidence is not null)
             throw new InvalidOperationException("Invalid shell approval evidence.");
-        }
 
         _grantEvidence = evidence;
-        foreach (var candidateEvidence in evidence.CandidateEvidence)
+        foreach (var candidateEvidence in evidence.Candidates)
         {
-            var actorEvidence = candidateEvidence.ActorEvidence;
-            if (actorEvidence.GrantCoverage is { } grantCoverage)
+            var candidateId = candidateEvidence.CandidateId;
+            if ((uint)candidateId.Value >= (uint)Candidates.Count)
+                throw new InvalidOperationException("Invalid shell approval evidence.");
+
+            var candidate = Candidates[candidateId.Value];
+            if (candidateEvidence.Coverage != ShellCoverageKind.Uncovered)
             {
                 Cover(
-                    candidateEvidence.Candidate,
-                    ToCoverageSource(grantCoverage),
-                    actorEvidence.GrantCreatedAt);
+                    candidate,
+                    ToCoverageSource(candidateEvidence.Coverage),
+                    candidateEvidence.GrantCreatedAt);
             }
             else
             {
-                _trace.AddActorEvidence(candidateEvidence.Candidate, actorEvidence);
+                _trace.AddActorEvidence(candidate, candidateEvidence);
             }
         }
 

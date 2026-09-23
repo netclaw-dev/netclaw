@@ -25,28 +25,19 @@ public sealed class ShellApprovalEvidenceTests
     {
         var verb = shell == ApprovalShell.Bash ? "git status" : "Get-Location";
         var candidate = CreateCandidate(0, shell, verb, directory);
+        var grantCandidate = CreateGrantCandidate(candidate, directory);
         var entry = ApprovalEntry.CreateTokenPrefix(
             shell,
             Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.Candidate.VerbTokens),
             directory);
-        var result = new ShellApprovalMatchResult(
-            new PersistentGrantStoreStatus.Ready(),
-            [
-                new ShellGrantCandidateMatch(
-                    candidate.Id,
-                    new ToolApprovalMatch(verb, "persistent", entry.FormatScope()),
-                    ShellCoverageKind.PersistentFolder,
-                    NearMisses: [])
-            ]);
+        var result = ShellApprovalMatchResult.Create(
+            [grantCandidate],
+            persistentStoreFailure: null,
+            [ShellGrantCandidateResult.Persistent(grantCandidate, entry)]);
 
-        var valid = ValidatedShellGrantEvidence.TryCreate(
-            result,
-            [candidate],
-            directory,
-            out var evidence);
-
-        Assert.True(valid);
-        Assert.NotNull(evidence);
+        var match = Assert.Single(result.Candidates);
+        Assert.Equal(ShellCoverageKind.PersistentFolder, match.Coverage);
+        Assert.Equal(entry.FormatScope(), match.FormatMatch(candidate.Candidate).Scope);
     }
 
     [Theory]
@@ -65,33 +56,32 @@ public sealed class ShellApprovalEvidenceTests
         "git status",
         null,
         "Bash token-prefix \"git  status\" anywhere")]
-    public void Persistent_scope_must_be_canonical(
+    public async Task Persistent_scope_must_be_canonical(
         ApprovalShell shell,
         string verb,
         string? directory,
         string scope)
     {
         var candidate = CreateCandidate(0, shell, verb, directory);
-        var result = new ShellApprovalMatchResult(
-            new PersistentGrantStoreStatus.Ready(),
+        var grantCandidate = CreateGrantCandidate(candidate, directory);
+        var publicMatch = new ToolApprovalMatch(verb, "persistent", scope);
+        var publicResult = new ToolApprovalCheckResult([], [publicMatch])
+        {
+            CandidateChecks =
             [
-                new ShellGrantCandidateMatch(
-                    candidate.Id,
-                    new ToolApprovalMatch(verb, "persistent", scope),
-                    directory is null
-                        ? ShellCoverageKind.PersistentGlobal
-                        : ShellCoverageKind.PersistentFolder,
-                    NearMisses: [])
-            ]);
+                new ToolApprovalCandidateCheck(candidate.Candidate, publicMatch)
+            ]
+        };
+        var adapter = new ShellApprovalEvidenceAdapter(new FixedApprovalService(publicResult));
+        var request = new ShellApprovalMatchRequest(
+            SessionId: null,
+            TrustAudience.Personal,
+            new ToolName("shell_execute"),
+            TestShellEnvironment.Current,
+            [grantCandidate]);
 
-        var valid = ValidatedShellGrantEvidence.TryCreate(
-            result,
-            [candidate],
-            directory,
-            out var evidence);
-
-        Assert.False(valid);
-        Assert.Null(evidence);
+        await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            adapter.MatchAsync(request, directory, TestContext.Current.CancellationToken));
     }
 
     [Theory]
@@ -103,6 +93,8 @@ public sealed class ShellApprovalEvidenceTests
     {
         var covered = CreateCandidate(0, ApprovalShell.Bash, "git status", null);
         var uncovered = CreateCandidate(1, ApprovalShell.Bash, "git push", null);
+        var coveredGrantCandidate = CreateGrantCandidate(covered, directory: null);
+        var uncoveredGrantCandidate = CreateGrantCandidate(uncovered, directory: null);
         var typedGrant = ApprovalEntry.CreateTokenPrefix(
             ApprovalShell.Bash,
             ["git", "status"]);
@@ -121,34 +113,23 @@ public sealed class ShellApprovalEvidenceTests
                 "/outside"),
             _ => throw new ArgumentOutOfRangeException(nameof(malformedCase), malformedCase, null)
         };
-        var result = new ShellApprovalMatchResult(
-            new PersistentGrantStoreStatus.Ready(),
+
+        var exception = Record.Exception(() => ShellApprovalMatchResult.Create(
+            [coveredGrantCandidate, uncoveredGrantCandidate],
+            persistentStoreFailure: null,
             [
-                new ShellGrantCandidateMatch(
-                    covered.Id,
-                    new ToolApprovalMatch(covered.Candidate.Verb, "session", "this chat"),
-                    ShellCoverageKind.Session,
-                    NearMisses: []),
-                new ShellGrantCandidateMatch(
-                    uncovered.Id,
-                    Match: null,
-                    GrantCoverage: null,
-                    NearMisses:
-                    [
-                        new ShellApprovalNearMiss(
-                            malformedGrant,
-                            ShellApprovalNearMissReason.ShellMismatch)
-                    ])
-            ]);
+                ShellGrantCandidateResult.Session(coveredGrantCandidate),
+                ShellGrantCandidateResult.Uncovered(
+                    uncoveredGrantCandidate,
+                    new ShellApprovalNearMiss(
+                        malformedGrant,
+                        ShellApprovalNearMissReason.ShellMismatch))
+            ]));
 
-        var valid = ValidatedShellGrantEvidence.TryCreate(
-            result,
-            [covered, uncovered],
-            cwd: null,
-            out var evidence);
-
-        Assert.False(valid);
-        Assert.Null(evidence);
+        if (malformedCase == MalformedNearMissGrantCase.NonShell)
+            Assert.IsType<ArgumentException>(exception);
+        else
+            Assert.IsType<System.Text.Json.JsonException>(exception);
     }
 
     private static ShellPolicyCandidate CreateCandidate(
@@ -165,6 +146,42 @@ public sealed class ShellApprovalEvidenceTests
                     verb.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             },
             SourceOccurrence: null);
+
+    private static ShellGrantCandidate CreateGrantCandidate(
+        ShellPolicyCandidate candidate,
+        string? directory)
+        => new(candidate.Id, candidate.Candidate, directory);
+
+    private sealed class FixedApprovalService(ToolApprovalCheckResult result) : IToolApprovalService
+    {
+        public Task<ToolApprovalCheckResult> CheckApprovalAsync(
+            ToolApprovalSessionId? sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<ApprovalCandidate> candidates,
+            string? cwd,
+            CancellationToken ct = default)
+            => Task.FromResult(result);
+
+        public Task<IReadOnlyList<string>> GetUnapprovedPatternsAsync(
+            ToolApprovalSessionId? sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<string> patterns,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("This test uses the candidate check API.");
+
+        public Task RecordApprovalAsync(
+            ToolApprovalSessionId sessionId,
+            TrustAudience audience,
+            ToolName toolName,
+            IReadOnlyList<string> patterns,
+            bool persistent,
+            string? cwd,
+            CancellationToken ct = default)
+            => throw new InvalidOperationException("This test does not record approvals.");
+    }
 
     public enum MalformedNearMissGrantCase
     {

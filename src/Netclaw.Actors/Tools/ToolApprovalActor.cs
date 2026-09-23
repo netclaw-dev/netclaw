@@ -64,33 +64,22 @@ internal sealed class ToolApprovalActor : ReceiveActor
         Receive<MatchShellCandidates>(msg =>
         {
             var snapshot = LoadPersistentSnapshot(msg.Audience, msg.ToolName);
-            var candidateMatches = new List<ShellGrantCandidateMatch>(msg.Candidates.Count);
+            var candidateMatches = new List<ShellGrantCandidateResult>(msg.Candidates.Count);
             foreach (var candidate in msg.Candidates)
             {
-                var grantEvaluation = EvaluateShellApproval(
+                candidateMatches.Add(EvaluateShellApproval(
                     msg.SessionId,
                     msg.Audience,
                     msg.ToolName,
-                    candidate.Candidate,
-                    candidate.RealDirectory,
-                    snapshot.Approvals);
-                candidateMatches.Add(new ShellGrantCandidateMatch(
-                    candidate.CandidateId,
-                    grantEvaluation.Match,
-                    grantEvaluation.Coverage,
-                    grantEvaluation.NearMisses)
-                {
-                    GrantCreatedAt = grantEvaluation.GrantCreatedAt
-                });
+                    candidate,
+                    snapshot.Approvals));
             }
 
-            var storeStatus = snapshot.Failure is { } failure
-                ? (PersistentGrantStoreStatus)new PersistentGrantStoreStatus.Unavailable(failure)
-                : new PersistentGrantStoreStatus.Ready();
             Sender.Tell(new ShellApprovalMatchResponse(
-                new ShellApprovalMatchResult(
-                    storeStatus,
-                    Array.AsReadOnly(candidateMatches.ToArray()))));
+                ShellApprovalMatchResult.Create(
+                    msg.Candidates,
+                    snapshot.Failure,
+                    candidateMatches)));
         });
 
         Receive<RecordToolApproval>(msg =>
@@ -232,47 +221,37 @@ internal sealed class ToolApprovalActor : ReceiveActor
         return MatchPersistedEntry(toolName, candidate, cwd, persistedApprovals);
     }
 
-    private ShellActorGrantEvaluation EvaluateShellApproval(
+    private ShellGrantCandidateResult EvaluateShellApproval(
         SessionId? sessionId,
         TrustAudience audience,
         ToolName toolName,
-        ApprovalCandidate candidate,
-        string? cwd,
+        ShellGrantCandidate candidate,
         IReadOnlyList<ApprovalEntry> persistedApprovals)
     {
         if (sessionId.HasValue
-            && IsSessionApproved(sessionId.Value, audience, toolName, candidate, cwd))
+            && IsSessionApproved(
+                sessionId.Value,
+                audience,
+                toolName,
+                candidate.Candidate,
+                candidate.RealDirectory))
         {
-            return new ShellActorGrantEvaluation(
-                new ToolApprovalMatch(candidate.Verb, "session", "this chat"),
-                ShellCoverageKind.Session,
-                GrantCreatedAt: null,
-                NearMisses: []);
+            return ShellGrantCandidateResult.Session(candidate);
         }
 
         var evaluation = ApprovalPatternMatching.EvaluateShellApproval(
-            candidate,
-            cwd,
+            candidate.Candidate,
+            candidate.RealDirectory,
             persistedApprovals,
             maximumNearMisses: 1);
         if (evaluation.MatchedEntry is { } entry)
         {
-            return new ShellActorGrantEvaluation(
-                new ToolApprovalMatch(candidate.Verb, "persistent", entry.FormatScope()),
-                entry.Repository is not null
-                    ? ShellCoverageKind.PersistentRepository
-                    : entry.Directory is null
-                        ? ShellCoverageKind.PersistentGlobal
-                        : ShellCoverageKind.PersistentFolder,
-                entry.CreatedAt,
-                NearMisses: []);
+            return ShellGrantCandidateResult.Persistent(candidate, entry);
         }
 
-        return new ShellActorGrantEvaluation(
-            Match: null,
-            Coverage: null,
-            GrantCreatedAt: null,
-            evaluation.NearMisses);
+        return ShellGrantCandidateResult.Uncovered(
+            candidate,
+            evaluation.NearMisses.SingleOrDefault());
     }
 
     private bool IsSessionApproved(
@@ -496,11 +475,6 @@ internal sealed class ToolApprovalActor : ReceiveActor
         IReadOnlyList<ApprovalEntry> Approvals,
         ApprovalStoreFailure? Failure);
 
-    private sealed record ShellActorGrantEvaluation(
-        ToolApprovalMatch? Match,
-        ShellCoverageKind? Coverage,
-        DateTimeOffset? GrantCreatedAt,
-        IReadOnlyList<ShellApprovalNearMiss> NearMisses);
 }
 
 internal sealed record ToolApprovalRecorded(ApprovalStoreFailure? Failure)
