@@ -129,6 +129,80 @@ public class McpToolResultFormatterTests
     }
 
     [Fact]
+    public void Structured_success_with_image_preserves_marker_and_structured_content()
+    {
+        var result = Json("""{"content":[{"type":"image","data":"AQID","mimeType":"image/png"}],"structuredContent":{"caption":"critical detail"},"isError":false}""");
+
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        Assert.Equal("[image: image/png]\n{\"caption\":\"critical detail\"}", message);
+        Assert.DoesNotContain("AQID", message);
+    }
+
+    [Fact]
+    public void Metadata_success_projects_content_without_binary_data()
+    {
+        var result = Json("""
+                          {
+                            "content": [
+                              { "type": "image", "data": "AQID", "mimeType": "image/png" }
+                            ],
+                            "isError": false,
+                            "_meta": { "vendor/example": true }
+                          }
+                          """);
+
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        Assert.Equal("[image: image/png]", message);
+        Assert.DoesNotContain("AQID", message);
+        Assert.DoesNotContain("_meta", message);
+    }
+
+    [Theory]
+    [InlineData(
+        """{"content":[{"type":"audio","data":"SECRET","mimeType":"audio/wav"}],"isError":false,"_meta":{}}""",
+        "[attachment: audio/wav]")]
+    [InlineData(
+        """{"content":[{"type":"resource","resource":{"uri":"memory://notes","text":"resource-notes"}}],"isError":false,"_meta":{}}""",
+        "resource-notes")]
+    [InlineData(
+        """{"content":[{"type":"resource","resource":{"uri":"memory://report","blob":"SECRET","mimeType":"application/pdf"}}],"isError":false,"_meta":{}}""",
+        "[attachment: application/pdf]")]
+    [InlineData(
+        """{"content":[{"type":"resource","resource":{"uri":"memory://chart","blob":"SECRET","mimeType":"image/png"}}],"isError":false,"_meta":{}}""",
+        "[image: image/png]")]
+    [InlineData(
+        """{"content":[{"type":"resource_link","uri":"memory://notes","name":"notes"}],"isError":false}""",
+        "[unsupported MCP content: resource_link]")]
+    [InlineData(
+        """{"content":[{"type":"text"}],"isError":false}""",
+        "[unsupported MCP content: text]")]
+    [InlineData(
+        """{"content":[42],"isError":false}""",
+        "[unsupported MCP content: unknown]")]
+    public void Json_content_projection_is_explicit_and_excludes_binary_data(
+        string json,
+        string expected)
+    {
+        var message = McpToolResultFormatter.Format(Json(json), "srv/tool");
+
+        Assert.Equal(expected, message);
+        Assert.DoesNotContain("SECRET", message);
+    }
+
+    [Fact]
+    public void Success_without_model_readable_content_reports_that_state()
+    {
+        var result = Json("""{"content":[],"isError":false,"_meta":{"vendor/example":true}}""");
+
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        Assert.Equal("MCP tool 'srv/tool' returned no model-readable content.", message);
+        Assert.DoesNotContain("vendor/example", message);
+    }
+
+    [Fact]
     public void Plain_string_result_is_passed_through()
         => Assert.Equal("Message sent.", McpToolResultFormatter.Format("Message sent.", "srv/tool"));
 
@@ -173,10 +247,37 @@ public class McpToolResultFormatterTests
         => Assert.Equal("done", McpToolResultFormatter.Format(new TextContent("done"), "srv/tool"));
 
     [Fact]
+    public void Single_DataContent_projects_marker_without_binary_data()
+    {
+        var result = new DataContent(new byte[] { 1, 2, 3 }, "image/png");
+
+        Assert.Equal("[image: image/png]", McpToolResultFormatter.Format(result, "srv/tool"));
+    }
+
+    [Fact]
     public void Non_image_DataContent_projects_attachment_marker()
     {
         var result = new AIContent[] { new DataContent(new byte[] { 4, 5 }, "application/pdf") };
 
         Assert.Equal("[attachment: application/pdf]", McpToolResultFormatter.Format(result, "srv/tool"));
+    }
+
+    [Fact]
+    public void Unsupported_AIContent_is_reported_instead_of_dropped()
+    {
+        var result = new AIContent[]
+        {
+            new TextContent("before"),
+            new FunctionCallContent("call-1", "nested-tool"),
+            new FunctionResultContent("call-1", "nested-result"),
+            new TextContent("after"),
+        };
+
+        var message = McpToolResultFormatter.Format(result, "srv/tool");
+
+        Assert.Equal(
+            "before\n[unsupported MCP content: FunctionCallContent]" +
+            "\n[unsupported MCP content: FunctionResultContent]\nafter",
+            message);
     }
 }

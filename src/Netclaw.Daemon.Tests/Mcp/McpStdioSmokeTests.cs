@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.Json;
+using Microsoft.Extensions.AI;
 using ModelContextProtocol.Client;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -72,6 +74,37 @@ public class McpStdioSmokeTests : IAsyncDisposable
 
         Assert.NotEmpty(results);
         Assert.Contains(results, t => t.Name == $"smoke/{firstTool.Name}");
+    }
+
+    [Fact]
+    public async Task MultiContentResult_ProjectsTextAndMarkerWithoutImageBytes()
+    {
+        _client = await CreateClientAsync("multi-content");
+        var tools = await _client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var tool = Assert.Single(tools, candidate => candidate.Name == "image-with-notes");
+
+        var result = await tool.InvokeAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.IsType<AIContent[]>(result);
+        var formatted = McpToolResultFormatter.Format(result, "smoke/image-with-notes");
+        Assert.Equal("[image: image/png]\nchart-notes", formatted);
+        Assert.DoesNotContain("AQID", formatted);
+    }
+
+    [Fact]
+    public async Task MetadataResult_ProjectsTextAndMarkerWithoutImageBytes()
+    {
+        _client = await CreateClientAsync("metadata-content");
+        var tools = await _client.ListToolsAsync(cancellationToken: TestContext.Current.CancellationToken);
+        var tool = Assert.Single(tools, candidate => candidate.Name == "image-with-metadata");
+
+        var result = await tool.InvokeAsync(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.IsType<JsonElement>(result);
+        var formatted = McpToolResultFormatter.Format(result, "smoke/image-with-metadata");
+        Assert.Equal("[image: image/png]", formatted);
+        Assert.DoesNotContain("AQID", formatted);
+        Assert.DoesNotContain("_meta", formatted);
     }
 
     [Fact]
