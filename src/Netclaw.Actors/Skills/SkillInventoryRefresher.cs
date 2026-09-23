@@ -19,6 +19,7 @@ public sealed class SkillInventoryRefresher
     private readonly IReadOnlyList<ResolvedExternalSource> _externalSources;
     private readonly SkillRegistry _registry;
     private readonly SkillIndexPublisher _indexPublisher;
+    private IReadOnlyList<ResolvedExternalSource> _managedGitPluginSources = [];
 
     public SkillInventoryRefresher(
         NetclawPaths paths,
@@ -38,15 +39,36 @@ public sealed class SkillInventoryRefresher
     {
         lock (_refreshLock)
         {
-            var result = SkillScanner.ScanAndMerge(
-                _paths.SkillsDirectory,
-                ResolveServerFeedSources(),
-                _externalSources);
-
-            _registry.ReplaceAll(result.AcceptedSkills, result.Issues);
-            _indexPublisher.Publish();
-            return result;
+            return RefreshCore();
         }
+    }
+
+    /// <summary>
+    /// Replaces the managed Git plugin paths and publishes one inventory snapshot.
+    /// </summary>
+    public MergedSkillScanResult ReplaceManagedGitPluginSourcesAndRefresh(
+        IReadOnlyList<ResolvedExternalSource> managedGitPluginSources)
+    {
+        ArgumentNullException.ThrowIfNull(managedGitPluginSources);
+
+        lock (_refreshLock)
+        {
+            _managedGitPluginSources = managedGitPluginSources;
+            return RefreshCore();
+        }
+    }
+
+    private MergedSkillScanResult RefreshCore()
+    {
+        var result = SkillScanner.ScanAndMerge(
+            _paths.SkillsDirectory,
+            ResolveServerFeedSources(),
+            _managedGitPluginSources,
+            _externalSources);
+
+        _registry.ReplaceAll(result.AcceptedSkills, result.Issues);
+        _indexPublisher.Publish();
+        return result;
     }
 
     private IReadOnlyList<ResolvedExternalSource> ResolveServerFeedSources()
