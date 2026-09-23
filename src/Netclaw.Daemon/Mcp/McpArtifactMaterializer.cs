@@ -20,9 +20,6 @@ internal sealed class McpArtifactMaterializer(
     IContentScanner contentScanner,
     ILogger<McpArtifactMaterializer> logger)
 {
-    internal const int MaxArtifactCount = ChannelAttachmentPolicy.DefaultMaxFilesPerMessage;
-    internal const long MaxAggregateBytes = ContentPolicy.DefaultMaxFileSizeBytes;
-
     private readonly IContentScanner _contentScanner = contentScanner;
     private readonly ILogger<McpArtifactMaterializer> _logger = logger;
 
@@ -43,17 +40,10 @@ internal sealed class McpArtifactMaterializer(
         var notes = new List<string>();
         var accepted = new List<AcceptedArtifact>();
         var createdFiles = new List<string>();
-        long aggregateBytes = 0;
-
-        if (artifacts.Count > MaxArtifactCount)
-        {
-            notes.Add(
-                $"[MCP artifacts limited: Netclaw accepted only the first {MaxArtifactCount} candidates.]");
-        }
 
         try
         {
-            for (var index = 0; index < Math.Min(artifacts.Count, MaxArtifactCount); index++)
+            for (var index = 0; index < artifacts.Count; index++)
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var candidate = artifacts[index];
@@ -65,13 +55,6 @@ internal sealed class McpArtifactMaterializer(
                     continue;
                 }
 
-                if (candidate.Data.Length > MaxAggregateBytes - aggregateBytes)
-                {
-                    notes.Add($"[MCP artifact {ordinal} rejected: the artifact byte limit was exceeded.]");
-                    continue;
-                }
-
-                aggregateBytes += candidate.Data.Length;
                 var scanName = BuildCandidateName(candidate, ordinal);
                 ContentScanResult scan;
                 try

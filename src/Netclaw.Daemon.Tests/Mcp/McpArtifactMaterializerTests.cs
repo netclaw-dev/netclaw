@@ -212,67 +212,6 @@ public sealed class McpArtifactMaterializerTests
     }
 
     [Fact]
-    public async Task Candidate_count_limit_bounds_scans_and_outputs()
-    {
-        // A server can return an unbounded list of small data blocks.
-        // This test proves that Netclaw scans and stores only the fixed candidate limit.
-        // Arrange
-        using var directory = new DisposableTempDir();
-        var context = CreateContext(directory, ModelModality.Image);
-        var scanner = new DelegatingScanner((_, _, _, _) => Task.FromResult(
-            ContentScanResult.Allowed(new VerifiedMimeType(MimeTypeCatalog.ImagePng))));
-        var materializer = CreateMaterializer(scanner);
-        var artifacts = Enumerable.Range(1, McpArtifactMaterializer.MaxArtifactCount + 1)
-            .Select(index => new McpResultArtifact(
-                new byte[] { (byte)index },
-                new DeclaredMimeType(MimeTypeCatalog.ImagePng),
-                $"image-{index}.png"))
-            .ToArray();
-
-        // Act
-        var notes = await materializer.MaterializeAsync(
-            artifacts,
-            "smoke/chart",
-            context.Invocation,
-            TestContext.Current.CancellationToken);
-
-        // Assert
-        Assert.Equal(McpArtifactMaterializer.MaxArtifactCount, scanner.CallCount);
-        Assert.Equal(McpArtifactMaterializer.MaxArtifactCount, context.Outputs.FileAttachments.Count);
-        Assert.Contains(notes, note => note.Contains("accepted only the first", StringComparison.Ordinal));
-    }
-
-    [Fact]
-    public async Task Aggregate_byte_limit_rejects_data_before_a_scan()
-    {
-        // The materializer must apply its fixed byte bound before expensive security work.
-        // This test proves that an oversized result cannot call the scanner or write a file.
-        // Arrange
-        using var directory = new DisposableTempDir();
-        var context = CreateContext(directory, ModelModality.Image);
-        var scanner = new DelegatingScanner((_, _, _, _) => Task.FromResult(
-            ContentScanResult.Allowed(new VerifiedMimeType(MimeTypeCatalog.ImagePng))));
-        var materializer = CreateMaterializer(scanner);
-        var artifacts = CreateArtifacts((
-            new byte[checked((int)(McpArtifactMaterializer.MaxAggregateBytes + 1))],
-            "image/png",
-            "oversized.png"));
-
-        // Act
-        var notes = await materializer.MaterializeAsync(
-            artifacts,
-            "smoke/chart",
-            context.Invocation,
-            TestContext.Current.CancellationToken);
-
-        // Assert
-        Assert.Equal(0, scanner.CallCount);
-        Assert.Empty(context.Outputs.FileAttachments);
-        Assert.False(Directory.Exists(context.SessionStorage!.ArtifactDirectory.Value));
-        Assert.Contains("byte limit", Assert.Single(notes));
-    }
-
-    [Fact]
     public async Task Cancellation_removes_files_and_registers_no_outputs()
     {
         // Cancellation can occur after one candidate reaches storage and before the next scan.

@@ -1,11 +1,11 @@
 ## 1. Result Projection
 
-- [x] 1.1 Add one immutable MCP result projection and verify formatter tests cover text, artifacts, errors, and invalid Base64.
+- [x] 1.1 Add one immutable MCP result projection and verify formatter tests cover text, artifacts, bounds, errors, and invalid Base64.
 - [x] 1.2 Keep the existing text wrappers compatible and verify current exact-text formatter tests pass.
 
 ## 2. Artifact Admission
 
-- [x] 2.1 Add the daemon artifact materializer and verify scan-before-write, verified MIME, count, byte, path, and cancellation cases.
+- [x] 2.1 Add the daemon artifact materializer and verify scan-before-write, verified MIME, path, and cancellation cases.
 - [x] 2.2 Reuse the existing modality decision and tool outputs; verify image-capable and text-only contexts produce the required outputs.
 
 ## 3. MCP Integration

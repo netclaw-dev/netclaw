@@ -42,7 +42,7 @@ Alternative: Parse the result again in the daemon. This duplicates protocol shap
 
 ### Put MCP artifact admission beside the daemon MCP manager
 
-One internal materializer owns MCP-specific limits, scan calls, artifact writes, and output registration. It receives the existing scanner through dependency injection.
+One internal materializer owns scan calls, artifact writes, and output registration. It receives the existing scanner through dependency injection.
 
 The materializer receives session paths and model modalities from `ToolInvocationContext`. It adds no root, policy, or configuration dependency.
 
@@ -53,7 +53,7 @@ Alternative: Reuse `AttachmentIngressPipeline`. That path owns channel downloads
 | Decision | Owner | State lifetime |
 |---|---|---|
 | MCP result shape, content order, and copy limits | `McpToolResultFormatter` | Call-local |
-| MCP scan-before-write order and defensive limits | MCP artifact materializer | Call-local |
+| MCP scan-before-write order | MCP artifact materializer | Call-local |
 | Verified MIME | Existing `IContentScanner` | Call-local |
 | Stored artifact path | Existing `SessionStoragePaths.ArtifactDirectory` | Durable file |
 | User and model output registration | Existing `ToolExecutionOutputs` | Call-local |
@@ -110,7 +110,7 @@ Alternative: Send a file only when the model cannot inspect it. That option can 
 
 The projection accepts at most ten candidates and 25 MiB of aggregate candidate bytes. These values match current session attachment ceilings.
 
-The materializer enforces the same limits for defense in depth before it scans or writes a candidate.
+The projection is the sole source of candidates for the materializer. Its internal candidate constructor prevents a second production creation path.
 
 The bounds limit scan and file work after the SDK returns. They cannot limit memory that the SDK already used for the response.
 
