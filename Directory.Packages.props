@@ -6,7 +6,7 @@
     <AkkaHostingVersion>1.5.71</AkkaHostingVersion>
     <AkkaPersistenceSqlHostingVersion>1.5.70</AkkaPersistenceSqlHostingVersion>
     <AkkaRemindersVersion>0.7.0</AkkaRemindersVersion>
-    <OpenTelemetryVersion>1.18.0</OpenTelemetryVersion>
+    <OpenTelemetryVersion>1.19.1</OpenTelemetryVersion>
     <SlackNetVersion>0.18.0</SlackNetVersion>
     <DiscordNetVersion>3.20.1</DiscordNetVersion>
     <MattermostNetVersion>5.0.10</MattermostNetVersion>
@@ -35,7 +35,7 @@
     <PackageVersion Include="Akka.Persistence.Sql.Hosting" Version="$(AkkaPersistenceSqlHostingVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders" Version="$(AkkaRemindersVersion)" />
     <PackageVersion Include="Aaron.Akka.Reminders.Sqlite" Version="$(AkkaRemindersVersion)" />
-    <PackageVersion Include="Anthropic" Version="12.46.0" />
+    <PackageVersion Include="Anthropic" Version="12.50.0" />
     <PackageVersion Include="HtmlAgilityPack" Version="1.13.0" />
     <PackageVersion Include="Microsoft.AspNetCore.DataProtection.Extensions" Version="$(MicrosoftAspNetCoreVersion)" />
     <PackageVersion Include="Microsoft.AspNetCore.OpenApi" Version="$(MicrosoftAspNetCoreVersion)" />
@@ -87,7 +87,7 @@
   <!-- Serialization -->
   <ItemGroup>
     <PackageVersion Include="Google.Protobuf" Version="3.36.2" />
-    <PackageVersion Include="Grpc.Tools" Version="2.83.0" />
+    <PackageVersion Include="Grpc.Tools" Version="2.84.0" />
     <PackageVersion Include="YamlDotNet" Version="18.1.0" />
   </ItemGroup>
   <!-- Test dependencies -->
