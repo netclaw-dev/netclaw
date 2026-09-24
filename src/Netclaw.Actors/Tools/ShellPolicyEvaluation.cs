@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Security;
 
 namespace Netclaw.Actors.Tools;
@@ -132,36 +133,66 @@ internal abstract record ShellPolicyPreflightResult
 
 internal sealed class ShellPolicyEvaluation
 {
-    private readonly bool[] _coverage;
+    internal sealed class CandidateState(
+        ShellPolicyCandidate candidate,
+        ShellPolicyCandidatePathFacts pathFacts)
+    {
+        internal ShellPolicyCandidate Candidate { get; } = candidate;
+        internal ShellPolicyCandidatePathFacts PathFacts { get; } = pathFacts;
+        internal ShellGrantCandidateResult? GrantEvidence { get; private set; }
+        internal int? GrantEvidenceOrder { get; private set; }
+        internal ShellCoverageKind Coverage { get; private set; }
+
+        internal void Apply(ShellGrantCandidateResult evidence, int order) =>
+            (GrantEvidence, GrantEvidenceOrder, Coverage) = (evidence, order, evidence.Coverage);
+
+        internal void Cover(ShellCoverageKind coverage) => Coverage = coverage;
+    }
+
+    private readonly IReadOnlyList<CandidateState> _candidates;
     private readonly ShellPolicyDecisionTraceBuilder _trace = new();
-    private ShellApprovalMatchResult? _grantEvidence;
+    private bool _hasGrantEvidence;
 
     internal ShellPolicyEvaluation(ShellPolicyProjection projection)
     {
         ArgumentNullException.ThrowIfNull(projection);
 
         Projection = projection;
-        _coverage = new bool[projection.Candidates.Count];
+        var pathFacts = ShellPolicyPathFacts.Create(
+            projection.Candidates,
+            projection.Environment.PathStyle);
+        _candidates = Array.AsReadOnly(projection.Candidates
+            .Select((candidate, index) => new CandidateState(candidate, pathFacts[index]))
+            .ToArray());
     }
 
     internal ShellPolicyProjection Projection { get; }
 
     internal IReadOnlyList<ShellPolicyCandidate> Candidates => Projection.Candidates;
 
-    internal bool AllCovered => _coverage.All(static covered => covered);
+    internal IReadOnlyList<CandidateState> CandidateStates => _candidates;
+
+    internal IEnumerable<CandidateState> GrantCandidates =>
+        _candidates.Where(static state => state.Candidate.CanRequestStoredGrant);
+
+    internal bool AllCovered => _candidates.All(static state =>
+        state.Coverage != ShellCoverageKind.Uncovered);
 
     internal IReadOnlyList<ShellPolicyCandidate> UncoveredCandidates =>
-        Array.AsReadOnly(Projection.Candidates
-            .Where((_, index) => !_coverage[index])
+        Array.AsReadOnly(_candidates
+            .Where(static state => state.Coverage == ShellCoverageKind.Uncovered)
+            .Select(static state => state.Candidate)
             .ToArray());
 
-    internal ShellApprovalMatchResult? GrantEvidence => _grantEvidence;
+    internal ApprovalStoreFailure? PersistentStoreFailure { get; private set; }
 
     internal IReadOnlyList<ToolApprovalMatch> ApprovalMatches =>
-        _grantEvidence?.Candidates
-            .Where(static result => result.Coverage != ShellCoverageKind.Uncovered)
-            .Select(result => result.FormatMatch(Candidates[result.CandidateId.Value].Candidate))
-            .ToArray() ?? [];
+        _candidates
+            .Where(static state => state.GrantEvidence is
+                { Coverage: not ShellCoverageKind.Uncovered })
+            .OrderBy(static state => state.GrantEvidenceOrder)
+            .Select(static state => state.GrantEvidence!.FormatMatch(state.Candidate.Candidate))
+            .ToArray();
 
     internal ToolApprovalContext GetUncoveredApprovalContext(
         IReadOnlyCollection<string> sessionOwnedDirectories)
@@ -182,45 +213,40 @@ internal sealed class ShellPolicyEvaluation
     internal bool IsCovered(ShellPolicyCandidateId candidateId)
     {
         var index = candidateId.Value;
-        if ((uint)index >= (uint)_coverage.Length)
+        if ((uint)index >= (uint)_candidates.Count)
             throw new ArgumentOutOfRangeException(nameof(candidateId));
 
-        return _coverage[index];
+        return _candidates[index].Coverage != ShellCoverageKind.Uncovered;
     }
 
     internal void ApplyActorEvidence(ShellApprovalMatchResult evidence)
     {
         ArgumentNullException.ThrowIfNull(evidence);
-        if (_grantEvidence is not null)
+        if (_hasGrantEvidence)
             throw new InvalidOperationException("Invalid shell approval evidence.");
 
-        var currentCandidates = Projection.GrantCandidates
-            .Select(candidate => new ShellGrantCandidate(
-                candidate.Id,
-                candidate.Candidate,
+        var currentCandidates = GrantCandidates
+            .Select(state => new ShellGrantCandidate(
+                state.Candidate.Id,
+                state.Candidate.Candidate,
                 Projection.ApprovalContext.Cwd))
             .ToArray();
         evidence = ShellApprovalMatchResult.Create(
             currentCandidates,
             evidence.PersistentStoreFailure,
             evidence.Candidates);
-        _grantEvidence = evidence;
-        foreach (var candidateEvidence in evidence.Candidates)
+        PersistentStoreFailure = evidence.PersistentStoreFailure;
+        _hasGrantEvidence = true;
+        for (var order = 0; order < evidence.Candidates.Count; order++)
         {
+            var candidateEvidence = evidence.Candidates[order];
             var candidateId = candidateEvidence.CandidateId;
             if ((uint)candidateId.Value >= (uint)Candidates.Count)
                 throw new InvalidOperationException("Invalid shell approval evidence.");
 
-            var candidate = Candidates[candidateId.Value];
-            if (candidateEvidence.Coverage != ShellCoverageKind.Uncovered)
-            {
-                var index = ValidateCoverageAssignment(candidate, candidateEvidence.Coverage);
-                _trace.AddActorEvidence(candidate, candidateEvidence);
-                _coverage[index] = true;
-                continue;
-            }
-
-            _trace.AddActorEvidence(candidate, candidateEvidence);
+            var state = _candidates[candidateId.Value];
+            state.Apply(candidateEvidence, order);
+            _trace.AddActorEvidence(state);
         }
 
     }
@@ -237,31 +263,21 @@ internal sealed class ShellPolicyEvaluation
             throw new InvalidOperationException("Invalid shell candidate coverage.");
         }
 
-        var index = ValidateCoverageAssignment(candidate, coverage);
-        _trace.AddCoverage(coverage, candidate);
-        _coverage[index] = true;
-    }
-
-    private int ValidateCoverageAssignment(
-        ShellPolicyCandidate candidate,
-        ShellCoverageKind coverage)
-    {
         ArgumentNullException.ThrowIfNull(candidate);
 
         var index = candidate.Id.Value;
         if ((uint)index >= (uint)Candidates.Count)
             throw new InvalidOperationException("Invalid shell candidate ID.");
 
-        if (!ReferenceEquals(candidate, Projection.Candidates[index]))
+        var state = _candidates[index];
+        if (!ReferenceEquals(candidate, state.Candidate))
             throw new InvalidOperationException("Shell candidate facts changed.");
 
-        if (_coverage[index])
+        if (state.Coverage != ShellCoverageKind.Uncovered)
             throw new InvalidOperationException("Shell candidate coverage was assigned twice.");
 
-        if (coverage == ShellCoverageKind.Uncovered)
-            throw new InvalidOperationException("Invalid shell candidate coverage.");
-
-        return index;
+        state.Cover(coverage);
+        _trace.AddCoverage(state);
     }
 
     internal ToolAuthorizationDecision Complete(

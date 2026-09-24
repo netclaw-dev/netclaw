@@ -132,8 +132,9 @@ internal sealed class ShellPolicyCoordinator(
                     trace));
         }
 
+        var evaluation = new ShellPolicyEvaluation(projection);
         var projectedPathDecision = policy.EnforceProjectedShellFileProtection(
-            projection.PathFacts,
+            evaluation.CandidateStates.Select(static state => state.PathFacts).ToArray(),
             context.Invocation);
         if (projectedPathDecision is not null)
         {
@@ -145,7 +146,7 @@ internal sealed class ShellPolicyCoordinator(
             tool,
             toolCall,
             context,
-            projection,
+            evaluation,
             corrections,
             cancellationToken);
 
@@ -306,11 +307,11 @@ internal sealed class ShellPolicyCoordinator(
         INetclawTool tool,
         FunctionCallContent toolCall,
         ToolExecutionContext context,
-        ShellPolicyProjection projection,
+        ShellPolicyEvaluation evaluation,
         ToolCorrectionCollection? corrections,
         CancellationToken cancellationToken)
     {
-        var evaluation = new ShellPolicyEvaluation(projection);
+        var projection = evaluation.Projection;
         try
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -322,7 +323,7 @@ internal sealed class ShellPolicyCoordinator(
             ValidateCandidateSyntax(projection);
             cancellationToken.ThrowIfCancellationRequested();
 
-            if (HasProtectedIntentPath(projection))
+            if (HasProtectedIntentPath(evaluation))
             {
                 return evaluation.Complete(
                     ToolAuthorizationDecision.Deny("shell_references_protected_path"));
@@ -335,11 +336,11 @@ internal sealed class ShellPolicyCoordinator(
             }
             cancellationToken.ThrowIfCancellationRequested();
 
-            var grantCandidates = projection.GrantCandidates;
+            var grantCandidates = evaluation.GrantCandidates;
             var requestCandidates = grantCandidates
-                .Select(candidate => new ShellGrantCandidate(
-                    candidate.Id,
-                    candidate.Candidate,
+                .Select(state => new ShellGrantCandidate(
+                    state.Candidate.Id,
+                    state.Candidate.Candidate,
                     projection.ApprovalContext.Cwd))
                 .ToArray();
             var actorResult = await _approvalEvidence.MatchAsync(
@@ -434,14 +435,15 @@ internal sealed class ShellPolicyCoordinator(
         }
     }
 
-    private bool HasProtectedIntentPath(ShellPolicyProjection projection)
+    private bool HasProtectedIntentPath(ShellPolicyEvaluation evaluation)
     {
-        foreach (var candidate in projection.Candidates)
+        foreach (var state in evaluation.CandidateStates)
         {
+            var candidate = state.Candidate;
             if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
                 continue;
 
-            if (policy.CausalIntentReferencesProtectedPath(projection.PathFacts[candidate.Id.Value]))
+            if (policy.CausalIntentReferencesProtectedPath(state.PathFacts))
                 return true;
         }
 
@@ -470,8 +472,9 @@ internal sealed class ShellPolicyCoordinator(
         ToolAccessPolicy policy,
         ToolInvocationContext invocation)
     {
-        foreach (var candidate in evaluation.Projection.GrantCandidates)
+        foreach (var state in evaluation.GrantCandidates)
         {
+            var candidate = state.Candidate;
             if (!candidate.CanUseRealReviewedSafePolicy)
                 continue;
 
@@ -480,7 +483,7 @@ internal sealed class ShellPolicyCoordinator(
 
             if (!policy.IsReviewedSafeCandidate(
                     candidate,
-                    evaluation.Projection.PathFacts[candidate.Id.Value],
+                    state.PathFacts,
                     invocation))
             {
                 continue;
@@ -491,8 +494,9 @@ internal sealed class ShellPolicyCoordinator(
                 ShellCoverageKind.ReviewedSafeReal);
         }
 
-        foreach (var candidate in evaluation.Candidates)
+        foreach (var state in evaluation.CandidateStates)
         {
+            var candidate = state.Candidate;
             if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
                 continue;
 
@@ -504,7 +508,7 @@ internal sealed class ShellPolicyCoordinator(
 
             if (!policy.IsReviewedSafeIntentCandidate(
                     candidate,
-                    evaluation.Projection.PathFacts[candidate.Id.Value],
+                    state.PathFacts,
                     invocation))
             {
                 continue;
@@ -517,22 +521,9 @@ internal sealed class ShellPolicyCoordinator(
     }
 
     private static bool HasCoveredIntentPrerequisites(ShellPolicyCandidate candidate, ShellPolicyEvaluation evaluation)
-    {
-        if (candidate.IntentDirectory is null)
-            return false;
-
-        // An intent consumer needs explicit prerequisite evidence; an empty list cannot establish coverage.
-        if (candidate.IntentPrerequisites.Count == 0)
-            return false;
-
-        foreach (var prerequisite in candidate.IntentPrerequisites)
-        {
-            if (!evaluation.IsCovered(prerequisite))
-                return false;
-        }
-
-        return true;
-    }
+        => candidate.IntentDirectory is not null
+           && candidate.IntentPrerequisites.Count > 0
+           && candidate.IntentPrerequisites.All(evaluation.IsCovered);
 
     private static ToolAuthorizationDecision CompleteAfterCoverage(
         ShellPolicyEvaluation evaluation,
@@ -565,7 +556,7 @@ internal sealed class ShellPolicyCoordinator(
             }
 
             cancellationToken.ThrowIfCancellationRequested();
-            if (evaluation.GrantEvidence?.PersistentStoreFailure is not null)
+            if (evaluation.PersistentStoreFailure is not null)
             {
                 return evaluation.Complete(
                     ToolAuthorizationDecision.Deny("approval_store_unavailable"));
@@ -580,10 +571,10 @@ internal sealed class ShellPolicyCoordinator(
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        var grantCandidates = projection.GrantCandidates;
+        var grantCandidateCount = evaluation.GrantCandidates.Count();
         if (approvalMatches.Count > 0)
         {
-            if (approvalMatches.Count == grantCandidates.Count)
+            if (approvalMatches.Count == grantCandidateCount)
             {
                 context.Approval.ApplyDecision(
                     "PreviouslyApproved",
@@ -598,7 +589,7 @@ internal sealed class ShellPolicyCoordinator(
 
         return evaluation.Complete(
             ToolAuthorizationDecision.Allow(
-                grantCandidates.Count == 0
+                grantCandidateCount == 0
                     ? ToolAllowReason.ApprovalExemptShellCandidates
                     : ToolAllowReason.ReviewedSafePolicy));
     }

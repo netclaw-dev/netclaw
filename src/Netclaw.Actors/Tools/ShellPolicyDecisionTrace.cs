@@ -101,13 +101,15 @@ internal sealed class ShellPolicyDecisionTraceBuilder
     private bool _truncated;
     private ShellPolicyDecisionTrace? _completedTrace;
 
-    internal void AddActorEvidence(
-        ShellPolicyCandidate candidate,
-        ShellGrantCandidateResult actorMatch)
+    internal void AddActorEvidence(ShellPolicyEvaluation.CandidateState state)
     {
+        ArgumentNullException.ThrowIfNull(state);
+        var candidate = state.Candidate;
+        var actorMatch = state.GrantEvidence
+            ?? throw new InvalidOperationException("Shell candidate approval evidence is unavailable.");
         if (actorMatch.Coverage != ShellCoverageKind.Uncovered)
         {
-            AddCoverage(actorMatch.Coverage, candidate, actorMatch.GrantCreatedAt);
+            AddCoverage(state);
             return;
         }
 
@@ -131,11 +133,11 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             nearMiss?.Grant.CreatedAt));
     }
 
-    internal void AddCoverage(
-        ShellCoverageKind coverage,
-        ShellPolicyCandidate candidate,
-        DateTimeOffset? grantTimestamp = null)
+    internal void AddCoverage(ShellPolicyEvaluation.CandidateState state)
     {
+        ArgumentNullException.ThrowIfNull(state);
+        var coverage = state.Coverage;
+        var candidate = state.Candidate;
         var (stage, displayCoverage, reason, scope) = coverage switch
         {
             ShellCoverageKind.OneTime => (
@@ -188,7 +190,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             GetExecutableBasename(candidate.Candidate),
             displayCoverage,
             scope,
-            grantTimestamp));
+            state.GrantEvidence?.GrantCreatedAt));
     }
 
     internal ShellPolicyDecisionTrace Complete(ToolAuthorizationDecision decision)
@@ -200,17 +202,6 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         _rows.Add(completion);
         _completedTrace = new ShellPolicyDecisionTrace(Array.AsReadOnly(_rows.ToArray()));
         return _completedTrace;
-    }
-
-    internal ShellPolicyDecisionTrace ReplaceCompletion(ToolAuthorizationDecision decision)
-    {
-        if (_completedTrace is not null)
-        {
-            _rows.RemoveAt(_rows.Count - 1);
-            _completedTrace = null;
-        }
-
-        return Complete(decision);
     }
 
     internal static string SanitizeText(string value)

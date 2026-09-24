@@ -1699,12 +1699,12 @@ public partial class DispatchingToolExecutorTests
         var builder = new ShellPolicyDecisionTraceBuilder();
         for (var index = 0; index < 300; index++)
         {
-            builder.AddCoverage(
-                ShellCoverageKind.ReviewedSafeReal,
-                new ShellPolicyCandidate(
-                    new ShellPolicyCandidateId(index),
-                    BashCandidate($"/usr/bin/tool-{index}"),
-                    SourceOccurrence: null));
+            var state = CreateCandidateState(new ShellPolicyCandidate(
+                new ShellPolicyCandidateId(index),
+                BashCandidate($"/usr/bin/tool-{index}"),
+                SourceOccurrence: null));
+            state.Cover(ShellCoverageKind.ReviewedSafeReal);
+            builder.AddCoverage(state);
         }
 
         var decision = ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy);
@@ -1755,12 +1755,12 @@ public partial class DispatchingToolExecutorTests
         var logger = new RecordingLogger<DispatchingToolExecutor>();
         var executor = CreateApprovalGatedShellExecutor(logger: logger);
         var builder = new ShellPolicyDecisionTraceBuilder();
-        builder.AddCoverage(
-                ShellCoverageKind.ReviewedSafeReal,
-            new ShellPolicyCandidate(
-                new ShellPolicyCandidateId(0),
-                BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
-                SourceOccurrence: null));
+        var state = CreateCandidateState(new ShellPolicyCandidate(
+            new ShellPolicyCandidateId(0),
+            BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
+            SourceOccurrence: null));
+        state.Cover(ShellCoverageKind.ReviewedSafeReal);
+        builder.AddCoverage(state);
         var trace = builder.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
 
@@ -1809,7 +1809,9 @@ public partial class DispatchingToolExecutorTests
             new ShellApprovalNearMiss(grant, nearMissReason));
         var builder = new ShellPolicyDecisionTraceBuilder();
 
-        builder.AddActorEvidence(candidate, actorMatch);
+        var state = CreateCandidateState(candidate);
+        state.Apply(actorMatch, order: 0);
+        builder.AddActorEvidence(state);
         var trace = builder.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
 
@@ -4481,6 +4483,14 @@ public partial class DispatchingToolExecutorTests
             VerbTokens = Array.AsReadOnly(
                 verb.Split(' ', StringSplitOptions.RemoveEmptyEntries)),
         };
+
+    private static ShellPolicyEvaluation.CandidateState CreateCandidateState(
+        ShellPolicyCandidate candidate)
+        => new(
+            candidate,
+            Assert.Single(ShellPolicyPathFacts.Create(
+                [candidate with { Id = new ShellPolicyCandidateId(0) }],
+                ShellPathStyle.Posix)));
 
     private sealed class UnexpectedApprovalService : IToolApprovalService
     {
