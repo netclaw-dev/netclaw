@@ -53,13 +53,13 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             var promptCandidate = Assert.Single(promptDecision.ApprovalContext.Candidates!);
             Assert.NotNull(promptCandidate.AssignmentDigest);
 
-            var grantContext = ApprovalGrantContext.FromDecision(
+            var grantScope = ApprovalGrantScope.FromDecision(
                 ApprovalDecision.ApprovedRepository,
                 main,
                 session.FullName,
                 promptDecision.ApprovalContext.RepositoryCommonDirectory);
             var repositoryGrant = Assert.Single(ApprovalBucketBuilder.BuildGrants(
-                promptDecision.ApprovalContext.Candidates!, grantContext));
+                promptDecision.ApprovalContext.Candidates!, grantScope));
             Assert.Equal(promptCandidate.AssignmentDigest, repositoryGrant.Candidate.AssignmentDigest);
             Assert.Equal(Path.Combine(main, ".git"), repositoryGrant.Repository);
             Assert.Equal(main, repositoryGrant.RepositoryWorktree);
@@ -176,13 +176,13 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 promptDecision.ApprovalContext.Options,
                 option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
 
-            var grantContext = ApprovalGrantContext.FromDecision(
+            var grantScope = ApprovalGrantScope.FromDecision(
                 ApprovalDecision.ApprovedRepository,
                 session.FullName,
                 session.FullName,
                 promptDecision.ApprovalContext.RepositoryCommonDirectory);
             var repositoryGrants = ApprovalBucketBuilder.BuildGrants(
-                promptDecision.ApprovalContext.Candidates!, grantContext);
+                promptDecision.ApprovalContext.Candidates!, grantScope);
             Assert.Single(repositoryGrants);
             Assert.All(repositoryGrants, repositoryGrant =>
             {
@@ -323,25 +323,25 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             Assert.Contains(
                 promptDecision.ApprovalContext!.Options,
                 option => option.Key.Value == Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveRepository);
-            var grantContext = ApprovalGrantContext.FromDecision(
+            var grantScope = ApprovalGrantScope.FromDecision(
                 ApprovalDecision.ApprovedRepository, sibling, session.FullName,
                 promptDecision.ApprovalContext.RepositoryCommonDirectory);
             var repositoryGrant = Assert.Single(ApprovalBucketBuilder.BuildGrants(
-                promptDecision.ApprovalContext.Candidates!, grantContext));
+                promptDecision.ApprovalContext.Candidates!, grantScope));
             Assert.Equal(Path.Combine(main, ".git"), repositoryGrant.Repository);
             Assert.Equal(sibling, repositoryGrant.RepositoryWorktree);
-            var swappedContext = ApprovalGrantContext.FromDecision(
+            var swappedGrantScope = ApprovalGrantScope.FromDecision(
                 ApprovalDecision.ApprovedRepository, sibling, session.FullName,
                 Path.Combine(unrelated, ".git"));
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
-                promptDecision.ApprovalContext.Candidates!, swappedContext));
+                promptDecision.ApprovalContext.Candidates!, swappedGrantScope));
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
                 [new Netclaw.Security.ApprovalCandidate("touch", Path.Combine(root.FullName, "outside"))],
-                grantContext));
+                grantScope));
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
                 [new Netclaw.Security.ApprovalCandidate("cd", Path.Combine(root.FullName, "outside")),
                     new Netclaw.Security.ApprovalCandidate("./scripts/bump-version.sh", null)],
-                grantContext));
+                grantScope));
 
             var grants = Approvals.Combine(
                 Approvals.PersistentRepository("./scripts/bump-version.sh"),
@@ -460,7 +460,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             Assert.True(Netclaw.Security.GitRepositoryApprovalScope.TryResolve(sibling, out var swappedScope));
             Assert.Equal(Path.Combine(unrelated, ".git"), swappedScope!.CommonDirectory);
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
-                promptDecision.ApprovalContext.Candidates!, grantContext));
+                promptDecision.ApprovalContext.Candidates!, grantScope));
 
             await using var changedRegistrationHarness = await CreateHarnessAsync(
                 "repository-changed-registration",

@@ -17,8 +17,7 @@ namespace Netclaw.Actors.Tools;
 internal sealed class ToolApprovalActor : ReceiveActor
 {
     private readonly ToolApprovalStore? _persistentStore;
-    private readonly Dictionary<string, Dictionary<string, HashSet<string>>> _sessionApprovals = new(StringComparer.Ordinal);
-    private readonly Dictionary<string, Dictionary<string, List<ApprovalEntry>>> _structuredSessionApprovals =
+    private readonly Dictionary<string, Dictionary<string, List<ApprovalEntry>>> _sessionApprovals =
         new(StringComparer.Ordinal);
     private readonly ILoggingAdapter _log = Context.GetLogger();
     private bool _reportedMigrationOmissions;
@@ -120,7 +119,11 @@ internal sealed class ToolApprovalActor : ReceiveActor
                     }
                 }
 
-                AddSessionApproval(msg.SessionId, msg.Audience, msg.ToolName, pattern);
+                AddSessionApproval(
+                    msg.SessionId,
+                    msg.Audience,
+                    msg.ToolName,
+                    new ApprovalEntry(pattern));
             }
 
             Sender.Tell(storeFailure is null
@@ -158,7 +161,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
 
             foreach (var entry in sessionEntries)
             {
-                AddStructuredSessionApproval(
+                AddSessionApproval(
                     msg.SessionId,
                     msg.Audience,
                     msg.ToolName,
@@ -267,15 +270,8 @@ internal sealed class ToolApprovalActor : ReceiveActor
         while (true)
         {
             var sessionKey = BuildSessionKey((SessionId)scopeId, audience);
-            if (_sessionApprovals.TryGetValue(sessionKey, out var toolMap)
-                && toolMap.TryGetValue(toolName.Value, out var verbs)
-                && verbs.Contains(candidate.Verb))
-            {
-                return true;
-            }
-
-            if (_structuredSessionApprovals.TryGetValue(sessionKey, out var structuredTools)
-                && structuredTools.TryGetValue(toolName.Value, out var entries))
+            if (_sessionApprovals.TryGetValue(sessionKey, out var tools)
+                && tools.TryGetValue(toolName.Value, out var entries))
             {
                 var matches = string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
                     ? ApprovalPatternMatching.MatchesShellApproval(candidate, cwd, entries)
@@ -299,39 +295,17 @@ internal sealed class ToolApprovalActor : ReceiveActor
         return false;
     }
 
-    private void AddSessionApproval(SessionId sessionId, TrustAudience audience, ToolName toolName, string candidateVerb)
-    {
-        var sessionKey = BuildSessionKey(sessionId, audience);
-        if (!_sessionApprovals.TryGetValue(sessionKey, out var toolMap))
-        {
-            toolMap = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal);
-            _sessionApprovals[sessionKey] = toolMap;
-        }
-
-        if (!toolMap.TryGetValue(toolName.Value, out var verbs))
-        {
-            // Session approvals use the same platform-correct comparer as the
-            // persistent store (Ordinal on POSIX, OrdinalIgnoreCase on Windows)
-            // so a grant for `git` cannot be redeemed by a planted `Git`
-            // earlier in $PATH on case-sensitive filesystems.
-            verbs = new HashSet<string>(ToolApprovalEntryComparer.Comparer);
-            toolMap[toolName.Value] = verbs;
-        }
-
-        verbs.Add(candidateVerb);
-    }
-
-    private void AddStructuredSessionApproval(
+    private void AddSessionApproval(
         SessionId sessionId,
         TrustAudience audience,
         ToolName toolName,
         ApprovalEntry entry)
     {
         var sessionKey = BuildSessionKey(sessionId, audience);
-        if (!_structuredSessionApprovals.TryGetValue(sessionKey, out var toolMap))
+        if (!_sessionApprovals.TryGetValue(sessionKey, out var toolMap))
         {
             toolMap = new Dictionary<string, List<ApprovalEntry>>(StringComparer.Ordinal);
-            _structuredSessionApprovals[sessionKey] = toolMap;
+            _sessionApprovals[sessionKey] = toolMap;
         }
 
         if (!toolMap.TryGetValue(toolName.Value, out var entries))

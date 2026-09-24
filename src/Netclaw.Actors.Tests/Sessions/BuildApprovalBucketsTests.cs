@@ -182,11 +182,11 @@ public sealed class BuildApprovalBucketsTests
     [InlineData(ApprovalDecision.ApprovedOnce)]
     [InlineData(ApprovalDecision.Denied)]
     [InlineData(ApprovalDecision.TimedOut)]
-    public void Non_reusable_decision_cannot_create_grant_context(ApprovalDecision decision)
+    public void Non_reusable_decision_cannot_create_grant_scope(ApprovalDecision decision)
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => Context(decision));
     }
 
-    private static ApprovalGrantContext Context(ApprovalDecision decision) =>
-        ApprovalGrantContext.FromDecision(decision, SessionDir, SessionDir, repositoryCommonDirectory: null);
+    private static ApprovalGrantScope Context(ApprovalDecision decision) =>
+        ApprovalGrantScope.FromDecision(decision, SessionDir, SessionDir, repositoryCommonDirectory: null);
 }

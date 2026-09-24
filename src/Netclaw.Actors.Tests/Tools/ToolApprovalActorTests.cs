@@ -53,6 +53,43 @@ public sealed class ToolApprovalActorTests : TestKit
     }
 
     [Fact]
+    public async Task Non_shell_session_approval_uses_the_structured_session_store()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
+        var service = CreateService(actor);
+        var toolName = new ToolName("file_read");
+
+        await service.RecordApprovalAsync(
+            "session-a",
+            TrustAudience.Personal,
+            toolName,
+            ["file_read"],
+            persistent: false,
+            cwd: "/ignored",
+            ct);
+
+        var sameSession = await service.CheckApprovalAsync(
+            "session-a",
+            TrustAudience.Personal,
+            toolName,
+            [new ApprovalCandidate("file_read", Directory: null, ApprovalAssignmentConstraint.None)],
+            cwd: "/other",
+            ct);
+        var otherSession = await service.CheckApprovalAsync(
+            "session-b",
+            TrustAudience.Personal,
+            toolName,
+            [new ApprovalCandidate("file_read", Directory: null, ApprovalAssignmentConstraint.None)],
+            cwd: "/other",
+            ct);
+
+        Assert.Empty(sameSession.UnapprovedPatterns);
+        Assert.Equal("session", Assert.Single(sameSession.ApprovedMatches).Source);
+        Assert.Equal(["file_read"], otherSession.UnapprovedPatterns);
+    }
+
+    [Fact]
     public async Task Unapproved_pattern_not_found()
     {
         var ct = TestContext.Current.CancellationToken;
