@@ -1,5 +1,19 @@
 # NetClaw Release Notes
 
+## 0.27.1-beta.1 (2026-09-24)
+
+A small tail of MCP improvements on top of stable 0.27.0 - the headline is that MCP tools can now deliver real file artifacts to you, not just text markers.
+
+### Features
+
+- **MCP tool results carry real artifacts.** Binary image, audio, and embedded-resource blocks from MCP tools are scanned with the existing content scanner, stored in the session artifact directory, and delivered to the primary channel through the normal file-output path. Rejected or unsupported artifacts stay visible as notes, and text-only results keep working unchanged ([#2232](https://github.com/netclaw-dev/netclaw/pull/2232)).
+- **Multi-content MCP tool results render readably.** When the MCP SDK returns a successful result as in-memory content objects, text blocks are joined and image attachments project as MIME markers instead of surfacing the literal type name ([#2180](https://github.com/netclaw-dev/netclaw/pull/2180), fixes [#2051](https://github.com/netclaw-dev/netclaw/issues/2051)).
+
+### Internal
+
+- Synchronized the pairing actor restart test, restored stable AppHost test discovery ([#2233](https://github.com/netclaw-dev/netclaw/pull/2233), [#2227](https://github.com/netclaw-dev/netclaw/pull/2227)), and refreshed the provider rename smoke tape ([#2228](https://github.com/netclaw-dev/netclaw/pull/2228)).
+- Dependency updates: Anthropic 12.46.0 -> 12.50.0 ([#2221](https://github.com/netclaw-dev/netclaw/pull/2221)), Grpc.Tools 2.83.0 -> 2.84.0 ([#2222](https://github.com/netclaw-dev/netclaw/pull/2222)), OpenTelemetry 1.18.0 -> 1.19.1 ([#2220](https://github.com/netclaw-dev/netclaw/pull/2220)), Google.Protobuf 3.36.1 -> 3.36.2 ([#2198](https://github.com/netclaw-dev/netclaw/pull/2198)), CsCheck 4.8.0 -> 4.9.1 ([#2197](https://github.com/netclaw-dev/netclaw/pull/2197)).
+
 ## 0.27.0 (2026-09-23)
 
 This is the stable 0.27.0 release, closing the beta cycle. The headline: NetClaw now remembers across sessions with local, on-device semantic memory - no cloud embeddings, no external services. Around that, shell approvals got sharper and quieter for both Bash and PowerShell, Slack replies render far better, MCP connections start faster and support OAuth client secrets, and the whole release carries a long tail of robustness fixes backed by behavioral evals.

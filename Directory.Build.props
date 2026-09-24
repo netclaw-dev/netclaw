@@ -8,8 +8,9 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
-    <VersionPrefix>0.27.0</VersionPrefix>
-    <PackageReleaseNotes>This is the stable 0.27.0 release, closing the beta cycle. The headline: NetClaw now remembers across sessions with local, on-device semantic memory - no cloud embeddings, no external services. Around that, shell approvals got sharper and quieter for both Bash and PowerShell, Slack replies render far better, MCP connections start faster and support OAuth client secrets, and the whole release carries a long tail of robustness fixes backed by behavioral evals.
+    <VersionPrefix>0.27.1</VersionPrefix>
+    <VersionSuffix>beta.1</VersionSuffix>
+    <PackageReleaseNotes>A small tail of MCP improvements on top of stable 0.27.0 - MCP tools can now deliver real file artifacts to you, not just text markers. Multi-content MCP tool results also render readably instead of surfacing literal type names. Includes internal test syncs and dependency updates.
 
 ### Local semantic memory (ONNX)
 
