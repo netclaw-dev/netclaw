@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
+using Netclaw.Actors.Tests.Jobs;
 using Netclaw.Actors.Tests.Tools;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -23,6 +24,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
+[Collection(BackgroundJobProcessCollection.Name)]
 public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
 {
     private static readonly DateTimeOffset ReceivedAt =
