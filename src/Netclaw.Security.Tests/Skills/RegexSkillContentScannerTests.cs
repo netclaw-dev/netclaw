@@ -74,10 +74,10 @@ public sealed class RegexSkillContentScannerTests
         Assert.NotNull(result.Reason);
     }
 
-    // -- Detector failure -> Rejected -------------------------------------
+    // -- Detector failure -> Failed ---------------------------------------
 
     [Fact]
-    public async Task ScanAsync_detector_failure_rejects_with_scanning_failed()
+    public async Task ScanAsync_detector_failure_returns_failed_verdict()
     {
         var scanner = new RegexSkillContentScanner(
             new ThrowingPromptInjectionDetector(),
@@ -85,7 +85,8 @@ public sealed class RegexSkillContentScannerTests
 
         var result = await scanner.ScanAsync("skill", "content", TestContext.Current.CancellationToken);
 
-        Assert.Equal(ScanVerdict.Rejected, result.Verdict);
+        Assert.Equal(ScanVerdict.Failed, result.Verdict);
+        Assert.False(result.IsAllowed);
         Assert.Equal("content scanning failed", result.Reason);
     }
 

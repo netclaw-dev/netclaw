@@ -107,7 +107,7 @@ An authenticated request can join a pass that the startup path, timer, or anothe
 
 `ServerFeedSkillSyncActor` owns the timer, active pass state, waiters, and lifetime token.
 This state is actor-local. The CLI owns only its call-local request wait.
-`ServerFeedSkillSyncService` runs one pass and keeps no lifecycle state.
+The external sync coordinator runs one pass through server-feed and managed plugin participants.
 The feed helpers retain the existing durable files and sync receipts.
 
 ```text
@@ -142,7 +142,8 @@ An interval of zero disables periodic checks. Startup and manual checks remain a
 | The daemon returns HTTP 503 | Exit 1; report that the daemon cannot run the pass now |
 | The daemon returns another HTTP error | Exit 1; report the status code, distinct from a connection failure |
 
-The response includes one pass ID, per-source counts, sidecar status, and the final inventory result.
+The response includes one pass ID, per-source counts, source type, sidecar status, and the final inventory result.
+The source type distinguishes a server feed from a Git plugin when both sources use the same name.
 The service assigns the pass ID before source work and includes it in its start and completion logs.
 The response contains no derived overall success field. The CLI computes its exit code from the source and inventory results.
 Overlapping callers receive the same pass ID. Source errors in this response do not include credentials or remote response bodies.
@@ -156,6 +157,107 @@ A directory deletion failure increments the failure count. The result can report
 For example, a healthy feed can update while another feed returns HTTP 500. The command reports both results and exits 1.
 A rejected skill retains its prior bytes and receipt. Other accepted skills from that feed can still update.
 Download failures do not create security alerts. This change does not alter the existing scanner or alert policy.
+
+### 8) Managed Agent Plugins
+
+The CLI manages public GitHub plugin packages through the paired daemon.
+The daemon owns source validation, reference resolution, configuration writes, and installed state.
+The CLI never writes plugin configuration on the client host.
+
+| Command | Behavior |
+|---|---|
+| `netclaw plugin install <owner/repository> [options]` | Configure a source, restart the daemon, run a sync, and verify installation |
+| `netclaw plugin list [--json]` | List configured sources and installed package state |
+| `netclaw plugin update <source-id> [--retry-rejected]` | Run the shared sync pass and report one source result |
+| `netclaw plugin update --all [--retry-rejected]` | Run the shared sync pass and report all plugin results |
+| `netclaw plugin enable <source-id>` | Enable a source and verify its installation |
+| `netclaw plugin disable <source-id>` | Disable a source and remove it from the live inventory |
+| `netclaw plugin remove <source-id>` | Remove a source and its durable sync state |
+| `netclaw skill sync --retry-rejected` | Retry rejected commits during the requested sync pass |
+
+The install command accepts `--branch`, `--tag`, or `--commit`.
+The operator can select only one reference option.
+Each plugin mutation requires confirmation unless the operator supplies `--yes`.
+The default format is `auto`.
+The supported formats are `auto`, `agent-plugin`, and `codex`.
+The daemon resolves an omitted reference to the repository's default branch.
+The daemon stores the resolved branch name.
+The daemon resolves a tag once and stores its exact commit.
+The durable source format supports only `Branch` and `Commit`.
+
+The daemon applies this ordered flow:
+
+```text
+CLI -> authenticated daemon route
+  validate the repository, source ID, format, path, reference, and timeout
+  resolve the default branch or tag when required
+  write the canonical source to SkillFeeds.Plugins
+  return the current restart generation
+CLI -> wait for a later healthy daemon generation
+CLI -> request one immediate skill sync
+daemon -> download, inspect, scan, and publish the candidate
+CLI -> read the plugin state and report success or failure
+```
+
+At daemon startup, the sync service publishes valid receipt-backed plugin directories before it starts remote work.
+
+The configuration file is durable state.
+The SQLite receipt and rejection tables are durable state.
+The sync actor owns active and queued pass state.
+The CLI owns its request and restart wait state.
+
+The source ID is the stable operator key for CLI mutations and managed paths.
+The package manifest name is a separate installed metadata field.
+The list command shows both values when a manifest is available.
+The JSON form uses `sourceId`, `manifestName`, `sourceFormat`, and `manifestFormat`.
+
+Auto format selection uses this order:
+
+1. Root `plugin.json` with the recognized Agent Plugins 1.0.0 schema.
+2. `.codex-plugin/plugin.json` as a compatibility manifest.
+
+An explicit format inspects only that format.
+Netclaw does not combine declarations from multiple manifests.
+A selected invalid manifest fails without a fallback to another manifest.
+
+The portable adapter uses the standard root manifest and fixed `skills/` directory.
+An invalid portable skill is skipped without blocking valid sibling skills.
+An invalid portable manifest rejects the candidate.
+A scanner security rejection rejects the complete candidate.
+
+The portable adapter accepts periods in package names.
+It accepts any string version and does not require SemVer.
+Unsupported components produce diagnostics and remain inactive.
+Package metadata cannot grant Netclaw authority.
+A portable package can install with zero supported skills.
+The sync result reports excluded components and skipped skills as notices.
+
+The Codex adapter reads only `.codex-plugin/plugin.json`.
+It keeps its existing declared skill-root and whole-candidate syntax rules.
+
+A valid source remains configured when a download or candidate check fails.
+The plugin then has the `NotInstalled` state when no prior receipt exists.
+A failed source change keeps the prior installed content active.
+An invalid source or unresolved tag fails before configuration persistence.
+All configuration writes preserve unrelated JSON and existing `SkillFeeds` data.
+The configuration TUI must preserve `SkillFeeds.Plugins` during each load and save cycle.
+
+An ordinary pass skips a known rejected commit.
+An explicit retry pass tests that commit again.
+A retry request waits behind an active ordinary pass.
+An ordinary request can join either active pass.
+A successful retry removes the matching durable rejection.
+
+For example, `--tag v1.2.0` can resolve to commit `13e26d39...`.
+The daemon stores that commit before its restart and acquires the content after restart.
+
+For a negative example, an unknown tag returns an error before the daemon changes the configuration.
+A scanner rejection keeps the source configured and records the rejected commit.
+
+The daemon exposes plugin lifecycle routes at `/api/plugins`.
+Each route uses the existing authenticated daemon policy.
+The daemon returns safe RFC 9457 problem details for expected failures.
+The CLI shows a valid safe detail and otherwise shows a bounded status message.
 
 ## Output and Exit Codes
 
