@@ -2462,9 +2462,9 @@ internal sealed class RecordingParentApprovalBridge(ParentApprovalDecision decis
             (request.Approval.Candidates ?? [])
                 .Select(static candidate => new ParentApprovalCandidate(
                     candidate.Verb,
-                    candidate.Directory,
-                    candidate.AssignmentConstraint)
+                    candidate.Directory)
                 {
+                    AssignmentDigest = candidate.AssignmentDigest,
                     Shell = candidate.Shell,
                     VerbTokens = candidate.VerbTokens,
                 }).ToList(),

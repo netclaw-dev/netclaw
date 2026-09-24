@@ -44,7 +44,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ToolAccessPolicy.AuthorizeMcpInvocation` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
-| Shell assignment identity, wrapper fallback, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers must stay one-time, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 59 killed | `./scripts/run-shell-assignment-mutations.sh` |
+| Shell assignment identity, wrapper fallback, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers must stay one-time, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 56 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Approval scope and repository persistence | Folder and repository grants require candidate scope, identity, registration, and containment | 12 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -243,7 +243,7 @@ Run the shell assignment gate:
 ./scripts/run-shell-assignment-mutations.sh
 ```
 
-The script tests 59 mutants across eight narrow boundaries.
+The script tests 56 mutants across eight narrow boundaries.
 It covers grant identity, wrapper fallback, prompt rollback, reviewed-safe exclusion, source spans, Bash host selection, and environment sanitation.
 The job fails unless every mutant dies.
 

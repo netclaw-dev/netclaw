@@ -117,9 +117,9 @@ matching_file="$repo_root/src/Netclaw.Security/ApprovalPatternMatching.cs"
 read -r matching_start matching_end matching_start_line matching_start_column matching_end_line matching_end_column < <(
   find_span \
     "$matching_file" \
-    "private static bool AssignmentConstraintMatches(" \
-    "private static bool AssignmentConstraintMatches(" \
-    "_ => false,"
+    "private static bool PhraseMatches(" \
+    "if (candidate.AssignmentDigest != entry.AssignmentDigest)" \
+    "return false;"
 )
 security_patterns+=("ApprovalPatternMatching.cs{$matching_start..$matching_end}")
 
@@ -157,7 +157,7 @@ read -r reviewed_start reviewed_end reviewed_start_line reviewed_start_column re
   find_span \
     "$reviewed_file" \
     "private bool IsReviewedDiagnosticSyntax(" \
-    "if (candidate.AssignmentConstraint is not" \
+    "if (candidate.AssignmentDigest is not null)" \
     "return false;"
 )
 actor_patterns+=("Tools/ReviewedSafeShellPolicy.cs{$reviewed_start..$reviewed_end}")
@@ -166,9 +166,9 @@ access_policy_file="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
 read -r option_start option_end option_start_line option_start_column option_end_line option_end_column < <(
   find_span \
     "$access_policy_file" \
-    "internal static bool HasAssignmentConstraint(" \
-    "internal static bool HasAssignmentConstraint(" \
-    "candidate.AssignmentConstraint.Kind == ApprovalAssignmentConstraintKind.ExactDigest);"
+    "internal static bool HasAssignmentDigest(" \
+    "internal static bool HasAssignmentDigest(" \
+    "candidate.AssignmentDigest is not null);"
 )
 actor_patterns+=("Tools/ToolAccessPolicy.cs{$option_start..$option_end}")
 
@@ -194,8 +194,8 @@ security_patterns+=("ShellExecutionEnvironment.cs{$sanitizer_start..$sanitizer_e
 security_output="$output_path/security"
 run_group "stryker-shell-command-analysis.json" "$security_output" "${security_patterns[@]}"
 security_report="$security_output/reports/mutation-report.json"
-assert_report "$security_report" 44
-assert_target "$security_report" "constraint-match" "$matching_file" "$matching_start_line" "$matching_start_column" "$matching_end_line" "$matching_end_column" 5
+assert_report "$security_report" 41
+assert_target "$security_report" "digest-match" "$matching_file" "$matching_start_line" "$matching_start_column" "$matching_end_line" "$matching_end_column" 2
 assert_target "$security_report" "assignment-span" "$analysis_file" "$span_start_line" "$span_start_column" "$span_end_line" "$span_end_column" 1
 assert_target "$security_report" "fallback-wrapper-assignments" "$analysis_file" "$wrapper_start_line" "$wrapper_start_column" "$wrapper_end_line" "$wrapper_end_column" 4
 assert_target "$security_report" "bash-initial-state" "$environment_file" "$mode_start_line" "$mode_start_column" "$mode_end_line" "$mode_end_column" 7

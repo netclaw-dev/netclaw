@@ -195,14 +195,14 @@ public sealed class AkkaToolApprovalService :
                 out var entry,
                 out _))
         {
-            return new ApprovalCandidate(pattern, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+            return new ApprovalCandidate(pattern, Directory: null)
             {
                 Shell = entry.Shell,
                 VerbTokens = entry.VerbTokens,
             };
         }
 
-        return new ApprovalCandidate(pattern, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None);
+        return new ApprovalCandidate(pattern, Directory: null);
     }
 
 }

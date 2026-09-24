@@ -309,12 +309,12 @@ public sealed class ToolApprovalGateTests
     [Fact]
     public void One_time_keys_bind_parser_tokens_not_only_the_legacy_projection()
     {
-        var first = new ApprovalCandidate("whoami", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var first = new ApprovalCandidate("whoami", Directory: null)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(["whoami", "user"]),
         };
-        var second = new ApprovalCandidate("whoami", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var second = new ApprovalCandidate("whoami", Directory: null)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(["whoami", "admin"]),
@@ -333,9 +333,9 @@ public sealed class ToolApprovalGateTests
         var secondDigest = new ApprovalAssignmentDigest($"sha256:{new string('b', 64)}");
         var candidate = new ApprovalCandidate(
             "inspect",
-            Directory: null,
-            AssignmentConstraint: ApprovalAssignmentConstraint.ExactDigest(firstDigest))
+            Directory: null)
         {
+            AssignmentDigest = firstDigest,
             Shell = ApprovalShell.Bash,
             VerbTokens = ["inspect"],
         };
@@ -345,12 +345,12 @@ public sealed class ToolApprovalGateTests
             [],
             [candidate with
             {
-                AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(secondDigest),
+                AssignmentDigest = secondDigest,
             }],
             cwd: "/work/repo");
         var unqualifiedKeys = OneTimeApprovalKeys.Create(
             [],
-            [candidate with { AssignmentConstraint = ApprovalAssignmentConstraint.None }],
+            [candidate with { AssignmentDigest = null }],
             cwd: "/work/repo");
 
         Assert.NotEqual(Assert.Single(firstKeys), Assert.Single(secondKeys));
@@ -1584,7 +1584,7 @@ public sealed class ToolApprovalGateTests
     [Fact]
     public void Narrow_shell_context_omits_reusable_options_for_incomplete_phrase_facts()
     {
-        var candidate = new ApprovalCandidate("status-report", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("status-report", Directory: null)
         {
             Shell = ApprovalShell.Bash,
         };
@@ -1631,7 +1631,7 @@ public sealed class ToolApprovalGateTests
             "worktree" => storage.WorktreeDirectory.Value,
             _ => throw new ArgumentOutOfRangeException(nameof(directoryKind))
         };
-        var candidate = new ApprovalCandidate("git status", selectedDirectory, ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git status", selectedDirectory)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["git", "status"]
@@ -1683,7 +1683,7 @@ public sealed class ToolApprovalGateTests
         ShellPathStyle pathStyle,
         bool offersAlwaysHere)
     {
-        var candidate = new ApprovalCandidate("git status", cwd, ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git status", cwd)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["git", "status"]

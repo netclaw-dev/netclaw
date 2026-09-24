@@ -259,9 +259,9 @@ public sealed class ToolApprovalStateTests
         var digest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
         var candidate = new ApprovalCandidate(
             "inspect",
-            "/work/repository",
-            ApprovalAssignmentConstraint.ExactDigest(digest))
+            "/work/repository")
         {
+            AssignmentDigest = digest,
             Shell = ApprovalShell.Bash,
             VerbTokens = ["inspect"],
         };

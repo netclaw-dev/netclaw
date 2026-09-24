@@ -233,7 +233,7 @@ public static class ApprovalPatternMatching
             return true;
         }
 
-        if (!AssignmentConstraintMatches(candidate.AssignmentConstraint, entry.AssignmentDigest))
+        if (candidate.AssignmentDigest != entry.AssignmentDigest)
         {
             reason = ShellApprovalNearMissReason.AssignmentMismatch;
             return true;
@@ -254,7 +254,7 @@ public static class ApprovalPatternMatching
 
     private static bool PhraseMatches(ApprovalCandidate candidate, ApprovalEntry entry)
     {
-        if (!AssignmentConstraintMatches(candidate.AssignmentConstraint, entry.AssignmentDigest))
+        if (candidate.AssignmentDigest != entry.AssignmentDigest)
         {
             return false;
         }
@@ -466,27 +466,11 @@ public static class ApprovalPatternMatching
     /// </remarks>
     public static bool IsPureSideEffect(ApprovalCandidate candidate)
     {
-        if (candidate.Directory is not null
-            || candidate.AssignmentConstraint is not
-            {
-                Kind: ApprovalAssignmentConstraintKind.None,
-                Digest: null
-            })
+        if (candidate.Directory is not null || candidate.AssignmentDigest is not null)
             return false;
 
         return ShellTokenizer.SingleTokenSideEffectVerbs.Contains(candidate.Verb);
     }
-
-    private static bool AssignmentConstraintMatches(
-        ApprovalAssignmentConstraint constraint,
-        ApprovalAssignmentDigest? digest) => constraint.Kind switch
-        {
-            ApprovalAssignmentConstraintKind.None =>
-                constraint.Digest is null && digest is null,
-            ApprovalAssignmentConstraintKind.ExactDigest =>
-                constraint.Digest is { } exact && exact == digest,
-            _ => false,
-        };
 
     /// <summary>
     /// Explains why a shell candidate that <see cref="MatchesShellApproval"/>

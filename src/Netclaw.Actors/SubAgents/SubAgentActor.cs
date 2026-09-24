@@ -1571,9 +1571,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             var bridgeCandidates = ctx.Candidates is { Count: > 0 } candidates
                                 ? candidates.Select(static candidate => new ParentApprovalCandidate(
                                     candidate.Verb,
-                                    candidate.Directory,
-                                    candidate.AssignmentConstraint)
+                                    candidate.Directory)
                                 {
+                                    AssignmentDigest = candidate.AssignmentDigest,
                                     Shell = candidate.Shell,
                                     VerbTokens = candidate.VerbTokens,
                                 }).ToList()

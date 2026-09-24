@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="ShellAssignmentConstraintTests.cs" company="Petabridge, LLC">
+// <copyright file="ShellAssignmentDigestTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -10,13 +10,22 @@ using Xunit;
 
 namespace Netclaw.Security.Tests;
 
-public sealed class ShellAssignmentConstraintTests
+public sealed class ShellAssignmentDigestTests
 {
     private static readonly ToolName ShellToolName = new("shell_execute");
     private static readonly ShellApprovalMatcher BashMatcher = new(
         ShellExecutionEnvironment.CreateBash(
             ShellPlatform.Linux,
             new Version(5, 2)));
+
+    [Fact]
+    public void Candidate_rejects_a_default_assignment_digest()
+    {
+        Assert.Throws<ArgumentNullException>(() => new ApprovalCandidate("inspect", "/work")
+        {
+            AssignmentDigest = default(ApprovalAssignmentDigest),
+        });
+    }
 
     [Fact]
     public void Bash_shell_state_uses_the_canonical_version_one_digest()
@@ -29,7 +38,7 @@ public sealed class ShellAssignmentConstraintTests
         Assert.Equal(
             "sha256:d17b5c9682ce3e864678f5c69763b677e40eb33d88f4ec54ed7106cf1d1a25c5",
             Assert.IsType<ApprovalAssignmentDigest>(
-                candidate.AssignmentConstraint.Digest).Value);
+                candidate.AssignmentDigest).Value);
     }
 
     [Fact]
@@ -41,7 +50,7 @@ public sealed class ShellAssignmentConstraintTests
         var commandEnvironment = ExtractSingle(BashMatcher, "mode='fast' inspect item", "/work");
 
         var digests = new[] { shellState, changedName, changedValue, commandEnvironment }
-            .Select(static candidate => candidate.AssignmentConstraint.Digest)
+            .Select(static candidate => candidate.AssignmentDigest)
             .ToHashSet();
         Assert.Equal(4, digests.Count);
     }
@@ -66,7 +75,7 @@ public sealed class ShellAssignmentConstraintTests
         Assert.Equal(
             "sha256:9f7f62fe7f1f23b11f416a1f3e7babaed28073eb2c50e926291f808c87267fd2",
             Assert.IsType<ApprovalAssignmentDigest>(
-                candidate.AssignmentConstraint.Digest).Value);
+                candidate.AssignmentDigest).Value);
     }
 
     [Fact]
@@ -84,9 +93,7 @@ public sealed class ShellAssignmentConstraintTests
 
         Assert.Equal("Set-Location", candidate.Verb);
         Assert.Equal("C:/work/project/tasks", candidate.Directory);
-        Assert.Equal(
-            ApprovalAssignmentConstraintKind.ExactDigest,
-            candidate.AssignmentConstraint.Kind);
+        Assert.NotNull(candidate.AssignmentDigest);
     }
 
     [Fact]
@@ -166,7 +173,7 @@ public sealed class ShellAssignmentConstraintTests
 
         Assert.False(analysis.IsMessy);
         var candidate = Assert.Single(analysis.Candidates);
-        Assert.Equal(ApprovalAssignmentConstraint.None, candidate.AssignmentConstraint);
+        Assert.Null(candidate.AssignmentDigest);
     }
 
     [Theory]
@@ -253,9 +260,7 @@ public sealed class ShellAssignmentConstraintTests
         Assert.Equal(2, analysis.Candidates.Count);
         Assert.All(
             analysis.Candidates,
-            static candidate => Assert.Equal(
-                ApprovalAssignmentConstraint.None,
-                candidate.AssignmentConstraint));
+            static candidate => Assert.Null(candidate.AssignmentDigest));
         var grants = analysis.Candidates.Select(static candidate =>
             ApprovalEntry.CreateTokenPrefix(
                 ApprovalShell.PowerShell,

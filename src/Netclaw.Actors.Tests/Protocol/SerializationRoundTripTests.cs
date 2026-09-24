@@ -902,17 +902,15 @@ public sealed class SerializationRoundTripTests : TestKit
             [
                 new Netclaw.Security.ApprovalCandidate(
                     "git",
-                    "/work/repository",
-                    Netclaw.Configuration.ApprovalAssignmentConstraint.ExactDigest(
-                        assignmentDigest))
+                    "/work/repository")
                 {
+                    AssignmentDigest = assignmentDigest,
                     Shell = Netclaw.Configuration.ApprovalShell.Bash,
                     VerbTokens = Array.AsReadOnly(["git", "push"]),
                 },
                 new Netclaw.Security.ApprovalCandidate(
                     "ls",
-                    null,
-                    Netclaw.Configuration.ApprovalAssignmentConstraint.None)
+                    null)
             ],
             TurnContext = new TurnContextRecord
             {
@@ -973,11 +971,8 @@ public sealed class SerializationRoundTripTests : TestKit
         Assert.Equal(Netclaw.Configuration.ApprovalShell.Bash, result.Candidates[0].Shell);
         Assert.Equal(["git", "push"], result.Candidates[0].VerbTokens);
         Assert.Equal(
-            Netclaw.Configuration.ApprovalAssignmentConstraintKind.ExactDigest,
-            result.Candidates[0].AssignmentConstraint.Kind);
-        Assert.Equal(
             assignmentDigest,
-            result.Candidates[0].AssignmentConstraint.Digest);
+            result.Candidates[0].AssignmentDigest);
         Assert.Equal("ls", result.Candidates[1].Verb);
         Assert.Null(result.Candidates[1].Directory);
         Assert.Null(result.Candidates[1].Shell);
@@ -1027,9 +1022,9 @@ public sealed class SerializationRoundTripTests : TestKit
             [
                 new Netclaw.Security.ApprovalCandidate(
                     "inspect",
-                    "/work/repository",
-                    Netclaw.Configuration.ApprovalAssignmentConstraint.ExactDigest(digest))
+                    "/work/repository")
                 {
+                    AssignmentDigest = digest,
                     Shell = Netclaw.Configuration.ApprovalShell.Bash,
                     VerbTokens = ["inspect"],
                 },
@@ -1047,8 +1042,7 @@ public sealed class SerializationRoundTripTests : TestKit
         // A reader from before assignment constraints sees only fields 1 through 4.
         var legacyProjection = new Netclaw.Security.ApprovalCandidate(
             wireCandidate.Verb,
-            wireCandidate.HasDirectory ? wireCandidate.Directory : null,
-            Netclaw.Configuration.ApprovalAssignmentConstraint.None)
+            wireCandidate.HasDirectory ? wireCandidate.Directory : null)
         {
             Shell = wireCandidate.HasShell
                 ? (Netclaw.Configuration.ApprovalShell)wireCandidate.Shell
@@ -1056,7 +1050,7 @@ public sealed class SerializationRoundTripTests : TestKit
             VerbTokens = wireCandidate.VerbTokens.ToArray(),
         };
 
-        Assert.Equal(Netclaw.Configuration.ApprovalAssignmentConstraint.None, legacyProjection.AssignmentConstraint);
+        Assert.Null(legacyProjection.AssignmentDigest);
         Assert.All(
             wire.OptionKeys.Where(static key => key.StartsWith("approve_assignment_", StringComparison.Ordinal)),
             key => Assert.Equal(ApprovalDecision.Denied, MapLegacyApprovalDecision(key)));
@@ -1080,7 +1074,7 @@ public sealed class SerializationRoundTripTests : TestKit
         var result = NetclawProtoMapper.FromProto(proto);
 
         var candidate = Assert.Single(result.Candidates);
-        Assert.Equal(Netclaw.Configuration.ApprovalAssignmentConstraint.None, candidate.AssignmentConstraint);
+        Assert.Null(candidate.AssignmentDigest);
     }
 
     [Fact]

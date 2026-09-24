@@ -38,7 +38,7 @@ public sealed class BuildApprovalBucketsTests
         // session approval dict, and the retry threw.
         var candidates = new[]
         {
-            new ApprovalCandidate("curl", null, ApprovalAssignmentConstraint.None)
+            new ApprovalCandidate("curl", null)
         };
 
         var buckets = ApprovalBucketBuilder.Build(
@@ -59,8 +59,8 @@ public sealed class BuildApprovalBucketsTests
         // operand path rather than session_dir.
         var candidates = new[]
         {
-            new ApprovalCandidate("cd", ProjectDir, ApprovalAssignmentConstraint.None),
-            new ApprovalCandidate("git checkout", ProjectDir, ApprovalAssignmentConstraint.None)
+            new ApprovalCandidate("cd", ProjectDir),
+            new ApprovalCandidate("git checkout", ProjectDir)
         };
 
         var buckets = ApprovalBucketBuilder.Build(
@@ -82,7 +82,7 @@ public sealed class BuildApprovalBucketsTests
         // The guard remains in place for persistent scope.
         var candidates = new[]
         {
-            new ApprovalCandidate("curl", null, ApprovalAssignmentConstraint.None)  // no path arg → falls back to cwd
+            new ApprovalCandidate("curl", null)  // no path arg → falls back to cwd
         };
 
         var buckets = ApprovalBucketBuilder.Build(
@@ -97,7 +97,7 @@ public sealed class BuildApprovalBucketsTests
     {
         var candidates = new[]
         {
-            new ApprovalCandidate("git checkout", ProjectDir, ApprovalAssignmentConstraint.None)
+            new ApprovalCandidate("git checkout", ProjectDir)
         };
 
         var buckets = ApprovalBucketBuilder.Build(
@@ -116,8 +116,8 @@ public sealed class BuildApprovalBucketsTests
         // matches any cwd at future evaluation. cwd is irrelevant here.
         var candidates = new[]
         {
-            new ApprovalCandidate("git push origin main", ProjectDir, ApprovalAssignmentConstraint.None),
-            new ApprovalCandidate("curl", null, ApprovalAssignmentConstraint.None)
+            new ApprovalCandidate("git push origin main", ProjectDir),
+            new ApprovalCandidate("curl", null)
         };
 
         var buckets = ApprovalBucketBuilder.Build(
@@ -138,8 +138,8 @@ public sealed class BuildApprovalBucketsTests
         // in ApprovalPatternMatching.MatchesShellApproval at lookup time.
         var candidates = new[]
         {
-            new ApprovalCandidate("echo", null, ApprovalAssignmentConstraint.None),
-            new ApprovalCandidate("git status", null, ApprovalAssignmentConstraint.None)
+            new ApprovalCandidate("echo", null),
+            new ApprovalCandidate("git status", null)
         };
 
         var sessionBuckets = ApprovalBucketBuilder.Build(
@@ -156,12 +156,12 @@ public sealed class BuildApprovalBucketsTests
     {
         var candidates = new[]
         {
-            new ApprovalCandidate("whoami", null, ApprovalAssignmentConstraint.None)
+            new ApprovalCandidate("whoami", null)
             {
                 Shell = ApprovalShell.Bash,
                 VerbTokens = Array.AsReadOnly(["whoami", "user"]),
             },
-            new ApprovalCandidate("whoami", null, ApprovalAssignmentConstraint.None)
+            new ApprovalCandidate("whoami", null)
             {
                 Shell = ApprovalShell.Bash,
                 VerbTokens = Array.AsReadOnly(["whoami", "admin"]),

@@ -84,7 +84,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     {
         if (shell != ApprovalShell.Bash)
         {
-            return new ApprovalCandidate(verb, directory, ApprovalAssignmentConstraint.None)
+            return new ApprovalCandidate(verb, directory)
             {
                 Shell = shell,
                 VerbTokens = Array.AsReadOnly(
@@ -157,7 +157,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         var digest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}");
         var qualified = parsed with
         {
-            AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(digest),
+            AssignmentDigest = digest,
         };
 
         Assert.False(AllShortCircuit(policy, [qualified], _projectDir, ctx));
@@ -187,7 +187,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
                     @"Get-ChildItem -Path C:\WORK\PROJECT -Recurse",
                     @"C:\WORK\PROJECT")
                 .Commands);
-        var candidate = new ApprovalCandidate("Get-ChildItem", @"C:\WORK\PROJECT", ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("Get-ChildItem", @"C:\WORK\PROJECT")
         {
             Shell = ApprovalShell.PowerShell,
             VerbTokens = ["Get-ChildItem"],
@@ -501,7 +501,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     {
         var policy = CreatePolicy(VerbList("head"));
         var ctx = PersonalContext(projectDir: _projectDir);
-        var candidate = new ApprovalCandidate("head", _projectDir, ApprovalAssignmentConstraint.None);
+        var candidate = new ApprovalCandidate("head", _projectDir);
 
         Assert.False(AllShortCircuit(policy, [candidate], _projectDir, ctx));
     }

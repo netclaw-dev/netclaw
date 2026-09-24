@@ -45,15 +45,13 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             Assert.False(
                 promptDecision.ApprovalContext!.IsMessy,
                 string.Join(", ", promptDecision.ApprovalContext.Candidates!.Select(
-                    candidate => $"{candidate.Verb}:{candidate.Directory}:{candidate.AssignmentConstraint.Kind}")));
+                    candidate => $"{candidate.Verb}:{candidate.Directory}:{candidate.AssignmentDigest}")));
             Assert.Contains(
                 promptDecision.ApprovalContext.Options,
                 option => option.Key.Value ==
                           Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveAssignmentRepositoryV1);
             var promptCandidate = Assert.Single(promptDecision.ApprovalContext.Candidates!);
-            Assert.Equal(
-                ApprovalAssignmentConstraintKind.ExactDigest,
-                promptCandidate.AssignmentConstraint.Kind);
+            Assert.NotNull(promptCandidate.AssignmentDigest);
 
             var grantContext = ApprovalGrantContext.FromDecision(
                 ApprovalDecision.ApprovedRepository,
@@ -62,7 +60,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 promptDecision.ApprovalContext.RepositoryCommonDirectory);
             var repositoryGrant = Assert.Single(ApprovalBucketBuilder.BuildGrants(
                 promptDecision.ApprovalContext.Candidates!, grantContext));
-            Assert.Equal(promptCandidate.AssignmentConstraint, repositoryGrant.Candidate.AssignmentConstraint);
+            Assert.Equal(promptCandidate.AssignmentDigest, repositoryGrant.Candidate.AssignmentDigest);
             Assert.Equal(Path.Combine(main, ".git"), repositoryGrant.Repository);
             Assert.Equal(main, repositoryGrant.RepositoryWorktree);
             Assert.True(ToolApprovalActor.TryCreateEntries(
@@ -71,7 +69,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 out var entries,
                 out _));
             var entry = Assert.Single(entries);
-            Assert.Equal(promptCandidate.AssignmentConstraint.Digest, entry.AssignmentDigest);
+            Assert.Equal(promptCandidate.AssignmentDigest, entry.AssignmentDigest);
             Assert.Equal(repositoryGrant.Repository, entry.Repository);
 
             await using var siblingHarness = await CreateHarnessAsync(
@@ -85,7 +83,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             var siblingDecision = await siblingHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
             var siblingCandidate = Assert.Single(siblingDecision.ApprovalContext!.Candidates!);
-            Assert.Equal(promptCandidate.AssignmentConstraint, siblingCandidate.AssignmentConstraint);
+            Assert.Equal(promptCandidate.AssignmentDigest, siblingCandidate.AssignmentDigest);
             Assert.True(ApprovalPatternMatching.MatchesShellApproval(
                 siblingCandidate,
                 sibling,
@@ -102,7 +100,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             var changedDecision = await changedHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
             var changedCandidate = Assert.Single(changedDecision.ApprovalContext!.Candidates!);
-            Assert.NotEqual(promptCandidate.AssignmentConstraint, changedCandidate.AssignmentConstraint);
+            Assert.NotEqual(promptCandidate.AssignmentDigest, changedCandidate.AssignmentDigest);
             Assert.False(ApprovalPatternMatching.MatchesShellApproval(
                 changedCandidate,
                 sibling,
@@ -110,7 +108,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
 
             var unqualifiedCandidate = siblingCandidate with
             {
-                AssignmentConstraint = ApprovalAssignmentConstraint.None,
+                AssignmentDigest = null,
             };
             Assert.False(ApprovalPatternMatching.MatchesShellApproval(
                 unqualifiedCandidate,
@@ -338,11 +336,11 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
                 promptDecision.ApprovalContext.Candidates!, swappedContext));
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
-                [new Netclaw.Security.ApprovalCandidate("touch", Path.Combine(root.FullName, "outside"), ApprovalAssignmentConstraint.None)],
+                [new Netclaw.Security.ApprovalCandidate("touch", Path.Combine(root.FullName, "outside"))],
                 grantContext));
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
-                [new Netclaw.Security.ApprovalCandidate("cd", Path.Combine(root.FullName, "outside"), ApprovalAssignmentConstraint.None),
-                    new Netclaw.Security.ApprovalCandidate("./scripts/bump-version.sh", null, ApprovalAssignmentConstraint.None)],
+                [new Netclaw.Security.ApprovalCandidate("cd", Path.Combine(root.FullName, "outside")),
+                    new Netclaw.Security.ApprovalCandidate("./scripts/bump-version.sh", null)],
                 grantContext));
 
             var grants = Approvals.Combine(

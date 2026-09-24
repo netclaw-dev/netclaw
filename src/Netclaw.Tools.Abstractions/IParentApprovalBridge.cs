@@ -79,9 +79,19 @@ public sealed class ParentApprovalUnavailableException : InvalidOperationExcepti
 /// </summary>
 public sealed record ParentApprovalCandidate(
     string Verb,
-    string? Directory,
-    ApprovalAssignmentConstraint AssignmentConstraint)
+    string? Directory)
 {
+    private ApprovalAssignmentDigest? _assignmentDigest;
+
+    /// <summary>The exact bounded shell-assignment digest, when present.</summary>
+    public ApprovalAssignmentDigest? AssignmentDigest
+    {
+        get => _assignmentDigest;
+        init => _assignmentDigest = value is { } digest
+            ? new ApprovalAssignmentDigest(digest.Value)
+            : null;
+    }
+
     /// <summary>The immutable parser-owned canonical verb tokens.</summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
 
@@ -93,10 +103,10 @@ public sealed record ParentApprovalCandidate(
         other is not null &&
         string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
         string.Equals(Directory, other.Directory, StringComparison.Ordinal) &&
-        AssignmentConstraint == other.AssignmentConstraint;
+        AssignmentDigest == other.AssignmentDigest;
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentConstraint);
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentDigest);
 }
 
 /// <summary>

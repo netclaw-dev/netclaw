@@ -123,7 +123,7 @@ public sealed class ApprovalNearMissTests
     [Fact]
     public void Typed_evaluation_returns_token_mismatch_from_one_grant_pass()
     {
-        var candidate = new ApprovalCandidate("git push", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git push", Directory: null)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["git", "push"],
@@ -147,7 +147,7 @@ public sealed class ApprovalNearMissTests
     [Fact]
     public void Typed_evaluation_returns_shell_mismatch_from_one_grant_pass()
     {
-        var candidate = new ApprovalCandidate("git status", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git status", Directory: null)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["git", "status"],
@@ -171,7 +171,7 @@ public sealed class ApprovalNearMissTests
     [Fact]
     public void Typed_evaluation_enumerates_the_grant_snapshot_once()
     {
-        var candidate = new ApprovalCandidate("git push", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git push", Directory: null)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["git", "push"],

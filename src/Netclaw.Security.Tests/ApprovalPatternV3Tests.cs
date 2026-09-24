@@ -24,7 +24,7 @@ public sealed class ApprovalPatternV3Tests
         string verb,
         string[] tokens)
     {
-        var candidate = new ApprovalCandidate(verb, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate(verb, Directory: null)
         {
             VerbTokens = Array.AsReadOnly(tokens),
             Shell = ApprovalShell.Bash,
@@ -39,7 +39,7 @@ public sealed class ApprovalPatternV3Tests
     [Fact]
     public void Token_prefix_does_not_cross_shell_boundary()
     {
-        var candidate = new ApprovalCandidate("git push", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git push", Directory: null)
         {
             VerbTokens = Array.AsReadOnly(["git", "push"]),
             Shell = ApprovalShell.PowerShell,
@@ -54,7 +54,7 @@ public sealed class ApprovalPatternV3Tests
     [Fact]
     public void Typed_shell_grant_does_not_match_candidate_without_shell_facts()
     {
-        var candidate = new ApprovalCandidate("git push", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None);
+        var candidate = new ApprovalCandidate("git push", Directory: null);
 
         Assert.False(ApprovalPatternMatching.MatchesShellApproval(
             candidate,
@@ -69,7 +69,7 @@ public sealed class ApprovalPatternV3Tests
             ApprovalShell.PowerShell,
             ["Get-Content"],
             @"C:\Work\Repo");
-        var candidate = new ApprovalCandidate("get-content", @"c:\work\repo\src", ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("get-content", @"c:\work\repo\src")
         {
             Shell = ApprovalShell.PowerShell,
             VerbTokens = Array.AsReadOnly(["get-content"]),
@@ -89,7 +89,7 @@ public sealed class ApprovalPatternV3Tests
         string verb,
         string[] tokens)
     {
-        var candidate = new ApprovalCandidate(verb, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate(verb, Directory: null)
         {
             VerbTokens = Array.AsReadOnly(tokens),
             Shell = ApprovalShell.Bash,
@@ -107,7 +107,7 @@ public sealed class ApprovalPatternV3Tests
         var grant = ApprovalEntry.CreateTokenPrefix(
             ApprovalShell.Bash,
             ["git", "ls-tree"]);
-        var candidate = new ApprovalCandidate("git ls-tree", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git ls-tree", Directory: null)
         {
             VerbTokens = Array.AsReadOnly(["git", "ls-tree", "feature"]),
             Shell = ApprovalShell.Bash,
@@ -125,7 +125,7 @@ public sealed class ApprovalPatternV3Tests
         var grant = ApprovalEntry.CreateLegacyExact(
             ApprovalShell.Bash,
             "git push");
-        var candidate = new ApprovalCandidate("git push origin", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("git push origin", Directory: null)
         {
             VerbTokens = Array.AsReadOnly(["git", "push", "origin"]),
             Shell = ApprovalShell.Bash,
@@ -140,19 +140,19 @@ public sealed class ApprovalPatternV3Tests
     [Fact]
     public void Assignment_qualified_grant_requires_the_same_exact_constraint()
     {
-        var constraint = ApprovalAssignmentConstraint.ExactDigest(AssignmentDigest);
         var grant = ApprovalEntry.CreateTokenPrefix(
             ApprovalShell.Bash,
             ["inspect"],
             assignmentDigest: AssignmentDigest);
-        var matching = new ApprovalCandidate("inspect", Directory: null, AssignmentConstraint: constraint)
+        var matching = new ApprovalCandidate("inspect", Directory: null)
         {
+            AssignmentDigest = AssignmentDigest,
             VerbTokens = ["inspect"],
             Shell = ApprovalShell.Bash,
         };
         var unqualified = matching with
         {
-            AssignmentConstraint = ApprovalAssignmentConstraint.None,
+            AssignmentDigest = null,
         };
 
         Assert.True(ApprovalPatternMatching.MatchesShellApproval(
@@ -189,8 +189,10 @@ public sealed class ApprovalPatternV3Tests
     {
         var candidate = new ApprovalCandidate(
             "echo",
-            Directory: null,
-            AssignmentConstraint: ApprovalAssignmentConstraint.ExactDigest(AssignmentDigest));
+            Directory: null)
+        {
+            AssignmentDigest = AssignmentDigest,
+        };
 
         Assert.False(ApprovalPatternMatching.IsPureSideEffect(candidate));
     }

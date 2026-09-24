@@ -22,9 +22,19 @@ namespace Netclaw.Security;
 /// </summary>
 public sealed record ApprovalCandidate(
     string Verb,
-    string? Directory,
-    ApprovalAssignmentConstraint AssignmentConstraint)
+    string? Directory)
 {
+    private ApprovalAssignmentDigest? _assignmentDigest;
+
+    /// <summary>The exact bounded shell-assignment digest, when present.</summary>
+    public ApprovalAssignmentDigest? AssignmentDigest
+    {
+        get => _assignmentDigest;
+        init => _assignmentDigest = value is { } digest
+            ? new ApprovalAssignmentDigest(digest.Value)
+            : null;
+    }
+
     /// <summary>The immutable parser-owned canonical verb tokens.</summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
 
@@ -42,10 +52,10 @@ public sealed record ApprovalCandidate(
         other is not null &&
         string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
         string.Equals(Directory, other.Directory, StringComparison.Ordinal) &&
-        AssignmentConstraint == other.AssignmentConstraint;
+        AssignmentDigest == other.AssignmentDigest;
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentConstraint);
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentDigest);
 }
 
 /// <summary>
@@ -298,17 +308,18 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var shell = Environment.Grammar == ShellGrammar.Bash
             ? ApprovalShell.Bash
             : ApprovalShell.PowerShell;
-        if (!ShellAssignmentConstraintFactory.TryCreate(
+        if (!ShellAssignmentDigestFactory.TryCreate(
                 shell,
                 occurrence.Assignments,
-                out var assignmentConstraint))
+                out var assignmentDigest))
         {
             return null;
         }
 
         return directories
-            .Select(directory => new ApprovalCandidate(verb, directory, assignmentConstraint)
+            .Select(directory => new ApprovalCandidate(verb, directory)
             {
+                AssignmentDigest = assignmentDigest,
                 VerbTokens = GetCanonicalVerbTokens(clause),
                 Shell = shell,
                 SourceOccurrence = occurrence,
@@ -1258,7 +1269,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             : ApprovalShell.PowerShell;
 
         if (analysis.Commands.Any(command =>
-                !ShellAssignmentConstraintFactory.TryCreate(
+                !ShellAssignmentDigestFactory.TryCreate(
                     shell,
                     command.Assignments,
                     out _)))
@@ -1533,7 +1544,7 @@ public sealed class DefaultApprovalMatcher : IToolApprovalMatcher
         => [toolName.Value];
 
     public IReadOnlyList<ApprovalCandidate> ExtractCandidates(ToolName toolName, IDictionary<string, object?>? arguments)
-        => [new ApprovalCandidate(toolName.Value, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)];
+        => [new ApprovalCandidate(toolName.Value, Directory: null)];
 
     public bool IsApproved(
         ToolName toolName,

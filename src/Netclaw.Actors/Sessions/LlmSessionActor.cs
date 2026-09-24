@@ -4841,9 +4841,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (decision == ApprovalDecision.ApprovedRepository)
             throw new InvalidOperationException("Repository grants require structured approval storage.");
 
-        if (request.Candidates.Any(static candidate =>
-                candidate.AssignmentConstraint.Kind != ApprovalAssignmentConstraintKind.None
-                || candidate.AssignmentConstraint.Digest is not null))
+        if (request.Candidates.Any(static candidate => candidate.AssignmentDigest is not null))
         {
             throw new InvalidOperationException(
                 "Assignment-qualified grants require structured approval storage.");

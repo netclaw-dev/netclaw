@@ -443,7 +443,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             var candidatesForCheck = approvalContext.Candidates is { Count: > 0 } candidates
                 ? candidates.ToList()
                 : approvalContext.CandidateVerbs
-                    .Select(verb => new ApprovalCandidate(verb, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None))
+                    .Select(verb => new ApprovalCandidate(verb, Directory: null))
                     .ToList();
 
             if (candidatesForCheck.Count > 0)
@@ -652,7 +652,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         string.Equals(first.Verb, second.Verb, StringComparison.Ordinal) &&
         string.Equals(first.Directory, second.Directory, StringComparison.Ordinal) &&
         first.Shell == second.Shell &&
-        first.AssignmentConstraint == second.AssignmentConstraint &&
+        first.AssignmentDigest == second.AssignmentDigest &&
         ((first.VerbTokens is null && second.VerbTokens is null) ||
          (first.VerbTokens is not null &&
           second.VerbTokens is not null &&

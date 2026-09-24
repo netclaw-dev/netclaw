@@ -70,11 +70,7 @@ internal sealed record ShellPolicyCandidate(
 
     internal bool CanUseRealReviewedSafePolicy =>
         Role == ShellPolicyCandidateRole.Ordinary
-        && Candidate.AssignmentConstraint is
-        {
-            Kind: ApprovalAssignmentConstraintKind.None,
-            Digest: null
-        };
+        && Candidate.AssignmentDigest is null;
 }
 
 /// <summary>

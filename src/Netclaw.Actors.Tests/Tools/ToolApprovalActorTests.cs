@@ -706,7 +706,7 @@ public sealed class ToolApprovalActorTests : TestKit
             var secondDigest = new ApprovalAssignmentDigest($"sha256:{new string('b', 64)}");
             var candidate = BashCandidate("inspect") with
             {
-                AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(firstDigest),
+                AssignmentDigest = firstDigest,
             };
 
             await service.RecordApprovalCandidatesAsync(
@@ -733,7 +733,7 @@ public sealed class ToolApprovalActorTests : TestKit
                 new ToolName("shell_execute"),
                 [candidate with
                 {
-                    AssignmentConstraint = ApprovalAssignmentConstraint.ExactDigest(secondDigest),
+                    AssignmentDigest = secondDigest,
                 }],
                 cwd: null,
                 ct);
@@ -741,7 +741,7 @@ public sealed class ToolApprovalActorTests : TestKit
                 "session-b",
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                [candidate with { AssignmentConstraint = ApprovalAssignmentConstraint.None }],
+                [candidate with { AssignmentDigest = null }],
                 cwd: null,
                 ct);
 
@@ -768,7 +768,7 @@ public sealed class ToolApprovalActorTests : TestKit
             var store = CreateStore(tempFile);
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
-            var candidate = new ApprovalCandidate("git ls-tree", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+            var candidate = new ApprovalCandidate("git ls-tree", Directory: null)
             {
                 Shell = ApprovalShell.Bash,
                 VerbTokens = Array.AsReadOnly(["git", "ls-tree", "feature"]),
@@ -853,7 +853,7 @@ public sealed class ToolApprovalActorTests : TestKit
             var store = CreateStore(tempFile);
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
-            var malformed = new ApprovalCandidate("head", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+            var malformed = new ApprovalCandidate("head", Directory: null)
             {
                 Shell = NativeShell,
             };
@@ -1044,7 +1044,7 @@ public sealed class ToolApprovalActorTests : TestKit
         => new(new StubRequiredActor(actor), TestShellEnvironment.Current);
 
     private static ApprovalCandidate BashCandidate(string verb, string? directory = null) =>
-        new(verb, directory, ApprovalAssignmentConstraint.None)
+        new(verb, directory)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(
@@ -1056,7 +1056,7 @@ public sealed class ToolApprovalActorTests : TestKit
         : ApprovalShell.Bash;
 
     private static ApprovalCandidate NativeCandidate(string verb, string? directory = null) =>
-        new(verb, directory, ApprovalAssignmentConstraint.None)
+        new(verb, directory)
         {
             Shell = NativeShell,
             VerbTokens = Array.AsReadOnly(

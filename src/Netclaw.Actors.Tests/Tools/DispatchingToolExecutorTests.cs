@@ -2368,7 +2368,7 @@ public partial class DispatchingToolExecutorTests
                 CandidateChecks =
                 [
                     new ToolApprovalCandidateCheck(
-                        new ApprovalCandidate("git push", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None),
+                        new ApprovalCandidate("git push", Directory: null),
                         ApprovedMatch: null)
                 ]
             });
@@ -2412,7 +2412,7 @@ public partial class DispatchingToolExecutorTests
         };
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
-        var forgedCandidate = new ApprovalCandidate("git status", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)
+        var forgedCandidate = new ApprovalCandidate("git status", Directory: null)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(["git", "push"]),
@@ -2476,7 +2476,7 @@ public partial class DispatchingToolExecutorTests
                 CandidateChecks =
                 [
                     new ToolApprovalCandidateCheck(
-                        new ApprovalCandidate("git push", Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None),
+                        new ApprovalCandidate("git push", Directory: null),
                         ApprovedMatch: null)
                 ]
             });
@@ -4698,7 +4698,7 @@ public partial class DispatchingToolExecutorTests
     }
 
     private static ApprovalCandidate BashCandidate(string verb, string? directory = null) =>
-        new(verb, directory, ApprovalAssignmentConstraint.None)
+        new(verb, directory)
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = Array.AsReadOnly(

@@ -34,8 +34,8 @@ public sealed class GitRepositoryApprovalScopeTests
 
             ApprovalCandidate[] siblingCandidates =
             [
-                new("task-a", checkoutDirectory, ApprovalAssignmentConstraint.None),
-                new("task-b", worktreeDirectory, ApprovalAssignmentConstraint.None),
+                new("task-a", checkoutDirectory),
+                new("task-b", worktreeDirectory),
             ];
             Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
                 siblingCandidates, session, out var siblingScopes));
@@ -47,16 +47,16 @@ public sealed class GitRepositoryApprovalScopeTests
 
             ApprovalCandidate[] cwdFallbackCandidates =
             [
-                new("task-a", null, ApprovalAssignmentConstraint.None),
-                new("task-b", worktreeDirectory, ApprovalAssignmentConstraint.None),
+                new("task-a", null),
+                new("task-b", worktreeDirectory),
             ];
             Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
                 cwdFallbackCandidates, checkoutDirectory, out _));
             Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
                 cwdFallbackCandidates, session, out _));
             Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-                [new ApprovalCandidate("task-a", checkoutDirectory, ApprovalAssignmentConstraint.None),
-                    new ApprovalCandidate("task-b", otherDirectory, ApprovalAssignmentConstraint.None)],
+                [new ApprovalCandidate("task-a", checkoutDirectory),
+                    new ApprovalCandidate("task-b", otherDirectory)],
                 session,
                 out _));
             Assert.False(GitRepositoryApprovalScope.TryResolveCandidates([], checkoutA, out _));
@@ -65,7 +65,7 @@ public sealed class GitRepositoryApprovalScopeTests
             Assert.False(GitRepositoryApprovalScope.TryResolveCandidate(
                 Path.Combine(root.FullName, "missing"), session, out _));
             Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-                [new ApprovalCandidate("task-a", Path.Combine(checkoutDirectory, ".."), ApprovalAssignmentConstraint.None)],
+                [new ApprovalCandidate("task-a", Path.Combine(checkoutDirectory, ".."))],
                 session,
                 out _));
 
@@ -74,7 +74,7 @@ public sealed class GitRepositoryApprovalScopeTests
                 var alias = Path.Combine(root.FullName, "linked-worktree");
                 Directory.CreateSymbolicLink(alias, worktreeA);
                 Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-                    [new ApprovalCandidate("task-a", alias, ApprovalAssignmentConstraint.None)], session, out _));
+                    [new ApprovalCandidate("task-a", alias)], session, out _));
             }
         }
         finally
@@ -106,7 +106,7 @@ public sealed class GitRepositoryApprovalScopeTests
                 "./scripts/bump-version.sh", null, sibling, [grant]));
             var folder = ApprovalEntry.CreateTokenPrefix(
                 ApprovalShell.Bash, ["./scripts/bump-version.sh"], main);
-            var candidate = new ApprovalCandidate("./scripts/bump-version.sh", null, ApprovalAssignmentConstraint.None)
+            var candidate = new ApprovalCandidate("./scripts/bump-version.sh", null)
             {
                 Shell = ApprovalShell.Bash,
                 VerbTokens = ["./scripts/bump-version.sh"],

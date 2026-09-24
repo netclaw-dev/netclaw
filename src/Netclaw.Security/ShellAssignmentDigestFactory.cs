@@ -1,5 +1,5 @@
 // -----------------------------------------------------------------------
-// <copyright file="ShellAssignmentConstraintFactory.cs" company="Petabridge, LLC">
+// <copyright file="ShellAssignmentDigestFactory.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
@@ -11,7 +11,7 @@ using ShellSyntaxTree;
 
 namespace Netclaw.Security;
 
-internal static class ShellAssignmentConstraintFactory
+internal static class ShellAssignmentDigestFactory
 {
     private const uint FormatVersion = 1;
     private static readonly byte[] Magic = "NCAS"u8.ToArray();
@@ -22,10 +22,10 @@ internal static class ShellAssignmentConstraintFactory
     public static bool TryCreate(
         ApprovalShell shell,
         IReadOnlyList<ShellVariableAssignment> assignments,
-        out ApprovalAssignmentConstraint constraint)
+        out ApprovalAssignmentDigest? digest)
     {
         ArgumentNullException.ThrowIfNull(assignments);
-        constraint = ApprovalAssignmentConstraint.None;
+        digest = null;
         if (assignments.Count == 0)
             return true;
 
@@ -76,9 +76,8 @@ internal static class ShellAssignmentConstraintFactory
             return false;
         }
 
-        var digest = new ApprovalAssignmentDigest(
+        digest = new ApprovalAssignmentDigest(
             $"sha256:{Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant()}");
-        constraint = ApprovalAssignmentConstraint.ExactDigest(digest);
         return true;
     }
 

@@ -258,11 +258,7 @@ internal sealed class ReviewedSafeShellPolicy
         out ApprovalShell shell)
     {
         shell = default;
-        if (candidate.AssignmentConstraint is not
-            {
-                Kind: ApprovalAssignmentConstraintKind.None,
-                Digest: null
-            })
+        if (candidate.AssignmentDigest is not null)
         {
             return false;
         }

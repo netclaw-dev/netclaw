@@ -26,8 +26,8 @@ public sealed class ShellAssignmentMutationTests
     [Fact]
     public void Assignment_grants_require_the_same_explicit_constraint()
     {
-        var qualified = Candidate(ApprovalAssignmentConstraint.ExactDigest(FirstDigest));
-        var unqualified = Candidate(ApprovalAssignmentConstraint.None);
+        var qualified = Candidate(FirstDigest);
+        var unqualified = Candidate(null);
         var matching = Entry(FirstDigest);
         var changed = Entry(SecondDigest);
         var absent = Entry(assignmentDigest: null);
@@ -52,10 +52,6 @@ public sealed class ShellAssignmentMutationTests
             unqualified,
             "/work",
             [matching]));
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
-            Candidate(default),
-            "/work",
-            [absent]));
     }
 
     [Fact]
@@ -218,17 +214,15 @@ public sealed class ShellAssignmentMutationTests
         var unqualified = Assert.IsAssignableFrom<IReadOnlyList<ToolApprovalOption>>(
             method.Invoke(null, [profile, true, false]));
 
-        Assert.True(ToolAccessPolicy.HasAssignmentConstraint(
-            [Candidate(ApprovalAssignmentConstraint.ExactDigest(FirstDigest))]));
-        Assert.True(ToolAccessPolicy.HasAssignmentConstraint(
+        Assert.True(ToolAccessPolicy.HasAssignmentDigest(
+            [Candidate(FirstDigest)]));
+        Assert.True(ToolAccessPolicy.HasAssignmentDigest(
             [
-                Candidate(ApprovalAssignmentConstraint.None),
-                Candidate(ApprovalAssignmentConstraint.ExactDigest(FirstDigest)),
+                Candidate(null),
+                Candidate(FirstDigest),
             ]));
-        Assert.False(ToolAccessPolicy.HasAssignmentConstraint(
-            [Candidate(ApprovalAssignmentConstraint.None)]));
-        Assert.False(ToolAccessPolicy.HasAssignmentConstraint(
-            [Candidate(default)]));
+        Assert.False(ToolAccessPolicy.HasAssignmentDigest(
+            [Candidate(null)]));
         Assert.All(
             new[]
             {
@@ -318,9 +312,10 @@ public sealed class ShellAssignmentMutationTests
             unqualified.Select(static option => option.Key.Value));
     }
 
-    private static ApprovalCandidate Candidate(ApprovalAssignmentConstraint constraint)
-        => new("inspect", "/work", constraint)
+    private static ApprovalCandidate Candidate(ApprovalAssignmentDigest? digest)
+        => new("inspect", "/work")
         {
+            AssignmentDigest = digest,
             Shell = ApprovalShell.Bash,
             VerbTokens = ["inspect"],
         };

@@ -12,26 +12,6 @@ namespace Netclaw.Configuration.Tests;
 public sealed class ApprovalEntryWireCodecTests
 {
     [Fact]
-    public void Default_assignment_constraint_is_not_valid_none()
-    {
-        var constraint = default(ApprovalAssignmentConstraint);
-
-        Assert.Equal(ApprovalAssignmentConstraintKind.Unknown, constraint.Kind);
-        Assert.False(constraint.IsValid);
-        Assert.Throws<ArgumentException>(() =>
-            new ApprovalAssignmentConstraint(
-                ApprovalAssignmentConstraintKind.Unknown,
-                digest: null));
-    }
-
-    [Fact]
-    public void Exact_assignment_constraint_rejects_a_default_digest()
-    {
-        Assert.Throws<ArgumentException>(() =>
-            ApprovalAssignmentConstraint.ExactDigest(default));
-    }
-
-    [Fact]
     public void Token_prefix_has_exact_wire_form()
     {
         var createdAt = new DateTimeOffset(2026, 8, 11, 12, 0, 0, TimeSpan.Zero);

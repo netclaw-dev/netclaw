@@ -586,7 +586,7 @@ public sealed class ShellCommandAnalysisMutationTests
                     @"Get-ChildItem -Path C:\work -Recurse",
                     @"C:\work")
                 .Commands);
-        var candidate = new ApprovalCandidate("Get-ChildItem", @"C:\work", ApprovalAssignmentConstraint.None)
+        var candidate = new ApprovalCandidate("Get-ChildItem", @"C:\work")
         {
             Shell = ApprovalShell.PowerShell,
             VerbTokens = ["Get-ChildItem"],
@@ -643,7 +643,7 @@ public sealed class ShellCommandAnalysisMutationTests
                     ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux))
                 .Analyze("Get-ChildItem", "/work")
                 .Commands);
-        var bashCandidate = new ApprovalCandidate("Get-ChildItem", "/work", ApprovalAssignmentConstraint.None)
+        var bashCandidate = new ApprovalCandidate("Get-ChildItem", "/work")
         {
             Shell = ApprovalShell.Bash,
             VerbTokens = ["Get-ChildItem"],
@@ -677,7 +677,7 @@ public sealed class ShellCommandAnalysisMutationTests
             ShellAnalysisFailure.None,
             new HashSet<ClauseElement>(ReferenceEqualityComparer.Instance),
             syntaxProofComplete: true);
-        var forgedCandidate = new ApprovalCandidate("Write-Output", @"C:\work", ApprovalAssignmentConstraint.None)
+        var forgedCandidate = new ApprovalCandidate("Write-Output", @"C:\work")
         {
             Shell = ApprovalShell.PowerShell,
             VerbTokens = ["Write-Output"],

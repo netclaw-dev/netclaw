@@ -1999,7 +1999,7 @@ internal sealed class ApprovalGateToolExecutor : IToolExecutor
                     ],
                     Cwd: null,
                     IsMessy: false,
-                    Candidates: [new Netclaw.Security.ApprovalCandidate(toolCall.Name, Directory: null, AssignmentConstraint: ApprovalAssignmentConstraint.None)]);
+                    Candidates: [new Netclaw.Security.ApprovalCandidate(toolCall.Name, Directory: null)]);
                 if (ManagedTemporaryRetryTools.TryGetValue(toolCall.Name, out var managedTemporaryDirectory))
                 {
                     approvalContext = approvalContext with

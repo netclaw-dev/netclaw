@@ -100,9 +100,9 @@ internal sealed class ParentSessionApprovalBridge :
                     IsMessy: isMessy,
                     Candidates: candidates.Select(static candidate => new ApprovalCandidate(
                         candidate.Verb,
-                        candidate.Directory,
-                        candidate.AssignmentConstraint)
+                        candidate.Directory)
                     {
+                        AssignmentDigest = candidate.AssignmentDigest,
                         Shell = candidate.Shell,
                         VerbTokens = candidate.VerbTokens,
                     }).ToList())),
@@ -142,9 +142,9 @@ internal sealed class ParentSessionApprovalBridge :
             Candidates = (request.Approval.Candidates ?? [])
                 .Select(static candidate => new ApprovalCandidate(
                     candidate.Verb,
-                    candidate.Directory,
-                    candidate.AssignmentConstraint)
+                    candidate.Directory)
                 {
+                    AssignmentDigest = candidate.AssignmentDigest,
                     Shell = candidate.Shell,
                     VerbTokens = candidate.VerbTokens,
                 }).ToList(),
