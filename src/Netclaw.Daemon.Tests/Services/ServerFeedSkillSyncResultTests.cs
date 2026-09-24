@@ -29,9 +29,15 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
     {
         _paths = new NetclawPaths(_directory.Path);
         _paths.EnsureDirectoriesExist();
+        new SchemaMigrator(_paths, NullLogger<SchemaMigrator>.Instance)
+            .MigrateAsync(_paths.SqliteDbPath, CancellationToken.None).GetAwaiter().GetResult();
     }
 
-    public void Dispose() => _directory.Dispose();
+    public void Dispose()
+    {
+        SqliteTestPools.Clear(_paths);
+        _directory.Dispose();
+    }
 
     [Fact]
     public async Task Rejected_skill_preserves_old_bytes_and_reports_partial_source_failure()
@@ -185,7 +191,11 @@ public sealed class ServerFeedSkillSyncResultTests : IDisposable
         scanner,
         NullLogger<ServerFeedSkillSyncService>.Instance,
         [],
-        feed => new SkillServerClient(new HttpClient(handler) { BaseAddress = new Uri(feed.Url) }));
+        feed => new SkillServerClient(new HttpClient(handler) { BaseAddress = new Uri(feed.Url) }),
+        new ManagedPluginStateStore(_paths, TimeProvider.System),
+        new GitSkillPluginAcquirer(
+            new HttpClient(new HttpClientHandler()), _paths, TimeProvider.System, new NoOpSkillContentScanner()),
+        NullNotificationSink.Instance);
 
     private static Task<SkillSyncResult.Response> RunAsync(ServerFeedSkillSyncService service)
         => service.SyncAsync(TestContext.Current.CancellationToken);

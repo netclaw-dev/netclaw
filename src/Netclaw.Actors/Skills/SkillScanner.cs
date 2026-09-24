@@ -208,6 +208,17 @@ public static partial class SkillScanner
         string nativeSkillsDirectory,
         IReadOnlyList<ResolvedExternalSource> serverFeedSources,
         IReadOnlyList<ResolvedExternalSource> externalSources)
+        => ScanAndMerge(nativeSkillsDirectory, serverFeedSources, Array.Empty<ResolvedExternalSource>(), externalSources);
+
+    /// <summary>
+    /// Scans all configured skill tiers. Managed Git plugins are lower priority than
+    /// organization feeds and higher priority than local external directories.
+    /// </summary>
+    public static MergedSkillScanResult ScanAndMerge(
+        string nativeSkillsDirectory,
+        IReadOnlyList<ResolvedExternalSource> serverFeedSources,
+        IReadOnlyList<ResolvedExternalSource> managedGitPluginSources,
+        IReadOnlyList<ResolvedExternalSource> externalSources)
     {
         var nativeScan = Scan(nativeSkillsDirectory, allowSymlinks: false, strictNameMatch: true);
         var allAccepted = new List<SkillEntry>(nativeScan.AcceptedSkills);
@@ -219,7 +230,11 @@ public static partial class SkillScanner
         // Server feed sources (second tier — org-managed private skill servers)
         MergeSources(serverFeedSources, allAccepted, allIssues, knownNames, allowFrontmatterlessFlatFiles: false);
 
-        // External filesystem sources (third tier — Claude Code, Open Code, custom paths)
+        // Managed Git plugins are verified, immutable third-party content. They yield
+        // to organization feeds but take priority over locally discovered sources.
+        MergeSources(managedGitPluginSources, allAccepted, allIssues, knownNames, allowFrontmatterlessFlatFiles: false);
+
+        // External filesystem sources are the lowest-precedence tier.
         MergeSources(externalSources, allAccepted, allIssues, knownNames, allowFrontmatterlessFlatFiles: true);
 
         return new MergedSkillScanResult(allAccepted, allIssues);
