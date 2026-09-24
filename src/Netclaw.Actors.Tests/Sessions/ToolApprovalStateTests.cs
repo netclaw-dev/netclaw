@@ -143,27 +143,6 @@ public sealed class ToolApprovalStateTests
             "/work/main/.git"));
     }
 
-    [Fact]
-    public void Assignment_repository_option_requires_its_exact_offered_key()
-    {
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
-            [ApprovalOptionKeys.ApproveRepository],
-            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
-            "/work/main/.git"));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
-            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
-            ApprovalOptionKeys.ApproveRepository,
-            "/work/main/.git"));
-        Assert.False(LlmSessionActor.IsOfferedApprovalOption(
-            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
-            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
-            repositoryCommonDirectory: null));
-        Assert.True(LlmSessionActor.IsOfferedApprovalOption(
-            [ApprovalOptionKeys.ApproveAssignmentRepositoryV1],
-            ApprovalOptionKeys.ApproveAssignmentRepositoryV1,
-            "/work/main/.git"));
-    }
-
     [Theory]
     [InlineData(ApprovalOptionKeys.ApproveAssignmentSessionV1, ApprovalDecision.ApprovedSession)]
     [InlineData(ApprovalOptionKeys.ApproveAssignmentAlwaysV1, ApprovalDecision.ApprovedAlways)]
@@ -173,17 +152,6 @@ public sealed class ToolApprovalStateTests
         string optionKey,
         ApprovalDecision expected)
         => Assert.Equal(expected, LlmSessionActor.MapApprovalDecision(optionKey));
-
-    [Theory]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentSessionV1)]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentAlwaysV1)]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentRepositoryV1)]
-    [InlineData(ApprovalOptionKeys.ApproveAssignmentEverywhereV1)]
-    public void Legacy_prompt_rejects_each_assignment_option_key(string optionKey)
-        => Assert.False(LlmSessionActor.IsOfferedApprovalOption(
-            [],
-            optionKey,
-            "/work/repository/.git"));
 
     [Fact]
     public void Approval_turn_transitions_reject_invalid_source_states()

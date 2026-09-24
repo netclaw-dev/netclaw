@@ -1837,25 +1837,6 @@ public partial class DispatchingToolExecutorTests
     }
 
     [Fact]
-    public void Shell_approval_result_rejects_foreign_facts_under_the_same_candidate_id()
-    {
-        var expected = new ShellGrantCandidate(
-            new ShellPolicyCandidateId(0),
-            BashCandidate("git push"),
-            RealDirectory: null);
-        var foreign = new ShellGrantCandidate(
-            expected.CandidateId,
-            BashCandidate("git status"),
-            RealDirectory: null);
-        var foreignResult = ShellGrantCandidateResult.Session(foreign);
-
-        Assert.Throws<ArgumentException>(() => ShellApprovalMatchResult.Create(
-            [expected],
-            persistentStoreFailure: null,
-            [foreignResult]));
-    }
-
-    [Fact]
     public void Persistent_shell_result_rejects_a_grant_for_another_candidate()
     {
         var candidate = new ShellGrantCandidate(

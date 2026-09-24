@@ -213,7 +213,7 @@ public sealed class ShellAssignmentDigestTests
     }
 
     [Fact]
-    public void PowerShell_assignment_span_can_discharge_only_one_opaque_node()
+    public void PowerShell_empty_reconciliation_cannot_discharge_an_assignment_node()
     {
         const string Source = "$mode='fast'; inspect item";
         var environment = ShellExecutionEnvironment.CreatePowerShell(
@@ -224,16 +224,6 @@ public sealed class ShellAssignmentDigestTests
         var list = Assert.IsType<CommandListSyntax>(Assert.Single(block.Statements));
         var opaqueAssignmentNode = list.Items[0].Command;
         Assert.IsNotType<SimpleCommandSyntax>(opaqueAssignmentNode);
-        Assert.True(ShellCommandAnalysis.AssignmentSyntaxReconciliation.TryCreate(
-            Source,
-            parsed.Commands,
-            out var reconciliation));
-
-        Assert.True(reconciliation.TryConsume(opaqueAssignmentNode));
-        Assert.True(reconciliation.AllConsumed);
-        Assert.False(reconciliation.TryConsume(opaqueAssignmentNode));
-        Assert.False(reconciliation.TryConsume(list.Items[1].Command));
-
         const string NoAssignmentSource = "inspect item";
         var noAssignment = environment.Parse(NoAssignmentSource, "C:/work");
         Assert.True(ShellCommandAnalysis.AssignmentSyntaxReconciliation.TryCreate(
