@@ -132,6 +132,29 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
             [ShellGrantCandidateResult.Session(foreign)]));
     }
 
+    [Fact]
+    public void Covered_candidate_rejects_actor_evidence()
+    {
+        var candidate = new ShellPolicyCandidate(
+            new ShellPolicyCandidateId(0),
+            ShellCandidate("git status"),
+            SourceOccurrence: null);
+        var pathFacts = Assert.Single(ShellPolicyPathFacts.Create(
+            [candidate],
+            ShellPathStyle.Posix));
+        var state = new ShellPolicyEvaluation.CandidateState(candidate, pathFacts);
+        state.Cover(ShellCoverageKind.ReviewedSafeReal);
+        var grantCandidate = new ShellGrantCandidate(
+            candidate.Id,
+            candidate.Candidate,
+            RealDirectory: null);
+
+        Assert.Throws<InvalidOperationException>(() => state.ApplyActorEvidence(
+            ShellGrantCandidateResult.Uncovered(grantCandidate),
+            order: 0));
+        Assert.Equal(ShellCoverageKind.ReviewedSafeReal, state.Coverage);
+    }
+
     public void Dispose() => Directory.Delete(_paths.BasePath, recursive: true);
 
     private static ToolConfig CreateConfig(ToolApprovalMode mode)

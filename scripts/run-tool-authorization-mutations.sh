@@ -9,6 +9,21 @@ if [[ "$output_path" != /* ]]; then
   output_path="$repo_root/$output_path"
 fi
 
+resolve_unique_condition_span() {
+  python3 - "$1" "$2" "$3" <<'PY'
+from pathlib import Path
+import sys
+
+text = Path(sys.argv[1]).read_text(encoding="utf-8")
+anchor, condition = sys.argv[2:]
+anchor_start = text.find(anchor)
+if anchor_start < 0 or text.find(anchor, anchor_start + 1) >= 0:
+    raise SystemExit("A mutation boundary is missing or duplicated.")
+start = text.index(condition, anchor_start, anchor_start + len(anchor))
+print(start, start + len(condition), text.count("\n", 0, start) + 1)
+PY
+}
+
 # Resolve each condition separately. Source drift must fail before Stryker starts.
 spans="$(
   perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
@@ -65,18 +80,17 @@ jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "Compile
 
 evidence_source="$repo_root/src/Netclaw.Actors/Tools/ToolApprovalMessages.cs"
 read -r evidence_start evidence_end evidence_line < <(
-  python3 - "$evidence_source" <<'PY'
-from pathlib import Path
-import sys
-
-source = Path(sys.argv[1])
-text = source.read_text(encoding="utf-8")
-marker = "!SourceCandidate.Candidate.HasSameApprovalFacts(candidate.Candidate)"
-start = text.find(marker)
-if start < 0 or text.find(marker, start + 1) >= 0:
-    raise SystemExit("The shell evidence identity boundary is missing or duplicated.")
-print(start, start + len(marker), text.count("\n", 0, start) + 1)
-PY
+  resolve_unique_condition_span \
+    "$evidence_source" \
+    "!SourceCandidate.Candidate.HasSameApprovalFacts(candidate.Candidate)" \
+    "!SourceCandidate.Candidate.HasSameApprovalFacts(candidate.Candidate)"
+)
+transition_source="$repo_root/src/Netclaw.Actors/Tools/ShellPolicyEvaluation.cs"
+read -r transition_start transition_end transition_line < <(
+  resolve_unique_condition_span \
+    "$transition_source" \
+    $'Coverage != ShellCoverageKind.Uncovered\n                || GrantEvidence is not null' \
+    "Coverage != ShellCoverageKind.Uncovered"
 )
 
 evidence_output="$output_path/evidence-facts"
@@ -85,6 +99,7 @@ evidence_output="$output_path/evidence-facts"
   dotnet stryker \
     --config-file stryker-config.json \
     --mutate "Tools/ToolApprovalMessages.cs{$evidence_start..$evidence_end}" \
+    --mutate "Tools/ShellPolicyEvaluation.cs{$transition_start..$transition_end}" \
     --output "$evidence_output" \
     --skip-version-check
 )
@@ -96,5 +111,13 @@ jq -e --arg source "$evidence_source" --argjson line "$evidence_line" '
   | ($mutants | length) == 1 and all($mutants[]; .status == "Killed")
 ' "$evidence_report" > /dev/null || {
   echo "Expected one killed shell evidence identity mutant." >&2
+  exit 1
+}
+jq -e --arg source "$transition_source" --argjson line "$transition_line" '
+  [.files[$source].mutants[] | select(.status != "Ignored" and .status != "CompileError")
+    | select(.location.start.line == $line)] as $mutants
+  | ($mutants | length) == 1 and all($mutants[]; .status == "Killed")
+' "$evidence_report" > /dev/null || {
+  echo "Expected one killed candidate transition mutant." >&2
   exit 1
 }
