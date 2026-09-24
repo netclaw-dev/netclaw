@@ -57,6 +57,7 @@ public sealed record ApprovalCandidate(
     internal bool HasSameApprovalFacts(ApprovalCandidate? other) =>
         other is not null &&
         Equals(other) &&
+        AssignmentDigest == other.AssignmentDigest &&
         Shell == other.Shell &&
         HasSameVerbTokens(other.VerbTokens);
 
