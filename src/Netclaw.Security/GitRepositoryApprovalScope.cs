@@ -156,28 +156,6 @@ internal sealed record GitRepositoryApprovalScope(
         return false;
     }
 
-    internal bool Contains(string? candidateDirectory, string? cwd)
-    {
-        if (candidateDirectory is not null && ShellPathRules.HasParentDirectorySegment(candidateDirectory))
-            return false;
-
-        try
-        {
-            var resolved = candidateDirectory is null
-                ? cwd
-                : PathUtility.ExpandAndNormalize(candidateDirectory, cwd);
-            return resolved is not null
-                   && Path.IsPathFullyQualified(resolved)
-                   && PathUtility.IsWithinRoot(resolved, WorktreeRoot)
-                   && !PathUtility.ContainsSymlinkSegment(WorktreeRoot, resolved);
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException
-                                   or UnauthorizedAccessException or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
-
     private static bool IsGitCommonDirectory(string directory)
         => Directory.Exists(directory)
            && HasValidHead(Path.Combine(directory, "HEAD"))

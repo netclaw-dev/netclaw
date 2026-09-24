@@ -253,8 +253,7 @@ public sealed class ToolAccessPolicy
         return decision.ApprovalContext is { } approvalContext
             ? new ShellPolicyPreflightResult.Continue(
                 analysis,
-                approvalContext,
-                ShellEnvironment)
+                approvalContext)
             : new ShellPolicyPreflightResult.Complete(
                 ToolAuthorizationResult.Stop(
                     ToolAuthorizationDecision.Deny("internal_policy_failure")));

@@ -97,7 +97,6 @@ public sealed class AkkaToolApprovalService :
                 protocolSessionId,
                 request.Audience,
                 request.ToolName,
-                request.Environment,
                 request.Candidates),
             TimeSpan.FromSeconds(5),
             cancellationToken);

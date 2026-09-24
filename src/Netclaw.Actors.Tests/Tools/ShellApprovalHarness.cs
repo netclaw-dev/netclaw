@@ -324,9 +324,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         if (grant.Repository is not null)
         {
             if (grant.RepositoryWorktree is null
-                || !GitRepositoryApprovalScope.TryResolve(grant.RepositoryWorktree, out var scope)
+                || !GitRepositoryApprovalScope.TryResolveCandidate(
+                    grant.Candidate.Directory,
+                    grant.RepositoryWorktree,
+                    out var scope)
                 || !ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, grant.Repository)
-                || !scope.Contains(grant.Candidate.Directory, grant.RepositoryWorktree))
+                || !PathUtility.AreEquivalentPaths(scope.WorktreeRoot, grant.RepositoryWorktree))
             {
                 throw new InvalidOperationException("Repository grant scope is invalid.");
             }

@@ -97,8 +97,6 @@ public sealed class GitRepositoryApprovalScopeTests
             Assert.True(GitRepositoryApprovalScope.TryResolve(main, out var mainScope));
             Assert.True(GitRepositoryApprovalScope.TryResolve(sibling, out var siblingScope));
             Assert.Equal(mainScope!.CommonDirectory, siblingScope!.CommonDirectory);
-            Assert.True(siblingScope.Contains("scripts/bump-version.sh", sibling));
-            Assert.False(siblingScope.Contains(Path.Combine(root.FullName, "outside", "marker"), sibling));
 
             var grant = ApprovalEntry.CreateRepositoryTokenPrefix(
                 ApprovalShell.Bash, ["./scripts/bump-version.sh"], mainScope.CommonDirectory);
@@ -171,8 +169,10 @@ public sealed class GitRepositoryApprovalScopeTests
             Assert.False(GitRepositoryApprovalScope.TryResolve(alias, out _));
 
             Directory.CreateSymbolicLink(Path.Combine(main, "external"), outside.FullName);
-            Assert.True(GitRepositoryApprovalScope.TryResolve(main, out var scope));
-            Assert.False(scope!.Contains("external/marker", main));
+            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate(
+                "external/marker",
+                main,
+                out _));
         }
         finally
         {

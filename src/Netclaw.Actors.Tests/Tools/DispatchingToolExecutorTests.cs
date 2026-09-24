@@ -1908,7 +1908,6 @@ public partial class DispatchingToolExecutorTests
                 SessionId: null,
                 TrustAudience.Personal,
                 new ToolName("shell_execute"),
-                ShellEnvironment,
                 [requestCandidate]);
 
             await Assert.ThrowsAsync<ArgumentException>(() =>

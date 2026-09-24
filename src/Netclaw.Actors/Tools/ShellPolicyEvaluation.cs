@@ -115,23 +115,18 @@ internal abstract record ShellPolicyPreflightResult
     {
         internal Continue(
             ShellCommandAnalysis analysis,
-            ToolApprovalContext approvalContext,
-            ShellExecutionEnvironment environment)
+            ToolApprovalContext approvalContext)
         {
             ArgumentNullException.ThrowIfNull(analysis);
             ArgumentNullException.ThrowIfNull(approvalContext);
-            ArgumentNullException.ThrowIfNull(environment);
 
             Analysis = analysis;
             ApprovalContext = approvalContext;
-            Environment = environment;
         }
 
         internal ShellCommandAnalysis Analysis { get; }
 
         internal ToolApprovalContext ApprovalContext { get; }
-
-        internal ShellExecutionEnvironment Environment { get; }
     }
 }
 

@@ -147,7 +147,7 @@ public sealed class ToolAccessPolicyRequiredDependenciesTests
         var continuation = Assert.IsType<ShellPolicyPreflightResult.Continue>(preflight);
         Assert.Equal("git status", continuation.Analysis.Source);
         Assert.Equal(context.ResolveShellCwd(null), continuation.Analysis.WorkingDirectory);
-        Assert.Same(environment, continuation.Environment);
+        Assert.Same(environment, continuation.Analysis.Environment);
         Assert.Equal(shellTool.Name, continuation.ApprovalContext.ToolName);
     }
 }

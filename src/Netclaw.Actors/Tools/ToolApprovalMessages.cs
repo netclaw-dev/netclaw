@@ -16,15 +16,6 @@ namespace Netclaw.Actors.Tools;
 /// </summary>
 internal static class ToolApprovalProtocol
 {
-    /// <summary>Marker for tool-approval commands.</summary>
-    internal interface IToolApprovalCommand;
-
-    /// <summary>Marker for tool-approval queries.</summary>
-    internal interface IToolApprovalQuery;
-
-    /// <summary>Marker for tool-approval responses.</summary>
-    internal interface IToolApprovalResponse;
-
     // ===== Queries =====
 
     internal sealed record GetUnapprovedPatterns(
@@ -32,21 +23,20 @@ internal static class ToolApprovalProtocol
         TrustAudience Audience,
         ToolName ToolName,
         IReadOnlyList<ApprovalCandidate> Candidates,
-        string? Cwd) : IToolApprovalQuery;
+        string? Cwd);
 
     internal sealed record MatchShellCandidates(
         SessionId? SessionId,
         TrustAudience Audience,
         ToolName ToolName,
-        ShellExecutionEnvironment Environment,
-        IReadOnlyList<ShellGrantCandidate> Candidates) : IToolApprovalQuery;
+        IReadOnlyList<ShellGrantCandidate> Candidates);
 
     // ===== Responses =====
 
-    internal sealed record UnapprovedPatternsResponse(ToolApprovalCheckResult Result) : IToolApprovalResponse;
+    internal sealed record UnapprovedPatternsResponse(ToolApprovalCheckResult Result);
 
     internal sealed record ShellApprovalMatchResponse(
-        ShellApprovalMatchResult Result) : IToolApprovalResponse;
+        ShellApprovalMatchResult Result);
 
     // ===== Commands =====
 
@@ -56,14 +46,14 @@ internal static class ToolApprovalProtocol
         ToolName ToolName,
         IReadOnlyList<string> Patterns,
         bool Persistent,
-        string? Cwd) : IToolApprovalCommand;
+        string? Cwd);
 
     internal sealed record RecordStructuredToolApproval(
         SessionId SessionId,
         TrustAudience Audience,
         ToolName ToolName,
         IReadOnlyList<ToolApprovalGrant> Grants,
-        bool Persistent) : IToolApprovalCommand;
+        bool Persistent);
 }
 
 internal interface IShellApprovalMatchService
@@ -77,7 +67,6 @@ internal sealed record ShellApprovalMatchRequest(
     ToolApprovalSessionId? SessionId,
     TrustAudience Audience,
     ToolName ToolName,
-    ShellExecutionEnvironment Environment,
     IReadOnlyList<ShellGrantCandidate> Candidates);
 
 internal sealed record ShellGrantCandidate(

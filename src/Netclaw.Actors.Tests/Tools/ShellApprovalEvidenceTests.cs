@@ -77,7 +77,6 @@ public sealed class ShellApprovalEvidenceTests
             SessionId: null,
             TrustAudience.Personal,
             new ToolName("shell_execute"),
-            TestShellEnvironment.Current,
             [grantCandidate]);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() =>

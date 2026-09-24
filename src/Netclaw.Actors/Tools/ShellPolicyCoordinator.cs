@@ -117,7 +117,7 @@ internal sealed class ShellPolicyCoordinator(
 
         if (preflight is not ShellPolicyPreflightResult.Continue continuation
             || !ShellPolicyProjection.TryCreate(
-                continuation.Environment,
+                continuation.Analysis.Environment,
                 policy.ShellApprovalMatcher,
                 continuation.Analysis,
                 continuation.ApprovalContext,
@@ -347,7 +347,6 @@ internal sealed class ShellPolicyCoordinator(
                     ToApprovalSessionId(context.SessionId),
                     context.Audience,
                     new ToolName(tool.Name),
-                    projection.Environment,
                     Array.AsReadOnly(requestCandidates)),
                 projection.ApprovalContext.Cwd,
                 cancellationToken);

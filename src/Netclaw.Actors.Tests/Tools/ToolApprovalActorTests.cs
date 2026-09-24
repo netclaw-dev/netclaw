@@ -864,7 +864,6 @@ public sealed class ToolApprovalActorTests : TestKit
                     SessionId: null,
                     TrustAudience.Personal,
                     new ToolName("shell_execute"),
-                    TestShellEnvironment.Current,
                     [
                         new ShellGrantCandidate(new ShellPolicyCandidateId(0), first, RealDirectory: null),
                         new ShellGrantCandidate(new ShellPolicyCandidateId(1), second, RealDirectory: null)
@@ -955,7 +954,6 @@ public sealed class ToolApprovalActorTests : TestKit
                     (ToolApprovalSessionId)"session-a",
                     TrustAudience.Personal,
                     new ToolName("shell_execute"),
-                    TestShellEnvironment.Current,
                     candidates),
                 ct);
 
@@ -1001,7 +999,6 @@ public sealed class ToolApprovalActorTests : TestKit
                     SessionId: null,
                     TrustAudience.Personal,
                     new ToolName("shell_execute"),
-                    TestShellEnvironment.Current,
                     [
                         new ShellGrantCandidate(
                             new ShellPolicyCandidateId(0),
@@ -1052,7 +1049,6 @@ public sealed class ToolApprovalActorTests : TestKit
                     SessionId: null,
                     TrustAudience.Personal,
                     new ToolName("shell_execute"),
-                    TestShellEnvironment.Current,
                     [
                         new ShellGrantCandidate(
                             new ShellPolicyCandidateId(0),
