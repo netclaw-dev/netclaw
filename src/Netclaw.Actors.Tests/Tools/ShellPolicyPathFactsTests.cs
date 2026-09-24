@@ -277,6 +277,7 @@ public sealed class ShellPolicyPathFactsTests
     [InlineData("duplicate")]
     [InlineData("identity")]
     [InlineData("id")]
+    [InlineData("uncovered")]
     [InlineData("session")]
     [InlineData("persistent")]
     public void Invalid_coverage_mutations_are_atomic(string mutation)
@@ -297,6 +298,9 @@ public sealed class ShellPolicyPathFactsTests
             "id" => () => evaluation.Cover(
                 candidate with { Id = new ShellPolicyCandidateId(7) },
                 ShellCoverageKind.ReviewedSafeReal),
+            "uncovered" => () => evaluation.Cover(
+                candidate,
+                ShellCoverageKind.Uncovered),
             "session" => () => evaluation.Cover(
                 candidate,
                 ShellCoverageKind.Session),

@@ -155,12 +155,24 @@ internal sealed class ShellPolicyEvaluation
 
         internal void ApplyActorEvidence(ShellGrantCandidateResult evidence, int order)
         {
+            ArgumentNullException.ThrowIfNull(evidence);
+            if (evidence.CandidateId != Candidate.Id || order < 0)
+                throw new InvalidOperationException("Invalid shell candidate approval evidence.");
+
             ValidateActorEvidence();
             (GrantEvidence, GrantEvidenceOrder, Coverage) = (evidence, order, evidence.Coverage);
         }
 
         internal void Cover(ShellCoverageKind coverage)
         {
+            if (coverage is not (ShellCoverageKind.OneTime
+                or ShellCoverageKind.ReviewedSafeReal
+                or ShellCoverageKind.ReviewedSafeIntent
+                or ShellCoverageKind.ApprovalExemptSideEffect))
+            {
+                throw new InvalidOperationException("Invalid shell candidate coverage.");
+            }
+
             if (Coverage != ShellCoverageKind.Uncovered)
                 throw new InvalidOperationException("Shell candidate coverage was assigned twice.");
 
@@ -287,14 +299,6 @@ internal sealed class ShellPolicyEvaluation
         ShellPolicyCandidate candidate,
         ShellCoverageKind coverage)
     {
-        if (coverage is not (ShellCoverageKind.OneTime
-            or ShellCoverageKind.ReviewedSafeReal
-            or ShellCoverageKind.ReviewedSafeIntent
-            or ShellCoverageKind.ApprovalExemptSideEffect))
-        {
-            throw new InvalidOperationException("Invalid shell candidate coverage.");
-        }
-
         ArgumentNullException.ThrowIfNull(candidate);
 
         var index = candidate.Id.Value;
