@@ -28,6 +28,22 @@ public sealed class ShellAssignmentDigestTests
     }
 
     [Fact]
+    public void Assignment_digest_does_not_change_public_candidate_identity()
+    {
+        var first = new ApprovalCandidate("inspect", "/work")
+        {
+            AssignmentDigest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}"),
+        };
+        var second = new ApprovalCandidate("inspect", "/work")
+        {
+            AssignmentDigest = new ApprovalAssignmentDigest($"sha256:{new string('b', 64)}"),
+        };
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+    }
+
+    [Fact]
     public void Bash_shell_state_uses_the_canonical_version_one_digest()
     {
         var candidate = ExtractSingle(

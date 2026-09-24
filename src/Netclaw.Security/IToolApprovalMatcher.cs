@@ -51,11 +51,10 @@ public sealed record ApprovalCandidate(
     public bool Equals(ApprovalCandidate? other) =>
         other is not null &&
         string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
-        string.Equals(Directory, other.Directory, StringComparison.Ordinal) &&
-        AssignmentDigest == other.AssignmentDigest;
+        string.Equals(Directory, other.Directory, StringComparison.Ordinal);
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentDigest);
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory);
 }
 
 /// <summary>

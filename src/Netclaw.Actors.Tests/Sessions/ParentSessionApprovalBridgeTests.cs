@@ -17,6 +17,22 @@ namespace Netclaw.Actors.Tests.Sessions;
 public sealed class ParentSessionApprovalBridgeTests
 {
     [Fact]
+    public void Assignment_digest_does_not_change_parent_candidate_identity()
+    {
+        var first = new ParentApprovalCandidate("inspect", "/work")
+        {
+            AssignmentDigest = new ApprovalAssignmentDigest($"sha256:{new string('a', 64)}"),
+        };
+        var second = new ParentApprovalCandidate("inspect", "/work")
+        {
+            AssignmentDigest = new ApprovalAssignmentDigest($"sha256:{new string('b', 64)}"),
+        };
+
+        Assert.Equal(first, second);
+        Assert.Equal(first.GetHashCode(), second.GetHashCode());
+    }
+
+    [Fact]
     public async Task Bridge_preserves_requester_identity_and_adopted_context()
     {
         var channel = new ApprovalChannel();

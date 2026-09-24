@@ -98,15 +98,14 @@ public sealed record ParentApprovalCandidate(
     /// <summary>The native shell grammar that produced the candidate.</summary>
     public ApprovalShell? Shell { get; init; }
 
-    /// <summary>Compares the complete reusable approval identity.</summary>
+    /// <summary>Compares the public candidate identity.</summary>
     public bool Equals(ParentApprovalCandidate? other) =>
         other is not null &&
         string.Equals(Verb, other.Verb, StringComparison.Ordinal) &&
-        string.Equals(Directory, other.Directory, StringComparison.Ordinal) &&
-        AssignmentDigest == other.AssignmentDigest;
+        string.Equals(Directory, other.Directory, StringComparison.Ordinal);
 
     /// <inheritdoc />
-    public override int GetHashCode() => HashCode.Combine(Verb, Directory, AssignmentDigest);
+    public override int GetHashCode() => HashCode.Combine(Verb, Directory);
 }
 
 /// <summary>
