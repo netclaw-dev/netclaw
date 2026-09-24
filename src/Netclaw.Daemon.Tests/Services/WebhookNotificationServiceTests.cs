@@ -7,6 +7,7 @@ using System.Net;
 using System.Text.Json;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Tests.Mcp;
 using Netclaw.Daemon.Services;
 using Xunit;
 
@@ -268,6 +269,48 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
 
         // Should not retry on 4xx
         Assert.Single(handler.Requests);
+    }
+
+    [Fact]
+    public async Task OmitsUnnamedTargetUrlAndRedactsDeliveryException()
+    {
+        const string workspace = "T000TEST";
+        const string channel = "B000TEST";
+        const string credential = "fakeWebhookToken";
+        var url = $"https://hooks.slack.com/services/{workspace}/{channel}/{credential}";
+        var handler = new RecordingHandler(new HttpRequestException($"Delivery to {url} failed."));
+        var config = new NotificationsConfig
+        {
+            Webhooks = [new WebhookTarget { Url = url }],
+            DeduplicationWindowSeconds = 0,
+            MaxRetries = 0
+        };
+        var logger = new RecordingLogger<WebhookNotificationService>();
+        var service = new WebhookNotificationService(
+            config,
+            new TestHttpClientFactory(handler),
+            TimeProvider.System,
+            TestIdentity,
+            logger);
+        _services.Add(service);
+
+        await service.StartAsync(CancellationToken.None);
+        service.Emit(CreateAlert());
+        await WaitForDeliveryAsync(handler, expectedCount: 1);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(url, Assert.Single(handler.Requests).RequestUri?.ToString());
+        Assert.Contains(logger.Entries, entry => entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+        Assert.All(logger.Entries, entry =>
+        {
+            Assert.DoesNotContain(workspace, entry, StringComparison.Ordinal);
+            Assert.DoesNotContain(channel, entry, StringComparison.Ordinal);
+            Assert.DoesNotContain(credential, entry, StringComparison.Ordinal);
+        });
+        var loggedException = Assert.Single(logger.Exceptions);
+        Assert.DoesNotContain(workspace, loggedException.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(channel, loggedException.ToString(), StringComparison.Ordinal);
+        Assert.DoesNotContain(credential, loggedException.ToString(), StringComparison.Ordinal);
     }
 
     private static Task WaitForDeliveryAsync(

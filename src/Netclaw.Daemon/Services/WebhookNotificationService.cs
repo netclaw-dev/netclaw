@@ -12,6 +12,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Netclaw.Channels.Slack.Webhooks;
 using Netclaw.Configuration;
+using Netclaw.Security;
 
 namespace Netclaw.Daemon.Services;
 
@@ -163,7 +164,9 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         OperationalAlert alert,
         CancellationToken ct)
     {
-        var targetName = target.Name ?? target.Url;
+        var targetName = string.IsNullOrWhiteSpace(target.Name)
+            ? "(unnamed webhook)"
+            : target.Name;
 
         for (var attempt = 0; attempt <= _config.MaxRetries; attempt++)
         {
@@ -214,7 +217,7 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex,
+                _logger.LogWarning(SecretOutputRedactor.RedactForLogging(ex),
                     "Webhook delivery error: {AlertType} → {Target} (attempt {Attempt}/{Max})",
                     alert.Type, targetName, attempt + 1, _config.MaxRetries + 1);
 

@@ -39,6 +39,7 @@ using Netclaw.Configuration;
 using Netclaw.Providers;
 using Netclaw.Providers.OAuth;
 using Netclaw.Configuration.Secrets;
+using Netclaw.Security;
 using Termina;
 using Termina.Diagnostics;
 using Termina.Hosting;
@@ -1553,9 +1554,9 @@ static void WriteSimpleDiff(string original, string updated)
             continue;
 
         if (oldLine is not null)
-            Console.WriteLine($"  - {oldLine}");
+            Console.WriteLine($"  - {SecretOutputRedactor.Redact(oldLine)}");
         if (newLine is not null)
-            Console.WriteLine($"  + {newLine}");
+            Console.WriteLine($"  + {SecretOutputRedactor.Redact(newLine)}");
     }
 }
 

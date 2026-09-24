@@ -828,7 +828,9 @@ static void ConfigureDaemonServices(
 
     if (notificationsConfig.Webhooks.Count > 0)
     {
-        services.AddHttpClient("Notifications").AddNetclawHeaders("webhook");
+        services.AddHttpClient("Notifications")
+            .RemoveAllLoggers()
+            .AddNetclawHeaders("webhook");
         services.AddSingleton<WebhookNotificationService>();
         services.AddSingleton<IOperationalNotificationSink>(sp =>
             sp.GetRequiredService<WebhookNotificationService>());

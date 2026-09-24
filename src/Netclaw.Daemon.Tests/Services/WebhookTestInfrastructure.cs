@@ -34,9 +34,12 @@ internal static class WebhookTestInfrastructure
 internal sealed class RecordingHandler : HttpMessageHandler
 {
     private readonly HttpStatusCode _statusCode;
+    private readonly Exception? _exception;
     private readonly SemaphoreSlim _deliverySemaphore = new(0);
 
     public RecordingHandler(HttpStatusCode statusCode) => _statusCode = statusCode;
+
+    public RecordingHandler(Exception exception) => _exception = exception;
 
     public List<HttpRequestMessage> Requests { get; } = [];
     public List<string> RequestBodies { get; } = [];
@@ -57,6 +60,9 @@ internal sealed class RecordingHandler : HttpMessageHandler
         }
 
         _deliverySemaphore.Release();
+        if (_exception is not null)
+            throw _exception;
+
         return new HttpResponseMessage(_statusCode);
     }
 }
