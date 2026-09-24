@@ -38,8 +38,13 @@ public static class SchemaFixResolver
         if (evaluation.Details is null)
             return false;
 
-        var failingDetails = evaluation.Details
-            .Where(d => !d.IsValid && d.Errors is not null)
+        var evaluationDetails = evaluation.Details.ToList();
+        // List output includes failures from inactive schema branches.
+        // A valid ancestor means that the nested failure did not invalidate this instance.
+        var failingDetails = evaluationDetails
+            .Where(d => !d.IsValid
+                        && d.Errors is not null
+                        && !HasValidAncestor(d, evaluationDetails))
             .ToList();
 
         var changed = false;
@@ -48,6 +53,42 @@ public static class SchemaFixResolver
         changed |= TryInsertMissingDefaults(schemaJson, config, failingDetails, appliedFixes);
         return changed;
     }
+
+    private static bool HasValidAncestor(
+        EvaluationResults detail,
+        IReadOnlyList<EvaluationResults> evaluationDetails)
+    {
+        var detailPath = detail.EvaluationPath.ToString();
+        var detailInstance = detail.InstanceLocation.ToString();
+
+        foreach (var candidate in evaluationDetails)
+        {
+            if (!candidate.IsValid)
+                continue;
+
+            var candidatePath = candidate.EvaluationPath.ToString();
+            if (candidatePath.Length == 0 || candidatePath.Length >= detailPath.Length)
+                continue;
+
+            var candidateInstance = candidate.InstanceLocation.ToString();
+            if (IsPointerAncestor(candidatePath, detailPath)
+                && IsPointerAncestorOrSame(candidateInstance, detailInstance))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsPointerAncestor(string candidate, string descendant)
+        => candidate.Length < descendant.Length
+           && descendant.StartsWith(candidate, StringComparison.Ordinal)
+           && descendant[candidate.Length] == '/';
+
+    private static bool IsPointerAncestorOrSame(string candidate, string descendant)
+        => string.Equals(candidate, descendant, StringComparison.Ordinal)
+           || IsPointerAncestor(candidate, descendant);
 
     /// <summary>
     /// Fixes integer values where the schema expects a string enum.

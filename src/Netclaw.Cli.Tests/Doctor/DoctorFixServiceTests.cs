@@ -155,6 +155,49 @@ public sealed class DoctorFixServiceTests
     }
 
     [Fact]
+    public async Task SchemaFixPreservesNamedModelsWhenRemovingStaleProperty()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Models": {
+                "Definitions": {
+                  "primary": {
+                    "Provider": "example-provider",
+                    "ModelId": "example-model"
+                  }
+                },
+                "Roles": {
+                  "Main": "primary"
+                }
+              },
+              "SkillSync": {
+                "Enabled": true,
+                "DisableSystemSkillSync": true
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        var fix = Assert.Single(plan.Fixes);
+        using var updated = JsonDocument.Parse(fix.UpdatedText);
+        var root = updated.RootElement;
+        var models = root.GetProperty("Models");
+        Assert.Equal("example-model",
+            models.GetProperty("Definitions").GetProperty("primary").GetProperty("ModelId").GetString());
+        Assert.Equal("primary", models.GetProperty("Roles").GetProperty("Main").GetString());
+        Assert.False(root.GetProperty("SkillSync").TryGetProperty("DisableSystemSkillSync", out _));
+
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+        var result = await new ConfigSchemaDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(DoctorSeverity.Pass, result.Severity);
+    }
+
+    [Fact]
     public async Task DynamicDescriptionReflectsAppliedFixes()
     {
         var paths = NewPaths();
