@@ -14,17 +14,57 @@ internal abstract record ApprovalGrantScope
     {
     }
 
-    internal sealed record Session : ApprovalGrantScope;
+    internal sealed record Session : ApprovalGrantScope
+    {
+        private Session()
+        {
+        }
 
-    internal sealed record Folder(
-        string? WorkingDirectory,
-        string SessionDirectory) : ApprovalGrantScope;
+        internal static Session Instance { get; } = new();
+    }
 
-    internal sealed record Repository(
-        string? WorkingDirectory,
-        string CommonDirectory) : ApprovalGrantScope;
+    internal sealed record Folder : ApprovalGrantScope
+    {
+        private Folder(string? workingDirectory, string sessionDirectory)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(sessionDirectory);
+            WorkingDirectory = workingDirectory;
+            SessionDirectory = sessionDirectory;
+        }
 
-    internal sealed record Global : ApprovalGrantScope;
+        internal string? WorkingDirectory { get; }
+
+        internal string SessionDirectory { get; }
+
+        internal static Folder Create(string? workingDirectory, string sessionDirectory) =>
+            new(workingDirectory, sessionDirectory);
+    }
+
+    internal sealed record Repository : ApprovalGrantScope
+    {
+        private Repository(string? workingDirectory, string commonDirectory)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(commonDirectory);
+            WorkingDirectory = workingDirectory;
+            CommonDirectory = commonDirectory;
+        }
+
+        internal string? WorkingDirectory { get; }
+
+        internal string CommonDirectory { get; }
+
+        internal static Repository Create(string? workingDirectory, string commonDirectory) =>
+            new(workingDirectory, commonDirectory);
+    }
+
+    internal sealed record Global : ApprovalGrantScope
+    {
+        private Global()
+        {
+        }
+
+        internal static Global Instance { get; } = new();
+    }
 
     internal static ApprovalGrantScope FromDecision(
         ApprovalDecision decision,
@@ -35,13 +75,13 @@ internal abstract record ApprovalGrantScope
         ArgumentException.ThrowIfNullOrWhiteSpace(sessionDirectory);
         return decision switch
         {
-            ApprovalDecision.ApprovedSession => new Session(),
-            ApprovalDecision.ApprovedAlways => new Folder(workingDirectory, sessionDirectory),
+            ApprovalDecision.ApprovedSession => Session.Instance,
+            ApprovalDecision.ApprovedAlways => Folder.Create(workingDirectory, sessionDirectory),
             ApprovalDecision.ApprovedRepository when !string.IsNullOrWhiteSpace(repositoryCommonDirectory) =>
-                new Repository(workingDirectory, repositoryCommonDirectory),
+                Repository.Create(workingDirectory, repositoryCommonDirectory),
             ApprovalDecision.ApprovedRepository =>
                 throw new InvalidOperationException("The repository option lacks its offered identity."),
-            ApprovalDecision.ApprovedEverywhere => new Global(),
+            ApprovalDecision.ApprovedEverywhere => Global.Instance,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(decision),
                 decision,
