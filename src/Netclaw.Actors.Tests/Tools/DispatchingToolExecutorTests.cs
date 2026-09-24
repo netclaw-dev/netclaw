@@ -1699,12 +1699,11 @@ public partial class DispatchingToolExecutorTests
         var builder = new ShellPolicyDecisionTraceBuilder();
         for (var index = 0; index < 300; index++)
         {
-            var state = CreateCandidateState(new ShellPolicyCandidate(
+            var candidate = new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(index),
                 BashCandidate($"/usr/bin/tool-{index}"),
-                SourceOccurrence: null));
-            state.Cover(ShellCoverageKind.ReviewedSafeReal);
-            builder.AddCoverage(state);
+                SourceOccurrence: null);
+            builder.AddCoverage(candidate, ShellCoverageKind.ReviewedSafeReal);
         }
 
         var decision = ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy);
@@ -1755,12 +1754,11 @@ public partial class DispatchingToolExecutorTests
         var logger = new RecordingLogger<DispatchingToolExecutor>();
         var executor = CreateApprovalGatedShellExecutor(logger: logger);
         var builder = new ShellPolicyDecisionTraceBuilder();
-        var state = CreateCandidateState(new ShellPolicyCandidate(
+        var candidate = new ShellPolicyCandidate(
             new ShellPolicyCandidateId(0),
             BashCandidate($"/usr/bin/{secret}\r\n\u202Espoof"),
-            SourceOccurrence: null));
-        state.Cover(ShellCoverageKind.ReviewedSafeReal);
-        builder.AddCoverage(state);
+            SourceOccurrence: null);
+        builder.AddCoverage(candidate, ShellCoverageKind.ReviewedSafeReal);
         var trace = builder.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
 
@@ -1809,9 +1807,7 @@ public partial class DispatchingToolExecutorTests
             new ShellApprovalNearMiss(grant, nearMissReason));
         var builder = new ShellPolicyDecisionTraceBuilder();
 
-        var state = CreateCandidateState(candidate);
-        state.Apply(actorMatch, order: 0);
-        builder.AddActorEvidence(state);
+        builder.AddActorEvidence(candidate, actorMatch);
         var trace = builder.Complete(
             ToolAuthorizationDecision.Allow(ToolAllowReason.ReviewedSafePolicy));
 
@@ -4483,14 +4479,6 @@ public partial class DispatchingToolExecutorTests
             VerbTokens = Array.AsReadOnly(
                 verb.Split(' ', StringSplitOptions.RemoveEmptyEntries)),
         };
-
-    private static ShellPolicyEvaluation.CandidateState CreateCandidateState(
-        ShellPolicyCandidate candidate)
-        => new(
-            candidate,
-            Assert.Single(ShellPolicyPathFacts.Create(
-                [candidate with { Id = new ShellPolicyCandidateId(0) }],
-                ShellPathStyle.Posix)));
 
     private sealed class UnexpectedApprovalService : IToolApprovalService
     {

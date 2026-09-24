@@ -182,8 +182,7 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
 
     private static ApprovalCandidate ShellCandidate(string verb) => new(
         verb,
-        Directory: null,
-        ApprovalAssignmentConstraint.None)
+        Directory: null)
     {
         Shell = ApprovalShell.Bash,
         VerbTokens = verb.Split(' ')

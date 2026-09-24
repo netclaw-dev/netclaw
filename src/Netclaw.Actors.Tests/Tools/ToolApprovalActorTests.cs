@@ -73,14 +73,14 @@ public sealed class ToolApprovalActorTests : TestKit
             "session-a",
             TrustAudience.Personal,
             toolName,
-            [new ApprovalCandidate("file_read", Directory: null, ApprovalAssignmentConstraint.None)],
+            [new ApprovalCandidate("file_read", Directory: null)],
             cwd: "/other",
             ct);
         var otherSession = await service.CheckApprovalAsync(
             "session-b",
             TrustAudience.Personal,
             toolName,
-            [new ApprovalCandidate("file_read", Directory: null, ApprovalAssignmentConstraint.None)],
+            [new ApprovalCandidate("file_read", Directory: null)],
             cwd: "/other",
             ct);
 

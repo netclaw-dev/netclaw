@@ -101,15 +101,15 @@ internal sealed class ShellPolicyDecisionTraceBuilder
     private bool _truncated;
     private ShellPolicyDecisionTrace? _completedTrace;
 
-    internal void AddActorEvidence(ShellPolicyEvaluation.CandidateState state)
+    internal void AddActorEvidence(
+        ShellPolicyCandidate candidate,
+        ShellGrantCandidateResult actorMatch)
     {
-        ArgumentNullException.ThrowIfNull(state);
-        var candidate = state.Candidate;
-        var actorMatch = state.GrantEvidence
-            ?? throw new InvalidOperationException("Shell candidate approval evidence is unavailable.");
+        ArgumentNullException.ThrowIfNull(candidate);
+        ArgumentNullException.ThrowIfNull(actorMatch);
         if (actorMatch.Coverage != ShellCoverageKind.Uncovered)
         {
-            AddCoverage(state);
+            AddCoverage(candidate, actorMatch.Coverage, actorMatch.GrantCreatedAt);
             return;
         }
 
@@ -133,11 +133,12 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             nearMiss?.Grant.CreatedAt));
     }
 
-    internal void AddCoverage(ShellPolicyEvaluation.CandidateState state)
+    internal void AddCoverage(
+        ShellPolicyCandidate candidate,
+        ShellCoverageKind coverage,
+        DateTimeOffset? grantTimestamp = null)
     {
-        ArgumentNullException.ThrowIfNull(state);
-        var coverage = state.Coverage;
-        var candidate = state.Candidate;
+        ArgumentNullException.ThrowIfNull(candidate);
         var (stage, displayCoverage, reason, scope) = coverage switch
         {
             ShellCoverageKind.OneTime => (
@@ -190,7 +191,7 @@ internal sealed class ShellPolicyDecisionTraceBuilder
             GetExecutableBasename(candidate.Candidate),
             displayCoverage,
             scope,
-            state.GrantEvidence?.GrantCreatedAt));
+            grantTimestamp));
     }
 
     internal ShellPolicyDecisionTrace Complete(ToolAuthorizationDecision decision)

@@ -54,6 +54,7 @@ internal sealed class ShellPolicyCoordinator(
         }
         catch (Exception)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             return ToolAuthorizationResult.Stop(
                 CompleteWithTrace(
                     ToolAuthorizationDecision.Deny("internal_policy_failure"),
@@ -132,7 +133,7 @@ internal sealed class ShellPolicyCoordinator(
                     trace));
         }
 
-        var evaluation = new ShellPolicyEvaluation(projection);
+        var evaluation = new ShellPolicyEvaluation(projection, trace);
         var projectedPathDecision = policy.EnforceProjectedShellFileProtection(
             evaluation.CandidateStates.Select(static state => state.PathFacts).ToArray(),
             context.Invocation);
@@ -312,83 +313,71 @@ internal sealed class ShellPolicyCoordinator(
         CancellationToken cancellationToken)
     {
         var projection = evaluation.Projection;
-        try
+        cancellationToken.ThrowIfCancellationRequested();
+        if (RequiresExactApproval(projection))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            if (RequiresExactApproval(projection))
-            {
-                return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
-            }
-
-            ValidateCandidateSyntax(projection);
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (HasProtectedIntentPath(evaluation))
-            {
-                return evaluation.Complete(
-                    ToolAuthorizationDecision.Deny("shell_references_protected_path"));
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (HasIneligibleIntentDirectory(projection))
-            {
-                return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var grantCandidates = evaluation.GrantCandidates;
-            var requestCandidates = grantCandidates
-                .Select(state => new ShellGrantCandidate(
-                    state.Candidate.Id,
-                    state.Candidate.Candidate,
-                    projection.ApprovalContext.Cwd))
-                .ToArray();
-            var actorResult = await _approvalEvidence.MatchAsync(
-                new ShellApprovalMatchRequest(
-                    ToApprovalSessionId(context.SessionId),
-                    context.Audience,
-                    new ToolName(tool.Name),
-                    Array.AsReadOnly(requestCandidates)),
-                projection.ApprovalContext.Cwd,
-                cancellationToken);
-            cancellationToken.ThrowIfCancellationRequested();
-            evaluation.ApplyActorEvidence(actorResult);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (_approvalEvidence.IsAvailable)
-            {
-                foreach (var candidate in evaluation.Candidates.Where(static item =>
-                             item.Role == ShellPolicyCandidateRole.Ordinary
-                             && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
-                {
-                    evaluation.Cover(
-                        candidate,
-                        ShellCoverageKind.ApprovalExemptSideEffect);
-                }
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-
-            if (projection.InteractiveApproval is InteractiveApprovalCapability.Available)
-            {
-                ApplyReviewedSafeCoverage(evaluation, policy, context.Invocation);
-            }
-            cancellationToken.ThrowIfCancellationRequested();
-
-            return CompleteAfterCoverage(
-                evaluation,
-                context,
-                toolCall.Name,
-                corrections,
-                cancellationToken);
+            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
         }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+
+        ValidateCandidateSyntax(projection);
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (HasProtectedIntentPath(evaluation))
         {
-            throw;
+            return evaluation.Complete(
+                ToolAuthorizationDecision.Deny("shell_references_protected_path"));
         }
-        catch (Exception)
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (HasIneligibleIntentDirectory(projection))
         {
-            cancellationToken.ThrowIfCancellationRequested();
-            return evaluation.InternalFailure();
+            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
         }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        var grantCandidates = evaluation.GrantCandidates;
+        var requestCandidates = grantCandidates
+            .Select(state => new ShellGrantCandidate(
+                state.Candidate.Id,
+                state.Candidate.Candidate,
+                projection.ApprovalContext.Cwd))
+            .ToArray();
+        var actorResult = await _approvalEvidence.MatchAsync(
+            new ShellApprovalMatchRequest(
+                ToApprovalSessionId(context.SessionId),
+                context.Audience,
+                new ToolName(tool.Name),
+                Array.AsReadOnly(requestCandidates)),
+            projection.ApprovalContext.Cwd,
+            cancellationToken);
+        cancellationToken.ThrowIfCancellationRequested();
+        evaluation.ApplyActorEvidence(actorResult);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (_approvalEvidence.IsAvailable)
+        {
+            foreach (var candidate in evaluation.Candidates.Where(static item =>
+                         item.Role == ShellPolicyCandidateRole.Ordinary
+                         && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
+            {
+                evaluation.Cover(
+                    candidate,
+                    ShellCoverageKind.ApprovalExemptSideEffect);
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        if (projection.InteractiveApproval is InteractiveApprovalCapability.Available)
+        {
+            ApplyReviewedSafeCoverage(evaluation, policy, context.Invocation);
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+
+        return CompleteAfterCoverage(
+            evaluation,
+            context,
+            toolCall.Name,
+            corrections,
+            cancellationToken);
     }
 
     private static bool RequiresExactApproval(ShellPolicyProjection projection)

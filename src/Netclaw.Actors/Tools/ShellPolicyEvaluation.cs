@@ -143,21 +143,44 @@ internal sealed class ShellPolicyEvaluation
         internal int? GrantEvidenceOrder { get; private set; }
         internal ShellCoverageKind Coverage { get; private set; }
 
-        internal void Apply(ShellGrantCandidateResult evidence, int order) =>
-            (GrantEvidence, GrantEvidenceOrder, Coverage) = (evidence, order, evidence.Coverage);
+        internal void ValidateActorEvidence()
+        {
+            if (Coverage != ShellCoverageKind.Uncovered
+                || GrantEvidence is not null
+                || GrantEvidenceOrder is not null)
+            {
+                throw new InvalidOperationException("Shell candidate already has coverage evidence.");
+            }
+        }
 
-        internal void Cover(ShellCoverageKind coverage) => Coverage = coverage;
+        internal void ApplyActorEvidence(ShellGrantCandidateResult evidence, int order)
+        {
+            ValidateActorEvidence();
+            (GrantEvidence, GrantEvidenceOrder, Coverage) = (evidence, order, evidence.Coverage);
+        }
+
+        internal void Cover(ShellCoverageKind coverage)
+        {
+            if (Coverage != ShellCoverageKind.Uncovered)
+                throw new InvalidOperationException("Shell candidate coverage was assigned twice.");
+
+            Coverage = coverage;
+        }
     }
 
     private readonly IReadOnlyList<CandidateState> _candidates;
-    private readonly ShellPolicyDecisionTraceBuilder _trace = new();
+    private readonly ShellPolicyDecisionTraceBuilder _trace;
     private bool _hasGrantEvidence;
 
-    internal ShellPolicyEvaluation(ShellPolicyProjection projection)
+    internal ShellPolicyEvaluation(
+        ShellPolicyProjection projection,
+        ShellPolicyDecisionTraceBuilder trace)
     {
         ArgumentNullException.ThrowIfNull(projection);
+        ArgumentNullException.ThrowIfNull(trace);
 
         Projection = projection;
+        _trace = trace;
         var pathFacts = ShellPolicyPathFacts.Create(
             projection.Candidates,
             projection.Environment.PathStyle);
@@ -235,8 +258,8 @@ internal sealed class ShellPolicyEvaluation
             currentCandidates,
             evidence.PersistentStoreFailure,
             evidence.Candidates);
-        PersistentStoreFailure = evidence.PersistentStoreFailure;
-        _hasGrantEvidence = true;
+
+        var states = new CandidateState[evidence.Candidates.Count];
         for (var order = 0; order < evidence.Candidates.Count; order++)
         {
             var candidateEvidence = evidence.Candidates[order];
@@ -245,10 +268,19 @@ internal sealed class ShellPolicyEvaluation
                 throw new InvalidOperationException("Invalid shell approval evidence.");
 
             var state = _candidates[candidateId.Value];
-            state.Apply(candidateEvidence, order);
-            _trace.AddActorEvidence(state);
+            state.ValidateActorEvidence();
+            states[order] = state;
         }
 
+        PersistentStoreFailure = evidence.PersistentStoreFailure;
+        _hasGrantEvidence = true;
+        for (var order = 0; order < evidence.Candidates.Count; order++)
+        {
+            var candidateEvidence = evidence.Candidates[order];
+            var state = states[order];
+            state.ApplyActorEvidence(candidateEvidence, order);
+            _trace.AddActorEvidence(state.Candidate, candidateEvidence);
+        }
     }
 
     internal void Cover(
@@ -273,11 +305,11 @@ internal sealed class ShellPolicyEvaluation
         if (!ReferenceEquals(candidate, state.Candidate))
             throw new InvalidOperationException("Shell candidate facts changed.");
 
-        if (state.Coverage != ShellCoverageKind.Uncovered)
-            throw new InvalidOperationException("Shell candidate coverage was assigned twice.");
-
         state.Cover(coverage);
-        _trace.AddCoverage(state);
+        _trace.AddCoverage(
+            state.Candidate,
+            state.Coverage,
+            state.GrantEvidence?.GrantCreatedAt);
     }
 
     internal ToolAuthorizationDecision Complete(
@@ -301,8 +333,5 @@ internal sealed class ShellPolicyEvaluation
 
         return decision.WithShellPolicyTrace(_trace.Complete(decision));
     }
-
-    internal ToolAuthorizationDecision InternalFailure() => Complete(
-        ToolAuthorizationDecision.Deny("internal_policy_failure"));
 
 }

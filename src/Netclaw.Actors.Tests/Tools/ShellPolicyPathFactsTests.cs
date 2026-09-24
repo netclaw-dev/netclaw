@@ -309,7 +309,9 @@ public sealed class ShellPolicyPathFactsTests
         Assert.Throws<InvalidOperationException>(apply);
 
         Assert.Equal(mutation == "duplicate", evaluation.IsCovered(candidate.Id));
-        var coveredRows = evaluation.InternalFailure().ShellPolicyTrace.Rows
+        var coveredRows = evaluation.Complete(
+                ToolAuthorizationDecision.Deny("internal_policy_failure"))
+            .ShellPolicyTrace.Rows
             .Where(static row => row.Outcome == ShellPolicyTraceOutcome.Covered)
             .ToArray();
         if (mutation == "duplicate")
@@ -335,6 +337,43 @@ public sealed class ShellPolicyPathFactsTests
 
         Assert.Throws<ArgumentException>(() => target.ApplyActorEvidence(evidence));
         Assert.False(target.IsCovered(Assert.Single(target.Candidates).Id));
+    }
+
+    [Fact]
+    public void Actor_evidence_after_local_coverage_fails_atomically()
+    {
+        var evaluation = CreateEvaluation(
+            BashCandidate("git status", "/work/repo"),
+            BashCandidate("git push", "/work/repo"));
+        var candidates = evaluation.Candidates;
+        evaluation.Cover(candidates[1], ShellCoverageKind.ReviewedSafeReal);
+        var grantCandidates = candidates.Select(candidate => new ShellGrantCandidate(
+                candidate.Id,
+                candidate.Candidate,
+                evaluation.Projection.ApprovalContext.Cwd))
+            .ToArray();
+        var evidence = ShellApprovalMatchResult.Create(
+            grantCandidates,
+            ApprovalStoreFailure.InvalidData,
+            grantCandidates.Select(static candidate =>
+                    ShellGrantCandidateResult.Uncovered(candidate))
+                .ToArray());
+
+        Assert.Throws<InvalidOperationException>(() => evaluation.ApplyActorEvidence(evidence));
+
+        Assert.False(evaluation.IsCovered(candidates[0].Id));
+        Assert.True(evaluation.IsCovered(candidates[1].Id));
+        Assert.Null(evaluation.PersistentStoreFailure);
+        Assert.Empty(evaluation.ApprovalMatches);
+        var trace = evaluation.Complete(
+            ToolAuthorizationDecision.Deny("internal_policy_failure"))
+            .ShellPolicyTrace;
+        Assert.DoesNotContain(
+            trace.Rows,
+            static row => row.Stage == ShellPolicyTraceStage.StoredGrantMatch);
+        Assert.Single(
+            trace.Rows,
+            static row => row.Stage == ShellPolicyTraceStage.ReviewedSafePolicy);
     }
 
     private static ShellPolicyCandidate Candidate(
@@ -375,7 +414,9 @@ public sealed class ShellPolicyPathFactsTests
             context,
             static _ => false,
             out var projection));
-        return new ShellPolicyEvaluation(Assert.IsType<ShellPolicyProjection>(projection));
+        return new ShellPolicyEvaluation(
+            Assert.IsType<ShellPolicyProjection>(projection),
+            new ShellPolicyDecisionTraceBuilder());
     }
 
     private static ApprovalCandidate BashCandidate(string verb, string directory) =>
