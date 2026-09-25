@@ -147,6 +147,7 @@ public static class ToolAudienceProfileToolCatalog
     public const string ListReminders = "list_reminders";
     public const string CancelReminder = "cancel_reminder";
     public const string GetReminderHistory = "get_reminder_history";
+    public const string RunReminder = "run_reminder";
     public const string SetWorkingDirectory = "set_working_directory";
 
     public static IReadOnlyList<string> FileTools { get; } =
@@ -154,7 +155,8 @@ public static class ToolAudienceProfileToolCatalog
     public static IReadOnlyList<string> WebTools { get; } = [WebSearch, WebFetch];
     public static IReadOnlyList<string> SkillTools { get; } = [SkillManage];
     public static IReadOnlyList<string> WebhookTools { get; } = [SetWebhook, ListWebhooks, DeleteWebhook];
-    public static IReadOnlyList<string> SchedulingTools { get; } = [SetReminder, ListReminders, CancelReminder, GetReminderHistory];
+    public static IReadOnlyList<string> SchedulingTools { get; } =
+        [SetReminder, ListReminders, CancelReminder, GetReminderHistory, RunReminder];
     public static IReadOnlyList<string> WorkingDirectoryTools { get; } = [SetWorkingDirectory];
 
     public static IReadOnlyList<string> PublicDefaultAllowedTools { get; } =

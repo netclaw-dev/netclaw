@@ -476,7 +476,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
             AudienceProfileRowKind.FileTools => "File tools grant read/list/attach/write/edit; File scope below limits where they can operate.",
             AudienceProfileRowKind.WebAccess => "Web grants web_search and web_fetch for this audience.",
             AudienceProfileRowKind.Skills => "Skills grants skill management and loading tools for this audience.",
-            AudienceProfileRowKind.Scheduling => "Scheduling grants reminder create/list/cancel/history tools.",
+            AudienceProfileRowKind.Scheduling => "Scheduling grants reminder create/list/cancel/history/run tools.",
             AudienceProfileRowKind.ChangeWorkingDirectory => "Change workspace lets sessions switch workspace roots.",
             AudienceProfileRowKind.FileAccess => DescribeFilesystemHelp(profile),
             AudienceProfileRowKind.IncomingAttachments => DescribeAttachmentHelp(profile.ChannelAttachments),

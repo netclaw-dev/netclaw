@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.75.3"
+  version: "2.78.0"
 ---
 
 # Netclaw Operations
@@ -148,7 +148,9 @@ runs contribute no parent working-context changes.
 Reminders: `set_reminder` with schedule type `once` / `interval` / `cron`. Always
 set `delivery_kind` explicitly (`current_session` / `channel` / `none`). A reminder
 that fires unattended cannot answer approval prompts, so pre-approve any shell verbs
-it needs first with `netclaw approvals trust-verb <verb>`. Background shell: set
+it needs first with `netclaw approvals trust-verb <verb>`. To test an existing
+reminder on request, use `run_reminder`; it does not change the reminder's
+schedule. Background shell: set
 `_background: true` on `shell_execute` (max 5 concurrent; cancel servers/watchers
 when done; background jobs are killed when the session passivates).
 

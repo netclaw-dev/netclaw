@@ -43,6 +43,7 @@ public sealed class ToolAudienceProfileDefaultsTests
                 ToolAudienceProfileToolCatalog.ListReminders,
                 ToolAudienceProfileToolCatalog.CancelReminder,
                 ToolAudienceProfileToolCatalog.GetReminderHistory,
+                ToolAudienceProfileToolCatalog.RunReminder,
                 ToolAudienceProfileToolCatalog.SetWorkingDirectory
             ]
         }
