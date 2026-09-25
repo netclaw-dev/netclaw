@@ -319,6 +319,26 @@ public static partial class ReminderProtocol
         ReminderWriteMode WriteMode = ReminderWriteMode.CreateOnly,
         ReminderAudienceAuthorizationContext? Authorization = null) : IReminderCommand, INoSerializationVerificationNeeded;
 
+    /// <summary>
+    /// Caller identity for an audience-gated reminder command. The manager compares
+    /// <see cref="SourceAudience"/> against a reminder's stored audience before the
+    /// command may read or act on it. See
+    /// <see cref="ReminderManagerActor.CanAccessAudience"/> for the one place that
+    /// comparison happens.
+    /// <para>
+    /// <see cref="ListRemindersCommand"/>, <see cref="GetReminderCommand"/>,
+    /// <see cref="CancelReminderCommand"/>, <see cref="GetReminderStatusQuery"/>,
+    /// and <see cref="GetReminderHistoryQuery"/> all require this context. Every
+    /// tool (<c>list_reminders</c>, <c>cancel_reminder</c>, <c>get_reminder_history</c>,
+    /// <c>set_reminder</c>) and every daemon HTTP endpoint under
+    /// <c>/api/reminders</c> builds and passes a real one.
+    /// </para>
+    /// <para>
+    /// A context with a null <see cref="SourceAudience"/> still denies all access
+    /// (see <see cref="ReminderManagerActor.CanAccessAudience"/>). Only a real
+    /// audience can see or act on a reminder.
+    /// </para>
+    /// </summary>
     public sealed record ReminderAudienceAuthorizationContext(
         TrustAudience? SourceAudience,
         string? SourceDescription = null) : INoSerializationVerificationNeeded;
@@ -326,21 +346,56 @@ public static partial class ReminderProtocol
     /// <summary>
     /// Disables a reminder and cancels any active schedule. The definition file
     /// is preserved on disk so history and configuration remain available for diagnosis.
+    /// The caller may act on the reminder only when its audience is at or below
+    /// <see cref="Authorization"/>'s source audience; otherwise the manager replies
+    /// as if the id does not exist — see <see cref="ReminderManagerActor.CanAccessAudience"/>.
     /// </summary>
-    public sealed record CancelReminderCommand(ReminderId Id) : IReminderCommand, INoSerializationVerificationNeeded;
+    public sealed record CancelReminderCommand(
+        ReminderId Id,
+        ReminderAudienceAuthorizationContext Authorization) : IReminderCommand, INoSerializationVerificationNeeded;
 
     /// <summary>
     /// Permanently deletes a reminder definition, its schedule, and history from disk.
     /// Not exposed as an LLM tool — use via CLI (<c>netclaw reminder delete</c>) or HTTP API.
+    /// Operator-only surface; no audience gate.
     /// </summary>
     public sealed record DeleteReminderCommand(ReminderId Id) : IReminderCommand, INoSerializationVerificationNeeded;
+
+    /// <summary>Operator-only surface; no audience gate — see <see cref="CancelReminderCommand"/> for the tool-reachable equivalent.</summary>
     public sealed record DisableReminderCommand(ReminderId Id) : IReminderCommand, INoSerializationVerificationNeeded;
+
+    /// <summary>Operator-only surface; no audience gate.</summary>
     public sealed record EnableReminderCommand(ReminderId Id) : IReminderCommand, INoSerializationVerificationNeeded;
-    public sealed record ListRemindersCommand(bool IncludeDisabled = true) : IReminderQuery, INoSerializationVerificationNeeded;
+
+    /// <summary>
+    /// Lists reminder definitions. Only reminders whose audience is at or below
+    /// <see cref="Authorization"/>'s source audience are returned — an out-of-scope
+    /// reminder is omitted, not flagged, so its existence is not disclosed.
+    /// </summary>
+    public sealed record ListRemindersCommand(
+        ReminderAudienceAuthorizationContext Authorization,
+        bool IncludeDisabled = true) : IReminderQuery, INoSerializationVerificationNeeded;
 
     // ===== Queries =====
 
-    public sealed record GetReminderCommand(ReminderId Id) : IReminderQuery, INoSerializationVerificationNeeded;
+    /// <summary>
+    /// Fetches one reminder's full definition. The caller may read it only when its
+    /// audience is at or below <see cref="Authorization"/>'s source audience;
+    /// otherwise the manager replies as if the id does not exist.
+    /// </summary>
+    public sealed record GetReminderCommand(
+        ReminderId Id,
+        ReminderAudienceAuthorizationContext Authorization) : IReminderQuery, INoSerializationVerificationNeeded;
+
+    /// <summary>
+    /// Fetches recent execution history for one reminder. The caller may read it
+    /// only when its audience is at or below <see cref="Authorization"/>'s source
+    /// audience; otherwise the manager replies as if the id does not exist.
+    /// </summary>
+    public sealed record GetReminderHistoryQuery(
+        ReminderId Id,
+        int MaxRecords,
+        ReminderAudienceAuthorizationContext Authorization) : IReminderQuery, INoSerializationVerificationNeeded;
 
     // ===== Responses =====
 
@@ -426,8 +481,13 @@ public static partial class ReminderProtocol
     /// <summary>
     /// Query sent to <see cref="ReminderManagerActor"/> for the per-reminder
     /// operational status surfaced by <c>netclaw reminder status &lt;id&gt;</c>.
+    /// The caller may read it only when its audience is at or below
+    /// <see cref="Authorization"/>'s source audience; otherwise the manager replies
+    /// as if the id does not exist.
     /// </summary>
-    public sealed record GetReminderStatusQuery(ReminderId Id) : IReminderQuery, INoSerializationVerificationNeeded;
+    public sealed record GetReminderStatusQuery(
+        ReminderId Id,
+        ReminderAudienceAuthorizationContext Authorization) : IReminderQuery, INoSerializationVerificationNeeded;
 
     /// <summary>
     /// Response to <see cref="GetReminderStatusQuery"/>: per-reminder health for an
@@ -446,6 +506,16 @@ public static partial class ReminderProtocol
         ReminderTerminalOutcome? TerminalOutcome,
         ReminderOccurrenceInfo? Occurrence,
         IReadOnlyList<HistoryRecord> RecentHistory) : IReminderResponse, INoSerializationVerificationNeeded;
+
+    /// <summary>
+    /// Response to <see cref="GetReminderHistoryQuery"/>. <see cref="Found"/> is
+    /// false both when the id does not exist and when it exists but is out of the
+    /// caller's audience scope — the two cases are indistinguishable by design.
+    /// </summary>
+    public sealed record ReminderHistoryResponse(
+        ReminderId Id,
+        bool Found,
+        IReadOnlyList<HistoryRecord> Records) : IReminderResponse, INoSerializationVerificationNeeded;
 
 }
 

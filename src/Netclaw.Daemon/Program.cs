@@ -1102,10 +1102,9 @@ static void ConfigureDaemonServices(
         {
             var reminderManager = registry.Get<Netclaw.Actors.Hosting.ReminderManagerActorKey>();
             var tp = sp.GetRequiredService<TimeProvider>();
-            var historyStore = sp.GetRequiredService<ReminderHistoryStore>();
             var targetResolvers = sp.GetServices<Netclaw.Actors.Reminders.IReminderTargetResolver>();
             var schedulingCfg = sp.GetRequiredService<SchedulingConfig>();
-            toolRegistry.WithReminderTools(reminderManager, tp, historyStore, schedulingCfg, targetResolvers);
+            toolRegistry.WithReminderTools(reminderManager, tp, schedulingCfg, targetResolvers);
 
             var bgJobManager = registry.Get<Netclaw.Actors.Hosting.BackgroundJobManagerActorKey>();
             toolRegistry.WithBackgroundJobTools(bgJobManager);

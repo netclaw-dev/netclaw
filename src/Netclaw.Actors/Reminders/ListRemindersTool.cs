@@ -41,7 +41,11 @@ public sealed partial class ListRemindersTool : NetclawTool<ListRemindersTool.Pa
         var includeDisabled = string.Equals(args.Filter, "all", StringComparison.OrdinalIgnoreCase);
 
         var response = await _reminderManager.Ask<ReminderListResponse>(
-            new ListRemindersCommand(includeDisabled), TimeSpan.FromSeconds(10), ct);
+            new ListRemindersCommand(
+                new ReminderAudienceAuthorizationContext(context.Audience, context.SessionId ?? context.ChannelType),
+                includeDisabled),
+            TimeSpan.FromSeconds(10),
+            ct);
 
         if (response.Reminders.Count == 0)
             return includeDisabled ? "No reminders found." : "No active reminders.";

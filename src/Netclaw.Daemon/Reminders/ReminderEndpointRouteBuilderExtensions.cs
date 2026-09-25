@@ -27,13 +27,21 @@ public static class ReminderEndpointRouteBuilderExtensions
             .WithTags("Reminders")
             .RequireAuthorization();
 
-        reminders.MapGet("", async ValueTask<Ok<IEnumerable<ReminderSummaryDto>>> (
+        reminders.MapGet("", async ValueTask<Results<Ok<IEnumerable<ReminderSummaryDto>>, ProblemHttpResult>> (
             IRequiredActor<ReminderManagerActorKey> actor,
+            ClaimsPrincipalMapper mapper,
+            HttpContext httpContext,
             CancellationToken ct) =>
         {
+            var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
+            if (authorization is null)
+                return TypedResults.Problem(
+                    detail: "Listing reminders requires Operator authority.",
+                    statusCode: StatusCodes.Status403Forbidden);
+
             var manager = await actor.GetAsync(ct);
             var response = await manager.Ask<ReminderListResponse>(
-                new ListRemindersCommand(), TimeSpan.FromSeconds(10), ct);
+                new ListRemindersCommand(Authorization: authorization), TimeSpan.FromSeconds(10), ct);
             var projected = response.Reminders.Select(r => new ReminderSummaryDto(
                 Id: r.Id.Value,
                 Title: r.Title,
@@ -190,17 +198,27 @@ public static class ReminderEndpointRouteBuilderExtensions
         .WithName("ImportReminder")
         .WithSummary("Import a reminder definition with the requested write mode.");
 
-        reminders.MapDelete("/{id}", async ValueTask<Results<Ok<ReminderMessageResponse>, NotFound<ReminderErrorResponse>>> (
+        reminders.MapDelete("/{id}", async ValueTask<Results<Ok<ReminderMessageResponse>, NotFound<ReminderErrorResponse>, ProblemHttpResult>> (
             string id,
             bool? permanent,
             IRequiredActor<ReminderManagerActorKey> actor,
+            ClaimsPrincipalMapper mapper,
+            HttpContext httpContext,
             CancellationToken ct) =>
         {
+            var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
+            if (authorization is null)
+                return TypedResults.Problem(
+                    detail: "Deleting or cancelling a reminder requires Operator authority.",
+                    statusCode: StatusCodes.Status403Forbidden);
+
             var manager = await actor.GetAsync(ct);
             var reminderId = new ReminderId(id);
 
             if (permanent == true)
             {
+                // Permanent delete is an Operator-only, non-audience-gated command —
+                // Operator's authority to list/get/cancel already spans every audience.
                 var deleted = await manager.Ask<ReminderDeletedResponse>(
                     new DeleteReminderCommand(reminderId),
                     TimeSpan.FromSeconds(10), ct);
@@ -211,7 +229,7 @@ public static class ReminderEndpointRouteBuilderExtensions
             }
 
             var response = await manager.Ask<ReminderCancelledResponse>(
-                new CancelReminderCommand(reminderId),
+                new CancelReminderCommand(reminderId, authorization),
                 TimeSpan.FromSeconds(10), ct);
 
             return response.Found
@@ -260,14 +278,22 @@ public static class ReminderEndpointRouteBuilderExtensions
         .WithName("EnableReminder")
         .WithSummary("Re-enable a previously disabled reminder.");
 
-        reminders.MapGet("/{id}", async ValueTask<Results<Ok<ReminderDetailDto>, NotFound<ReminderErrorResponse>>> (
+        reminders.MapGet("/{id}", async ValueTask<Results<Ok<ReminderDetailDto>, NotFound<ReminderErrorResponse>, ProblemHttpResult>> (
             string id,
             IRequiredActor<ReminderManagerActorKey> actor,
+            ClaimsPrincipalMapper mapper,
+            HttpContext httpContext,
             CancellationToken ct) =>
         {
+            var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
+            if (authorization is null)
+                return TypedResults.Problem(
+                    detail: "Reading a reminder requires Operator authority.",
+                    statusCode: StatusCodes.Status403Forbidden);
+
             var manager = await actor.GetAsync(ct);
             var response = await manager.Ask<GetReminderResponse>(
-                new GetReminderCommand(new ReminderId(id)),
+                new GetReminderCommand(new ReminderId(id), authorization),
                 TimeSpan.FromSeconds(10), ct);
 
             if (response.Reminder is null)
@@ -296,32 +322,51 @@ public static class ReminderEndpointRouteBuilderExtensions
         .WithName("GetReminder")
         .WithSummary("Get a single reminder's full definition.");
 
-        reminders.MapGet("/{id}/history", async ValueTask<Results<Ok<IReadOnlyList<HistoryRecord>>, NotFound<ReminderErrorResponse>>> (
+        reminders.MapGet("/{id}/history", async ValueTask<Results<Ok<IReadOnlyList<HistoryRecord>>, NotFound<ReminderErrorResponse>, ProblemHttpResult>> (
             string id,
             int? last,
-            ReminderDefinitionStore definitionStore,
-            ReminderHistoryStore historyStore,
+            IRequiredActor<ReminderManagerActorKey> actor,
+            ClaimsPrincipalMapper mapper,
+            HttpContext httpContext,
             CancellationToken ct) =>
         {
-            var rid = new ReminderId(id);
-            if (!definitionStore.Exists(rid))
-                return TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
+            var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
+            if (authorization is null)
+                return TypedResults.Problem(
+                    detail: "Reading reminder history requires Operator authority.",
+                    statusCode: StatusCodes.Status403Forbidden);
 
+            var manager = await actor.GetAsync(ct);
+            var rid = new ReminderId(id);
             var maxRecords = Math.Clamp(last ?? 20, 1, 500);
-            var records = await historyStore.ReadAsync(rid, maxRecords);
-            return TypedResults.Ok(records);
+
+            var response = await manager.Ask<ReminderHistoryResponse>(
+                new GetReminderHistoryQuery(rid, maxRecords, authorization),
+                TimeSpan.FromSeconds(10), ct);
+
+            return response.Found
+                ? TypedResults.Ok(response.Records)
+                : TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));
         })
         .WithName("GetReminderHistory")
         .WithSummary("Get recent fire history for a reminder.");
 
-        reminders.MapGet("/{id}/status", async ValueTask<Results<Ok<ReminderStatusDto>, NotFound<ReminderErrorResponse>>> (
+        reminders.MapGet("/{id}/status", async ValueTask<Results<Ok<ReminderStatusDto>, NotFound<ReminderErrorResponse>, ProblemHttpResult>> (
             string id,
             IRequiredActor<ReminderManagerActorKey> actor,
+            ClaimsPrincipalMapper mapper,
+            HttpContext httpContext,
             CancellationToken ct) =>
         {
+            var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
+            if (authorization is null)
+                return TypedResults.Problem(
+                    detail: "Reading reminder status requires Operator authority.",
+                    statusCode: StatusCodes.Status403Forbidden);
+
             var manager = await actor.GetAsync(ct);
             var status = await manager.Ask<ReminderStatusResponse>(
-                new GetReminderStatusQuery(new ReminderId(id)), TimeSpan.FromSeconds(10), ct);
+                new GetReminderStatusQuery(new ReminderId(id), authorization), TimeSpan.FromSeconds(10), ct);
 
             if (!status.Found)
                 return TypedResults.NotFound(new ReminderErrorResponse($"Reminder '{id}' not found."));

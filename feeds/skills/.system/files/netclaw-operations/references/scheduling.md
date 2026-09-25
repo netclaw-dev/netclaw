@@ -131,6 +131,24 @@ the audience of the channel/session that created it. A reminder cannot be
 minted with broader audience than the creator currently holds; lowering the
 audience is always allowed.
 
+### Reminder visibility by audience
+
+`list_reminders`, `get_reminder_history`, `cancel_reminder`, and the status/get
+lookups scope every result to the caller's audience. A reminder is visible or
+actionable only when its audience is at or below the caller's audience:
+
+| Caller audience | Reminders it can see and act on |
+|------------------|---------------------------------|
+| Personal | Personal, Team, Public |
+| Team | Team, Public |
+| Public | Public |
+
+A Team session cannot see a Personal reminder in `list_reminders`, cannot cancel
+it, cannot read its history or status, and cannot overwrite it by reusing its ID
+in `set_reminder` — each of those calls behaves exactly as it would for an ID
+that does not exist. Do not treat "not found" as proof a reminder was deleted;
+it may exist at a higher audience than the current session.
+
 Other scheduling tools: `list_reminders`, `cancel_reminder`,
 `get_reminder_history`.
 

@@ -73,10 +73,8 @@ public class ReminderToolConfigGateTests : IDisposable
     [Fact]
     public async Task GetReminderHistoryTool_ReturnsErrorWhenSchedulingDisabled()
     {
-        var paths = new NetclawPaths(_dir.Path);
-        Directory.CreateDirectory(paths.RemindersDirectory);
-        var store = new ReminderHistoryStore(paths);
-        var tool = new GetReminderHistoryTool(store, _disabledConfig);
+        // Pass null! for reminderManager — the tool must return before touching the actor
+        var tool = new GetReminderHistoryTool(_disabledConfig, reminderManager: null!);
 
         var result = await tool.ExecuteAsync(
             new Dictionary<string, object?> { ["ReminderId"] = "test-reminder" },

@@ -35,6 +35,12 @@ public class ReminderManagerActorTests : TestKit
     private readonly FailingReminderSessionPipeline _sessionPipeline =
         new("persistence recovery failed");
 
+    // Matches the audience the daemon HTTP layer resolves for an Operator caller
+    // (see ResolveReminderAuthorizationContext) — these tests call the manager
+    // directly, the same way that layer does, so they use the same caller shape.
+    private static readonly ReminderAudienceAuthorizationContext OperatorAuthorization =
+        new(TrustAudience.Personal, "Operator/test");
+
     public ReminderManagerActorTests(ITestOutputHelper output) : base(output: output) { }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
@@ -117,7 +123,7 @@ public class ReminderManagerActorTests : TestKit
         Assert.NotNull(scheduled.NextFire);
 
         var list = await manager.Ask<ReminderListResponse>(
-            new ListRemindersCommand(), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new ListRemindersCommand(OperatorAuthorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.Single(list.Reminders);
         Assert.Equal("test-list", list.Reminders[0].Title);
@@ -136,7 +142,7 @@ public class ReminderManagerActorTests : TestKit
             new SaveReminderCommand(definition, Authorization: authorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var cancelled = await manager.Ask<ReminderCancelledResponse>(
-            new CancelReminderCommand(definition.Id), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new CancelReminderCommand(definition.Id, OperatorAuthorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(cancelled.Found);
 
@@ -151,7 +157,7 @@ public class ReminderManagerActorTests : TestKit
         var manager = await GetManagerAsync();
 
         var cancelled = await manager.Ask<ReminderCancelledResponse>(
-            new CancelReminderCommand(new ReminderId("does-not-exist")),
+            new CancelReminderCommand(new ReminderId("does-not-exist"), OperatorAuthorization),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(cancelled.Found);
@@ -200,7 +206,7 @@ public class ReminderManagerActorTests : TestKit
             new SaveReminderCommand(definition, Authorization: authorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var status = await manager.Ask<ReminderStatusResponse>(
-            new GetReminderStatusQuery(definition.Id), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new GetReminderStatusQuery(definition.Id, OperatorAuthorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(status.Found);
         Assert.True(status.Enabled);
@@ -217,7 +223,7 @@ public class ReminderManagerActorTests : TestKit
         var manager = await GetManagerAsync();
 
         var status = await manager.Ask<ReminderStatusResponse>(
-            new GetReminderStatusQuery(new ReminderId("does-not-exist")),
+            new GetReminderStatusQuery(new ReminderId("does-not-exist"), OperatorAuthorization),
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.False(status.Found);
@@ -238,7 +244,7 @@ public class ReminderManagerActorTests : TestKit
         _definitionStore.Save(definition);
 
         var status = await manager.Ask<ReminderStatusResponse>(
-            new GetReminderStatusQuery(definition.Id),
+            new GetReminderStatusQuery(definition.Id, OperatorAuthorization),
             TimeSpan.FromSeconds(5),
             TestContext.Current.CancellationToken);
 
@@ -311,7 +317,7 @@ public class ReminderManagerActorTests : TestKit
         _sharedResolver.RegisterShardRegion(ReminderManagerActor.ShardRegionName, restarted);
 
         var status = await restarted.Ask<ReminderStatusResponse>(
-            new GetReminderStatusQuery(definition.Id),
+            new GetReminderStatusQuery(definition.Id, OperatorAuthorization),
             TimeSpan.FromSeconds(5),
             TestContext.Current.CancellationToken);
         Assert.True(status.Found);
@@ -1072,7 +1078,7 @@ public class ReminderManagerActorTests : TestKit
         await AwaitAssertAsync(async () =>
         {
             var status = await manager.Ask<ReminderStatusResponse>(
-                new GetReminderStatusQuery(recurringReminder.Id),
+                new GetReminderStatusQuery(recurringReminder.Id, OperatorAuthorization),
                 TimeSpan.FromSeconds(3),
                 TestContext.Current.CancellationToken);
             // The historical capacity gate would have skipped this occurrence
@@ -1528,7 +1534,7 @@ public class ReminderManagerActorTests : TestKit
             ReminderManagerActor.ReconcileReminders.Instance, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         var status = await manager.Ask<ReminderStatusResponse>(
-            new GetReminderStatusQuery(definition.Id), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+            new GetReminderStatusQuery(definition.Id, OperatorAuthorization), TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.True(status.Found);
         Assert.Null(status.NextFire); // no timer installed
