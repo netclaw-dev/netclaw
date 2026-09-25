@@ -274,6 +274,18 @@ public enum ReminderTerminalOutcome
 }
 
 /// <summary>
+/// Who triggered a reminder execution: the Akka.Reminders scheduler on the
+/// reminder's own fire schedule, or an operator running it now via
+/// <c>netclaw reminder run</c>. Recorded on <see cref="HistoryRecord"/> so an
+/// operator can tell a manual test run apart from a real scheduled fire.
+/// </summary>
+public enum ReminderExecutionSource
+{
+    Scheduled = 0,
+    Manual = 1
+}
+
+/// <summary>
 /// Message persisted inside Akka.Reminders. Intentionally lightweight: pointer to disk definition.
 /// </summary>
 public sealed record ReminderPayload : INetclawSerializableMessage
@@ -338,6 +350,27 @@ public static partial class ReminderProtocol
     public sealed record EnableReminderCommand(ReminderId Id) : IReminderCommand, INoSerializationVerificationNeeded;
     public sealed record ListRemindersCommand(bool IncludeDisabled = true) : IReminderQuery, INoSerializationVerificationNeeded;
 
+    /// <summary>
+    /// Runs an existing reminder now, outside its schedule. Requires Operator
+    /// authority — <see cref="Authorization"/> is required, not optional, so a
+    /// caller that forgets to resolve it fails closed instead of running
+    /// unauthorized. The manual run does not consume the reminder's next
+    /// scheduled occurrence and does not touch scheduled failure accounting.
+    /// </summary>
+    public sealed record RunReminderNowCommand(
+        ReminderId Id,
+        ReminderAudienceAuthorizationContext? Authorization) : IReminderCommand, INoSerializationVerificationNeeded;
+
+    /// <summary>
+    /// Waits for a manual run started by <see cref="RunReminderNowCommand"/> to
+    /// settle. Sent as a second, long-timeout ask right after a
+    /// <see cref="ReminderRunNowResponse"/> accept ack — <see cref="ExecutionId"/>
+    /// ties this wait to that exact run, not just any run of the same reminder.
+    /// </summary>
+    public sealed record AwaitReminderRunCommand(
+        ReminderId Id,
+        Guid ExecutionId) : IReminderCommand, INoSerializationVerificationNeeded;
+
     // ===== Queries =====
 
     public sealed record GetReminderCommand(ReminderId Id) : IReminderQuery, INoSerializationVerificationNeeded;
@@ -354,6 +387,59 @@ public static partial class ReminderProtocol
 
     public sealed record ReminderCancelledResponse(ReminderId Id, bool Found) : IReminderResponse, INoSerializationVerificationNeeded;
     public sealed record ReminderDeletedResponse(ReminderId Id, bool Found) : IReminderResponse, INoSerializationVerificationNeeded;
+
+    /// <summary>Reason a <see cref="RunReminderNowCommand"/> was rejected.</summary>
+    public enum ReminderRunError
+    {
+        None,
+        Unauthorized,
+        SchedulingDisabled,
+        NotFound,
+        Disabled,
+        Expired,
+        AlreadyExecuting
+    }
+
+    /// <summary>
+    /// Reply to both halves of a <c>netclaw reminder run</c> round trip: the
+    /// immediate accept/reject ack from <see cref="RunReminderNowCommand"/>,
+    /// and the settled outcome from <see cref="AwaitReminderRunCommand"/>. One
+    /// shared shape instead of two near-duplicate types — the accept ack fills
+    /// only <see cref="ExecutionId"/>, <see cref="StartedAt"/>,
+    /// <see cref="SessionId"/>, and <see cref="DeliveryTarget"/>; the settled
+    /// reply additionally fills <see cref="DurationMs"/> and
+    /// <see cref="ReplyText"/>. <see cref="TimedOut"/> is never set by the
+    /// manager — only the daemon endpoint sets it, locally, when the settle
+    /// wait exceeds <see cref="ManualRunMaxWaitTimeout"/>.
+    /// </summary>
+    public sealed record ReminderRunNowResponse(
+        ReminderId Id,
+        bool Success,
+        ReminderRunError Error = ReminderRunError.None,
+        string? ErrorMessage = null,
+        Guid? ExecutionId = null,
+        DateTimeOffset? StartedAt = null,
+        long? DurationMs = null,
+        string? SessionId = null,
+        string? DeliveryTarget = null,
+        string? ReplyText = null,
+        bool ReplyTextTrimmed = false,
+        bool TimedOut = false) : IReminderResponse, INoSerializationVerificationNeeded;
+
+    /// <summary>
+    /// Upper bound for a <c>netclaw reminder run</c> call to wait for a manual
+    /// execution to settle: the execution actor's own hard ceiling
+    /// (<see cref="ReminderExecutionActor.ExecutionAttemptTimeout"/>) plus the
+    /// manager's settlement margin (<see cref="ReminderManagerActor.SettlementMargin"/>).
+    /// Public so the daemon endpoint and the CLI's HTTP client read the same
+    /// value: the endpoint uses it as its wait-for-settlement ask timeout, and
+    /// the CLI's HTTP client timeout for the same call must exceed it, or the
+    /// CLI would give up before the daemon replies. Computed on each read
+    /// (not cached) so a test that shrinks <c>ExecutionAttemptTimeout</c> sees
+    /// the change reflected here too.
+    /// </summary>
+    public static TimeSpan ManualRunMaxWaitTimeout =>
+        ReminderExecutionActor.ExecutionAttemptTimeout + ReminderManagerActor.SettlementMargin;
 
     public sealed record ReminderStateResponse(
         ReminderId Id,
@@ -470,12 +556,21 @@ public sealed record ReminderInfo(
 /// <summary>
 /// Sent by <see cref="ReminderExecutionActor"/> to parent when execution completes.
 /// </summary>
+/// <param name="ReplyText">
+/// The session's accumulated assistant output for a Mode A (own-pipeline)
+/// execution, untrimmed. Null for Mode B (<see cref="DeliveryKind.CurrentSession"/>) —
+/// that reply is produced inside the origin session, not observed by this
+/// actor. Not persisted on <see cref="HistoryRecord"/>: it exists only to
+/// flow to a waiting <c>netclaw reminder run</c> caller, not to bloat every
+/// scheduled fire's on-disk history entry.
+/// </param>
 internal sealed record ReminderExecutionCompleted(
     Guid ExecutionId,
     ReminderId Id,
     bool Success,
     HistoryRecord History,
-    string? ErrorMessage = null) : INoSerializationVerificationNeeded;
+    string? ErrorMessage = null,
+    string? ReplyText = null) : INoSerializationVerificationNeeded;
 
 internal sealed record ReminderExecutionAccepted(Guid ExecutionId) : INoSerializationVerificationNeeded;
 
@@ -502,9 +597,15 @@ public sealed record ReminderOccurrenceInfo(
 /// A single execution history entry for a reminder, appended to
 /// <c>~/.netclaw/reminders/{id}.history.jsonl</c> after each run.
 /// </summary>
+/// <param name="Source">
+/// Who triggered the run. Defaults to <see cref="ReminderExecutionSource.Scheduled"/>
+/// so a legacy record on disk missing this field (written before this field
+/// existed) still reads as a scheduled run.
+/// </param>
 public sealed record HistoryRecord(
     DateTimeOffset FiredAt,
     bool Success,
     long DurationMs,
     string SessionId,
-    string? ErrorMessage);
+    string? ErrorMessage,
+    ReminderExecutionSource Source = ReminderExecutionSource.Scheduled);

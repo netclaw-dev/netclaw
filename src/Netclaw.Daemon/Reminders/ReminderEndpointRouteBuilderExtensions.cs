@@ -221,6 +221,67 @@ public static class ReminderEndpointRouteBuilderExtensions
         .WithName("DeleteReminder")
         .WithSummary("Cancel a reminder, or permanently delete it with ?permanent=true.");
 
+        reminders.MapPost("/{id}/run", async ValueTask<Results<Ok<ReminderRunResultDto>, NotFound<ReminderErrorResponse>, Conflict<ReminderErrorResponse>, BadRequest<ReminderErrorResponse>, ProblemHttpResult>> (
+            string id,
+            IRequiredActor<ReminderManagerActorKey> actor,
+            ClaimsPrincipalMapper mapper,
+            HttpContext httpContext,
+            CancellationToken ct) =>
+        {
+            var authorization = ResolveReminderAuthorizationContext(mapper, httpContext);
+
+            // Same operator-only gate as create: a non-Operator caller never
+            // reaches the manager actor.
+            if (authorization?.SourceAudience is null)
+                return TypedResults.Problem(
+                    detail: "Running a reminder now requires Operator authority.",
+                    statusCode: StatusCodes.Status403Forbidden);
+
+            var reminderId = new ReminderId(id);
+            var manager = await actor.GetAsync(ct);
+
+            // First round trip: fast accept/reject ack. A rejection (not
+            // found, disabled, expired, already executing, unauthorized,
+            // scheduling disabled) is reported the same way it always was.
+            var accepted = await manager.Ask<ReminderRunNowResponse>(
+                new RunReminderNowCommand(reminderId, authorization),
+                TimeSpan.FromSeconds(10), ct);
+
+            if (!accepted.Success)
+            {
+                return accepted.Error switch
+                {
+                    ReminderRunError.NotFound => TypedResults.NotFound(
+                        new ReminderErrorResponse(accepted.ErrorMessage ?? $"Reminder '{id}' not found.")),
+                    ReminderRunError.AlreadyExecuting => TypedResults.Conflict(
+                        new ReminderErrorResponse(accepted.ErrorMessage ?? $"Reminder '{id}' is already executing.")),
+                    ReminderRunError.Unauthorized => TypedResults.Problem(
+                        detail: accepted.ErrorMessage ?? "Running a reminder now requires Operator authority.",
+                        statusCode: StatusCodes.Status403Forbidden),
+                    _ => TypedResults.BadRequest(
+                        new ReminderErrorResponse(accepted.ErrorMessage ?? $"Unable to run reminder '{id}'."))
+                };
+            }
+
+            // Second round trip: wait for the run to settle, bounded by the
+            // execution actor's own hard ceiling plus settlement margin. This
+            // does not cancel the run on timeout — the manager keeps running
+            // it and simply has nobody left to tell when it finishes.
+            try
+            {
+                var settled = await manager.Ask<ReminderRunNowResponse>(
+                    new AwaitReminderRunCommand(reminderId, accepted.ExecutionId!.Value),
+                    ReminderProtocol.ManualRunMaxWaitTimeout, ct);
+                return TypedResults.Ok(ReminderRunResultDto.FromSettled(settled));
+            }
+            catch (AskTimeoutException)
+            {
+                return TypedResults.Ok(ReminderRunResultDto.TimedOut(accepted));
+            }
+        })
+        .WithName("RunReminderNow")
+        .WithSummary("Run a reminder now, wait for it to finish, and return the result (requires Operator authority).");
+
         reminders.MapPost("/{id}/disable", async ValueTask<Results<Ok<ReminderDisableResponse>, NotFound<ReminderErrorResponse>>> (
             string id,
             IRequiredActor<ReminderManagerActorKey> actor,
@@ -431,6 +492,50 @@ internal sealed record ReminderStatusDto(
     string? TerminalOutcome,
     ReminderOccurrenceInfo? Occurrence,
     IReadOnlyList<HistoryRecord> RecentHistory);
+
+/// <summary>
+/// Result of <c>POST /api/reminders/{id}/run</c>: the settled outcome of a
+/// manual run, or a "still running" placeholder when the daemon gave up
+/// waiting before the run settled. <see cref="Status"/> is one of
+/// <c>ok</c>, <c>failed</c>, or <c>timed_out</c>.
+/// </summary>
+internal sealed record ReminderRunResultDto(
+    string Id,
+    string Source,
+    string Status,
+    DateTimeOffset? StartedAt,
+    long? DurationMs,
+    string? SessionId,
+    string DeliveryTarget,
+    string? ReplyText,
+    bool ReplyTextTrimmed,
+    string? ErrorMessage)
+{
+    public static ReminderRunResultDto FromSettled(ReminderRunNowResponse settled) => new(
+        Id: settled.Id.Value,
+        Source: "manual",
+        Status: settled.Success ? "ok" : "failed",
+        StartedAt: settled.StartedAt,
+        DurationMs: settled.DurationMs,
+        SessionId: settled.SessionId,
+        DeliveryTarget: settled.DeliveryTarget ?? "none",
+        ReplyText: settled.ReplyText,
+        ReplyTextTrimmed: settled.ReplyTextTrimmed,
+        ErrorMessage: settled.ErrorMessage);
+
+    public static ReminderRunResultDto TimedOut(ReminderRunNowResponse accepted) => new(
+        Id: accepted.Id.Value,
+        Source: "manual",
+        Status: "timed_out",
+        StartedAt: accepted.StartedAt,
+        DurationMs: null,
+        SessionId: accepted.SessionId,
+        DeliveryTarget: accepted.DeliveryTarget ?? "none",
+        ReplyText: null,
+        ReplyTextTrimmed: false,
+        ErrorMessage: $"Still running after {ReminderProtocol.ManualRunMaxWaitTimeout}. " +
+                      "The run was not cancelled — check `netclaw reminder status` or the session for the final result.");
+}
 
 /// <summary>Acknowledgement carrying a human-readable message.</summary>
 internal sealed record ReminderMessageResponse(string Message);
