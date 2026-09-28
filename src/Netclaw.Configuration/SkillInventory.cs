@@ -78,6 +78,8 @@ public static class SkillInventory
     public static Response From(IEnumerable<SkillEntry> skills, NetclawPaths paths)
     {
         var systemPrefix = paths.SystemSkillsDirectory + Path.DirectorySeparatorChar;
+        var serverFeedPrefix = paths.ServerFeedsDirectory + Path.DirectorySeparatorChar;
+        var gitPluginPrefix = paths.ManagedGitSkillsDirectory + Path.DirectorySeparatorChar;
         var nativePrefix = paths.SkillsDirectory + Path.DirectorySeparatorChar;
 
         var rows = skills
@@ -90,7 +92,12 @@ public static class SkillInventory
                     Name = skill.Name,
                     DisplayName = skill.DisplayName,
                     Description = skill.Description,
-                    Source = Classify(skill, systemPrefix, nativePrefix),
+                    Source = Classify(
+                        skill,
+                        systemPrefix,
+                        serverFeedPrefix,
+                        gitPluginPrefix,
+                        nativePrefix),
                     Category = skill.Category,
                     Version = skill.Version,
                     UserInvocable = skill.UserInvocable,
@@ -115,7 +122,12 @@ public static class SkillInventory
         return new Response { Skills = rows };
     }
 
-    private static string Classify(SkillEntry skill, string systemPrefix, string nativePrefix)
+    private static string Classify(
+        SkillEntry skill,
+        string systemPrefix,
+        string serverFeedPrefix,
+        string gitPluginPrefix,
+        string nativePrefix)
     {
         switch (skill.Source)
         {
@@ -123,6 +135,10 @@ public static class SkillInventory
                 return "mcp";
             case FileSkillSource file when file.FilePath.StartsWith(systemPrefix, StringComparison.OrdinalIgnoreCase):
                 return "system";
+            case FileSkillSource file when
+                file.FilePath.StartsWith(serverFeedPrefix, StringComparison.OrdinalIgnoreCase)
+                || file.FilePath.StartsWith(gitPluginPrefix, StringComparison.OrdinalIgnoreCase):
+                return "external";
             case FileSkillSource file when file.FilePath.StartsWith(nativePrefix, StringComparison.OrdinalIgnoreCase):
                 return "native";
             case FileSkillSource:

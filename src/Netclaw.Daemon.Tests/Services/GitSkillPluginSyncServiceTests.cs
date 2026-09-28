@@ -258,6 +258,61 @@ public sealed class GitSkillPluginSyncServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task Successful_explicit_retry_removes_the_durable_rejection()
+    {
+        var source = Source();
+        var store = await CreateStoreAsync();
+        var fingerprint = ManagedPluginSourceValidator.Fingerprint(source);
+        await store.SaveRejectionAsync(
+            source.Id, fingerprint, FirstCommit, "scanner result", true,
+            TestContext.Current.CancellationToken);
+        var registry = new SkillRegistry();
+        var service = new ServerFeedSkillSyncService(
+            new SkillFeedsConfig { Plugins = [source] }, _paths,
+            CreateRefresher(registry, static () => { }), _time,
+            new NoOpSkillContentScanner(), NullLogger<ServerFeedSkillSyncService>.Instance,
+            store, new FakeAcquirer(_paths, source, FirstCommit, "1.0.0", "plugin-skill"),
+            new RecordingSink());
+
+        var result = await service.SyncAsync(
+            retryRejected: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, Assert.Single(result.Sources).ChangedCount);
+        Assert.Null(await store.GetRejectionAsync(
+            source.Id, fingerprint, FirstCommit, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
+    public async Task Successful_equal_version_retry_removes_the_durable_rejection()
+    {
+        var source = Source();
+        var registry = new SkillRegistry();
+        var refresher = CreateRefresher(registry, static () => { });
+        var firstService = await CreateServiceAsync(
+            source, refresher,
+            new FakeAcquirer(_paths, source, FirstCommit, "1.0.0", "plugin-skill"),
+            new RecordingSink());
+        await firstService.SyncAsync(TestContext.Current.CancellationToken);
+        var store = new ManagedPluginStateStore(_paths, _time);
+        var fingerprint = ManagedPluginSourceValidator.Fingerprint(source);
+        await store.SaveRejectionAsync(
+            source.Id, fingerprint, SecondCommit, "scanner result", true,
+            TestContext.Current.CancellationToken);
+        var retryService = new ServerFeedSkillSyncService(
+            new SkillFeedsConfig { Plugins = [source] }, _paths, refresher, _time,
+            new NoOpSkillContentScanner(), NullLogger<ServerFeedSkillSyncService>.Instance,
+            store, new FakeAcquirer(_paths, source, SecondCommit, "1.0.0", "plugin-skill"),
+            new RecordingSink());
+
+        var result = await retryService.SyncAsync(
+            retryRejected: true, TestContext.Current.CancellationToken);
+
+        Assert.Equal(1, Assert.Single(result.Sources).UnchangedCount);
+        Assert.Null(await store.GetRejectionAsync(
+            source.Id, fingerprint, SecondCommit, TestContext.Current.CancellationToken));
+    }
+
+    [Fact]
     public async Task Startup_cleanup_removes_staging_and_orphan_commits_but_keeps_receipt_directory()
     {
         var source = Source();
