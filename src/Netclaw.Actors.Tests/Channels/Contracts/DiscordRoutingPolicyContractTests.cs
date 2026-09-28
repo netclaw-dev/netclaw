@@ -7,9 +7,31 @@ using Netclaw.Channels.Discord;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
-public sealed class DiscordRoutingPolicyContractTests : RoutingPolicyContractTests
+public sealed class DiscordRoutingPolicyContractTests : DmGatedRoutingPolicyContractTests
 {
-    protected override RoutingVerdict Evaluate(
+    protected override RoutingVerdict EvaluateRouting(
+        bool mentionOnly, bool isDm, bool containsMention, string text)
+        => EvaluateDiscord(
+            mentionOnly, allowDm: true, mentionRequiredInDm: false,
+            mentionRequiredInThread: false, isDm, containsMention,
+            threadExists: false, isThreadReply: false, text);
+
+    protected override RoutingVerdict EvaluateThreadReply(
+        bool mentionRequiredInThread, bool containsMention, bool threadExists,
+        bool isThreadReply, string text)
+        => EvaluateDiscord(
+            mentionOnly: true, allowDm: false, mentionRequiredInDm: false,
+            mentionRequiredInThread, isDm: false, containsMention,
+            threadExists, isThreadReply, text);
+
+    protected override RoutingVerdict EvaluateDmGating(
+        bool allowDm, bool mentionRequiredInDm, bool containsMention)
+        => EvaluateDiscord(
+            mentionOnly: true, allowDm, mentionRequiredInDm,
+            mentionRequiredInThread: false, isDm: true, containsMention,
+            threadExists: false, isThreadReply: false, "hey");
+
+    private static RoutingVerdict EvaluateDiscord(
         bool mentionOnly,
         bool allowDm,
         bool mentionRequiredInDm,

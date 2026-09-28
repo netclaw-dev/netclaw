@@ -7,9 +7,31 @@ using Netclaw.Channels.Slack;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
-public sealed class SlackRoutingPolicyContractTests : RoutingPolicyContractTests
+public sealed class SlackRoutingPolicyContractTests : DmGatedRoutingPolicyContractTests
 {
-    protected override RoutingVerdict Evaluate(
+    protected override RoutingVerdict EvaluateRouting(
+        bool mentionOnly, bool isDm, bool containsMention, string text)
+        => EvaluateSlack(
+            mentionOnly, allowDm: true, mentionRequiredInDm: false,
+            mentionRequiredInThread: false, isDm, containsMention,
+            threadExists: false, isThreadReply: false, text);
+
+    protected override RoutingVerdict EvaluateThreadReply(
+        bool mentionRequiredInThread, bool containsMention, bool threadExists,
+        bool isThreadReply, string text)
+        => EvaluateSlack(
+            mentionOnly: true, allowDm: false, mentionRequiredInDm: false,
+            mentionRequiredInThread, isDm: false, containsMention,
+            threadExists, isThreadReply, text);
+
+    protected override RoutingVerdict EvaluateDmGating(
+        bool allowDm, bool mentionRequiredInDm, bool containsMention)
+        => EvaluateSlack(
+            mentionOnly: true, allowDm, mentionRequiredInDm,
+            mentionRequiredInThread: false, isDm: true, containsMention,
+            threadExists: false, isThreadReply: false, "hey");
+
+    private static RoutingVerdict EvaluateSlack(
         bool mentionOnly,
         bool allowDm,
         bool mentionRequiredInDm,

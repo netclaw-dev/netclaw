@@ -7,9 +7,31 @@ using Netclaw.Channels.Mattermost;
 
 namespace Netclaw.Actors.Tests.Channels.Contracts;
 
-public sealed class MattermostRoutingPolicyContractTests : RoutingPolicyContractTests
+public sealed class MattermostRoutingPolicyContractTests : DmGatedRoutingPolicyContractTests
 {
-    protected override RoutingVerdict Evaluate(
+    protected override RoutingVerdict EvaluateRouting(
+        bool mentionOnly, bool isDm, bool containsMention, string text)
+        => EvaluateMattermost(
+            mentionOnly, allowDm: true, mentionRequiredInDm: false,
+            mentionRequiredInThread: false, isDm, containsMention,
+            threadExists: false, isThreadReply: false, text);
+
+    protected override RoutingVerdict EvaluateThreadReply(
+        bool mentionRequiredInThread, bool containsMention, bool threadExists,
+        bool isThreadReply, string text)
+        => EvaluateMattermost(
+            mentionOnly: true, allowDm: false, mentionRequiredInDm: false,
+            mentionRequiredInThread, isDm: false, containsMention,
+            threadExists, isThreadReply, text);
+
+    protected override RoutingVerdict EvaluateDmGating(
+        bool allowDm, bool mentionRequiredInDm, bool containsMention)
+        => EvaluateMattermost(
+            mentionOnly: true, allowDm, mentionRequiredInDm,
+            mentionRequiredInThread: false, isDm: true, containsMention,
+            threadExists: false, isThreadReply: false, "hey");
+
+    private static RoutingVerdict EvaluateMattermost(
         bool mentionOnly,
         bool allowDm,
         bool mentionRequiredInDm,

@@ -13,14 +13,22 @@ Slack and Discord implement identical security logic independently: ACL policies
 | `PromptClassificationTests` | 10 | No | `PromptClassifier.ClassifyAsync` (shared code, no abstract base) |
 | `AclPolicyContractTests` | 16 | No | ACL allow/deny, audience resolution, principal classification, provenance |
 | `GatewayRoutingContractTests` | 3 | Yes | Message routing, duplicate event filtering, ACL enforcement at gateway |
-| `RoutingPolicyContractTests` | 11 | No | Inbound routing policy: mention gating, thread continuation/rehydration, DM matrix, empty content |
+| `RoutingPolicyContractTests` | 6 | No | Universal routing: mention gating, explicit-mention ingress, allowed-DM ingress, empty content, mention-only opt-out (Telegram enrolls here only) |
+| `ThreadReplyRoutingPolicyContractTests` | +6 | No | Thread-platform layer: live-thread continuation without mention, restart rehydration, `MentionRequiredInThread` gating |
+| `DmGatedRoutingPolicyContractTests` | +3 | No | Policy-level DM gating layer: `DmNotAllowed` drop and `MentionRequiredInDm`; derives through the thread layer, so its fixtures run all 15 routing cases |
 | `SessionBindingContractTests` | 16 | Yes | Prompt injection gate, approval flows, output rendering, failure notification, pipeline lifecycle |
 | `ChannelHealthContractTests` | 3 | Yes | `IChannel.GetHealthAsync`: healthy when connected+ready, disconnected with a reason, degraded when disabled |
 | `SnapshotChannelHealthContractTests` | +2 | Yes | Snapshot transports only (Discord, Mattermost): degraded when connected-but-not-ready, health detail propagated from the transport snapshot. Slack's socket-mode transport is binary and implements only the base health contract |
 | `ChannelShutdownContractTests` | 1 | No | `IChannel.StopAsync` must not propagate a failing transport disconnect — shutdown teardown races (dead actor system on SIGTERM) are expected, and a throw becomes a false `daemon-main` crash. Fixtures wire a timing-out fake transport and assert `StopAsync` completes |
 | `GatewayLifecycleContractTests` | 7 | Yes | Gateway lifecycle state machine (Discord and Mattermost only — Slack has no lifecycle actor): not-ready ingress dropped, runtime disconnect → clean reconnect, spurious ready signal → clean reconnect, no duplicate transport handlers across reconnects, not-ready reported while transport still connected, auto-reconnect after disconnect, retry timer cancelled on actor stop. Runs on `Akka.TestKit.TestScheduler` (virtual time); retry/ready-timeout timers are driven via `AdvanceScheduler` |
 
-Total: **59 contract assertions per channel** (16 ACL + 3 gateway + 11 routing policy + 16 session binding + 3 health + 10 shared prompt classification), plus 2 extra health assertions for snapshot-transport channels and 7 lifecycle assertions for channels with a gateway lifecycle actor.
+Per-channel totals now vary with the capabilities a channel enrolls in.
+Layer sizes: ACL 17 · gateway routing 3 · routing policy 6 universal (+6
+thread-reply layer, +3 DM-gating layer) · session binding 30 (+2 approval
+sender-reply ack cases, +14 opt-in thread hydration) · health 3 (+2 for
+snapshot-transport channels) · shutdown 1 · proactive outbound 7 · shared
+prompt classification 10 · gateway lifecycle 7 (Discord and Mattermost
+only).
 
 ## Adding a new channel
 
@@ -85,18 +93,18 @@ public sealed class ExampleGatewayContractTests(ITestOutputHelper output)
 
 ### 3. Routing policy contract: `{Channel}RoutingPolicyContractTests`
 
-Subclass `RoutingPolicyContractTests`. No TestKit needed — routing policies are static methods.
+Routing coverage is split into capability layers instead of one base with
+capability flags. `RoutingPolicyContractTests` is the universal base — the
+routing behavior every chat channel shares (6 cases) — with:
 
 ```csharp
 public sealed class ExampleRoutingPolicyContractTests : RoutingPolicyContractTests
 {
-    protected override RoutingVerdict Evaluate(
-        bool mentionOnly, bool allowDm, bool mentionRequiredInDm,
-        bool isDm, bool containsMention, bool threadExists, bool isThreadReply, string text)
+    protected override RoutingVerdict EvaluateRouting(
+        bool mentionOnly, bool isDm, bool containsMention, string text)
     {
-        // 1. Construct a plain text-only inbound message for your channel
-        //    (no attachments, no platform-specific subtypes), mapping
-        //    isThreadReply onto however your platform marks thread replies.
+        // 1. Construct a plain text-only inbound message for your channel,
+        //    mapping isDm onto however your platform marks direct messages.
         // 2. Call your ExampleRoutingPolicy.Evaluate(...)
         // 3. Map your decision kind/ignore reason onto RoutingVerdict.
         //    Throw on channel-specific ignore reasons — they belong in
@@ -104,6 +112,25 @@ public sealed class ExampleRoutingPolicyContractTests : RoutingPolicyContractTes
     }
 }
 ```
+
+`ThreadReplyRoutingPolicyContractTests` adds the 6 thread-platform cases
+(live-thread continuation without mention, restart rehydration, and the
+`MentionRequiredInThread` tap) through:
+
+```csharp
+protected abstract RoutingVerdict EvaluateThreadReply(
+    bool mentionRequiredInThread, bool containsMention,
+    bool threadExists, bool isThreadReply, string text);
+```
+
+`DmGatedRoutingPolicyContractTests` adds the 3 policy-level DM gating cases
+(`DmNotAllowed` drop, `MentionRequiredInDm`) through
+`EvaluateDmGating(allowDm, mentionRequiredInDm, containsMention)` and derives
+through the thread layer, so a fixture re-based onto it runs all 15 routing
+cases exactly once. Slack, Discord, and Mattermost implement all three
+evaluators around one private verdict mapper; Telegram enrolls in the
+universal base only — its topics key sessions but are not addressing
+signals, and its DM gating lives in the ACL contract.
 
 ### 4. Session binding contract: `{Channel}SessionBindingContractTests`
 

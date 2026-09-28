@@ -25,8 +25,10 @@ public enum RoutingVerdictKind
 
 /// <summary>
 /// The ignore reasons shared by all channel routing policies. Channel-specific
-/// reasons (e.g. Slack's <c>HiddenMessage</c>/<c>UnsupportedSubtype</c>/<c>WrongKind</c>)
-/// have no mapping here and are covered by the standalone per-channel tests.
+/// reasons (e.g. Slack's <c>HiddenMessage</c>/<c>UnsupportedSubtype</c>/<c>WrongKind</c>
+/// or Telegram's <c>GroupMentionRequired</c>) map onto these when the meaning
+/// matches and have no mapping here otherwise; those stay covered by the
+/// standalone per-channel tests.
 /// </summary>
 public enum RoutingIgnoreReason
 {
@@ -48,44 +50,39 @@ public sealed record RoutingVerdict(RoutingVerdictKind Kind, RoutingIgnoreReason
 }
 
 /// <summary>
-/// Behavioral contract for channel routing policies (<c>SlackRoutingPolicy</c>,
-/// <c>DiscordRoutingPolicy</c>, <c>MattermostRoutingPolicy</c>). The policies are
-/// pure static functions, so no TestKit is needed. Each fixture constructs a plain
-/// text-only inbound message for its channel (no files/attachments, no subtype,
-/// not hidden) and normalizes the channel decision into a <see cref="RoutingVerdict"/>.
+/// Universal behavioral contract for channel routing policies: the routing
+/// behavior every chat channel shares — the mention gate, explicit-mention
+/// ingress, allowed-DM ingress, empty-content filtering, and the
+/// mention-only opt-out. The policies are pure static functions, so no
+/// TestKit is needed. Each fixture constructs a plain text-only inbound
+/// message for its channel (no files/attachments) and normalizes the channel
+/// decision into a <see cref="RoutingVerdict"/>.
+/// <para>
+/// Platform-specific routing axes live in capability layers that derive from
+/// this base: <see cref="ThreadReplyRoutingPolicyContractTests"/> (threads)
+/// and <see cref="DmGatedRoutingPolicyContractTests"/> (policy-level DM
+/// gating). Channels enroll in the layers whose interaction model they have.
+/// </para>
 /// </summary>
 public abstract class RoutingPolicyContractTests
 {
     /// <summary>
-    /// Evaluates the channel's routing policy for a plain user message.
-    /// <paramref name="isThreadReply"/> means the message itself is a reply inside
-    /// an existing platform thread (Slack: <c>ThreadTs</c> differs from <c>EventTs</c>;
-    /// Discord: <c>IsInThread</c>; Mattermost: non-empty <c>RootPostId</c>), while
-    /// <paramref name="threadExists"/> means a live session actor exists for that thread.
+    /// Evaluates the channel's routing policy for a plain text-only user
+    /// message with no thread context.
     /// </summary>
-    protected abstract RoutingVerdict Evaluate(
+    protected abstract RoutingVerdict EvaluateRouting(
         bool mentionOnly,
-        bool allowDm,
-        bool mentionRequiredInDm,
-        bool mentionRequiredInThread,
         bool isDm,
         bool containsMention,
-        bool threadExists,
-        bool isThreadReply,
         string text);
 
     [Fact]
     public void MessageWithoutMention_Ignored_WhenMentionOnly()
     {
-        var verdict = Evaluate(
+        var verdict = EvaluateRouting(
             mentionOnly: true,
-            allowDm: true,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
-            threadExists: false,
-            isThreadReply: false,
             text: "hello");
 
         Assert.Equal(RoutingVerdict.Ignore(RoutingIgnoreReason.ChannelMentionRequired), verdict);
@@ -94,129 +91,25 @@ public abstract class RoutingPolicyContractTests
     [Fact]
     public void MessageWithMention_Routes_WhenMentionOnly()
     {
-        var verdict = Evaluate(
+        var verdict = EvaluateRouting(
             mentionOnly: true,
-            allowDm: true,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: false,
             isDm: false,
             containsMention: true,
-            threadExists: false,
-            isThreadReply: false,
             text: "@bot hello");
 
         Assert.Equal(RoutingVerdict.Route, verdict);
     }
 
     [Fact]
-    public void ExistingThread_ContinuesWithoutMention()
+    public void AllowedDirectMessage_Routes()
     {
-        var verdict = Evaluate(
+        var verdict = EvaluateRouting(
             mentionOnly: true,
-            allowDm: true,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: false,
-            isDm: false,
-            containsMention: false,
-            threadExists: true,
-            isThreadReply: true,
-            text: "follow up");
-
-        Assert.Equal(RoutingVerdict.ContinueOnly, verdict);
-    }
-
-    [Fact]
-    public void ThreadReply_RehydratesSession_WhenNoActorExists()
-    {
-        // Reply in an existing platform thread, but the session actor was lost
-        // (e.g. daemon restart). The policy must route so the persisted session
-        // can be rehydrated — the mention-only gate must not block this path.
-        var verdict = Evaluate(
-            mentionOnly: true,
-            allowDm: true,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: false,
-            isDm: false,
-            containsMention: false,
-            threadExists: false,
-            isThreadReply: true,
-            text: "follow up");
-
-        Assert.Equal(RoutingVerdict.Route, verdict);
-    }
-
-    [Theory]
-    [InlineData(true, RoutingVerdictKind.ContinueOnly, null)]
-    [InlineData(false, RoutingVerdictKind.Ignore, RoutingIgnoreReason.ThreadMentionRequired)]
-    public void ExistingThread_HonorsMentionRequiredInThread(
-        bool containsMention,
-        RoutingVerdictKind expectedKind,
-        RoutingIgnoreReason? expectedReason)
-    {
-        // With MentionRequiredInThread enabled, follow-ups in a thread with an
-        // active session still need a mention — the active-session bypass is off.
-        var verdict = Evaluate(
-            mentionOnly: true,
-            allowDm: true,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: true,
-            isDm: false,
-            containsMention: containsMention,
-            threadExists: true,
-            isThreadReply: true,
-            text: "follow up");
-
-        Assert.Equal(new RoutingVerdict(expectedKind, expectedReason), verdict);
-    }
-
-    [Theory]
-    [InlineData(true, RoutingVerdictKind.Route, null)]
-    [InlineData(false, RoutingVerdictKind.Ignore, RoutingIgnoreReason.ThreadMentionRequired)]
-    public void ThreadReplyRehydration_HonorsMentionRequiredInThread(
-        bool containsMention,
-        RoutingVerdictKind expectedKind,
-        RoutingIgnoreReason? expectedReason)
-    {
-        // The daemon-restart rehydration path is gated the same way: an
-        // un-mentioned thread reply must not re-create the session.
-        var verdict = Evaluate(
-            mentionOnly: true,
-            allowDm: true,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: true,
-            isDm: false,
-            containsMention: containsMention,
-            threadExists: false,
-            isThreadReply: true,
-            text: "follow up");
-
-        Assert.Equal(new RoutingVerdict(expectedKind, expectedReason), verdict);
-    }
-
-    [Theory]
-    [InlineData(true, false, false, RoutingVerdictKind.Route, null)]
-    [InlineData(false, false, false, RoutingVerdictKind.Ignore, RoutingIgnoreReason.DmNotAllowed)]
-    [InlineData(true, true, false, RoutingVerdictKind.Ignore, RoutingIgnoreReason.DmMentionRequired)]
-    [InlineData(true, true, true, RoutingVerdictKind.Route, null)]
-    public void DirectMessage_routing_decision(
-        bool allowDm,
-        bool mentionRequiredInDm,
-        bool containsMention,
-        RoutingVerdictKind expectedKind,
-        RoutingIgnoreReason? expectedReason)
-    {
-        var verdict = Evaluate(
-            mentionOnly: true,
-            allowDm: allowDm,
-            mentionRequiredInDm: mentionRequiredInDm,
-            mentionRequiredInThread: false,
             isDm: true,
-            containsMention: containsMention,
-            threadExists: false,
-            isThreadReply: false,
+            containsMention: false,
             text: "hey");
 
-        Assert.Equal(new RoutingVerdict(expectedKind, expectedReason), verdict);
+        Assert.Equal(RoutingVerdict.Route, verdict);
     }
 
     [Theory]
@@ -224,15 +117,10 @@ public abstract class RoutingPolicyContractTests
     [InlineData("   ")]
     public void EmptyContent_Ignored(string text)
     {
-        var verdict = Evaluate(
+        var verdict = EvaluateRouting(
             mentionOnly: false,
-            allowDm: false,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
-            threadExists: false,
-            isThreadReply: false,
             text: text);
 
         Assert.Equal(RoutingVerdict.Ignore(RoutingIgnoreReason.NoContent), verdict);
@@ -241,15 +129,10 @@ public abstract class RoutingPolicyContractTests
     [Fact]
     public void MentionOnlyDisabled_RoutesWithoutMention()
     {
-        var verdict = Evaluate(
+        var verdict = EvaluateRouting(
             mentionOnly: false,
-            allowDm: true,
-            mentionRequiredInDm: false,
-            mentionRequiredInThread: false,
             isDm: false,
             containsMention: false,
-            threadExists: false,
-            isThreadReply: false,
             text: "hello");
 
         Assert.Equal(RoutingVerdict.Route, verdict);
