@@ -37,6 +37,7 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
     private readonly ISkillContentScanner _scanner;
     private readonly ILogger<ServerFeedSkillSyncService> _logger;
     private readonly Func<SkillFeedSource, SkillServerClient> _clientFactory;
+    private readonly ManagedPluginSyncParticipant _pluginSyncParticipant;
 
     public ServerFeedSkillSyncService(
         SkillFeedsConfig feedsConfig,
@@ -44,7 +45,8 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
         SkillInventoryRefresher inventoryRefresher,
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
-        ILogger<ServerFeedSkillSyncService> logger)
+        ILogger<ServerFeedSkillSyncService> logger,
+        ManagedPluginSyncParticipant pluginSyncParticipant)
         : this(
             feedsConfig,
             paths,
@@ -52,29 +54,37 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
             timeProvider,
             scanner,
             logger,
-            CreateSkillServerClient)
+            CreateSkillServerClient,
+            pluginSyncParticipant)
     {
     }
 
     internal ServerFeedSkillSyncService(
         SkillFeedsConfig feedsConfig,
         NetclawPaths paths,
-        SkillRegistry skillRegistry,
-        SkillIndexPublisher skillIndexPublisher,
+        SkillInventoryRefresher inventoryRefresher,
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
-        IReadOnlyList<ResolvedExternalSource> externalSources)
+        ManagedPluginStateStore pluginStateStore,
+        IGitSkillPluginAcquirer pluginAcquirer,
+        IOperationalNotificationSink notificationSink)
         : this(
             feedsConfig,
             paths,
-            skillRegistry,
-            skillIndexPublisher,
+            inventoryRefresher,
             timeProvider,
             scanner,
             logger,
-            externalSources,
-            CreateSkillServerClient)
+            CreateSkillServerClient,
+            new ManagedPluginSyncParticipant(
+                feedsConfig,
+                paths,
+                timeProvider,
+                pluginStateStore,
+                pluginAcquirer,
+                notificationSink,
+                logger))
     {
     }
 
@@ -87,7 +97,10 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
         IReadOnlyList<ResolvedExternalSource> externalSources,
-        Func<SkillFeedSource, SkillServerClient> clientFactory)
+        Func<SkillFeedSource, SkillServerClient> clientFactory,
+        ManagedPluginStateStore pluginStateStore,
+        IGitSkillPluginAcquirer pluginAcquirer,
+        IOperationalNotificationSink notificationSink)
         : this(
             feedsConfig,
             paths,
@@ -100,7 +113,15 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
             timeProvider,
             scanner,
             logger,
-            clientFactory)
+            clientFactory,
+            new ManagedPluginSyncParticipant(
+                feedsConfig,
+                paths,
+                timeProvider,
+                pluginStateStore,
+                pluginAcquirer,
+                notificationSink,
+                logger))
     {
     }
 
@@ -111,7 +132,8 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
         TimeProvider timeProvider,
         ISkillContentScanner scanner,
         ILogger<ServerFeedSkillSyncService> logger,
-        Func<SkillFeedSource, SkillServerClient> clientFactory)
+        Func<SkillFeedSource, SkillServerClient> clientFactory,
+        ManagedPluginSyncParticipant pluginSyncParticipant)
     {
         _feedsConfig = feedsConfig;
         _paths = paths;
@@ -120,6 +142,7 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
         _scanner = scanner;
         _logger = logger;
         _clientFactory = clientFactory;
+        _pluginSyncParticipant = pluginSyncParticipant;
     }
 
     /// <summary>
@@ -133,6 +156,10 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
         try
         {
             var sources = new List<SkillSyncResult.SourceRow>();
+            var startupPluginSources = await _pluginSyncParticipant.LoadStartupSourcesAsync(cancellationToken);
+            if (startupPluginSources is not null)
+                RescanAndUpdateIndex(startupPluginSources);
+
             foreach (var feed in _feedsConfig.Feeds.Where(static feed => feed.Enabled))
             {
                 try
@@ -158,9 +185,13 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
                 }
             }
 
+            var pluginResult = await _pluginSyncParticipant.SyncAsync(retryRejected: false, cancellationToken);
+            sources.AddRange(pluginResult.Rows);
+            var managedPluginSources = pluginResult.Sources;
+
             try
             {
-                var scan = RescanAndUpdateIndex();
+                var scan = RescanAndUpdateIndex(managedPluginSources);
                 var result = new SkillSyncResult.Response
                 {
                     PassId = passId,
@@ -207,6 +238,7 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
             _logger.LogInformation("External skill sync pass {Outcome}. {PassId}", outcome, passId);
         }
     }
+
 
     private async Task<SkillSyncResult.SourceRow> SyncFeedAsync(SkillFeedSource feed, CancellationToken cancellationToken)
     {
@@ -889,9 +921,11 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
         return mode == 0 ? null : mode;
     }
 
-    private MergedSkillScanResult RescanAndUpdateIndex()
+    private MergedSkillScanResult RescanAndUpdateIndex(
+        IReadOnlyList<ResolvedExternalSource> managedGitPluginSources)
     {
-        var mergedResult = _inventoryRefresher.Refresh();
+        var mergedResult = _inventoryRefresher.ReplaceManagedGitPluginSourcesAndRefresh(
+            managedGitPluginSources);
 
         if (mergedResult.Issues.Count > 0)
         {
@@ -919,9 +953,11 @@ internal sealed class ServerFeedSkillSyncService : IServerFeedSkillSyncRunner
     private static SkillSyncResult.SourceRow SourceFailure(
         string name,
         string sidecar,
-        string error) => new()
+        string error,
+        string sourceKind = SkillSyncResult.ServerFeedSourceKind) => new()
         {
             Name = name,
+            SourceKind = sourceKind,
             FailedCount = 1,
             Sidecar = sidecar,
             Error = error,

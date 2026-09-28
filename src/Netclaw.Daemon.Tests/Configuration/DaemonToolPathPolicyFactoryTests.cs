@@ -70,6 +70,20 @@ public sealed class DaemonToolPathPolicyFactoryTests
         Assert.True(policy.IsDenied(skillPath));
     }
 
+    [Fact]
+    public void Managed_git_plugin_skills_are_readable_but_not_writable_or_shell_accessible()
+    {
+        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
+        var policy = DaemonToolPathPolicyFactory.Create(
+            paths,
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+        var skillPath = Path.Combine(paths.ManagedGitSkillsDirectory, "fixture", "commit", "SKILL.md");
+
+        Assert.False(policy.IsReadDenied(skillPath));
+        Assert.True(policy.IsDenied(skillPath));
+        Assert.True(policy.CommandReferencesDeniedPath($"cat '{skillPath}'"));
+    }
+
     [Theory]
     [InlineData("tool-index.md")]
     [InlineData("mcp/synthetic-server.md")]

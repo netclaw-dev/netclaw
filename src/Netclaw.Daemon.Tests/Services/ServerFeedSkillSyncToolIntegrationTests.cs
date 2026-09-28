@@ -35,7 +35,11 @@ public sealed class ServerFeedSkillSyncToolIntegrationTests : IDisposable
         _paths.EnsureDirectoriesExist();
     }
 
-    public void Dispose() => _directory.Dispose();
+    public void Dispose()
+    {
+        SqliteTestPools.Clear(_paths);
+        _directory.Dispose();
+    }
 
     [Fact]
     public async Task SyncAsync_updates_the_live_registry_for_SkillReadResourceTool()
@@ -95,7 +99,18 @@ public sealed class ServerFeedSkillSyncToolIntegrationTests : IDisposable
             feed => new SkillServerClient(new HttpClient(handler, disposeHandler: false)
             {
                 BaseAddress = new Uri(feed.Url),
-            }));
+            }),
+            CreatePluginStateStore(),
+            new GitSkillPluginAcquirer(
+                new HttpClient(new HttpClientHandler()), _paths, TimeProvider.System, new NoOpSkillContentScanner()),
+            NullNotificationSink.Instance);
+    }
+
+    private ManagedPluginStateStore CreatePluginStateStore()
+    {
+        new SchemaMigrator(_paths, NullLogger<SchemaMigrator>.Instance)
+            .MigrateAsync(_paths.SqliteDbPath, CancellationToken.None).GetAwaiter().GetResult();
+        return new ManagedPluginStateStore(_paths, TimeProvider.System);
     }
 
     private sealed class RevisionFeedHandler : HttpMessageHandler

@@ -116,7 +116,15 @@ public sealed class SkillServerNativeSidecarIntegrationTests : IAsyncLifetime
             TimeProvider.System,
             new NoOpSkillContentScanner(),
             NullLogger<ServerFeedSkillSyncService>.Instance,
-            []);
+            [],
+            feed => new SkillServerClient(new HttpClient(new HttpClientHandler())
+            {
+                BaseAddress = new Uri(feed.Url),
+            }),
+            CreatePluginStateStore(paths),
+            new GitSkillPluginAcquirer(
+                new HttpClient(new HttpClientHandler()), paths, TimeProvider.System, new NoOpSkillContentScanner()),
+            NullNotificationSink.Instance);
 
         await service.SyncAsync(CancellationToken.None);
 
@@ -137,6 +145,13 @@ public sealed class SkillServerNativeSidecarIntegrationTests : IAsyncLifetime
         var registry = new SubAgentDefinitionRegistry();
         Assert.True(loader.SyncInto(registry));
         Assert.NotNull(registry.TryGetByName("code-reviewer"));
+    }
+
+    private static ManagedPluginStateStore CreatePluginStateStore(NetclawPaths paths)
+    {
+        new SchemaMigrator(paths, NullLogger<SchemaMigrator>.Instance)
+            .MigrateAsync(paths.SqliteDbPath, CancellationToken.None).GetAwaiter().GetResult();
+        return new ManagedPluginStateStore(paths, TimeProvider.System);
     }
 
     private static async Task SeedSkillServerAsync()
