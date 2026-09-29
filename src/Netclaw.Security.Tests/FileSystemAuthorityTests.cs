@@ -131,6 +131,21 @@ public sealed class FileSystemAuthorityTests : IDisposable
     }
 
     [Fact]
+    public void Allow_side_containment_keeps_case_for_posix_paths()
+    {
+        // R4: allow checks compare with case except for the Windows style. A grant
+        // for /work must not cover /WORK. Protected sets ignore case instead.
+        Assert.True(CanonicalPath.TryCreate("/work", relativeBase: null, ShellPathStyle.Posix, out var root));
+        Assert.True(CanonicalPath.TryCreate("/WORK/src", relativeBase: null, ShellPathStyle.Posix, out var upper));
+        Assert.True(CanonicalPath.TryCreate("/work/src", relativeBase: null, ShellPathStyle.Posix, out var lower));
+
+        Assert.False(root.Contains(upper));
+        Assert.False(root.IsSamePath(Posix("/WORK")));
+        Assert.True(root.Contains(lower));
+        Assert.Equal(PathDecision.Outside, Membership(upper, new PathBoundary.Folder(root, LinkRule.BelowRoot)));
+    }
+
+    [Fact]
     public void Host_path_keeps_a_tilde_as_a_literal_segment()
     {
         var project = Host(Path.Combine(_root, "project"));
@@ -142,6 +157,12 @@ public sealed class FileSystemAuthorityTests : IDisposable
 
     private static PathDecision Membership(CanonicalPath path, PathBoundary boundary)
         => FileSystemAuthority.EvaluateMembership(path, [boundary]);
+
+    private static CanonicalPath Posix(string path)
+    {
+        Assert.True(CanonicalPath.TryCreate(path, relativeBase: null, ShellPathStyle.Posix, out var canonical));
+        return canonical;
+    }
 
     private static CanonicalPath Host(string path)
     {

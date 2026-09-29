@@ -157,6 +157,7 @@ internal sealed class PathAccessPolicy
 
         IReadOnlyList<string> roots = [];
         IReadOnlyList<PathBoundary> boundaries;
+        var stoppedAtUnusableRoot = false;
         if (access.Mode == ToolFilesystemMode.All && !confined)
         {
             // An interactive Mode.All profile grants broad file authority.
@@ -189,14 +190,16 @@ internal sealed class PathAccessPolicy
                     fullPath);
             }
 
-            if (!TryCreateRootBoundaries(roots, fullPath, context, operation, out boundaries))
-                return DenyFileRelationship(PathDecision.Unverifiable, confined, label, context.Audience, roots, fullPath);
+            boundaries = CreateRootBoundaries(roots, fullPath, context, operation, out stoppedAtUnusableRoot);
         }
 
         if (!CanonicalPath.TryCreateHost(fullPath, relativeBase: null, out var path))
             return DenyFileRelationship(PathDecision.Unverifiable, confined, label, context.Audience, roots, fullPath);
 
         var decision = _fileSystem.Evaluate(path, ToAuthorityOperation(protectionOperation), boundaries);
+        if (stoppedAtUnusableRoot && decision is PathDecision.Outside)
+            decision = PathDecision.Unverifiable;
+
         return decision switch
         {
             PathDecision.Allowed => PathAccessDecision.Allow(fullPath),
@@ -221,7 +224,10 @@ internal sealed class PathAccessPolicy
             return PathAccessDecision.Deny("Error: Invalid destination path.", PathAccessFailure.InvalidInput);
         }
 
-        var decision = _fileSystem.Evaluate(destination, PathOperation.Write, [CreateTrustedFolder(directory)]);
+        // A drive root (or "/") is never an output directory. It would contain every path.
+        var decision = directory.IsDriveRoot
+            ? PathDecision.Unverifiable
+            : _fileSystem.Evaluate(destination, PathOperation.Write, [CreateTrustedFolder(directory)]);
         return decision switch
         {
             PathDecision.Allowed => PathAccessDecision.Allow(destination.Value),
@@ -420,9 +426,10 @@ internal sealed class PathAccessPolicy
             out var projectPath);
         if (projectResult == PathBaseStatus.Resolved)
         {
-            var decision = TryCreateFolders(GetProjectBaseRoots(context, accessKind), out var boundaries)
-                ? FileSystemAuthority.EvaluateMembership(projectPath, boundaries)
-                : PathDecision.Unverifiable;
+            var boundaries = CreateFolders(GetProjectBaseRoots(context, accessKind), out var stoppedAtUnusableRoot);
+            var decision = FileSystemAuthority.EvaluateMembership(projectPath, boundaries);
+            if (stoppedAtUnusableRoot && decision is PathDecision.Outside)
+                decision = PathDecision.Unverifiable;
             if (decision is PathDecision.Allowed
                 || (decision is PathDecision.Outside
                     && HasUnrestrictedInteractiveFileAccess(context, accessKind)))
@@ -606,23 +613,21 @@ internal sealed class PathAccessPolicy
     }
 
     /// <summary>Builds the held boundaries for a file path from its trusted roots.</summary>
-    private bool TryCreateRootBoundaries(
+    private List<PathBoundary> CreateRootBoundaries(
         IReadOnlyList<string> roots,
         string fullPath,
         ToolInvocationContext context,
         FileOperation operation,
-        out IReadOnlyList<PathBoundary> boundaries)
+        out bool stoppedAtUnusableRoot)
     {
-        if (!TryCreateFolders(roots, out var folders))
-        {
-            boundaries = [];
-            return false;
-        }
+        var folders = CreateFolders(roots, out stoppedAtUnusableRoot);
 
         // Older sessions keep their logs together outside their individual session
         // directories. Allow this session's log without exposing the other logs
-        // beside it (R11). A declaration never uses the log.
-        if (operation != FileOperation.DeclareProjectScope
+        // beside it (R11). A declaration never uses the log. An unusable root
+        // decides before the log, as it did before.
+        if (!stoppedAtUnusableRoot
+            && operation != FileOperation.DeclareProjectScope
             && context.SessionStorage is { Binding: null } storage
             && PathComparer.Equals(fullPath, storage.LogPath.Value)
             && CanonicalPath.TryCreateHost(storage.LogPath.Value, relativeBase: null, out var log))
@@ -630,22 +635,35 @@ internal sealed class PathAccessPolicy
             folders.Add(new PathBoundary.ExactFile(log) { LinkAnchor = FindSessionStorageRoot(log) ?? log });
         }
 
-        boundaries = folders;
-        return true;
+        return folders;
     }
 
-    private bool TryCreateFolders(IEnumerable<string> roots, out List<PathBoundary> folders)
+    /// <summary>
+    /// Builds one folder for each root, in root order. The first root decides
+    /// when it contains the path.
+    /// </summary>
+    /// <remarks>
+    /// An empty root, <c>/</c>, or a drive root such as <c>C:\</c> is unusable and
+    /// stops the list. The earlier path API trimmed <c>/</c> to an empty path and
+    /// failed there, and it trimmed <c>C:\</c> to <c>C:</c>, the drive's current directory.
+    /// A path that no earlier root contains is then unverifiable, which fails closed.
+    /// </remarks>
+    private List<PathBoundary> CreateFolders(IEnumerable<string> roots, out bool stoppedAtUnusableRoot)
     {
-        folders = [];
+        var folders = new List<PathBoundary>();
         foreach (var root in roots)
         {
-            if (!CanonicalPath.TryCreateHost(root, relativeBase: null, out var rootPath))
-                return false;
+            if (!CanonicalPath.TryCreateHost(root, relativeBase: null, out var rootPath) || rootPath.IsDriveRoot)
+            {
+                stoppedAtUnusableRoot = true;
+                return folders;
+            }
 
             folders.Add(CreateTrustedFolder(rootPath));
         }
 
-        return true;
+        stoppedAtUnusableRoot = false;
+        return folders;
     }
 
     // A session path can pass through a link in a parent directory. The link check

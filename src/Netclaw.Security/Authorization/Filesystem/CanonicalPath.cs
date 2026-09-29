@@ -147,6 +147,15 @@ internal readonly record struct CanonicalPath
     internal bool IsSamePath(CanonicalPath other)
         => Style == other.Style && string.Equals(Value, other.Value, Comparison(Style, ignoreCase: false));
 
+    /// <summary>
+    /// Returns true for <c>/</c> or a drive root such as <c>C:\</c>. A UNC share
+    /// root is not a drive root.
+    /// </summary>
+    internal bool IsDriveRoot
+        => Style == ShellPathStyle.Posix
+            ? Value == "/"
+            : Value.Length == 3 && char.IsAsciiLetter(Value[0]) && Value[1] == ':' && Value[2] == '\\';
+
     /// <summary>The volume root of this path: <c>/</c>, a drive root, or a UNC share.</summary>
     internal CanonicalPath VolumeRoot
     {

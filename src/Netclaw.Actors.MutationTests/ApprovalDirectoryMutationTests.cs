@@ -87,6 +87,18 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
             CreateCandidate(_shell, Path.Combine(alias, "src")), alias, [grant]));
     }
 
+    [Fact]
+    public void Folder_grant_compares_posix_paths_with_case()
+    {
+        // R4: allow checks keep case on POSIX hosts, macOS included.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.False(Matches(_grantRoot.ToUpperInvariant(), _grantRoot));
+        Assert.False(Matches(Path.Combine(_grantRoot, "src").ToUpperInvariant(), _grantRoot));
+        Assert.True(Matches(Path.Combine(_grantRoot, "src"), _grantRoot));
+    }
+
     [Theory]
     [InlineData(@"C:\repo\app", true)]
     [InlineData(@"c:\REPO\APP\src", true)]
@@ -94,6 +106,8 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
     [InlineData(@"C:\repo\app\..\app-other", false)]
     [InlineData(@"D:\repo\app\src", false)]
     [InlineData(@"..\app-other", false)]
+    [InlineData(@"\repo\app\src", false)]
+    [InlineData(@"~\src", false)]
     public void PowerShell_scope_preserves_windows_path_boundaries(string directory, bool allowed)
     {
         var grant = ApprovalEntry.CreateTokenPrefix(ApprovalShell.PowerShell, ["git", "status"], @"C:\repo\app");
