@@ -30,7 +30,7 @@ public sealed class ApprovalContractGuardTests(ShellApprovalMatrixFixture fixtur
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The repository uses POSIX paths and the git CLI.")]
     public async Task Shell_grant_does_not_authorize_file_read()
     {
-        var root = Directory.CreateTempSubdirectory("netclaw-shell-grant-file-read-");
+        var root = ApprovalTestGit.CreateRoot("netclaw-shell-grant-file-read-");
         try
         {
             var repository = Directory.CreateDirectory(Path.Combine(root.FullName, "repository-a")).FullName;
