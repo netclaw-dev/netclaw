@@ -3,8 +3,6 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using Netclaw.Actors.Protocol;
-using Netclaw.Actors.Tools;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -91,15 +89,15 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             fixture.ActorSystem,
             TestContext.Current.CancellationToken);
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+        var approval = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
         Assert.False(approval.IsMessy);
         Assert.Equal(["git push"], approval.CandidateVerbs);
         Assert.Contains(
-            approval.Options,
-            option => option.Key.Value == ApprovalOptionKeys.ApproveSession);
+            approval.OptionKeys,
+            key => key == ObservedOptionKeys.ApproveSession);
     }
 
     [SlopwatchSuppress("SW001", "The observed compound uses POSIX Bash directory and pipeline semantics.")]
@@ -119,11 +117,11 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             TestContext.Current.CancellationToken);
         harness.CreateProjectDirectory("sub");
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.True(decision.ApprovalContext?.IsMessy);
-        Assert.Empty(decision.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+        Assert.True(decision.Prompt?.IsMessy);
+        Assert.Empty(decision.Prompt!.CandidateVerbs);
         Assert.Equal(0, harness.ApprovalService.CheckCount);
     }
 
@@ -150,10 +148,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-scopes",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
-            Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
+            Assert.Equal(ApprovalOutcome.Allowed, decision.Outcome);
+            Assert.Equal(ApprovalAllowReason.StoredApproval, decision.AllowReason);
 
             await using var missingStage = await ShellApprovalHarness.CreateAsync(
                 "static-shell-missing-stage",
@@ -166,17 +164,17 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     project.FullName,
                     "signalr/static-shell-missing-stage",
                     []));
-            var missingDecision = await missingStage.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, missingDecision.Outcome);
-            Assert.False(missingDecision.ApprovalContext?.IsMessy);
-            Assert.Equal(["sed"], missingDecision.ApprovalContext?.CandidateVerbs);
+            var missingDecision = await missingStage.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, missingDecision.Outcome);
+            Assert.False(missingDecision.Prompt?.IsMessy);
+            Assert.Equal(["sed"], missingDecision.Prompt?.CandidateVerbs);
             Assert.Contains(
-                missingDecision.ApprovalContext!.Options,
-                option => option.Key.Value == ApprovalOptionKeys.ApproveSession);
-            missingStage.SeedOneTimeApproval(missingDecision.ApprovalContext!);
-            var retryDecision = await missingStage.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, retryDecision.Outcome);
-            Assert.Equal(ToolAllowReason.OneTimeApproval, retryDecision.AllowReason);
+                missingDecision.Prompt!.OptionKeys,
+                key => key == ObservedOptionKeys.ApproveSession);
+            missingStage.SeedOneTimeApproval(missingDecision.Prompt!);
+            var retryDecision = await missingStage.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalOutcome.Allowed, retryDecision.Outcome);
+            Assert.Equal(ApprovalAllowReason.OneTimeApproval, retryDecision.AllowReason);
         }
         finally
         {
@@ -210,9 +208,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-link-parent",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+            Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
             Assert.Equal("shell_invalid_working_directory", decision.DenyReason);
         }
         finally
@@ -246,12 +244,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-failed-cd",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.False(decision.ApprovalContext?.IsMessy);
-            Assert.Equal(["touch"], decision.ApprovalContext?.CandidateVerbs);
-            Assert.Equal(project.FullName, Assert.Single(decision.ApprovalContext!.Candidates!).Directory);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+            Assert.False(decision.Prompt?.IsMessy);
+            Assert.Equal(["touch"], decision.Prompt?.CandidateVerbs);
+            Assert.Equal(project.FullName, Assert.Single(decision.Prompt!.CandidateDirectories!));
         }
         finally
         {
@@ -285,12 +283,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-sibling-scope",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.False(decision.ApprovalContext?.IsMessy);
-            Assert.Equal(["touch"], decision.ApprovalContext?.CandidateVerbs);
-            Assert.Equal(sibling.FullName, Assert.Single(decision.ApprovalContext!.Candidates!).Directory);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+            Assert.False(decision.Prompt?.IsMessy);
+            Assert.Equal(["touch"], decision.Prompt?.CandidateVerbs);
+            Assert.Equal(sibling.FullName, Assert.Single(decision.Prompt!.CandidateDirectories!));
         }
         finally
         {
@@ -322,9 +320,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-link-escape",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.NotEqual(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+            Assert.NotEqual(ApprovalOutcome.Allowed, decision.Outcome);
         }
         finally
         {
@@ -361,9 +359,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                         []),
                     deniedPaths: ["/etc/passwd"]);
 
-                var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+                var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-                Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+                Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
             }
         }
         finally
@@ -386,9 +384,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                 Interactive: false);
             var cases = new[]
             {
-                (Name: "current", Grants: Approvals.Session("cd", "cat", "sed", "touch"), Expected: ToolAuthorizationOutcome.Allowed),
-                (Name: "other", Grants: Approvals.SessionForOtherSession("cd", "cat", "sed", "touch"), Expected: ToolAuthorizationOutcome.RequiresApproval),
-                (Name: "audience", Grants: Approvals.PersistentForOtherAudience("cd", "cat", "sed", "touch"), Expected: ToolAuthorizationOutcome.RequiresApproval)
+                (Name: "current", Grants: Approvals.Session("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.Allowed),
+                (Name: "other", Grants: Approvals.SessionForOtherSession("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.RequiresApproval),
+                (Name: "audience", Grants: Approvals.PersistentForOtherAudience("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.RequiresApproval)
             };
             foreach (var testCase in cases)
             {
@@ -404,7 +402,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                         "signalr/static-shell-session",
                         []));
 
-                var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+                var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
                 Assert.True(
                     decision.Outcome == testCase.Expected,
@@ -439,10 +437,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/static-shell-deep-glob",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.True(decision.ApprovalContext?.IsMessy);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
+            Assert.True(decision.Prompt?.IsMessy);
         }
         finally
         {
@@ -478,12 +476,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/directory-advice",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            var correction = Assert.IsType<ToolCorrection.ShellWorkingDirectorySuggested>(decision.AgentCorrection);
-            Assert.Equal(child.FullName, correction.Directory);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalCorrection.ShellWorkingDirectory, decision.AgentCorrection);
+            Assert.Equal(child.FullName, decision.AgentCorrectionTarget);
+            Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, decision.Outcome);
 
-            await Assert.ThrowsAsync<ToolCorrectionRequiredException>(() =>
+            await Assert.ThrowsAsync<ShellApprovalCorrectionRequiredException>(() =>
                 harness.ExecuteAsync(TestContext.Current.CancellationToken));
             Assert.False(File.Exists(marker));
 
@@ -498,9 +496,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     project.FullName,
                     "signalr/directory-advice",
                     []));
-            var exactDecision = await exactHarness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, exactDecision.Outcome);
-            Assert.IsNotType<ToolCorrection.ShellWorkingDirectorySuggested>(exactDecision.AgentCorrection);
+            var exactDecision = await exactHarness.EvaluateAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, exactDecision.Outcome);
+            Assert.NotEqual(ApprovalCorrection.ShellWorkingDirectory, exactDecision.AgentCorrection);
         }
         finally
         {
@@ -535,9 +533,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                         "signalr/directory-boundary",
                         []));
 
-                var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+                var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-                Assert.IsNotType<ToolCorrection.ShellWorkingDirectorySuggested>(decision.AgentCorrection);
+                Assert.NotEqual(ApprovalCorrection.ShellWorkingDirectory, decision.AgentCorrection);
             }
         }
         finally
@@ -569,10 +567,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                     "signalr/directory-behavior",
                     []));
 
-            var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-            Assert.IsNotType<ToolCorrection.ShellWorkingDirectorySuggested>(decision.AgentCorrection);
-            Assert.NotEqual(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+            Assert.NotEqual(ApprovalCorrection.ShellWorkingDirectory, decision.AgentCorrection);
+            Assert.NotEqual(ApprovalOutcome.RequiresAgentCorrection, decision.Outcome);
         }
         finally
         {
@@ -637,15 +635,15 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             fixture.ActorSystem,
             TestContext.Current.CancellationToken);
 
-        var initial = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(["git push"], initial.ApprovalContext!.CandidateVerbs);
-        harness.SeedOneTimeApproval(initial.ApprovalContext);
+        var initial = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["git push"], initial.Prompt!.CandidateVerbs);
+        harness.SeedOneTimeApproval(initial.Prompt);
         harness.ReplaceProjectDirectoryWithExternalSymlink("leak");
 
-        var retry = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
-        Assert.Equal(["cat", "git push"], retry.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
+        Assert.Equal(["cat", "git push"], retry.Prompt!.CandidateVerbs);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash authorization behavior.")]
@@ -664,8 +662,8 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             fixture.ActorSystem,
             TestContext.Current.CancellationToken);
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        var context = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
 
         Assert.True(decision.NeedsApproval);
         Assert.Null(decision.AgentCorrection);
@@ -688,8 +686,8 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             fixture.ActorSystem,
             TestContext.Current.CancellationToken);
 
-        var decision = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        var context = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        var context = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
 
         Assert.Null(decision.AgentCorrection);
     }
@@ -709,16 +707,16 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             TestContext.Current.CancellationToken);
         harness.CreateProjectDirectory("artifacts");
 
-        var initial = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(["git push"], initial.ApprovalContext!.CandidateVerbs);
-        harness.SeedOneTimeApproval(initial.ApprovalContext);
+        var initial = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["git push"], initial.Prompt!.CandidateVerbs);
+        harness.SeedOneTimeApproval(initial.Prompt);
         harness.CreateProjectFileSymlinkToExternalFile("artifacts/leak");
 
-        var retry = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
-        Assert.True(retry.ApprovalContext!.IsMessy);
-        Assert.Empty(retry.ApprovalContext.CandidateVerbs);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
+        Assert.True(retry.Prompt!.IsMessy);
+        Assert.Empty(retry.Prompt.CandidateVerbs);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX symlink and Bash authorization behavior.")]
@@ -736,15 +734,15 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             TestContext.Current.CancellationToken);
         harness.CreateProjectDirectory("repo");
 
-        var initial = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
-        Assert.Equal(["gh pr merge"], initial.ApprovalContext!.CandidateVerbs);
-        harness.SeedOneTimeApproval(initial.ApprovalContext);
+        var initial = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+        Assert.Equal(["gh pr merge"], initial.Prompt!.CandidateVerbs);
+        harness.SeedOneTimeApproval(initial.Prompt);
         harness.ReplaceProjectDirectoryWithExternalSymlink("repo");
 
-        var retry = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+        var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, retry.Outcome);
-        Assert.Equal(["git push", "gh pr merge"], retry.ApprovalContext!.CandidateVerbs);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
+        Assert.Equal(["git push", "gh pr merge"], retry.Prompt!.CandidateVerbs);
     }
 
     [Fact]
