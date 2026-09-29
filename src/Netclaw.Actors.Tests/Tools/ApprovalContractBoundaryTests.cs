@@ -419,8 +419,12 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
         }
     }
 
+    // Without a bound session or a project, an unattended Personal call keeps
+    // only the shared session roots and the global roots. A path outside them
+    // is denied. The "no trusted roots" branch cannot be reached here: the
+    // production paths always supply the shared session and workspaces roots.
     [Fact]
-    public async Task Unattended_call_without_a_session_or_project_fails_closed()
+    public async Task Unattended_call_without_a_session_or_project_stays_inside_shared_roots()
     {
         await using var harness = await CreateHarnessAsync(
             "no-trusted-roots",
@@ -433,8 +437,10 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
 
         Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
         Assert.Equal("path_access_denied", write.DenyReason);
+        Assert.Equal(UnattendedRootsMessage, write.DenyMessage);
         Assert.Equal(ApprovalOutcome.Denied, read.Outcome);
         Assert.Equal("path_access_denied", read.DenyReason);
+        Assert.Equal(UnattendedRootsMessage, read.DenyMessage);
     }
 
     // ── 5 (continued). Nested secrets and the display size bound ──
@@ -535,14 +541,20 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
             var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session")).FullName;
             await using var harness = await CreateHarnessAsync(
                 "windows-temporary-root",
-                new ShellApprovalInvocation("Get-Content result.log", Host: ShellApprovalHost.PowerShell7),
+                new ShellApprovalInvocation("Remove-Item result.log", Host: ShellApprovalHost.PowerShell7),
                 scope: new ShellApprovalHarnessScope(project, session, "signalr/windows-temporary-root", []));
             var temporary = Path.TrimEndingDirectorySeparator(Path.GetTempPath());
 
-            var observed = await harness.EvaluateShellAsync("Get-Content result.log", Ct, temporary);
+            // A write in %TEMP% gets managed-directory advice. The production
+            // Windows safe-verb list marks Get-Content as a reviewed diagnostic,
+            // and a diagnostic gets no relocation advice; it asks for approval.
+            var write = await harness.EvaluateShellAsync("Remove-Item result.log", Ct, temporary);
+            var diagnostic = await harness.EvaluateShellAsync("Get-Content result.log", Ct, temporary);
 
-            Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, observed.Outcome);
-            Assert.Equal(ApprovalCorrection.ManagedTemporaryDirectory, observed.AgentCorrection);
+            Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, write.Outcome);
+            Assert.Equal(ApprovalCorrection.ManagedTemporaryDirectory, write.AgentCorrection);
+            Assert.Equal(ApprovalOutcome.RequiresApproval, diagnostic.Outcome);
+            Assert.NotEqual(ApprovalCorrection.ManagedTemporaryDirectory, diagnostic.AgentCorrection);
         }
         finally
         {
