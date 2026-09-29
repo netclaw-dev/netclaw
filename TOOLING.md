@@ -319,7 +319,12 @@ case ID.
 | Case added | Passes. The check reports it. |
 
 A negative control is a case ID in the same section. The case must exist in the
-candidate snapshot and must prompt or deny. Only the owner can give `approvedBy`.
+baseline and in the candidate snapshot. It must prompt or deny in both. Only the
+owner can give `approvedBy`. A table header that repeats a column name is bad
+input.
+
+Owner review: a change to the intended-changes file, to the check script, or to
+its CI job always needs owner review. Such a PR is never an automatic merge.
 
 List intended changes in
 `src/Netclaw.Actors.Tests/Tools/approval-outcome-intended-changes.json`:
@@ -361,7 +366,10 @@ the check against the base of each pull request.
 for the tool authorization path in 11 groups. Each group has a file list and
 globs for the planned `src/Netclaw.{Actors,Security}/Authorization/` folders.
 The script skips listed files that do not exist and reports them. It never
-counts test projects.
+counts test projects. It also reports the total of all production `.cs` files
+under `src/`. Code that moves out of the groups to an unlisted path stays in that
+total, so read the group delta together with the whole-tree delta. `--compare`
+prints a warning for each listed file that is missing at either revision.
 
 ```bash
 python3 scripts/authorization-metrics.py                          # working tree
@@ -370,7 +378,9 @@ python3 scripts/authorization-metrics.py --compare origin/dev HEAD
 python3 scripts/authorization-metrics.py --rev HEAD --files       # list each file
 ```
 
-The baseline at `2fe42f1b3` is 23,873 lines and 257 types in 67 files.
+The baseline at `2fe42f1b3` is 23,873 lines and 257 types in 67 files. The
+whole production tree at that revision is 192,146 lines and 2,410 types in 909
+files.
 
 ## Interactive CLI Smoke Tests (Tape Harness)
 
