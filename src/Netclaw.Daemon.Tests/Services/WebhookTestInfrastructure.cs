@@ -35,11 +35,31 @@ internal sealed class RecordingHandler : HttpMessageHandler
 {
     private readonly HttpStatusCode _statusCode;
     private readonly Exception? _exception;
+    private readonly Task? _holdFirstRequestUntil;
     private readonly SemaphoreSlim _deliverySemaphore = new(0);
+    private int _requestCount;
 
-    public RecordingHandler(HttpStatusCode statusCode) => _statusCode = statusCode;
+    /// <param name="statusCode">The status code of each response.</param>
+    /// <param name="holdFirstRequestUntil">
+    /// When set, the first request signals <see cref="DeliverySemaphore"/> and then waits for this
+    /// task before it returns. A test uses it to keep a delivery in flight while it stops the service.
+    /// </param>
+    public RecordingHandler(HttpStatusCode statusCode, Task? holdFirstRequestUntil = null)
+    {
+        _statusCode = statusCode;
+        _holdFirstRequestUntil = holdFirstRequestUntil;
+    }
 
-    public RecordingHandler(Exception exception) => _exception = exception;
+    /// <param name="exception">The exception that each request throws.</param>
+    /// <param name="holdFirstRequestUntil">
+    /// When set, the first request signals <see cref="DeliverySemaphore"/> and then waits for this
+    /// task before it throws.
+    /// </param>
+    public RecordingHandler(Exception exception, Task? holdFirstRequestUntil = null)
+    {
+        _exception = exception;
+        _holdFirstRequestUntil = holdFirstRequestUntil;
+    }
 
     public List<HttpRequestMessage> Requests { get; } = [];
     public List<string> RequestBodies { get; } = [];
@@ -60,6 +80,12 @@ internal sealed class RecordingHandler : HttpMessageHandler
         }
 
         _deliverySemaphore.Release();
+
+        // A real transport observes the request token, so a held request ends when the
+        // caller cancels it.
+        if (_holdFirstRequestUntil is not null && Interlocked.Increment(ref _requestCount) == 1)
+            await _holdFirstRequestUntil.WaitAsync(cancellationToken);
+
         if (_exception is not null)
             throw _exception;
 

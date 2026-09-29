@@ -38,6 +38,12 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     private const string AtomicTempSuffix = ".tmp";
     private const string LinkDeniedError = "Symlink traversal is not allowed in skill file paths.";
     private const string UnverifiedTargetError = "Could not verify the target path. The operation was not done.";
+    // A flat-file skill uses the skills root as its directory. A FilePath for it can
+    // name a file of another skill, or a new SKILL.md that claims another skill name.
+    // The actions check this rule after GuardMutationTarget, so that guard stays the
+    // first denial for links and protected tiers.
+    private const string FlatSkillFileError =
+        "Flat-file skills have no resource files. Use edit, or patch without FilePath, to change the skill file.";
 
     private readonly SkillRegistry _skillRegistry;
     private readonly NetclawPaths _paths;
@@ -236,6 +242,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var targetError = GuardMutationTarget(skill.SkillDirectory, targetPath, atomicWrite: true);
         if (targetError is not null) return targetError;
 
+        if (skill.IsFlatFile && !string.IsNullOrWhiteSpace(args.FilePath))
+            return FlatSkillFileError;
+
         if (!File.Exists(targetPath))
             return $"File not found: {args.FilePath ?? "SKILL.md"}";
 
@@ -349,6 +358,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var targetError = GuardMutationTarget(skill.SkillDirectory, fullPath, atomicWrite: true);
         if (targetError is not null) return targetError;
 
+        if (skill.IsFlatFile)
+            return FlatSkillFileError;
+
         var scanResult = await _scanner.ScanAsync(
             $"{name}:{normalizedPath}",
             args.FileContent,
@@ -391,6 +403,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         var fullPath = Path.GetFullPath(Path.Combine(skill.SkillDirectory, normalizedPath));
         var targetError = GuardMutationTarget(skill.SkillDirectory, fullPath, atomicWrite: false);
         if (targetError is not null) return targetError;
+
+        if (skill.IsFlatFile)
+            return FlatSkillFileError;
 
         if (!File.Exists(fullPath))
             return $"File not found: {normalizedPath}";

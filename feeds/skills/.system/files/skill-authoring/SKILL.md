@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.9.0"
+  version: "1.10.0"
 ---
 
 # Skill Authoring
@@ -71,7 +71,9 @@ skill-name.md       # YAML frontmatter + markdown instructions (no resources)
 
 Flat `.md` files with valid YAML frontmatter are accepted as skills for
 compatibility with Claude Code and other platforms. Flat-file skills cannot
-have resources. If both `skill-name/SKILL.md` and `skill-name.md` exist, the
+have resources. `skill_manage` denies `write_file`, `remove_file`, and `patch`
+with `filePath` for a flat-file skill. Use `edit`, or `patch` without
+`filePath`. If both `skill-name/SKILL.md` and `skill-name.md` exist, the
 directory version takes precedence.
 
 Name matching depends on the source:
@@ -235,6 +237,8 @@ Hard rules:
 - Skills with duplicate normalized names, mismatched frontmatter identity,
   symlinked directories/files/resources, or unreadable `SKILL.md` files are
   rejected from the registry until fixed.
+- A system skill keeps its name. When a local skill uses the name of a system
+  skill, the system skill stays registered and the local copy is rejected.
 
 ## Skill Directories
 
