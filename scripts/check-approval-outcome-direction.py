@@ -37,8 +37,8 @@ Intended-changes file (JSON):
 
 - "section", "id", "from", "to", and "reason" are required.
 - "negativeControl" is required for RequiresApproval -> Allowed. It names a case
-  ID in the same section. That case must exist in the candidate snapshot, and
-  its candidate outcome must not be Allowed.
+  ID in the same section. That case must exist in the baseline and in the
+  candidate snapshot, and it must not be Allowed in either one.
 - "approvedBy" is required for Denied -> other and RequiresApproval -> Denied.
 - Each entry that is new since the baseline must match an actual transition.
   A new entry that does not match fails the check (stale entry).
@@ -118,7 +118,7 @@ def split_cells(line: str) -> list[str]:
 
 def parse_snapshot(text: str, label: str) -> dict[tuple[str, str], Row]:
     """Parse every Markdown table that has ID and Result columns."""
-    text = text.lstrip("﻿")
+    text = text.lstrip("\ufeff")
     rows: dict[tuple[str, str], Row] = {}
     section = ""
     header: list[str] | None = None
@@ -139,6 +139,11 @@ def parse_snapshot(text: str, label: str) -> dict[tuple[str, str], Row]:
         except InputError as error:
             raise InputError(f"{label}:{number}: {error}") from error
         if header is None:
+            duplicates = sorted({name for name in cells if cells.count(name) > 1})
+            if duplicates:
+                # A second Result or ID column could hide a regression.
+                raise InputError(
+                    f"{label}:{number}: table header repeats column(s) {duplicates}")
             header = cells
             expect_divider = True
             continue
@@ -233,7 +238,7 @@ def check(
         entry = active.get(key)
         if entry is not None:
             used.add(key)
-        evaluate(transition, entry, candidate)
+        evaluate(transition, entry, baseline, candidate)
 
     for key, entry in active.items():
         if key in used:
@@ -244,7 +249,7 @@ def check(
     return report
 
 
-def evaluate(transition: Transition, entry: dict | None, candidate: dict) -> None:
+def evaluate(transition: Transition, entry: dict | None, baseline: dict, candidate: dict) -> None:
     before, after = transition.before, transition.after
     if after is None:
         transition.note = "case removed; a case must not disappear"
@@ -276,15 +281,22 @@ def evaluate(transition: Transition, entry: dict | None, candidate: dict) -> Non
         if control_id is None:
             transition.note = "intended change has no negativeControl"
             return
-        control = candidate.get((transition.section, control_id))
-        if control is None:
-            transition.note = f"negative control {control_id!r} does not exist"
+        # The control must be an existing case that prompts or denies before
+        # and after the change. A control that the same PR adds proves nothing.
+        control_key = (transition.section, control_id)
+        control_before = baseline.get(control_key)
+        control_after = candidate.get(control_key)
+        if control_before is None or control_after is None:
+            transition.note = (
+                f"negative control {control_id!r} must exist in the baseline and the candidate")
             return
-        if control_id == transition.case_id or control.result == ALLOWED:
-            transition.note = f"negative control {control_id!r} is Allowed; it must prompt or deny"
+        if control_id == transition.case_id or ALLOWED in (control_before.result, control_after.result):
+            transition.note = (
+                f"negative control {control_id!r} is Allowed in the baseline or the candidate; "
+                "it must prompt or deny in both")
             return
         transition.status = "ok"
-        transition.note = f"negative control {control_id} is {control.result}"
+        transition.note = f"negative control {control_id} is {control_after.result}"
         return
     # RequiresApproval -> Denied
     if entry is None or "approvedBy" not in entry:

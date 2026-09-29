@@ -33,7 +33,7 @@ def snapshot(rows: dict[str, str], section: str = SECTION) -> str:
     body = "".join(
         f"| {case_id} | Bash | git status \\| head -1 | {result} | reason |\n"
         for case_id, result in rows.items())
-    return f"﻿# {section}\n\nSome text.\n\n{HEADER}{body}"
+    return f"\ufeff# {section}\n\nSome text.\n\n{HEADER}{body}"
 
 
 BASE_ROWS = {
@@ -133,7 +133,21 @@ class DirectionCheckTests(unittest.TestCase):
         code, output = self.run_check(
             {**BASE_ROWS, "push-prompts": "Allowed"}, [change(negativeControl="no-such-case")])
         self.assertEqual(1, code, output)
-        self.assertIn("does not exist", output)
+        self.assertIn("must exist in the baseline and the candidate", output)
+
+    def test_fail_negative_control_added_by_the_same_change(self):
+        rows = {**BASE_ROWS, "push-prompts": "Allowed", "new-control-prompts": "RequiresApproval"}
+        code, output = self.run_check(rows, [change(negativeControl="new-control-prompts")])
+        self.assertEqual(1, code, output)
+        self.assertIn("must exist in the baseline and the candidate", output)
+
+    def test_fail_negative_control_allowed_in_baseline(self):
+        baseline = {**BASE_ROWS, "control-was-allowed": "Allowed"}
+        rows = {**BASE_ROWS, "push-prompts": "Allowed", "control-was-allowed": "RequiresApproval"}
+        code, output = self.run_check(
+            rows, [change(negativeControl="control-was-allowed")], baseline_rows=baseline)
+        self.assertEqual(1, code, output)
+        self.assertIn("it must prompt or deny in both", output)
 
     def test_fail_allowed_negative_control(self):
         code, output = self.run_check(
@@ -182,6 +196,16 @@ class DirectionCheckTests(unittest.TestCase):
         code, output = self.run_check(BASE_ROWS, candidate_text=text)
         self.assertEqual(2, code, output)
         self.assertIn("duplicate case", output)
+
+    def test_bad_input_duplicate_result_column(self):
+        # The second Result column holds the regression; the check must not read the first one only.
+        text = (
+            "# " + SECTION + "\n\n"
+            "| ID | Result | Result |\n| --- | --- | --- |\n"
+            "| safe-allows | Allowed | RequiresApproval |\n")
+        code, output = self.run_check(BASE_ROWS, candidate_text=text)
+        self.assertEqual(2, code, output)
+        self.assertIn("repeats column(s) ['Result']", output)
 
     def test_bad_input_unknown_result(self):
         code, output = self.run_check({**BASE_ROWS, "safe-allows": "Maybe"})
