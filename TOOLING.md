@@ -321,6 +321,100 @@ Review these candidate boundaries before lower-risk code:
 4. Slack, Discord, and Mattermost ACL decisions.
 5. Device bearer token authentication.
 
+## Approval Contract Tooling
+
+These tools protect the shell approval contract during the tool authorization
+consolidation. They need only `python3` (standard library) and `git`.
+
+### Evidence Fixtures
+
+The approval and tool-friction evidence JSON is in
+`src/Netclaw.Security.Tests/Evidence/`. Both `Netclaw.Security.Tests` and
+`Netclaw.Actors.Tests` read it. Tests must not load files from `openspec/`,
+because an archive step moves change folders. The folder README lists each
+file and the tests that read it.
+
+### Outcome Direction Check
+
+`scripts/check-approval-outcome-direction.py` compares the `Result` column of
+the review snapshot
+`src/Netclaw.Actors.Tests/Tools/ShellApprovalDispositionMatrixTests.Shell_approval_cases_match_review_table.verified.md`
+with the same file at a baseline revision. It keys rows by section heading and
+case ID.
+
+| Change | Rule |
+| --- | --- |
+| `Allowed` to other | Always fails. |
+| `Denied` to other | Fails unless an intended change has `approvedBy`. |
+| `RequiresApproval` to `Allowed` | Fails unless an intended change names a negative control. |
+| `RequiresApproval` to `Denied` | Fails unless an intended change has `approvedBy`. |
+| Case removed | Always fails. |
+| Case added | Passes. The check reports it. |
+
+A negative control is a case ID in the same section. The case must exist in the
+baseline and in the candidate snapshot. It must prompt or deny in both. Only the
+owner can give `approvedBy`. A table header that repeats a column name is bad
+input.
+
+Owner review: a change to the intended-changes file, to the check script, or to
+its CI job always needs owner review. Such a PR is never an automatic merge.
+
+List intended changes in
+`src/Netclaw.Actors.Tests/Tools/approval-outcome-intended-changes.json`:
+
+```json
+{
+  "changes": [
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "<case ID>",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "<why the change is safe>",
+      "negativeControl": "<case ID that still prompts or denies>",
+      "approvedBy": "<owner, when the rule needs it>"
+    }
+  ]
+}
+```
+
+The check fails when a new entry matches no transition (stale entry). An entry
+that is also in the baseline version of the file is history. The check ignores
+it, and it does not justify a new transition.
+
+```bash
+python3 scripts/check-approval-outcome-direction.py                       # merge base of HEAD and origin/dev
+python3 scripts/check-approval-outcome-direction.py --base-ref origin/feature/x
+python3 scripts/check-approval-outcome-direction.py --base-rev 2fe42f1b3
+python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v          # self-tests
+```
+
+Exit status 0 means pass, 1 means a rule violation, and 2 means bad input. The
+`Approval Outcome Direction` job in `pr_validation.yml` runs the self-tests and
+the check against the base of each pull request.
+
+### Authorization Metrics
+
+`scripts/authorization-metrics.py` reports production lines and declared types
+for the tool authorization path in 11 groups. Each group has a file list and
+globs for the planned `src/Netclaw.{Actors,Security}/Authorization/` folders.
+The script skips listed files that do not exist and reports them. It never
+counts test projects. It also reports the total of all production `.cs` files
+under `src/`. Code that moves out of the groups to an unlisted path stays in that
+total, so read the group delta together with the whole-tree delta. `--compare`
+prints a warning for each listed file that is missing at either revision.
+
+```bash
+python3 scripts/authorization-metrics.py                          # working tree
+python3 scripts/authorization-metrics.py --rev 2fe42f1b3          # one revision, no checkout
+python3 scripts/authorization-metrics.py --compare origin/dev HEAD
+python3 scripts/authorization-metrics.py --rev HEAD --files       # list each file
+```
+
+The baseline at `2fe42f1b3` is 23,873 lines and 257 types in 67 files. The
+whole production tree at that revision is 192,146 lines and 2,410 types in 909
+files.
+
 ## Interactive CLI Smoke Tests (Tape Harness)
 
 The native smoke harness exercises the interactive Termina TUI surface

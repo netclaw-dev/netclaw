@@ -7,7 +7,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=../../../scripts/smoke/lib/common.sh
 . "${SCRIPT_DIR}/../../../scripts/smoke/lib/common.sh"
 
-REMINDER_WAIT_TIMEOUT="${REMINDER_WAIT_TIMEOUT:-150}"
+REMINDER_WAIT_TIMEOUT="${REMINDER_WAIT_TIMEOUT:-60}"
 
 seed_and_start_daemon
 
@@ -19,7 +19,7 @@ if [[ -f "$SMOKE_LLM_REQUEST_RECORD" ]]; then
 fi
 
 log "Testing one-shot reminder create (id=$ONE_SHOT_ID)..."
-nc reminder create "$ONE_SHOT_ID" once 1m "Say OK in one word"
+nc reminder create "$ONE_SHOT_ID" once 10s "Say OK in one word"
 
 log "Verifying reminder appears in list..."
 reminder_list="$(nc reminder list 2>/dev/null || true)"
@@ -42,7 +42,7 @@ while (( SECONDS < deadline )); do
     execution_found=true
     break
   fi
-  sleep 5
+  sleep 1
 done
 
 if [[ "$execution_found" == "true" ]]; then

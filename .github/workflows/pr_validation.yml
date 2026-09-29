@@ -486,6 +486,49 @@ jobs:
           python3 -m unittest discover -s evals -p test_background_evals.py -v
           python3 -m unittest discover -s evals -p test_cycle_evals.py -v
 
+  approval-outcome-direction:
+    name: Approval Outcome Direction
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      # The check reads the review snapshot at the base revision with git show,
+      # so it needs the base history.
+      - name: "Checkout"
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: "Self-tests"
+        run: python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v
+
+      # An allowed case must stay allowed, and a denied case must stay denied.
+      # See TOOLING.md "Outcome Direction Check".
+      - name: "Check approval outcome direction"
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          MERGE_GROUP_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          PUSH_BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          case "$EVENT_NAME" in
+            pull_request)
+              python3 scripts/check-approval-outcome-direction.py --base-ref "origin/$PR_BASE_REF" ;;
+            merge_group)
+              python3 scripts/check-approval-outcome-direction.py --base-rev "$MERGE_GROUP_BASE_SHA" ;;
+            push)
+              if [[ "$PUSH_BEFORE_SHA" =~ ^0+$ ]]; then
+                echo "New branch push: compare with the merge base of origin/dev."
+                python3 scripts/check-approval-outcome-direction.py --base-ref origin/dev
+              else
+                python3 scripts/check-approval-outcome-direction.py --base-rev "$PUSH_BEFORE_SHA"
+              fi ;;
+            *)
+              echo "Unsupported event: $EVENT_NAME" >&2
+              exit 2 ;;
+          esac
+
   semver-conformance:
     name: SemVer Conformance
     runs-on: ubuntu-latest

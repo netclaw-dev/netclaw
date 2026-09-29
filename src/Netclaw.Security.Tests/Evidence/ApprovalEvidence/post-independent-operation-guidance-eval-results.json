@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "runtime": {
+    "version": "0.26.0",
+    "commit": "764c396b8418aed9d7ce320a7c31da9788d013b0",
+    "baseCommit": "334cb4c430a5fe79131dde4c7185f9a4e1d5a95f",
+    "imageSha256": "a2414f3b5a4a280ab601cbf2eaf3134688beecdc0d2ae1c28472400f7f0c0099",
+    "providerType": "deepseek",
+    "model": "deepseek-v4-flash",
+    "runsPerCase": 5,
+    "interactiveApprovalAvailable": false,
+    "sourceState": "The image was rebuilt after a clean from the exact committed guidance change. Spark2 was not used."
+  },
+  "sanitization": {
+    "projectRoot": "/work/project",
+    "sourceBoundary": "Raw eval logs remain local. This artifact omits run, session, call, user, repository, host, URL, timestamp, prompt, response, rationale, and command text.",
+    "measurementBoundary": "The assertion rejects compound shell calls, approval-required results, missing project declarations, failed shell results, and incomplete requested content."
+  },
+  "baseline": {
+    "commit": "334cb4c430a5fe79131dde4c7185f9a4e1d5a95f",
+    "runs": 5,
+    "behaviorPassCount": 3,
+    "taskCompletionCount": 4,
+    "setWorkingDirectoryCallCount": 5,
+    "shellCallCount": 6,
+    "independentBatchRunCount": 1,
+    "approvalPromptEquivalentCount": 1
+  },
+  "changed": {
+    "commit": "764c396b8418aed9d7ce320a7c31da9788d013b0",
+    "runs": 5,
+    "behaviorPassCount": 5,
+    "taskCompletionCount": 5,
+    "setWorkingDirectoryCallCount": 5,
+    "shellCallCount": 5,
+    "successfulShellCallCount": 5,
+    "compoundShellCallCount": 0,
+    "typedWorkingDirectoryCallCount": 0,
+    "approvalPromptEquivalentCount": 0
+  },
+  "interpretation": "Generic guidance raised strict behavior from three of five to five of five. It removed one compound prompted run without changing shell authority."
+}
