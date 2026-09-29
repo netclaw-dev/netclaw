@@ -5,7 +5,7 @@ the canonical architecture document for people. The testable rules live in the
 [`tool-authorization` OpenSpec capability](../../openspec/specs/tool-authorization/spec.md).
 This document links to those rules by ID (TA-1 to TA-16). It does not copy them.
 
-Status: this document describes the code at `dev` revision `0f1991ed0`. Sections 2
+Status: this document describes the code at `dev` revision `f7d407d6f`. Sections 2
 to 5 name today's owners. A note with the label **Planned** describes a target
 shape that no code has yet. The consolidation program changes one context per
 PR. Each PR updates this document in the same diff.
@@ -231,8 +231,11 @@ Leaks today:
 - A platform temporary-path predicate from the Advice module also relaxes a
   link check for causal intent (`ShellPolicyCoordinator.cs`,
   `ToolAccessPolicy.cs`).
-- `skill_manage` checks its target path by text only. It does no link check
-  and no protected-path check (`SkillManageTool.cs`).
+- `skill_manage` has its own mutation guard
+  (`SkillManageTool.GuardMutationTarget`, #2247). The guard reuses
+  `PathUtility.ContainsSymlinkSegment` and the shared `ToolPathPolicy`
+  write-deny list, but it is one more place that composes the link and
+  protection checks.
 
 **Planned:** a closed `PathBoundary` union with three operations
 (canonicalize, evaluate, resolve repository). See consolidation PR 3.
@@ -629,6 +632,8 @@ Support levels:
 - **Needs a contract:** the design has a place for it, but a named contract is
   absent.
 - **Not supported:** outside the design. The row gives the reason.
+- **Planned:** an accepted decision that a named follow-up PR implements. It
+  is not current behavior.
 
 "Supported" describes where the change goes today. It does not mean that the
 change is small.
@@ -644,6 +649,7 @@ change is small.
 | Team approvers and verified automation approvers | Needs a contract | Consent delivery: who may answer, and how the answer is recorded. |
 | OS-level sandbox or executor containment | Not supported | Netclaw has no executor boundary. It would plug in at Admission (a shell mode) and at launch (section 3.8). The `SandboxOnly` shell mode exists but always denies. |
 | Close the `skill_manage` parent-directory check-to-use window | Not supported today | The temp file uses create-new semantics, so a link at the temp name fails. A same-user process that can already write where the daemon writes can still swap a parent directory. That gives no new authority today. With a sandboxed executor, fix it in Filesystem authority with directory-handle operations. |
+| A missing or unreadable audience becomes an error (owner decision, September 29) | Planned | Today some components fall back to `Public` (TA-1). A follow-up code PR makes each such fallback fail loudly. Until that PR merges, the fallback stays as TA-1 describes it. |
 | A consent for repository A that covers repository B | Not supported, by design | This is an invariant. A repository grant covers only registered worktrees of one Git common directory (TA-8). |
 
 ## 9. How we know it works
@@ -667,7 +673,15 @@ and the approval tooling is in
 | Shell facts stay general. | The shell analysis and shell assignment mutation gates; `ShellPolicyEvidenceFixtureTests` |
 | An unanswered request survives restart. | `ApprovalRehydrationTests`; `ShellApprovalLifecycleIntegrationTests` |
 | Non-interactive runs cannot get new consent. | Evals Category 9 in `evals/run-evals.sh`; `evals/background_evals.py` |
+| `skill_manage` mutations refuse links and protected paths. | `SkillToolTests`; the skill_manage guard mutation gate ([TOOLING.md § Skill Manage Guard Gate](../../TOOLING.md#skill-manage-guard-gate)) |
 | A shell grant never authorizes `file_read`. | No test yet. Consolidation PR 1b adds it. |
+
+Model guidance (which tool the model should choose, and how it should declare
+a project directory) is not an authorization rule, and no spec owns it. The
+tool descriptions and `ToolChoiceGuidance` own that text, and evals Category 9
+in `evals/run-evals.sh` measure its effect. A guidance change must not change
+an authorization outcome; the case catalog and the outcome direction check
+catch such a change.
 
 Evidence fixtures live in
 [`src/Netclaw.Security.Tests/Evidence/`](../../src/Netclaw.Security.Tests/Evidence/README.md).

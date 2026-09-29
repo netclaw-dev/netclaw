@@ -254,6 +254,33 @@ kept in lockstep by a shared fixture (`feeds/scripts/semver-order.txt`) — chan
 (and the fixture) together if precedence ever changes. Never hand-edit the release
 manifest or installer feed.
 
+## Stacked Pull Requests
+
+Stack PRs only when a change needs several reviewable steps that depend on
+each other. Otherwise, open one PR.
+
+- You need contributor (write) access to `netclaw-dev/netclaw` to stack. A
+  PR's base must be a branch in the base repository, so each stack branch must
+  live upstream. A contributor without write access opens one PR from a fork.
+- Name each branch that another PR uses as its base `feature/<topic>`.
+  `pr_validation` runs only for PRs into `dev`, `main`, `master`, or
+  `feature/*`; a PR into another base gets no test CI. To fix an existing base
+  branch, rename it with the GitHub branch-rename API. GitHub retargets the
+  dependent PRs.
+- Write each PR description so that it stands alone, and name its base PR.
+- Verify each PR on the combined stack, not on its isolated branch.
+- Merge from the bottom up. GitHub treats dependent PRs as a native stack, and
+  `gh pr merge` fails with "must be merged using the asynchronous merge REST
+  API". Use `PUT /repos/{owner}/{repo}/pulls/{n}/merge-async` with
+  `merge_method=squash` and `sha=<head>`. Then poll
+  `GET /repos/{owner}/{repo}/pulls/{n}/merge-async/{uuid}` until the state is
+  `merged`.
+- After a squash merge, GitHub retargets the next PR to `dev` and can rebase
+  it. If the next PR shows a conflict, run
+  `git rebase --onto origin/dev <old base head>` so that only its own commits
+  remain. Then push with `--force-with-lease`.
+- The repository deletes merged head branches automatically.
+
 ## Universal Quality Bar
 
 - secure-by-default behavior for gateway and tools

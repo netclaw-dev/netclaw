@@ -118,6 +118,10 @@ SHALL fall back to the narrowest audience, `Public`. No fallback SHALL select
 a broader audience than the source provides. An audience derived from a
 deployment default and a source audience SHALL be the narrower of the two.
 
+Planned change (owner decision, September 29): a missing or unreadable
+audience becomes an error in every component. A follow-up code PR implements
+it. Until that PR merges, the `Public` fallback above is the current behavior.
+
 A turn without a message source SHALL NOT synthesize a requester. A consent
 request without a recorded requester SHALL fail closed without a prompt,
 except for a verified-automation principal.
