@@ -632,21 +632,6 @@ static void ConfigureDaemonServices(
     var toolPathPolicy = DaemonToolPathPolicyFactory.Create(paths, shellEnvironment);
     services.AddSingleton(toolPathPolicy);
 
-    // Load operator-authored hard-deny overrides (additive only — see
-    // HardDenyOverridesLoader). Missing file → empty list and only shipped
-    // defaults apply. Malformed file → daemon refuses to start; the
-    // loader throws InvalidDataException with operator-facing context so
-    // the failure surfaces loudly rather than silently dropping rules.
-    var hardDenyOverridesLoader = new HardDenyOverridesLoader();
-    var hardDenyOverrides = hardDenyOverridesLoader.Load(paths.HardDenyOverridesPath);
-    services.AddSingleton(hardDenyOverridesLoader);
-
-    var shellCommandPolicy = new ShellCommandPolicy(
-        shellEnvironment,
-        toolConfig.HardDenyPatterns,
-        hardDenyOverrides);
-    services.AddSingleton(shellCommandPolicy);
-
     services.AddShellParser(shellEnvironment);
 
     // Subagent timeout configuration
@@ -676,7 +661,6 @@ static void ConfigureDaemonServices(
         SkillSyncEnabled: skillSyncConfig.Enabled,
         SubAgentsEnabled: subAgentConfig.Enabled,
         SchedulingEnabled: schedulingConfig.Enabled);
-    var fileApprovalMatcher = new FilePathApprovalMatcher(paths.ConfigDirectory);
     // Safe-verbs list: bundled per-OS defaults only — embedded resource in
     // Netclaw.Configuration with no on-disk user override. Used by the
     // approval gate's verb-pattern Layer to auto-allow demonstrably
@@ -687,29 +671,15 @@ static void ConfigureDaemonServices(
     var safeVerbs = SafeVerbLoader.Load(shellEnvironment.Platform == ShellPlatform.Windows);
     services.AddSingleton(safeVerbs);
 
-    var toolAccessPolicy = new ToolAccessPolicy(
+    var toolAccessPolicy = services.AddDaemonToolAuthorization(
         paths,
+        shellEnvironment,
         toolConfig,
         effectivePolicyDefaults,
-        shellCommandPolicy,
         toolPathPolicy,
-        fileApprovalMatcher,
+        safeVerbs,
         featureGates,
-        safeVerbs);
-    services.AddSingleton(toolAccessPolicy);
-
-    var approvalShell = shellEnvironment.Grammar switch
-    {
-        ShellGrammar.Bash => ApprovalShell.Bash,
-        ShellGrammar.PowerShell => ApprovalShell.PowerShell,
-        _ => throw new InvalidOperationException("The native shell grammar is invalid.")
-    };
-    var toolApprovalStore = new ToolApprovalStore(
-        paths.ToolApprovalsPath,
-        TimeProvider.System,
-        new ApprovalStoreMigrationContext(approvalShell));
-    services.AddSingleton(toolApprovalStore);
-    services.AddSingleton<IToolApprovalService, AkkaToolApprovalService>();
+        TimeProvider.System);
 
     var toolRegistry = new ToolRegistry();
     toolRegistry.WithFirstPartyTools(toolAccessPolicy, searchBackend,
@@ -814,13 +784,7 @@ static void ConfigureDaemonServices(
 
     services.AddSingleton<IMemoryExtractor>(NullMemoryExtractor.Instance);
 
-    services.AddSingleton(toolRegistry);
-    services.AddSingleton<IToolExecutor>(sp =>
-        new DispatchingToolExecutor(
-            toolRegistry,
-            toolAccessPolicy,
-            sp.GetService<IToolApprovalService>(),
-            sp.GetRequiredService<ILogger<DispatchingToolExecutor>>()));
+    services.AddDaemonToolExecutor(toolRegistry, toolAccessPolicy);
     // Operational notification webhooks
     var notificationsConfig = configuration.GetSection("Notifications")
         .Get<NotificationsConfig>() ?? new NotificationsConfig();
