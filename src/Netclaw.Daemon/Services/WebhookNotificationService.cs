@@ -34,6 +34,9 @@ namespace Netclaw.Daemon.Services;
 public sealed class WebhookNotificationService : BackgroundService, IOperationalNotificationSink
 {
     private const int ChannelCapacity = 256;
+
+    // The largest delay that a TimeProvider timer and CancellationTokenSource accept.
+    private static readonly TimeSpan MaxDrainBudget = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
     private static readonly string Hostname = Environment.MachineName;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -91,26 +94,61 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
         // alerts before base.StopAsync cancels stoppingToken. A cancelled stoppingToken makes
         // HttpClient turn the outcome of an in-flight request into a TaskCanceledException,
         // so an immediate cancel drops that outcome and every queued alert.
-        // The drain budget is one HTTP timeout. The host shutdown token also bounds it.
         _channel.Writer.TryComplete();
-
-        var executeTask = ExecuteTask;
-        if (executeTask is not null)
+        try
         {
-            var budget = TimeSpan.FromSeconds(_config.TimeoutSeconds);
-            using var budgetCts = new CancellationTokenSource(budget, _timeProvider);
-            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budgetCts.Token);
-            await executeTask.WaitAsync(drainCts.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+            await DrainAsync(cancellationToken);
+        }
+        finally
+        {
+            // base.StopAsync must run in every path. It is the only code that cancels
+            // stoppingToken, so a skipped call leaves ExecuteAsync running after stop.
+            await base.StopAsync(cancellationToken);
+        }
+    }
 
-            if (!executeTask.IsCompleted)
-            {
-                _logger.LogWarning(
-                    "Webhook drain did not finish within {BudgetSeconds}s; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
-                    _config.TimeoutSeconds, _channel.Reader.Count);
-            }
+    /// <summary>
+    /// Waits for <see cref="BackgroundService.ExecuteTask"/> to deliver the remaining alerts.
+    /// The budget is one HTTP timeout (<see cref="NotificationsConfig.TimeoutSeconds"/>).
+    /// The host shutdown token also ends the wait.
+    /// </summary>
+    private async Task DrainAsync(CancellationToken cancellationToken)
+    {
+        var executeTask = ExecuteTask;
+        if (executeTask is null)
+            return;
+
+        // The daemon does not enforce the schema range for TimeoutSeconds. A timer cannot
+        // use a budget of zero or less, or a budget above its maximum delay. Do not throw
+        // past base.StopAsync for a configuration error. Log it and skip the drain.
+        var budget = TimeSpan.FromSeconds(_config.TimeoutSeconds);
+        if (budget <= TimeSpan.Zero || budget > MaxDrainBudget)
+        {
+            _logger.LogError(
+                "Webhook drain skipped: Notifications.TimeoutSeconds is {TimeoutSeconds}, which is not a valid drain budget; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
+                _config.TimeoutSeconds, _channel.Reader.Count);
+            return;
         }
 
-        await base.StopAsync(cancellationToken);
+        using var budgetCts = new CancellationTokenSource(budget, _timeProvider);
+        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budgetCts.Token);
+        await executeTask.WaitAsync(drainCts.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        if (executeTask.IsCompleted)
+            return;
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Webhook drain ended by the host shutdown token; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
+                _channel.Reader.Count);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Webhook drain budget of {BudgetSeconds}s expired; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
+                _config.TimeoutSeconds, _channel.Reader.Count);
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
