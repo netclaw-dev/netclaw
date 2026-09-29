@@ -38,18 +38,18 @@ but the policy model must support it from day one.
 
 ### SEC-003 Data and Tool Grant Controls
 
-Data access and tool invocation must be checked against configured grants before
-execution. Tool categories for MVP:
+Data access and tool invocation must be checked before execution. The control
+is the audience profile of the turn (Public, Team, Personal):
 
-- `shell` — command execution (highest risk)
-- `web_search` — web search API calls
-- `web_fetch` — URL content retrieval
-- `github` — GitHub CLI operations
-- `mcp:{server_name}` — MCP server tool invocation
-- `config_write` — self-modification of agent config files
-- `schedule_write` — creation/modification of scheduled tasks
+- a per-audience tool allow list (`AllowedTools`) for profile-managed tools;
+- per-audience MCP server and MCP tool allow lists;
+- per-audience consent modes (`Auto`, `Approval`, `Deny`) per tool;
+- per-audience file roots for read, write, and attach.
 
-Each grant specifies allowed senders and channels. Missing grant = deny.
+Shell execution is the highest-risk tool and needs the Personal audience.
+A tool "grant category" (for example `shell`, `file`, `mcp:{server_name}`) is
+tool metadata only; it does not decide access. A tool that the audience does
+not allow is denied. See `docs/architecture/tool-authorization.md`.
 
 ### SEC-004 Startup Validation
 
@@ -94,8 +94,9 @@ When the agent modifies its own configuration files (FR-014):
   conversation — only through CLI or direct file edit by the operator.
 - Agent can modify: personality, instructions, user preferences, project
   registry, environment inventory, and scheduled tasks.
-- Agent cannot modify: ACL rules, exposure policy, tool grants, or security
-  settings.
+- Agent cannot modify: ACL rules, exposure policy, audience tool allow lists,
+  or security settings. Tool authorization write-denies the config directory
+  for agent file tools.
 
 ### SEC-009 Shell Execution Boundaries
 
@@ -128,7 +129,7 @@ Out of scope (deferred):
 
 1. Unknown sender in restrictive channel cannot trigger model execution.
 2. Ambient channel behavior only activates where explicitly configured.
-3. Tool execution attempts without grant return policy denial.
+3. Tool execution attempts that the audience profile does not allow return policy denial.
 4. Invalid ACL file prevents successful host start.
 5. Diagnostics expose effective exposure mode and latest policy denies.
 6. Public exposure mode without access policy fails validation.

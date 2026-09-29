@@ -14,8 +14,10 @@ through conversation and execute tasks autonomously.
 The agent SHALL create scheduled tasks when the user requests recurring or
 timed actions through conversation. The agent SHALL assign a human-readable
 task ID and confirm the schedule. Tasks SHALL support fixed interval and cron
-expression schedule types. Tasks requesting tool grants that cannot be
-satisfied by ACL policy SHALL be rejected at creation time.
+expression schedule types. Task creation SHALL NOT grant tool authority. Each
+tool call of a task SHALL pass tool authorization when the task runs, with the
+stored task audience (`tool-authorization` TA-3 and TA-4). Tool grant
+categories are metadata; the per-audience tool allow lists are the control.
 
 Reminder definitions minted through conversation, tool calls, CLI, REST, or
 import SHALL persist an execution audience that is less than or equal to the
@@ -30,7 +32,7 @@ is always allowed.
 - **WHEN** the agent parses the request as a fixed-interval schedule
 - **THEN** the agent creates a task with the specified interval
 - **AND** assigns a human-readable task ID
-- **AND** confirms the schedule, next run time, and required tool grants
+- **AND** confirms the schedule and next run time
 
 #### Scenario: Create cron-based scheduled task
 
@@ -41,10 +43,10 @@ is always allowed.
 
 #### Scenario: Reject task with ungrantable tools
 
-- **GIVEN** the user requests a scheduled task that requires the `shell` tool
-- **WHEN** the `shell` grant is not available in the ACL policy for that sender
-- **THEN** the agent rejects the task at creation time
-- **AND** explains which tool grants are missing
+- **GIVEN** a Team-audience scheduled task whose prompt asks for `shell_execute`
+- **WHEN** the task runs and the model calls `shell_execute`
+- **THEN** tool authorization denies the call with `tool_not_allowed_for_audience_profile`
+- **AND** the task definition itself carried no tool authority
 
 #### Scenario: Task ID collision avoided
 
