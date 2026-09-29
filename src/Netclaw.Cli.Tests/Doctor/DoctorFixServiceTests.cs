@@ -7,7 +7,9 @@ using Netclaw.Cli.Daemon;
 using System.Text.Json;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Doctor;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Doctor;
@@ -404,6 +406,125 @@ public sealed class DoctorFixServiceTests
         {
             Environment.SetEnvironmentVariable(envVar, previous);
         }
+    }
+
+    private const string Netclaw0254ToolsConfig =
+        """
+        {
+          "configVersion": 1,
+          "Tools": {
+            "AudienceProfiles": {
+              "Public": {
+                "ToolsMode": "Allowlist",
+                "AllowedTools": ["file_read", "file_list", "attach_file"]
+              },
+              "Team": {
+                "ToolsMode": "Allowlist",
+                "AllowedTools": [
+                  "file_read", "file_list", "file_write", "file_edit", "attach_file",
+                  "web_search", "web_fetch", "skill_manage", "set_reminder",
+                  "list_reminders", "cancel_reminder", "get_reminder_history",
+                  "set_working_directory"
+                ]
+              }
+            }
+          }
+        }
+        """;
+
+    [Fact]
+    public async Task Rewrites_legacy_default_allowlists_after_a_backup()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, Netclaw0254ToolsConfig, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.Contains(plan.Fixes, fix => fix.Description.Contains("current default audience tool lists", StringComparison.Ordinal));
+        Assert.Equal(
+            Netclaw0254ToolsConfig,
+            await File.ReadAllTextAsync(paths.NetclawConfigPath + ".legacy-tool-defaults.bak", TestContext.Current.CancellationToken));
+
+        // Round trip: the fixed file binds to the current defaults with no legacy warning.
+        var toolConfig = BindDaemonToolConfig(paths, out var warnings);
+        Assert.Equal(ToolAudienceProfileToolCatalog.PublicDefaultAllowedTools, toolConfig.AudienceProfiles.Public.AllowedTools);
+        Assert.Equal(ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools, toolConfig.AudienceProfiles.Team.AllowedTools);
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public async Task Existing_backup_is_kept_and_a_second_run_changes_nothing()
+    {
+        var paths = NewPaths();
+        var firstBackup = paths.NetclawConfigPath + ".legacy-tool-defaults.bak";
+        await File.WriteAllTextAsync(firstBackup, "older backup", TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, Netclaw0254ToolsConfig, TestContext.Current.CancellationToken);
+        var service = ConfigOnlyService(paths);
+
+        await service.ApplyAsync(
+            await service.BuildPlanAsync(TestContext.Current.CancellationToken),
+            TestContext.Current.CancellationToken);
+        var fixedText = await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken);
+        var secondPlan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(secondPlan, TestContext.Current.CancellationToken);
+
+        Assert.Equal("older backup", await File.ReadAllTextAsync(firstBackup, TestContext.Current.CancellationToken));
+        Assert.Equal(
+            Netclaw0254ToolsConfig,
+            await File.ReadAllTextAsync(paths.NetclawConfigPath + ".legacy-tool-defaults.2.bak", TestContext.Current.CancellationToken));
+        Assert.DoesNotContain(secondPlan.Fixes, fix => fix.FilePath == paths.NetclawConfigPath);
+        Assert.Equal(fixedText, await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken));
+        Assert.False(File.Exists(paths.NetclawConfigPath + ".legacy-tool-defaults.3.bak"));
+    }
+
+    [Fact]
+    public async Task Keeps_a_hand_edited_allowlist()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Team": { "ToolsMode": "Allowlist", "AllowedTools": ["file_read", "file_list", "attach_file", "web_fetch"] }
+                }
+              }
+            }
+            """, TestContext.Current.CancellationToken);
+
+        var plan = await ConfigOnlyService(paths).BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(plan.Fixes, fix => fix.Description.Contains("current default audience tool lists", StringComparison.Ordinal));
+        Assert.False(File.Exists(paths.NetclawConfigPath + ".legacy-tool-defaults.bak"));
+    }
+
+    [Fact]
+    public async Task Failed_backup_blocks_the_legacy_allowlist_rewrite()
+    {
+        // A directory at the backup path makes the copy fail. The config file must not change.
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, Netclaw0254ToolsConfig, TestContext.Current.CancellationToken);
+        Directory.CreateDirectory(paths.NetclawConfigPath + ".legacy-tool-defaults.bak");
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        var failure = await Record.ExceptionAsync(() => service.ApplyAsync(plan, TestContext.Current.CancellationToken));
+        Assert.True(failure is IOException or UnauthorizedAccessException, $"Unexpected failure: {failure}");
+        Assert.Equal(
+            Netclaw0254ToolsConfig,
+            await File.ReadAllTextAsync(paths.NetclawConfigPath, TestContext.Current.CancellationToken));
+    }
+
+    private static ToolConfig BindDaemonToolConfig(NetclawPaths paths, out IReadOnlyList<string> warnings)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddNetclawDaemonSources(paths)
+            .Build();
+        return ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), out warnings);
     }
 
     private static NetclawPaths NewPaths()

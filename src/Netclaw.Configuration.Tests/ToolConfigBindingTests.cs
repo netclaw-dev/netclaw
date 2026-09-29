@@ -92,6 +92,49 @@ public sealed class ToolConfigBindingTests : IDisposable
         }
     }
 
+    public static TheoryData<TrustAudience, string[], bool> LegacyAllowLists()
+    {
+        string[] team0254 = [.. ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools[1]];
+        return new()
+        {
+            // Each older shipped default maps to today's default. Order does not matter.
+            { TrustAudience.Public, [.. ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools[0]], true },
+            { TrustAudience.Public, [.. ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools[1].Reverse()], true },
+            { TrustAudience.Team, [.. ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools[0]], true },
+            { TrustAudience.Team, [.. team0254.Reverse()], true },
+            // Any other list is operator intent and is applied as written, never widened.
+            { TrustAudience.Team, [.. team0254.Where(tool => tool != ToolAudienceProfileToolCatalog.WebFetch)], false },
+            { TrustAudience.Team, [.. team0254, ToolAudienceProfileToolCatalog.SetWebhook], false },
+            { TrustAudience.Team, [.. team0254.Select(tool => tool == ToolAudienceProfileToolCatalog.FileRead ? "File_Read" : tool)], false },
+            { TrustAudience.Team, [.. team0254, ToolAudienceProfileToolCatalog.FileRead], false },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(LegacyAllowLists))]
+    public void Older_default_allowlists_map_to_the_current_default(TrustAudience audience, string[] tools, bool maps)
+    {
+        var json = $"[{string.Join(", ", tools.Select(tool => $"\"{tool}\""))}]";
+
+        var toolConfig = Bind($"AudienceProfiles:{audience}:AllowedTools", json, "NETCLAW_TEST_UNUSED_", out var warnings);
+
+        var profile = ToolAudienceProfileDefaults.GetResolvedProfile(toolConfig.AudienceProfiles, audience);
+        if (!maps)
+        {
+            Assert.Equal(tools, profile.AllowedTools);
+            Assert.Empty(warnings);
+            return;
+        }
+
+        var current = ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(audience);
+        Assert.Equal(current, profile.AllowedTools);
+        var warning = Assert.Single(warnings);
+        Assert.Contains($"Tools.AudienceProfiles.{audience}.AllowedTools is an older Netclaw default list", warning, StringComparison.Ordinal);
+        Assert.Contains("netclaw doctor --fix", warning, StringComparison.Ordinal);
+        foreach (var added in current.Except(tools))
+            Assert.Contains(added, warning, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void Only_the_reviewed_allow_lists_have_default_items()
     {

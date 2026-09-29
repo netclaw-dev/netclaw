@@ -169,6 +169,33 @@ public static class ToolAudienceProfileToolCatalog
         .. WorkingDirectoryTools
     ];
 
+    // Policy data: every older Public and Team default AllowedTools list that a release
+    // shipped. `netclaw init` wrote the complete default list to netclaw.json. The old
+    // configuration binder added configured items to the current defaults, so those installs
+    // ran with the current default tools. With list replacement, an exact match maps back to
+    // the current default (see ToolConfig.BindFromConfiguration and `netclaw doctor --fix`).
+    // Add a row here when a default list changes in a release.
+    //   0.8.0 to 0.19.0: a800e56e2 (#249).
+    //   0.20.0 to 0.25.4, and 0.26.0-beta.1 to 0.26.0-beta.5: 980eab0d6 (#1111).
+    //   The current lists ship from 0.26.0: cfd528d5b (#2037), ecf70fc5d (#2038), 8bfe958b5 (#2045).
+    //   The intermediate file_read_many and json_read lists never shipped in a release tag.
+    public static IReadOnlyList<IReadOnlyList<string>> LegacyPublicDefaultAllowedTools { get; } =
+    [
+        [FileRead, FileWrite, AttachFile],
+        [FileRead, FileList, AttachFile]
+    ];
+
+    public static IReadOnlyList<IReadOnlyList<string>> LegacyTeamDefaultAllowedTools { get; } =
+    [
+        [FileRead, AttachFile],
+        [
+            FileRead, FileList, FileWrite, FileEdit, AttachFile,
+            WebSearch, WebFetch, SkillManage,
+            SetReminder, ListReminders, CancelReminder, GetReminderHistory,
+            SetWorkingDirectory
+        ]
+    ];
+
     public static IReadOnlyList<string> ProfileManagedTools { get; } =
     [
         .. TeamDefaultAllowedTools,
@@ -296,6 +323,54 @@ public static class ToolAudienceProfileDefaults
         Mode = ToolFilesystemMode.Roots,
         Roots = [SessionDirectoryToken]
     };
+
+    /// <summary>
+    /// Returns true when <paramref name="allowedTools"/> is exactly an older shipped default
+    /// list for <paramref name="audience"/>: the same tools in any order, with no extra, missing,
+    /// or repeated tool. Tool names are case-sensitive. Only Public and Team have older lists.
+    /// </summary>
+    public static bool IsLegacyDefaultAllowedTools(TrustAudience audience, IReadOnlyCollection<string> allowedTools)
+    {
+        var legacyLists = audience switch
+        {
+            TrustAudience.Public => ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools,
+            TrustAudience.Team => ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools,
+            _ => []
+        };
+
+        return legacyLists.Any(legacy => legacy.Count == allowedTools.Count
+            && new HashSet<string>(legacy, StringComparer.Ordinal).SetEquals(allowedTools));
+    }
+
+    /// <summary>
+    /// Describes an older default AllowedTools list for the daemon startup log and for
+    /// <c>netclaw doctor</c>: the audience, the tool changes, and the fix command.
+    /// </summary>
+    public static string DescribeLegacyDefaultAllowedTools(TrustAudience audience, IReadOnlyCollection<string> allowedTools)
+    {
+        var current = CurrentDefaultAllowedTools(audience);
+        var added = current.Except(allowedTools, StringComparer.Ordinal).ToArray();
+        var removed = allowedTools.Except(current, StringComparer.Ordinal).ToArray();
+        return $"Tools.AudienceProfiles.{audience}.AllowedTools is an older Netclaw default list. "
+            + $"The daemon applies the current {audience} default, which adds {JoinOrNone(added)} "
+            + $"and removes {JoinOrNone(removed)}. "
+            + "Run `netclaw doctor --fix` to write the current list to netclaw.json.";
+    }
+
+    private static string JoinOrNone(IReadOnlyCollection<string> tools)
+        => tools.Count == 0 ? "no tools" : string.Join(", ", tools);
+
+    /// <summary>
+    /// Returns the current default AllowedTools list for Public or Team.
+    /// </summary>
+    public static IReadOnlyList<string> CurrentDefaultAllowedTools(TrustAudience audience)
+        => audience switch
+        {
+            TrustAudience.Public => ToolAudienceProfileToolCatalog.PublicDefaultAllowedTools,
+            TrustAudience.Team => ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools,
+            _ => throw new ArgumentOutOfRangeException(
+                nameof(audience), audience, "Only Public and Team have a default AllowedTools list.")
+        };
 
     public static ToolAudienceProfile GetResolvedProfile(ToolAudienceProfiles? profiles, TrustAudience audience)
     {

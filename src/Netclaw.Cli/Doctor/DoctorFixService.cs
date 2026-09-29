@@ -77,6 +77,9 @@ public sealed class DoctorFixService
 
         // --- Manual fixes (not derivable from schema alone) ---
 
+        if (TryWriteCurrentDefaultAllowedTools(obj))
+            appliedFixes.Add(LegacyAllowedToolsFixName);
+
         if (obj["configVersion"] is null)
         {
             obj["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
@@ -151,6 +154,68 @@ public sealed class DoctorFixService
         }
 
         return Task.FromResult(new DoctorFixPlan(fixes));
+    }
+
+    private const string LegacyAllowedToolsFixName = "current default audience tool lists";
+
+    /// <summary>
+    /// Rewrites a Public or Team AllowedTools list that exactly matches an older shipped default
+    /// to the current default. The daemon already applies the current default for such a list
+    /// and logs a warning. This fix makes netclaw.json show the list that the daemon applies.
+    /// A list that differs from every older default is operator intent, so this fix keeps it.
+    /// </summary>
+    private static bool TryWriteCurrentDefaultAllowedTools(JsonObject config)
+    {
+        if (config["Tools"] is not JsonObject tools || tools["AudienceProfiles"] is not JsonObject profiles)
+            return false;
+
+        var changed = false;
+        foreach (var audience in (TrustAudience[])[TrustAudience.Public, TrustAudience.Team])
+        {
+            if (profiles[audience.ToString()] is not JsonObject profile
+                || profile["AllowedTools"] is not JsonArray allowedTools)
+            {
+                continue;
+            }
+
+            var toolsMode = profile["ToolsMode"] is JsonValue modeValue && modeValue.TryGetValue<string>(out var mode)
+                ? mode
+                : nameof(ToolProfileMode.Allowlist);
+            if (!string.Equals(toolsMode, nameof(ToolProfileMode.Allowlist), StringComparison.OrdinalIgnoreCase))
+                continue;
+
+            var stored = new List<string>();
+            foreach (var item in allowedTools)
+            {
+                if (item is not JsonValue value || !value.TryGetValue<string>(out var tool))
+                    break;
+                stored.Add(tool);
+            }
+
+            if (stored.Count != allowedTools.Count
+                || !ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, stored))
+            {
+                continue;
+            }
+
+            profile["AllowedTools"] = new JsonArray(
+                [.. ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(audience).Select(tool => (JsonNode?)JsonValue.Create(tool))]);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    // Returns netclaw.json.legacy-tool-defaults.bak, then .legacy-tool-defaults.2.bak, and so on:
+    // the first name that is not a file. A directory at a candidate name is not skipped, so the
+    // copy fails loudly instead of the fix writing without a backup.
+    internal static string NextLegacyAllowedToolsBackupPath(string configPath)
+    {
+        var candidate = configPath + ".legacy-tool-defaults.bak";
+        for (var number = 2; File.Exists(candidate); number++)
+            candidate = $"{configPath}.legacy-tool-defaults.{number}.bak";
+
+        return candidate;
     }
 
     private static void TryApplySchemaFixes(JsonObject config, List<string> appliedFixes)
@@ -285,6 +350,15 @@ public sealed class DoctorFixService
                 var backupPath = fix.FilePath + ".legacy-models.bak";
                 if (!File.Exists(backupPath))
                     File.Copy(fix.FilePath, backupPath);
+            }
+
+            // The audience tool list fix changes security policy data, so the operator gets a
+            // copy of the original file. A failed copy throws before the write below. An older
+            // backup is never overwritten: each run that applies this fix writes a new file.
+            if (fix.Description.Contains(LegacyAllowedToolsFixName, StringComparison.Ordinal)
+                && File.Exists(fix.FilePath))
+            {
+                File.Copy(fix.FilePath, NextLegacyAllowedToolsBackupPath(fix.FilePath), overwrite: false);
             }
 
             AtomicFile.WriteAllText(fix.FilePath, fix.UpdatedText);
