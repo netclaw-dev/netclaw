@@ -169,7 +169,7 @@ static async Task RunDaemonAsync(
     builder.WebHost.UseUrls($"http://{daemonConfig.Host}:{daemonConfig.Port}");
     var daemonLogLevel = builder.ConfigureNetclawLogging(paths);
     builder.AddNetclawTelemetry();
-    ConfigureDaemonServices(
+    var configurationWarnings = ConfigureDaemonServices(
         builder.Services,
         builder.Configuration,
         paths,
@@ -242,6 +242,9 @@ static async Task RunDaemonAsync(
         shellResolution.Environment.ExecutablePath,
         shellResolution.Environment.Grammar,
         shellResolution.Environment.PowerShellDialect?.ToString() ?? "not-applicable");
+    foreach (var warning in configurationWarnings)
+        startupLogger.LogWarning("Configuration warning: {ConfigurationWarning}", warning);
+
     if (shellResolution.FallbackReason is { } fallbackReason)
     {
         startupLogger.LogWarning(
@@ -399,10 +402,7 @@ static NetclawPaths ConfigureConfigServices(
     // 1. netclaw.json (base config, optional)
     // 2. secrets.json (credentials overlay, optional)
     // 3. NETCLAW_* environment variables (highest priority)
-    configuration
-        .AddJsonFile(bootstrapPaths.NetclawConfigPath, optional: true, reloadOnChange: false)
-        .AddJsonFile(bootstrapPaths.SecretsPath, optional: true, reloadOnChange: false)
-        .AddEnvironmentVariables("NETCLAW_");
+    configuration.AddNetclawDaemonSources(bootstrapPaths);
 
     // Re-create paths with config-driven overrides (e.g. custom workspaces directory).
     var workspacesDir = configuration.GetValue<string>("Workspaces:Directory");
@@ -439,7 +439,8 @@ static NetclawPaths ConfigureConfigServices(
 // Daemon-only services (actor system, tools, persistence)
 // ═══════════════════════════════════════════════════════════════════════
 
-static void ConfigureDaemonServices(
+// Returns configuration warnings. The caller logs them after the host builds its loggers.
+static IReadOnlyList<string> ConfigureDaemonServices(
     IServiceCollection services,
     IConfigurationManager configuration,
     NetclawPaths paths,
@@ -584,16 +585,7 @@ static void ConfigureDaemonServices(
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
     services.AddSingleton(sessionConfig);
 
-    // Tools (auto-bound, no required properties)
-    var toolConfig = configuration.GetSection("Tools")
-        .Get<ToolConfig>() ?? new ToolConfig();
-    var attachmentErrors = toolConfig.AudienceProfiles.ValidateChannelAttachments();
-    if (attachmentErrors.Count > 0)
-    {
-        throw new InvalidOperationException(
-            "Invalid Tools.AudienceProfiles.ChannelAttachments configuration: "
-            + string.Join("; ", attachmentErrors));
-    }
+    var toolConfig = ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), out var toolConfigWarnings);
     services.AddSingleton(toolConfig);
 
     var securityPolicyConfig = configuration.GetSection("Security")
@@ -1175,6 +1167,8 @@ static void ConfigureDaemonServices(
     // Active session cleanup during host shutdown
     services.AddSingleton<SessionRegistryShutdownService>();
     services.AddSingleton<IHostedService>(sp => sp.GetRequiredService<SessionRegistryShutdownService>());
+
+    return toolConfigWarnings;
 }
 
 static ISearchBackend? CreateSearchBackend(SearchConfig config)

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+### Configuration
+
+- **Configured tool lists now replace the defaults.** Before this change, the daemon added configured `Tools` list items to the built-in defaults, so an operator could not narrow an audience tool allowlist, file roots, `GlobalReadRoots`, attachment categories, or `WebFetch.HttpAllowList`. The Security & Access TUI tool-group and attachment changes also had no effect on the daemon. Now a configured list is the complete list.
+  - `[]`, `null`, and `{}` give an empty list. For `null` and `{}`, the daemon logs a startup warning that names the key.
+  - The daemon now stops at startup, with an error that names the key, when a list key has a scalar value, when an attachment category is not one defined name (for example `"Bogus"` or `"Pdf, Document"`), or when an empty `NETCLAW_*` variable and a config file both set the same list.
+  - **Upgrade impact:** if `netclaw.json` has a narrowed list, the daemon now applies it. For example, `"Team": { "AllowedTools": ["file_read", "file_list"] }` gave all 15 Team tools before and gives only those two tools now. To add one entry to a default list, write the complete list, for example `"GlobalReadRoots": ["{skills_dir}", "{identity_dir}", "{workspaces_dir}", "/srv/docs"]`. Check each `Tools` list in `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables before you upgrade.
+
 ### Shell authorization
 
 - **Static shell assignments can use exact reusable approvals.** Netclaw binds each grant to a digest of the complete Bash or PowerShell assignment facts.
