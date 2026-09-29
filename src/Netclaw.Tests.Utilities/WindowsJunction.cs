@@ -31,9 +31,13 @@ public static class WindowsJunction
 
         using var process = Process.Start(startInfo)
             ?? throw new InvalidOperationException("cmd.exe did not start.");
+        // Read both streams while the process runs. A read after the exit can deadlock
+        // when the child fills a pipe buffer before it exits.
+        var standardOutputTask = process.StandardOutput.ReadToEndAsync(ct);
+        var standardErrorTask = process.StandardError.ReadToEndAsync(ct);
         await process.WaitForExitAsync(ct);
-        var standardOutput = await process.StandardOutput.ReadToEndAsync(ct);
-        var standardError = await process.StandardError.ReadToEndAsync(ct);
+        var standardOutput = await standardOutputTask;
+        var standardError = await standardErrorTask;
         if (process.ExitCode != 0)
             throw new InvalidOperationException($"mklink failed: {standardOutput}{standardError}");
 
