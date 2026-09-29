@@ -40,7 +40,7 @@ public sealed partial class SqliteStoreMemoryTool : NetclawTool<SqliteStoreMemor
         var sessionId = string.IsNullOrWhiteSpace(context.SessionId)
             ? "manual/tool"
             : context.SessionId!;
-        var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
+        var audience = context.Audience;
         var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary?.Value);
 
         var payload = new MemoryCheckpointPayload(

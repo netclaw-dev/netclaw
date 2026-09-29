@@ -21,6 +21,32 @@ public sealed class SecurityPolicyDefaultsTests
         Assert.True(result.UsedStrictFallback);
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Public, "boundary:public")]
+    [InlineData(TrustAudience.Team, "boundary:team")]
+    [InlineData(TrustAudience.Personal, "boundary:personal")]
+    public void Boundary_from_audience_maps_each_defined_audience(TrustAudience audience, string expected)
+        => Assert.Equal(expected, SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience).Value);
+
+    [Fact]
+    public void Boundary_from_audience_refuses_an_undefined_audience_value()
+    {
+        // The old switch arm returned the Public boundary for any undefined value.
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => SecurityPolicyDefaults.ResolveBoundaryFromAudience((TrustAudience)7));
+    }
+
+    [Fact]
+    public void Resolved_tool_profile_refuses_an_undefined_audience_value()
+    {
+        // The old switch arm returned the Public profile for any undefined value.
+        var profiles = ToolAudienceProfileDefaults.CreateProfilesForPosture(DeploymentPosture.Personal);
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ToolAudienceProfileDefaults.GetResolvedProfile(profiles, (TrustAudience)7));
+        Assert.Same(profiles.Team, ToolAudienceProfileDefaults.GetResolvedProfile(profiles, TrustAudience.Team));
+    }
+
     [Fact]
     public void Resolve_uses_personal_host_shell_when_personal_posture_selected()
     {

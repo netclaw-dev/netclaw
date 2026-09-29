@@ -305,7 +305,9 @@ public static class ToolAudienceProfileDefaults
             TrustAudience.Public => resolvedProfiles.Public ?? CreatePublic(),
             TrustAudience.Team => resolvedProfiles.Team ?? CreateTeam(),
             TrustAudience.Personal => resolvedProfiles.Personal ?? CreatePersonal(),
-            _ => CreatePublic()
+            // An undefined audience value is an invariant violation. Do not
+            // hand it the Public profile.
+            _ => throw new ArgumentOutOfRangeException(nameof(audience), audience, "Undefined trust audience.")
         };
     }
 }

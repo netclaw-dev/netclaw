@@ -128,6 +128,16 @@ public sealed record TurnContext
             return false;
         }
 
+        // Proto3 cannot tell a Public audience from an absent field, because
+        // Public is enum value 0. It can carry an unknown number, for example
+        // from a newer writer or a damaged record. Refuse that record. Do not
+        // cast it into an audience that later code would compare as a rank.
+        if (!Enum.IsDefined(record.Audience))
+        {
+            reason = $"invalid trust audience '{(int)record.Audience}'";
+            return false;
+        }
+
         if (record.Boundary is not { } boundary)
         {
             reason = "missing trust boundary";

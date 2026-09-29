@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Memory;
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Memory;
@@ -43,7 +44,8 @@ public sealed class MemoryRulesFirstExtractorTests
         Confidence: 0.8,
         Kind: MemoryKind.Document.ToWireValue(),
         Title: "compaction-boundary",
-        UpdateSemantics: "append-document");
+        UpdateSemantics: "append-document",
+        Audience: TrustAudience.Public.ToWireValue());
 
     [Fact]
     public void Compaction_boundary_is_retained_but_not_auto_recallable()
@@ -78,6 +80,38 @@ public sealed class MemoryRulesFirstExtractorTests
 
         Assert.Empty(result.Candidates);
         Assert.Equal(MemoryExtractionDropReason.TurnCompleteRetired, result.DropReason);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    public void Checkpoint_without_audience_is_dropped_as_audience_unresolved(string? audience)
+    {
+        // Before this change the extractor stored a payload without an
+        // audience as a Public memory. A durable checkpoint must say who may
+        // read the memory, so the extractor now drops it and names the reason.
+        var payload = MakeCompactionPayload("Decisions: use Kata containers for isolation.")
+            with { Audience = audience };
+
+        var result = _extractor.ExtractWithDiagnostics(payload, new HashSet<string>());
+
+        Assert.Empty(result.Candidates);
+        Assert.Equal(MemoryExtractionDropReason.AudienceUnresolved, result.DropReason);
+        Assert.StartsWith(SecurityPolicyDefaults.AudienceUnresolvedReason, result.DropDetail);
+    }
+
+    [Theory]
+    [InlineData("public", TrustAudience.Public)]
+    [InlineData("team", TrustAudience.Team)]
+    [InlineData("personal", TrustAudience.Personal)]
+    public void Checkpoint_with_explicit_audience_keeps_that_audience(string wire, TrustAudience expected)
+    {
+        var payload = MakeCompactionPayload("Decisions: use Kata containers for isolation.")
+            with { Audience = wire };
+
+        var candidate = Assert.Single(_extractor.Extract(payload, new HashSet<string>()));
+
+        Assert.Equal(expected, candidate.Audience);
     }
 
     [Fact]

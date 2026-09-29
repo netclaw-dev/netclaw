@@ -23,6 +23,13 @@ public enum MemoryExtractionDropReason
     FingerprintDuplicate,
     PayloadDeserializationFailed,
     ObservedProposalsEmpty,
+
+    /// <summary>
+    /// The checkpoint payload has no audience, or its audience is not a known
+    /// value. The pipeline drops the checkpoint. It does not store the memory
+    /// under the Public audience.
+    /// </summary>
+    AudienceUnresolved,
 }
 
 public sealed record MemoryExtractionResult(
@@ -125,8 +132,14 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         var memoryClass = ResolveMemoryClass(payload);
 
-        var resolvedAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
-        SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
+        if (!SecurityPolicyDefaults.TryParseAudience(payload.Audience, out var parsedAudience))
+        {
+            return new MemoryExtractionResult(
+                results,
+                MemoryExtractionDropReason.AudienceUnresolved,
+                DescribeUnresolvedAudience(payload.Audience));
+        }
+
         var resolvedBoundary = MemoryPolicyScopeResolver.ResolveBoundary(payload.Boundary);
 
         var kind = ResolveKind(payload);
@@ -161,6 +174,11 @@ public sealed class MemoryRulesFirstExtractor(MemoryPolicyEvaluator policy)
 
         return new MemoryExtractionResult(results, MemoryExtractionDropReason.None);
     }
+
+    internal static string DescribeUnresolvedAudience(string? audience)
+        => string.IsNullOrWhiteSpace(audience)
+            ? "audience_unresolved: payload has no audience"
+            : $"audience_unresolved: payload audience '{audience}' is not public, team, or personal";
 
     private static MemoryClass ResolveMemoryClass(MemoryCheckpointPayload payload)
     {
@@ -342,8 +360,19 @@ public sealed class MemoryCurationEngine(
             return [];
         }
 
-        var resolvedAudienceWire = MemoryPolicyEvaluator.ResolveAudience(payload.Audience, TrustAudience.Public);
-        SecurityPolicyDefaults.TryParseAudience(resolvedAudienceWire, out var parsedAudience);
+        // A queued checkpoint is a durable record. A missing or unknown
+        // audience means the record cannot say who may read the memory, so
+        // drop it with an Error log. Do not store it under the Public audience.
+        if (!SecurityPolicyDefaults.TryParseAudience(payload.Audience, out var parsedAudience))
+        {
+            LogCheckpointDropped(
+                checkpoint,
+                MemoryExtractionDropReason.AudienceUnresolved,
+                payload,
+                MemoryRulesFirstExtractor.DescribeUnresolvedAudience(payload.Audience));
+            return [];
+        }
+
         var resolvedBoundary = !string.IsNullOrWhiteSpace(payload.Boundary)
             ? payload.Boundary!
             : TrustBoundary.TrustedInstanceValue;
@@ -422,7 +451,9 @@ public sealed class MemoryCurationEngine(
         string? detail = null,
         Exception? exception = null)
     {
-        var level = exception is not null ? LogLevel.Warning : LogLevel.Information;
+        var level = reason == MemoryExtractionDropReason.AudienceUnresolved
+            ? LogLevel.Error
+            : exception is not null ? LogLevel.Warning : LogLevel.Information;
         if (!_logger.IsEnabled(level))
             return;
 

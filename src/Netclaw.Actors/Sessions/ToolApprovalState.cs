@@ -304,6 +304,12 @@ internal static class ToolApprovalTurnContext
     {
         failure = null;
 
+        if (!Enum.IsDefined(evt.Audience))
+        {
+            failure = $"legacy approval event has invalid trust audience '{(int)evt.Audience}'";
+            return null;
+        }
+
         if (!ChannelTypeExtensions.TryFromWireValue(evt.ChannelType, out var channelType))
         {
             failure = "legacy approval event is missing channel type";

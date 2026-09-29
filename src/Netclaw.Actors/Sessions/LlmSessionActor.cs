@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Text.Json;
 using Akka.Actor;
 using Akka.Event;
@@ -906,6 +907,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (finding.Decision != SubAgentFindingReviewDecision.Accepted)
                 continue;
 
+            if (!TryResolveMemoryCheckpointAudience(
+                    Memory.CheckpointTriggerType.SubagentFindings,
+                    out var findingAudience))
+                continue;
+
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId,
                 TurnId: _activeTurnId,
@@ -914,7 +920,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Payload: SessionMemoryCheckpointFactory.ForSubAgentFinding(
                     _sessionId,
                     CurrentMemoryBoundary(),
-                    CurrentMemoryAudience(),
+                    findingAudience,
                     finding)));
         }
 
@@ -1306,16 +1312,21 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             _startupContextInjected = false;
             _recallManager.ResetForCompaction();
 
-            EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
-                SessionId: _sessionId,
-                TurnId: _activeTurnId,
-                TriggerType: Memory.CheckpointTriggerType.CompactionBoundary,
-                Priority: 90,
-                Payload: SessionMemoryCheckpointFactory.ForCompactionBoundary(
-                    _sessionId,
-                    CurrentMemoryBoundary(),
-                    CurrentMemoryAudience(),
-                    msg.Summary)));
+            if (TryResolveMemoryCheckpointAudience(
+                    Memory.CheckpointTriggerType.CompactionBoundary,
+                    out var compactionAudience))
+            {
+                EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
+                    SessionId: _sessionId,
+                    TurnId: _activeTurnId,
+                    TriggerType: Memory.CheckpointTriggerType.CompactionBoundary,
+                    Priority: 90,
+                    Payload: SessionMemoryCheckpointFactory.ForCompactionBoundary(
+                        _sessionId,
+                        CurrentMemoryBoundary(),
+                        compactionAudience,
+                        msg.Summary)));
+            }
 
             SaveSnapshot(BuildSnapshot());
 
@@ -3281,8 +3292,32 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
            ?? _currentTurnSource?.Audience
            ?? SecurityPolicyDefaults.ResolveAudienceFromSessionId(_sessionId.Value);
 
-    private string CurrentMemoryAudience()
-        => (_currentTurnContext?.Audience ?? _currentTurnSource?.Audience ?? TrustAudience.Public).ToWireValue();
+    /// <summary>
+    /// Returns the audience of the active turn authority: the durable turn
+    /// context first, then the turn source. Null means that the session has
+    /// no turn authority. Callers must refuse the operation in that case. Do
+    /// not replace null with Public or with a value derived from the session id.
+    /// </summary>
+    internal static TrustAudience? ResolveTurnAuthorityAudience(TurnContext? turnContext, MessageSource? turnSource)
+        => turnContext?.Audience ?? turnSource?.Audience;
+
+    private bool TryResolveMemoryCheckpointAudience(
+        Memory.CheckpointTriggerType triggerType,
+        out string audience)
+    {
+        if (ResolveTurnAuthorityAudience(_currentTurnContext, _currentTurnSource) is { } resolved)
+        {
+            audience = resolved.ToWireValue();
+            return true;
+        }
+
+        audience = string.Empty;
+        _log.Error(
+            "Memory checkpoint dropped reason={Reason} trigger={TriggerType}: the session has no turn context and no turn source, so it cannot resolve the memory audience",
+            SecurityPolicyDefaults.AudienceUnresolvedReason,
+            triggerType);
+        return false;
+    }
 
     private string CurrentMemoryBoundary()
         => _currentTurnContext?.Boundary.Value
@@ -3295,18 +3330,46 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (_toolAccessPolicy is null || _fullRegistry is null || availableTools.Count == 0)
             return availableTools;
 
-        return _toolAccessPolicy.FilterExposedTools(availableTools, _fullRegistry, _currentTrustContext);
+        if (!TryGetToolExposureTrustContext("expose_tools", availableTools.Count, out var trustContext))
+            return [];
+
+        return _toolAccessPolicy.FilterExposedTools(availableTools, _fullRegistry, trustContext);
+    }
+
+    /// <summary>
+    /// Returns the trust context that tool exposure needs. A session with a
+    /// tool access policy and no trust context has no resolved audience. That
+    /// is a wiring or lifecycle defect. The session then exposes no tools and
+    /// writes an Error log. It does not expose the Public tool set.
+    /// </summary>
+    private bool TryGetToolExposureTrustContext(
+        string operation,
+        int candidateCount,
+        [NotNullWhen(true)] out EffectiveTrustContext? trustContext)
+    {
+        trustContext = _currentTrustContext;
+        if (trustContext is not null)
+            return true;
+
+        _log.Error(
+            "Tool exposure refused reason={Reason} operation={Operation} candidateCount={CandidateCount}: the session has a tool access policy but no resolved trust context",
+            SecurityPolicyDefaults.AudienceUnresolvedReason,
+            operation,
+            candidateCount);
+        return false;
     }
 
     private void LogToolExposure(int exposedCount)
     {
-        if (_toolAccessPolicy is null || _fullRegistry is null)
+        // A missing trust context was already refused and logged at Error
+        // level by ResolveExposedToolsForCurrentTurn.
+        if (_toolAccessPolicy is null || _fullRegistry is null || _currentTrustContext is not { } trustContext)
             return;
 
         var coreCount = _fullRegistry.GetCoreRegistrations().Count(registration =>
-            _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext));
+            _toolAccessPolicy.IsToolExposed(registration, trustContext));
         var visibleCount = _fullRegistry.GetAllRegistrations().Count(registration =>
-            _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext));
+            _toolAccessPolicy.IsToolExposed(registration, trustContext));
         var exposure = (
             Core: coreCount,
             DeferredVisible: Math.Max(0, visibleCount - coreCount),
@@ -3331,12 +3394,13 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
     /// </summary>
     private SetWorkingDirectoryTool? GetExposedSetWorkingDirectoryTool()
     {
-        if (_toolAccessPolicy is null || _fullRegistry is null)
+        // No trust context means no exposed tools, so no hint either.
+        if (_toolAccessPolicy is null || _fullRegistry is null || _currentTrustContext is not { } trustContext)
             return null;
 
         var registration = _fullRegistry.GetRegistrationByToolName(SetWorkingDirectoryTool.ToolName);
         return registration?.Tool is SetWorkingDirectoryTool tool
-               && _toolAccessPolicy.IsToolExposed(registration, _currentTrustContext)
+               && _toolAccessPolicy.IsToolExposed(registration, trustContext)
             ? tool
             : null;
     }
@@ -3477,6 +3541,16 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             return RejectSlashCommand($"Failed to load skill /{skill.Name}: {ex.Message}\n\nThe skill file may be missing or corrupted.");
         }
 
+        if (ResolveTurnAuthorityAudience(_currentTurnContext, _currentTurnSource) is not { } routedAudience)
+        {
+            _log.Error(
+                "Routed slash command /{SkillName} refused reason={Reason}: the session has no turn context and no turn source",
+                skill.Name,
+                SecurityPolicyDefaults.AudienceUnresolvedReason);
+            return RejectSlashCommand(
+                $"Skill '/{skill.Name}' cannot run: the session cannot resolve the audience for this turn ({SecurityPolicyDefaults.AudienceUnresolvedReason}).");
+        }
+
         _sessionMetrics?.RecordSkillLoaded(skill.Name, SkillLoadMethod.SlashCommand);
 
         var effectiveTask = string.IsNullOrWhiteSpace(remainder)
@@ -3487,7 +3561,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         TryReplyAck();
         _recallManager.ResetForNewTurn();
 
-        _ = ExecuteRoutedSkillAsync(Self, skill, profile, effectiveTask, skillBody);
+        _ = ExecuteRoutedSkillAsync(Self, skill, profile, effectiveTask, skillBody, routedAudience);
         TransitionTo(SessionPhase.Processing);
         return true;
     }
@@ -3497,7 +3571,8 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         SkillEntry skill,
         SubAgentProfile profile,
         string task,
-        string skillBody)
+        string skillBody,
+        TrustAudience audience)
     {
         try
         {
@@ -3520,8 +3595,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             var context = new ToolExecutionContext(new ToolRunScope
             {
                 Session = new ToolSessionScope.Bound(_sessionId.Value, _sessionStorage),
-                // No active turn context/source carries no trust context — fall closed.
-                Audience = _currentTurnContext?.Audience ?? _currentTurnSource?.Audience ?? TrustAudience.Public,
+                // The caller resolved this audience from the turn authority and
+                // refused the command when no authority existed.
+                Audience = audience,
                 InlineOutputBudget = new InlineOutputBudget(_config.Tuning.MaxInlineToolResultChars),
                 Boundary = _currentTurnContext?.Boundary ?? _currentTurnSource?.Boundary,
                 ChannelType = _currentTurnContext?.ChannelType?.ToWireValue()
@@ -3695,7 +3771,9 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         var registration = _fullRegistry.GetRegistrationByToolName(toolName);
         if (registration is null) return false;
 
-        if (_toolAccessPolicy is null || !_toolAccessPolicy.IsToolExposed(registration, _currentTrustContext))
+        if (_toolAccessPolicy is null
+            || !TryGetToolExposureTrustContext("activate_tool", 1, out var trustContext)
+            || !_toolAccessPolicy.IsToolExposed(registration, trustContext))
             return false;
 
         var tool = registration.Tool;
@@ -3854,7 +3932,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
         if (persistApprovalState && pending.TurnContext is { } turnContext)
             _currentTurnContext = turnContext;
         else if (persistApprovalState && pending.TurnContextRestoreFailure is { } restoreFailure)
-            _log.Warning(
+            _log.Error(
                 "Approval request {CallId} could not restore turn context: {Reason}",
                 evt.CallId,
                 restoreFailure);
@@ -4920,6 +4998,11 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
             if (finding.Decision != SubAgentFindingReviewDecision.Accepted)
                 continue;
 
+            if (!TryResolveMemoryCheckpointAudience(
+                    Memory.CheckpointTriggerType.SubagentFindings,
+                    out var findingAudience))
+                continue;
+
             EnqueueCheckpointFireAndForget(new MemoryCheckpointRequest(
                 SessionId: _sessionId,
                 TurnId: _activeTurnId,
@@ -4928,7 +5011,7 @@ public sealed class LlmSessionActor : ReceivePersistentActor, IWithTimers
                 Payload: SessionMemoryCheckpointFactory.ForSubAgentFinding(
                     _sessionId,
                     CurrentMemoryBoundary(),
-                    CurrentMemoryAudience(),
+                    findingAudience,
                     finding)));
         }
 
