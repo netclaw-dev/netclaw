@@ -132,8 +132,10 @@ public static partial class SkillScanner
             }
         }
 
-        // Resolve duplicates: directory skills take precedence over flat-file skills.
-        // If both are the same type (both directories or both flat files), reject all duplicates.
+        // Resolve duplicates. A single system skill wins over every other copy of its
+        // name. Without this rule, a user-tier file that claims a system skill name
+        // disables the system skill. Otherwise directory skills take precedence over
+        // flat-file skills, and duplicates of the same type are all rejected.
         var groups = acceptedCandidates
             .GroupBy(static s => s.Name, StringComparer.OrdinalIgnoreCase);
 
@@ -144,6 +146,25 @@ public static partial class SkillScanner
             if (entries.Count == 1)
             {
                 resolved.Add(entries[0]);
+                continue;
+            }
+
+            var systemEntries = entries
+                .Where(static e => string.Equals(e.Category, SystemCategory, StringComparison.Ordinal))
+                .ToList();
+            if (systemEntries.Count == 1)
+            {
+                var systemEntry = systemEntries[0];
+                resolved.Add(systemEntry);
+                foreach (var shadowed in entries.Where(e => !ReferenceEquals(e, systemEntry)))
+                {
+                    issues.Add(new SkillScanIssue(
+                        Path: shadowed.FilePath,
+                        Kind: SkillScanIssueKind.DuplicateName,
+                        Message: $"Skill '{shadowed.FilePath}' is shadowed by system skill '{systemEntry.FilePath}'. System skills take precedence.",
+                        SkillName: shadowed.Name));
+                }
+
                 continue;
             }
 
