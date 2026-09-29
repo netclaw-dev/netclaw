@@ -262,11 +262,13 @@ each other. Otherwise, open one PR.
 - You need contributor (write) access to `netclaw-dev/netclaw` to stack. A
   PR's base must be a branch in the base repository, so each stack branch must
   live upstream. A contributor without write access opens one PR from a fork.
-- Name each branch that another PR uses as its base `feature/<topic>`.
-  `pr_validation` runs only for PRs into `dev`, `main`, `master`, or
-  `feature/*`; a PR into another base gets no test CI. To fix an existing base
-  branch, rename it with the GitHub branch-rename API. GitHub retargets the
-  dependent PRs.
+- Name each branch that another PR uses as its base `feature/<topic>` from
+  the start. `pr_validation` runs only for PRs into `dev`, `main`, `master`,
+  or `feature/*`; a PR into another base gets no test CI.
+- Caution: a branch rename retargets the PRs that use the branch as their
+  base, but it closes the PR whose head is that branch. That PR cannot be
+  reopened. If a head branch must be renamed, open a replacement PR from the
+  renamed branch and link the closed PR to it.
 - Write each PR description so that it stands alone, and name its base PR.
 - Verify each PR on the combined stack, not on its isolated branch.
 - Merge from the bottom up. GitHub treats dependent PRs as a native stack, and
