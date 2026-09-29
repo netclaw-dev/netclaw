@@ -74,12 +74,42 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
 
     public void Emit(OperationalAlert alert)
     {
-        _channel.Writer.TryWrite(alert);
+        // The bounded channel uses DropOldest, so TryWrite fails only after StopAsync
+        // completes the writer. Log the drop so a late alert (for example daemon.stopping)
+        // does not disappear without a trace.
+        if (!_channel.Writer.TryWrite(alert))
+        {
+            _logger.LogWarning(
+                "Webhook alert dropped because the notification service is stopping: {AlertType}",
+                alert.Type);
+        }
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        // Close intake, then let ExecuteAsync finish the in-flight delivery and the queued
+        // alerts before base.StopAsync cancels stoppingToken. A cancelled stoppingToken makes
+        // HttpClient turn the outcome of an in-flight request into a TaskCanceledException,
+        // so an immediate cancel drops that outcome and every queued alert.
+        // The drain budget is one HTTP timeout. The host shutdown token also bounds it.
         _channel.Writer.TryComplete();
+
+        var executeTask = ExecuteTask;
+        if (executeTask is not null)
+        {
+            var budget = TimeSpan.FromSeconds(_config.TimeoutSeconds);
+            using var budgetCts = new CancellationTokenSource(budget, _timeProvider);
+            using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budgetCts.Token);
+            await executeTask.WaitAsync(drainCts.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+            if (!executeTask.IsCompleted)
+            {
+                _logger.LogWarning(
+                    "Webhook drain did not finish within {BudgetSeconds}s; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
+                    _config.TimeoutSeconds, _channel.Reader.Count);
+            }
+        }
+
         await base.StopAsync(cancellationToken);
     }
 
@@ -213,6 +243,11 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+                // Do not attach the exception. HttpClient puts the original
+                // HttpRequestException, which can contain the target URL, in InnerException.
+                _logger.LogWarning(
+                    "Webhook delivery aborted by shutdown: {AlertType} → {Target} (attempt {Attempt}/{Max})",
+                    alert.Type, targetName, attempt + 1, _config.MaxRetries + 1);
                 throw;
             }
             catch (Exception ex)
