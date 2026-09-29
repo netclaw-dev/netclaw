@@ -34,6 +34,9 @@ namespace Netclaw.Daemon.Services;
 public sealed class WebhookNotificationService : BackgroundService, IOperationalNotificationSink
 {
     private const int ChannelCapacity = 256;
+
+    // The largest delay that a TimeProvider timer and CancellationTokenSource accept.
+    private static readonly TimeSpan MaxDrainBudget = TimeSpan.FromMilliseconds(uint.MaxValue - 1);
     private static readonly string Hostname = Environment.MachineName;
 
     private static readonly JsonSerializerOptions JsonOptions = new()
@@ -74,13 +77,78 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
 
     public void Emit(OperationalAlert alert)
     {
-        _channel.Writer.TryWrite(alert);
+        // The bounded channel uses DropOldest, so TryWrite fails only after StopAsync
+        // completes the writer. Log the drop so a late alert (for example daemon.stopping)
+        // does not disappear without a trace.
+        if (!_channel.Writer.TryWrite(alert))
+        {
+            _logger.LogWarning(
+                "Webhook alert dropped because the notification service is stopping: {AlertType}",
+                alert.Type);
+        }
     }
 
     public override async Task StopAsync(CancellationToken cancellationToken)
     {
+        // Close intake, then let ExecuteAsync finish the in-flight delivery and the queued
+        // alerts before base.StopAsync cancels stoppingToken. A cancelled stoppingToken makes
+        // HttpClient turn the outcome of an in-flight request into a TaskCanceledException,
+        // so an immediate cancel drops that outcome and every queued alert.
         _channel.Writer.TryComplete();
-        await base.StopAsync(cancellationToken);
+        try
+        {
+            await DrainAsync(cancellationToken);
+        }
+        finally
+        {
+            // base.StopAsync must run in every path. It is the only code that cancels
+            // stoppingToken, so a skipped call leaves ExecuteAsync running after stop.
+            await base.StopAsync(cancellationToken);
+        }
+    }
+
+    /// <summary>
+    /// Waits for <see cref="BackgroundService.ExecuteTask"/> to deliver the remaining alerts.
+    /// The budget is one HTTP timeout (<see cref="NotificationsConfig.TimeoutSeconds"/>).
+    /// The host shutdown token also ends the wait.
+    /// </summary>
+    private async Task DrainAsync(CancellationToken cancellationToken)
+    {
+        var executeTask = ExecuteTask;
+        if (executeTask is null)
+            return;
+
+        // The daemon does not enforce the schema range for TimeoutSeconds. A timer cannot
+        // use a budget of zero or less, or a budget above its maximum delay. Do not throw
+        // past base.StopAsync for a configuration error. Log it and skip the drain.
+        var budget = TimeSpan.FromSeconds(_config.TimeoutSeconds);
+        if (budget <= TimeSpan.Zero || budget > MaxDrainBudget)
+        {
+            _logger.LogError(
+                "Webhook drain skipped: Notifications.TimeoutSeconds is {TimeoutSeconds}, which is not a valid drain budget; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
+                _config.TimeoutSeconds, _channel.Reader.Count);
+            return;
+        }
+
+        using var budgetCts = new CancellationTokenSource(budget, _timeProvider);
+        using var drainCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, budgetCts.Token);
+        await executeTask.WaitAsync(drainCts.Token).ConfigureAwait(ConfigureAwaitOptions.SuppressThrowing);
+
+        if (executeTask.IsCompleted)
+            return;
+
+        if (cancellationToken.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "Webhook drain ended by the host shutdown token; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
+                _channel.Reader.Count);
+        }
+        else
+        {
+            _logger.LogWarning(
+                "Webhook drain budget of {BudgetSeconds}s expired; aborting the in-flight delivery and {QueuedAlerts} queued alert(s)",
+                _config.TimeoutSeconds, _channel.Reader.Count);
+        }
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -213,6 +281,11 @@ public sealed class WebhookNotificationService : BackgroundService, IOperational
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
+                // Do not attach the exception. HttpClient puts the original
+                // HttpRequestException, which can contain the target URL, in InnerException.
+                _logger.LogWarning(
+                    "Webhook delivery aborted by shutdown: {AlertType} → {Target} (attempt {Attempt}/{Max})",
+                    alert.Type, targetName, attempt + 1, _config.MaxRetries + 1);
                 throw;
             }
             catch (Exception ex)

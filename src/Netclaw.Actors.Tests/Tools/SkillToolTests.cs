@@ -1433,6 +1433,112 @@ public class SkillToolTests : IDisposable
         Assert.True(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "sys-kept", "SKILL.md")));
     }
 
+    private const string FlatSkillFileDeniedMessage = "Flat-file skills have no resource files.";
+
+    [Fact]
+    public async Task SkillManage_flat_skill_write_cannot_knock_out_system_skill()
+    {
+        // Regression: the flat skill wrote sys-guide/SKILL.md at the skills root.
+        // The rescan then found two skills named sys-guide and rejected both.
+        WriteFlatSkill("notes");
+        WriteNestedSkill(".system", "sys-guide", SystemGuideSkill);
+        ScanSkills();
+
+        var result = await CreateManageTool().ExecuteAsync(ToolInput.Create(
+            "Action", "write_file", "Name", "notes",
+            "FilePath", "sys-guide/SKILL.md",
+            "FileContent", "---\nname: sys-guide\ndescription: Copy.\n---\n# Copy"), PersonalCtx, TestContext.Current.CancellationToken);
+
+        await AssertSystemGuideLoadsAsync();
+        Assert.StartsWith(FlatSkillFileDeniedMessage, result);
+        Assert.False(File.Exists(Path.Combine(_paths.SkillsDirectory, "sys-guide", "SKILL.md")));
+    }
+
+    [Fact]
+    public async Task Planted_copy_of_system_skill_name_does_not_knock_out_system_skill()
+    {
+        // A writer outside skill_manage (for example file_write in a Personal
+        // session) can still put a copy at the skills root. The rescan keeps the
+        // system skill and reports the copy.
+        WriteNestedSkill(".system", "sys-guide", SystemGuideSkill);
+        WriteSkill("sys-guide", "---\nname: sys-guide\ndescription: Copy.\n---\n# Copy");
+        ScanSkills();
+
+        var result = await CreateManageTool().ExecuteAsync(ToolInput.Create(
+            "Action", "create", "Name", "fresh-skill",
+            "Content", "---\nname: fresh-skill\ndescription: Fresh.\n---\n# Fresh"), PersonalCtx, TestContext.Current.CancellationToken);
+
+        Assert.Contains("Skill 'fresh-skill' created", result);
+        await AssertSystemGuideLoadsAsync();
+        var issue = Assert.Single(_registry.GetScanIssues(), i => i.Kind == SkillScanIssueKind.DuplicateName);
+        Assert.Equal(Path.Combine(_paths.SkillsDirectory, "sys-guide", "SKILL.md"), issue.Path);
+        Assert.Contains(Path.Combine(_paths.SystemSkillsDirectory, "sys-guide", "SKILL.md"), issue.Message);
+    }
+
+    [Theory]
+    [InlineData("write_file")]
+    [InlineData("remove_file")]
+    [InlineData("patch")]
+    public async Task SkillManage_flat_skill_cannot_change_files_of_another_skill(string action)
+    {
+        WriteFlatSkill("notes");
+        WriteSkill("other-skill", "---\nname: other-skill\ndescription: Other.\n---\n# Other");
+        WriteFile("other-skill", "references/guide.md", "original");
+        ScanSkills();
+
+        var args = action switch
+        {
+            "write_file" => ToolInput.Create("Action", action, "Name", "notes",
+                "FilePath", "other-skill/references/guide.md", "FileContent", "overwritten"),
+            "remove_file" => ToolInput.Create("Action", action, "Name", "notes",
+                "FilePath", "other-skill/references/guide.md"),
+            _ => ToolInput.Create("Action", action, "Name", "notes",
+                "FilePath", "other-skill/references/guide.md", "OldString", "original", "NewString", "overwritten")
+        };
+        var result = await CreateManageTool().ExecuteAsync(args, PersonalCtx, TestContext.Current.CancellationToken);
+
+        Assert.StartsWith(FlatSkillFileDeniedMessage, result);
+        Assert.Equal("original", File.ReadAllText(Path.Combine(_paths.SkillsDirectory, "other-skill", "references", "guide.md")));
+    }
+
+    [Fact]
+    public async Task SkillManage_flat_skill_edit_and_patch_still_work()
+    {
+        WriteFlatSkill("notes");
+        ScanSkills();
+        var tool = CreateManageTool();
+        var ct = TestContext.Current.CancellationToken;
+        var flatFile = Path.Combine(_paths.SkillsDirectory, "notes.md");
+
+        var edited = await tool.ExecuteAsync(ToolInput.Create(
+            "Action", "edit", "Name", "notes",
+            "Content", "---\nname: notes\ndescription: Notes.\n---\n# Notes\n\nfirst draft"), PersonalCtx, ct);
+        var patched = await tool.ExecuteAsync(ToolInput.Create(
+            "Action", "patch", "Name", "notes",
+            "OldString", "first", "NewString", "second"), PersonalCtx, ct);
+
+        Assert.StartsWith("Skill 'notes' updated.", edited);
+        Assert.StartsWith("Patch applied.", patched);
+        Assert.Contains("second draft", File.ReadAllText(flatFile));
+        Assert.True(_registry.GetAll().Single(s => s.Name == "notes").IsFlatFile);
+    }
+
+    private const string SystemGuideSkill = "---\nname: sys-guide\ndescription: System guide.\n---\n# System Guide\n\nSystem instructions.";
+
+    private void WriteFlatSkill(string name)
+        => File.WriteAllText(
+            Path.Combine(_paths.SkillsDirectory, $"{name}.md"),
+            $"---\nname: {name}\ndescription: Flat skill.\n---\n# Flat\n");
+
+    private async Task AssertSystemGuideLoadsAsync()
+    {
+        var skill = Assert.Single(_registry.GetAll(), s => s.Name == "sys-guide");
+        Assert.Equal(SkillScanner.SystemCategory, skill.Category);
+        var loaded = await new SkillLoadTool(_registry, new NoOpSkillContentScanner(), PromptLoader).ExecuteAsync(
+            ToolInput.Create("Name", "sys-guide"), PersonalCtx, TestContext.Current.CancellationToken);
+        Assert.Contains("System instructions.", loaded);
+    }
+
     [Theory(SkipUnless = nameof(IsPosix), Skip = "Symbolic link creation requires native POSIX semantics.")]
     [SlopwatchSuppress("SW001", "This regression requires native POSIX symbolic-link semantics.")]
     [InlineData(true)]

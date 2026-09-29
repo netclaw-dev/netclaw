@@ -5,7 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Net;
 using System.Text.Json;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Tests.Mcp;
 using Netclaw.Daemon.Services;
@@ -44,7 +46,8 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         NotificationsConfig config,
         RecordingHandler handler,
         TimeProvider? timeProvider = null,
-        ServiceIdentity? identity = null)
+        ServiceIdentity? identity = null,
+        ILogger<WebhookNotificationService>? logger = null)
     {
         var factory = new TestHttpClientFactory(handler);
         var service = new WebhookNotificationService(
@@ -52,7 +55,7 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
             factory,
             timeProvider ?? TimeProvider.System,
             identity ?? TestIdentity,
-            NullLogger<WebhookNotificationService>.Instance);
+            logger ?? NullLogger<WebhookNotificationService>.Instance);
         _services.Add(service);
         return service;
     }
@@ -132,6 +135,9 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         service.Emit(CreateAlert(source: "server1"));
         service.Emit(CreateAlert(source: "server1"));
         await WaitForDeliveryAsync(handler, expectedCount: 1, timeoutMs: 2000);
+
+        // StopAsync drains the queue, so the second alert is processed before the assertion.
+        await service.StopAsync(TestContext.Current.CancellationToken);
 
         // Only the first should be delivered
         Assert.Single(handler.Requests);
@@ -267,6 +273,9 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         service.Emit(CreateAlert());
         await WaitForDeliveryAsync(handler, expectedCount: 1, timeoutMs: 2000);
 
+        // StopAsync drains the delivery, so a retry would occur before the assertion.
+        await service.StopAsync(TestContext.Current.CancellationToken);
+
         // Should not retry on 4xx
         Assert.Single(handler.Requests);
     }
@@ -311,6 +320,188 @@ public sealed class WebhookNotificationServiceTests : IAsyncDisposable
         Assert.DoesNotContain(workspace, loggedException.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(channel, loggedException.ToString(), StringComparison.Ordinal);
         Assert.DoesNotContain(credential, loggedException.ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StopAsync_LogsDeliveryFailureThatCompletesDuringShutdown()
+    {
+        const string workspace = "T000TEST";
+        const string channel = "B000TEST";
+        const string credential = "fakeWebhookToken";
+        var url = $"https://hooks.slack.com/services/{workspace}/{channel}/{credential}";
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(
+            new HttpRequestException($"Delivery to {url} failed."),
+            holdFirstRequestUntil: release.Task);
+        var config = new NotificationsConfig
+        {
+            Webhooks = [new WebhookTarget { Url = url }],
+            DeduplicationWindowSeconds = 0,
+            MaxRetries = 0
+        };
+        var logger = new RecordingLogger<WebhookNotificationService>();
+        var service = CreateService(config, handler, new FakeTimeProvider(), logger: logger);
+
+        await service.StartAsync(CancellationToken.None);
+        service.Emit(CreateAlert());
+        await WaitForDeliveryAsync(handler, expectedCount: 1);
+
+        // The delivery fails only after the stop request. This is the CI interleaving
+        // that made OmitsUnnamedTargetUrlAndRedactsDeliveryException flaky.
+        var stop = service.StopAsync(TestContext.Current.CancellationToken);
+        release.SetResult();
+        await stop;
+
+        Assert.Contains(logger.Entries, entry =>
+            entry.Contains("Webhook delivery error", StringComparison.Ordinal)
+            && entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Contains("aborted", StringComparison.Ordinal));
+        var loggedException = Assert.Single(logger.Exceptions).ToString();
+        Assert.DoesNotContain(workspace, loggedException, StringComparison.Ordinal);
+        Assert.DoesNotContain(channel, loggedException, StringComparison.Ordinal);
+        Assert.DoesNotContain(credential, loggedException, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task StopAsync_DeliversQueuedAlerts()
+    {
+        var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(HttpStatusCode.OK, holdFirstRequestUntil: release.Task);
+        var config = new NotificationsConfig
+        {
+            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            DeduplicationWindowSeconds = 0
+        };
+        var service = CreateService(config, handler, new FakeTimeProvider());
+
+        await service.StartAsync(CancellationToken.None);
+        service.Emit(CreateAlert(source: "a"));
+        service.Emit(CreateAlert(source: "b"));
+        service.Emit(CreateAlert(source: "c"));
+        await WaitForDeliveryAsync(handler, expectedCount: 1);
+
+        var stop = service.StopAsync(TestContext.Current.CancellationToken);
+        release.SetResult();
+        await stop;
+
+        Assert.Equal(3, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task StopAsync_AbortsDeliveryThatExceedsDrainBudget()
+    {
+        const string credential = "fakeWebhookToken";
+        var url = $"https://hooks.slack.com/services/T000TEST/B000TEST/{credential}";
+        // The test never releases the held request. Only the drain budget can end it.
+        var neverReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(HttpStatusCode.OK, holdFirstRequestUntil: neverReleased.Task);
+        var config = new NotificationsConfig
+        {
+            Webhooks = [new WebhookTarget { Url = url }],
+            DeduplicationWindowSeconds = 0,
+            TimeoutSeconds = 10
+        };
+        var timeProvider = new FakeTimeProvider();
+        var logger = new RecordingLogger<WebhookNotificationService>();
+        var service = CreateService(config, handler, timeProvider, logger: logger);
+
+        await service.StartAsync(CancellationToken.None);
+        service.Emit(CreateAlert(source: "a"));
+        service.Emit(CreateAlert(source: "b"));
+        await WaitForDeliveryAsync(handler, expectedCount: 1);
+
+        // StopAsync creates the budget timer before it returns, so the advance expires it.
+        var stop = service.StopAsync(TestContext.Current.CancellationToken);
+        timeProvider.Advance(TimeSpan.FromSeconds(config.TimeoutSeconds));
+        await stop;
+
+        Assert.Single(handler.Requests);
+        Assert.Contains(logger.Entries, entry =>
+            entry.Contains("Webhook drain budget of 10s expired", StringComparison.Ordinal)
+            && entry.Contains("1 queued alert(s)", StringComparison.Ordinal));
+        Assert.Contains(logger.Entries, entry =>
+            entry.Contains("Webhook delivery aborted by shutdown", StringComparison.Ordinal)
+            && entry.Contains("(unnamed webhook)", StringComparison.Ordinal));
+        Assert.All(logger.Entries, entry => Assert.DoesNotContain(credential, entry, StringComparison.Ordinal));
+        Assert.Empty(logger.Exceptions);
+    }
+
+    [Fact]
+    public async Task StopAsync_LogsHostShutdownTokenAsDrainCause()
+    {
+        // The test never releases the held request. Only the stop tokens can end it.
+        var neverReleased = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var handler = new RecordingHandler(HttpStatusCode.OK, holdFirstRequestUntil: neverReleased.Task);
+        var config = new NotificationsConfig
+        {
+            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            DeduplicationWindowSeconds = 0
+        };
+        var logger = new RecordingLogger<WebhookNotificationService>();
+        var service = CreateService(config, handler, new FakeTimeProvider(), logger: logger);
+
+        await service.StartAsync(CancellationToken.None);
+        service.Emit(CreateAlert());
+        await WaitForDeliveryAsync(handler, expectedCount: 1);
+
+        // The fake clock never advances, so the budget cannot expire. The host token
+        // is the only cause that can end the drain.
+        await service.StopAsync(new CancellationToken(canceled: true));
+
+        Assert.Contains(logger.Entries, entry =>
+            entry.Contains("Webhook drain ended by the host shutdown token", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Contains("budget", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task StopAsync_WithInvalidTimeout_LogsErrorAndStillStops()
+    {
+        // TimeoutSeconds = -1 also makes each HTTP attempt fail before it sends a request.
+        // With retries enabled, ExecuteAsync then waits in the retry backoff, which only
+        // stoppingToken can end early. So ExecuteTask completes before StopAsync returns
+        // only if base.StopAsync cancelled stoppingToken.
+        var handler = new RecordingHandler(HttpStatusCode.OK);
+        var config = new NotificationsConfig
+        {
+            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            DeduplicationWindowSeconds = 0,
+            MaxRetries = 2,
+            TimeoutSeconds = -1
+        };
+        var logger = new RecordingLogger<WebhookNotificationService>();
+        var service = CreateService(config, handler, new FakeTimeProvider(), logger: logger);
+
+        await service.StartAsync(CancellationToken.None);
+        service.Emit(CreateAlert());
+
+        await service.StopAsync(TestContext.Current.CancellationToken);
+
+        Assert.True(service.ExecuteTask?.IsCompleted, "base.StopAsync did not cancel stoppingToken.");
+        Assert.Empty(handler.Requests);
+        Assert.Contains(logger.Entries, entry =>
+            entry.Contains("Webhook drain skipped: Notifications.TimeoutSeconds is -1", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task Emit_AfterStop_LogsDroppedAlert()
+    {
+        var handler = new RecordingHandler(HttpStatusCode.OK);
+        var config = new NotificationsConfig
+        {
+            Webhooks = [new WebhookTarget { Url = "https://example.com/hook" }],
+            DeduplicationWindowSeconds = 0
+        };
+        var logger = new RecordingLogger<WebhookNotificationService>();
+        var service = CreateService(config, handler, new FakeTimeProvider(), logger: logger);
+
+        await service.StartAsync(CancellationToken.None);
+        await service.StopAsync(TestContext.Current.CancellationToken);
+        service.Emit(CreateAlert(type: "daemon.stopping", category: AlertType.DaemonStopping));
+
+        Assert.Empty(handler.Requests);
+        Assert.Contains(logger.Entries, entry =>
+            entry.Contains("Webhook alert dropped because the notification service is stopping", StringComparison.Ordinal)
+            && entry.Contains("daemon.stopping", StringComparison.Ordinal));
     }
 
     private static Task WaitForDeliveryAsync(
