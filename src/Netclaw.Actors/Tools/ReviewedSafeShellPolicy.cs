@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -332,7 +333,7 @@ internal sealed class ReviewedSafeShellPolicy
                     _pathAccessPolicy.EvaluateReviewedShellPath(
                         path.Value,
                         context,
-                        path.PathStyle,
+                        path.Style,
                         proposedProjectRoot,
                         includeTrustedRootInLinkCheck) is not PathAccessDecision.Allowed))
             {
@@ -400,39 +401,11 @@ internal sealed class ReviewedSafeShellPolicy
     }
 
     // A parser-derived intent is approval scope, not a trusted root. Permit a
-    // root alias such as macOS /tmp,
-    // while still rejecting linked descendants below it.
+    // root alias such as macOS /tmp, while still rejecting linked descendants below it.
     private static bool IsWithinCausalIntent(string path, string intentRoot)
-        => IsWithinShellRoot(path, intentRoot, ShellPathStyle.Posix, includeRoot: false);
-
-    private static bool IsWithinShellRoot(
-        string path,
-        string root,
-        ShellPathStyle pathStyle,
-        bool includeRoot = true)
-    {
-        try
-        {
-            return ShellPathRules.TryNormalize(path, pathStyle, out var normalizedPath)
-                   && ShellPathRules.TryNormalize(root, pathStyle, out var normalizedRoot)
-                   && ShellPathRules.IsWithinRoot(
-                       normalizedPath,
-                       normalizedRoot,
-                       pathStyle)
-                   && (!ShellPathRules.UsesHostPathStyle(pathStyle)
-                       || !PathUtility.ContainsSymlinkSegment(
-                           normalizedRoot,
-                           normalizedPath,
-                           includeRoot));
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or IOException
-                                      or NotSupportedException
-                                      or UnauthorizedAccessException
-                                      or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
-
+        => CanonicalPath.TryCreate(path, relativeBase: null, ShellPathStyle.Posix, out var candidate)
+           && CanonicalPath.TryCreate(intentRoot, relativeBase: null, ShellPathStyle.Posix, out var root)
+           && FileSystemAuthority.EvaluateMembership(
+               candidate,
+               [new PathBoundary.Folder(root, LinkRule.BelowRoot)]) is PathDecision.Allowed;
 }

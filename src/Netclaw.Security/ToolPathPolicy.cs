@@ -3,60 +3,37 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-using System.Text;
+using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 
 namespace Netclaw.Security;
 
-internal readonly record struct CanonicalShellPath
-{
-    private CanonicalShellPath(string value, ShellPathStyle pathStyle)
-    {
-        Value = value;
-        PathStyle = pathStyle;
-    }
-
-    internal string Value { get; }
-
-    internal ShellPathStyle PathStyle { get; }
-
-    internal static bool TryCreate(
-        string? value,
-        ShellPathStyle pathStyle,
-        out CanonicalShellPath path)
-    {
-        path = default;
-        if (string.IsNullOrWhiteSpace(value)
-            || value.Any(char.IsControl))
-        {
-            return false;
-        }
-
-        if (!ShellPathRules.TryNormalize(value, pathStyle, out var normalized))
-            return false;
-
-        path = new CanonicalShellPath(normalized, pathStyle);
-        return true;
-    }
-}
-
 /// <summary>
-/// Evaluates whether a file path is denied for agent tool access.
+/// Builds the process filesystem authority from the protected-path lists, and
+/// checks shell command text for references to protected paths.
 /// </summary>
 /// <remarks>
-/// Three independent deny surfaces: write (<see cref="IsDenied"/>), read
-/// (<see cref="IsReadDenied"/>), and shell indicators
-/// (<see cref="CommandReferencesDeniedPath"/>). The shell indicator list is
-/// scanned as raw substrings of the command text, so directory-scoped entries
-/// (e.g. the config dir) over-block commands whose text merely mentions them —
-/// that is the accepted trade-off for keeping the control plane unreachable.
+/// The protected lists are policy data. <see cref="FileSystem"/> owns the three
+/// protected sets (write, read, shell) and every path comparison. This class
+/// keeps only the shell text heuristics. They scan raw substrings of the command
+/// text, so directory-scoped entries (e.g. the config dir) over-block commands
+/// whose text merely mentions them. That is the accepted trade-off for keeping
+/// the control plane unreachable.
 /// </remarks>
 public sealed class ToolPathPolicy
 {
+    // The default-layout text hints. They apply even when an operator moves the
+    // Netclaw root, so a command that names the default credential store stays
+    // denied. A credential hint denies a path token alone; every hint denies with
+    // a high-risk verb.
+    private static readonly (string Fragment, bool IsCredentialStore)[] DefaultLayoutHints =
+    [
+        (".netclaw/config", false),
+        (".netclaw/keys", true),
+        ("secrets.json", true),
+    ];
+
     private readonly ShellCommandAnalyzer _analyzer;
-    private readonly HashSet<string> _writeDeniedPaths;
-    private readonly HashSet<string> _readDeniedPaths;
-    private readonly HashSet<string> _shellDeniedPaths;
     private readonly HashSet<string> _commandIndicators;
 
     public ToolPathPolicy(IEnumerable<string> deniedPaths)
@@ -71,9 +48,7 @@ public sealed class ToolPathPolicy
         Environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _analyzer = new ShellCommandAnalyzer(environment);
         var materialized = deniedPaths.ToList();
-        _writeDeniedPaths = BuildNormalizedSet(materialized);
-        _readDeniedPaths = _writeDeniedPaths;
-        _shellDeniedPaths = _writeDeniedPaths;
+        FileSystem = new FileSystemAuthority(materialized, materialized, materialized);
         _commandIndicators = BuildCommandIndicators(materialized);
     }
 
@@ -97,56 +72,15 @@ public sealed class ToolPathPolicy
     {
         Environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _analyzer = new ShellCommandAnalyzer(environment);
-        _writeDeniedPaths = BuildNormalizedSet(writeDeniedPaths);
-        _readDeniedPaths = BuildNormalizedSet(readDeniedPaths);
         var shellList = shellIndicatorPaths.ToList();
-        _shellDeniedPaths = BuildNormalizedSet(shellList);
+        FileSystem = new FileSystemAuthority(writeDeniedPaths, readDeniedPaths, shellList);
         _commandIndicators = BuildCommandIndicators(shellList);
     }
 
     public ShellExecutionEnvironment Environment { get; }
 
-    private static HashSet<string> BuildNormalizedSet(IEnumerable<string> paths)
-    {
-        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var path in paths)
-        {
-            var normalized = PathUtility.Normalize(path);
-            set.Add(normalized);
-
-            // macOS keeps /etc, /var, /tmp as symlinks into /private, so a denied
-            // path that traverses one resolves to a different real path. The deny
-            // checks canonicalize the *candidate* path (TryResolveSymlinksInPath /
-            // TryResolveSymlinkTarget); without the resolved denied form here, a
-            // candidate resolving to /private/etc/... would slip past a /etc deny.
-            //
-            // Construction skips a resolution failure (the lexical form above is
-            // still added); the deny CHECKS fail closed on the same failure. A
-            // startup-time resolution throw must not crash the process, and the
-            // lexical entry alone still denies exact and lexical-child matches.
-            if (TryResolveCanonicalForDenySet(normalized, out var canonical))
-                set.Add(canonical);
-        }
-
-        return set;
-    }
-
-    // Construction-only: resolve a denied path's canonical form, but never crash the
-    // policy build if resolution throws. The lexical form is already in the set, and
-    // the runtime deny checks (IsDeniedAgainst / CommandReferencesDeniedPath) fail
-    // CLOSED on a resolution exception — so swallowing here is safe for construction.
-    private static bool TryResolveCanonicalForDenySet(string path, out string canonical)
-    {
-        try
-        {
-            return TryResolveSymlinksInPath(path, out canonical);
-        }
-        catch
-        {
-            canonical = string.Empty;
-            return false;
-        }
-    }
+    /// <summary>The filesystem authority that owns the protected sets for this process.</summary>
+    internal FileSystemAuthority FileSystem { get; }
 
     private static HashSet<string> BuildCommandIndicators(IEnumerable<string> paths)
     {
@@ -172,61 +106,15 @@ public sealed class ToolPathPolicy
     }
 
     /// <summary>
-    /// Returns true if the given path is denied for write by policy.
-    /// Normalizes the path (resolves "..", removes trailing separators) before checking.
+    /// Returns true when a parser-canonical shell path is protected. A path in
+    /// another style than this shell cannot be checked, so it counts as protected (R5).
     /// </summary>
-    public bool IsDenied(string path)
-        => IsDeniedAgainst(path, _writeDeniedPaths);
-
-    /// <summary>
-    /// Returns true if the given path is denied for structured file reads.
-    /// Shell indicators remain independent because a structured read names one
-    /// exact operation and path.
-    /// </summary>
-    public bool IsReadDenied(string path)
-        => IsDeniedAgainst(path, _readDeniedPaths);
-
-    internal bool IsShellDeniedProjectedPath(
-        CanonicalShellPath path)
-        => path.PathStyle != Environment.PathStyle
-           || IsShellDenied(path.Value);
+    internal bool IsShellDeniedProjectedPath(CanonicalPath path)
+        => path.Style != Environment.PathStyle
+           || FileSystem.IsProtected(path.Value, PathOperation.Shell);
 
     private bool IsShellDenied(string path)
-        => IsDeniedAgainst(path, _shellDeniedPaths);
-
-    private static bool IsDeniedAgainst(string path, HashSet<string> deniedSet)
-    {
-        if (string.IsNullOrWhiteSpace(path))
-            return false;
-
-        if (PathUtility.TryNormalize(path, null, out var normalized) && IsDeniedNormalized(normalized, deniedSet))
-            return true;
-
-        try
-        {
-            // TryResolveSymlinkTarget only resolves the final path element. A path
-            // whose INTERMEDIATE directory is a symlink into a denied location
-            // (e.g. /tmp/x -> ~/.netclaw/config, then /tmp/x/netclaw.json) would
-            // slip past that check. Mirror the shell side (CommandReferencesDeniedPath)
-            // by also walking the path segment by segment — same infrastructure.
-            if (TryResolveSymlinkTarget(path, out var resolvedTarget)
-                && IsDeniedNormalized(resolvedTarget, deniedSet))
-            {
-                return true;
-            }
-
-            return TryResolveSymlinksInPath(path, out var canonical)
-                && IsDeniedNormalized(canonical, deniedSet);
-        }
-        catch
-        {
-            // This method is the SOLE backstop for interactive Personal reads
-            // (IsReadDenied has no other gate above it). An undetermined
-            // resolution must deny, not silently allow — the same defect class
-            // as the double-drive fail-open fixed for #1724. Fail closed.
-            return true;
-        }
-    }
+        => FileSystem.IsProtected(path, PathOperation.Shell);
 
     /// <summary>
     /// Returns true if the given shell command string contains a reference to any denied path.
@@ -253,11 +141,8 @@ public sealed class ToolPathPolicy
         var command = analysis.Source;
         var workingDirectory = analysis.WorkingDirectory;
 
-        if (!string.IsNullOrWhiteSpace(workingDirectory)
-            && IsDeniedAgainst(workingDirectory, _shellDeniedPaths))
-        {
+        if (!string.IsNullOrWhiteSpace(workingDirectory) && IsShellDenied(workingDirectory))
             return true;
-        }
 
         var tokens = ShellTokenizer.Tokenize(command).ToList();
         var slashCommand = command.Replace('\\', '/');
@@ -277,54 +162,30 @@ public sealed class ToolPathPolicy
             if (!LooksLikePath(token))
                 continue;
 
+            // The authority resolves every link segment, so a planted link under
+            // an approved directory cannot hide a protected target. A resolution
+            // failure counts as protected.
             var normalized = ShellTokenizer.NormalizePathToken(
                 token,
                 workingDirectory,
                 Environment.PathStyle);
-            if (normalized is not null && IsDeniedNormalized(normalized, _shellDeniedPaths))
-            {
+            if (normalized is not null && IsShellDenied(normalized))
                 return true;
-            }
 
-            // Defense-in-depth against symlink escalation under a directory-
-            // scoped approval. Path.GetFullPath (used by NormalizePathToken)
-            // collapses `.`/`..` but does NOT resolve symlinks in any path
-            // component. Without this pass, a user who approves /home/safe/
-            // can be tricked by a planted /home/safe/leak -> /etc symlink:
-            // the approval gate sees /home/safe/leak/passwd as "within" the
-            // approved root and waves it through, and the static path check
-            // here would never see /etc unless we resolve link targets along
-            // every component of the path.
-            if (normalized is not null)
-            {
-                try
-                {
-                    if (TryResolveSymlinksInPath(normalized, out var canonical)
-                        && IsDeniedNormalized(canonical, _shellDeniedPaths))
-                    {
-                        return true;
-                    }
-                }
-                catch
-                {
-                    // Fail closed: an undetermined resolution means we cannot
-                    // rule out this token reaching a denied path via symlink,
-                    // so treat the command as referencing one.
-                    return true;
-                }
-            }
-
-            var expanded = PathUtility.ExpandHome(token);
-            if (expanded.Contains("secrets.json", StringComparison.OrdinalIgnoreCase)
-                || expanded.Contains(".netclaw/keys", StringComparison.OrdinalIgnoreCase)
-                || expanded.Contains(".netclaw\\keys", StringComparison.OrdinalIgnoreCase))
+            var expanded = PathUtility.ExpandHome(token).Replace('\\', '/');
+            if (DefaultLayoutHints.Any(hint =>
+                    hint.IsCredentialStore
+                    && expanded.Contains(hint.Fragment, StringComparison.OrdinalIgnoreCase)))
             {
                 return true;
             }
         }
 
-        if (ContainsProtectedPathHint(slashCommand) && ContainsHighRiskVerb(tokens))
+        if (DefaultLayoutHints.Any(hint => slashCommand.Contains(hint.Fragment, StringComparison.OrdinalIgnoreCase))
+            && ContainsHighRiskVerb(tokens))
+        {
             return true;
+        }
 
         return false;
     }
@@ -341,7 +202,7 @@ public sealed class ToolPathPolicy
             {
                 if (argument.IsPath
                     && !string.IsNullOrWhiteSpace(argument.Resolved)
-                    && IsDeniedAgainst(argument.Resolved, _shellDeniedPaths))
+                    && IsShellDenied(argument.Resolved))
                 {
                     return true;
                 }
@@ -379,22 +240,15 @@ public sealed class ToolPathPolicy
         {
             ShellValueDomain.Exact exact =>
                 !string.IsNullOrWhiteSpace(exact.Value)
-                && IsDeniedAgainst(exact.Value, _shellDeniedPaths),
+                && IsShellDenied(exact.Value),
             ShellValueDomain.FiniteSet finite => finite.Values.Any(value =>
                 !string.IsNullOrWhiteSpace(value)
-                && IsDeniedAgainst(value, _shellDeniedPaths)),
+                && IsShellDenied(value)),
             ShellValueDomain.PathPattern pattern =>
                 !string.IsNullOrWhiteSpace(pattern.CoveringDirectory)
-                && IsDeniedAgainst(pattern.CoveringDirectory, _shellDeniedPaths),
+                && IsShellDenied(pattern.CoveringDirectory),
             _ => false
         };
-
-    private static bool ContainsProtectedPathHint(string slashCommand)
-    {
-        return slashCommand.Contains(".netclaw/config", StringComparison.OrdinalIgnoreCase)
-            || slashCommand.Contains(".netclaw/keys", StringComparison.OrdinalIgnoreCase)
-            || slashCommand.Contains("secrets.json", StringComparison.OrdinalIgnoreCase);
-    }
 
     private static bool ContainsHighRiskVerb(IEnumerable<string> tokens)
     {
@@ -403,121 +257,6 @@ public sealed class ToolPathPolicy
             var verb = ShellTokenizer.TrimShellPunctuation(token);
             if (ShellTokenizer.HighRiskVerbs.Contains(verb))
                 return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsDeniedNormalized(string candidate, HashSet<string> deniedSet)
-    {
-        foreach (var denied in deniedSet)
-        {
-            if (IsSamePathOrChild(candidate, denied))
-                return true;
-        }
-
-        return false;
-    }
-
-    private static bool IsSamePathOrChild(string candidate, string denied)
-    {
-        if (!candidate.StartsWith(denied, StringComparison.OrdinalIgnoreCase))
-            return false;
-
-        if (candidate.Length == denied.Length)
-            return true;
-
-        var boundary = candidate[denied.Length];
-        return boundary == Path.DirectorySeparatorChar || boundary == Path.AltDirectorySeparatorChar;
-    }
-
-    // Callers own exception policy here on purpose: BuildNormalizedSet (startup)
-    // skips a failed resolution, while the deny-check call sites (IsDeniedAgainst,
-    // CommandReferencesDeniedPath) fail closed. A blanket catch here would hide
-    // that distinction and force every caller back to the same (wrong) answer.
-    internal static bool TryResolveSymlinksInPath(string path, out string canonical)
-    {
-        canonical = string.Empty;
-        if (string.IsNullOrEmpty(path))
-            return false;
-
-        // Walk the path component by component, resolving any directory
-        // or file symlinks encountered. ResolveLinkTarget(returnFinalTarget:
-        // true) follows the chain to a non-link, but only operates on the
-        // entity it's invoked against — it does not see symlinks earlier
-        // in the path. Hence the explicit segment walk.
-        var fullPath = Path.GetFullPath(path);
-        // Seed the builder with the full root (drive + separator on Windows,
-        // "/" on Unix) and split only the REMAINDER after the root. Splitting
-        // the whole path re-emits the drive segment ("C:"), which the root
-        // already provides — appending it again yields "C:\C:\Users\..." so
-        // every Directory.Exists/File.Exists probe below misses and symlink
-        // resolution silently no-ops, failing the deny open. See #1724.
-        var root = Path.GetPathRoot(fullPath) ?? string.Empty;
-        var remainder = fullPath.Length > root.Length ? fullPath[root.Length..] : string.Empty;
-        var segments = remainder.Split(
-            [Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar],
-            StringSplitOptions.RemoveEmptyEntries);
-        var sb = new StringBuilder();
-        sb.Append(root);
-
-        foreach (var segment in segments)
-        {
-            if (sb.Length > 0 && sb[^1] != Path.DirectorySeparatorChar)
-                sb.Append(Path.DirectorySeparatorChar);
-            sb.Append(segment);
-
-            var partial = sb.ToString();
-            if (Directory.Exists(partial))
-            {
-                var target = new DirectoryInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
-                if (target is not null)
-                {
-                    sb.Clear();
-                    sb.Append(target.FullName);
-                }
-            }
-            else if (File.Exists(partial))
-            {
-                var target = new FileInfo(partial).ResolveLinkTarget(returnFinalTarget: true);
-                if (target is not null)
-                {
-                    sb.Clear();
-                    sb.Append(target.FullName);
-                }
-
-                break;
-            }
-        }
-
-        canonical = PathUtility.Normalize(sb.ToString());
-        return !string.IsNullOrEmpty(canonical) && !string.Equals(canonical, PathUtility.Normalize(fullPath), StringComparison.Ordinal);
-    }
-
-    // Only IsDeniedAgainst calls this; it owns exception policy (fails closed).
-    // See the comment on TryResolveSymlinksInPath for why this does not catch.
-    private static bool TryResolveSymlinkTarget(string path, out string normalizedTarget)
-    {
-        normalizedTarget = string.Empty;
-
-        if (File.Exists(path))
-        {
-            var target = new FileInfo(path).ResolveLinkTarget(returnFinalTarget: true);
-            if (target is null)
-                return false;
-
-            normalizedTarget = PathUtility.Normalize(target.FullName);
-            return true;
-        }
-
-        if (Directory.Exists(path))
-        {
-            var target = new DirectoryInfo(path).ResolveLinkTarget(returnFinalTarget: true);
-            if (target is null)
-                return false;
-
-            normalizedTarget = PathUtility.Normalize(target.FullName);
-            return true;
         }
 
         return false;
@@ -538,5 +277,4 @@ public sealed class ToolPathPolicy
             || token.Contains(':', StringComparison.Ordinal)
             || token.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
     }
-
 }

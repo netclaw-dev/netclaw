@@ -1,15 +1,16 @@
 // -----------------------------------------------------------------------
-// <copyright file="GitRepositoryApprovalScopeTests.cs" company="Petabridge, LLC">
+// <copyright file="RepositoryIdentityTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Filesystem;
 using Xunit;
 
 namespace Netclaw.Security.Tests;
 
-public sealed class GitRepositoryApprovalScopeTests
+public sealed class RepositoryIdentityTests
 {
     [Fact]
     public void Candidate_scopes_require_one_registered_repository()
@@ -32,12 +33,8 @@ public sealed class GitRepositoryApprovalScopeTests
             var otherDirectory = Directory.CreateDirectory(
                 Path.Combine(checkoutB, "tasks")).FullName;
 
-            ApprovalCandidate[] siblingCandidates =
-            [
-                new("task-a", checkoutDirectory),
-                new("task-b", worktreeDirectory),
-            ];
-            Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
+            string?[] siblingCandidates = [checkoutDirectory, worktreeDirectory];
+            Assert.True(RepositoryIdentity.TryResolveAll(
                 siblingCandidates, session, out var siblingScopes));
             Assert.Equal(2, siblingScopes!.Count);
             Assert.Equal(checkoutA, siblingScopes[0].WorktreeRoot);
@@ -45,27 +42,22 @@ public sealed class GitRepositoryApprovalScopeTests
             Assert.True(PathUtility.AreEquivalentPaths(
                 siblingScopes[0].CommonDirectory, siblingScopes[1].CommonDirectory));
 
-            ApprovalCandidate[] cwdFallbackCandidates =
-            [
-                new("task-a", null),
-                new("task-b", worktreeDirectory),
-            ];
-            Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
+            string?[] cwdFallbackCandidates = [null, worktreeDirectory];
+            Assert.True(RepositoryIdentity.TryResolveAll(
                 cwdFallbackCandidates, checkoutDirectory, out _));
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
+            Assert.False(RepositoryIdentity.TryResolveAll(
                 cwdFallbackCandidates, session, out _));
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-                [new ApprovalCandidate("task-a", checkoutDirectory),
-                    new ApprovalCandidate("task-b", otherDirectory)],
+            Assert.False(RepositoryIdentity.TryResolveAll(
+                [checkoutDirectory, otherDirectory],
                 session,
                 out _));
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates([], checkoutA, out _));
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate("tasks", cwd: null, out _));
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate(" ", checkoutA, out _));
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate(
+            Assert.False(RepositoryIdentity.TryResolveAll([], checkoutA, out _));
+            Assert.False(RepositoryIdentity.TryResolve("tasks", cwd: null, out _));
+            Assert.False(RepositoryIdentity.TryResolve(" ", checkoutA, out _));
+            Assert.False(RepositoryIdentity.TryResolve(
                 Path.Combine(root.FullName, "missing"), session, out _));
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-                [new ApprovalCandidate("task-a", Path.Combine(checkoutDirectory, ".."))],
+            Assert.False(RepositoryIdentity.TryResolveAll(
+                [Path.Combine(checkoutDirectory, "..")],
                 session,
                 out _));
 
@@ -73,8 +65,7 @@ public sealed class GitRepositoryApprovalScopeTests
             {
                 var alias = Path.Combine(root.FullName, "linked-worktree");
                 Directory.CreateSymbolicLink(alias, worktreeA);
-                Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-                    [new ApprovalCandidate("task-a", alias)], session, out _));
+                Assert.False(RepositoryIdentity.TryResolveAll([alias], session, out _));
             }
         }
         finally
@@ -94,8 +85,8 @@ public sealed class GitRepositoryApprovalScopeTests
             RunGit(root.FullName, "init", main);
             RunGit(main, "worktree", "add", "--orphan", "-b", "sibling", sibling);
 
-            Assert.True(GitRepositoryApprovalScope.TryResolve(main, out var mainScope));
-            Assert.True(GitRepositoryApprovalScope.TryResolve(sibling, out var siblingScope));
+            Assert.True(RepositoryIdentity.TryResolve(candidateDirectory: null, main, out var mainScope));
+            Assert.True(RepositoryIdentity.TryResolve(candidateDirectory: null, sibling, out var siblingScope));
             Assert.Equal(mainScope!.CommonDirectory, siblingScope!.CommonDirectory);
 
             var grant = ApprovalEntry.CreateRepositoryTokenPrefix(
@@ -112,21 +103,21 @@ public sealed class GitRepositoryApprovalScopeTests
             Assert.False(ApprovalPatternMatching.MatchesShellApproval(candidate, sibling, [folder]));
             Assert.True(ApprovalPatternMatching.MatchesShellApproval(candidate, sibling, [grant]));
             var nested = Directory.CreateDirectory(Path.Combine(sibling, "nested")).FullName;
-            Assert.True(GitRepositoryApprovalScope.TryResolve(nested, out var nestedScope));
+            Assert.True(RepositoryIdentity.TryResolve(candidateDirectory: null, nested, out var nestedScope));
             Assert.Equal(mainScope.CommonDirectory, nestedScope!.CommonDirectory);
             Assert.True(ApprovalPatternMatching.MatchesShellApproval(candidate, nested, [grant]));
 
             File.WriteAllText(
                 Path.Combine(main, ".git", "worktrees", "sibling", "commondir"),
                 "../../\n");
-            Assert.True(GitRepositoryApprovalScope.TryResolve(sibling, out var trailingScope));
+            Assert.True(RepositoryIdentity.TryResolve(candidateDirectory: null, sibling, out var trailingScope));
             Assert.Equal(mainScope.CommonDirectory, trailingScope!.CommonDirectory);
             Assert.Equal(0, RunGitExitCode(sibling, "rev-parse", "--show-toplevel"));
 
             var forged = Directory.CreateDirectory(Path.Combine(root.FullName, "forged"));
             var forgedPointer = Path.Combine(forged.FullName, ".git");
             File.WriteAllText(forgedPointer, File.ReadAllText(Path.Combine(sibling, ".git")));
-            Assert.False(GitRepositoryApprovalScope.TryResolve(forged.FullName, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, forged.FullName, out _));
 
             var forgedAdmin = Directory.CreateDirectory(
                 Path.Combine(main, ".git", "worktrees", "forged"));
@@ -135,15 +126,15 @@ public sealed class GitRepositoryApprovalScopeTests
                 Path.Combine(forged.FullName, ".git") + "\n");
             File.WriteAllText(forgedPointer,
                 $"gitdir: {forgedAdmin.FullName}\n");
-            Assert.False(GitRepositoryApprovalScope.TryResolve(forged.FullName, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, forged.FullName, out _));
             Assert.NotEqual(0, RunGitExitCode(forged.FullName, "rev-parse", "--show-toplevel"));
             File.WriteAllText(Path.Combine(forgedAdmin.FullName, "HEAD"), "invalid\n");
-            Assert.False(GitRepositoryApprovalScope.TryResolve(forged.FullName, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, forged.FullName, out _));
             Assert.NotEqual(0, RunGitExitCode(forged.FullName, "rev-parse", "--show-toplevel"));
 
             var moved = Path.Combine(root.FullName, "moved");
             Directory.Move(sibling, moved);
-            Assert.False(GitRepositoryApprovalScope.TryResolve(moved, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, moved, out _));
         }
         finally
         {
@@ -166,10 +157,10 @@ public sealed class GitRepositoryApprovalScopeTests
 
             var alias = Path.Combine(root.FullName, "alias");
             Directory.CreateSymbolicLink(alias, main);
-            Assert.False(GitRepositoryApprovalScope.TryResolve(alias, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, alias, out _));
 
             Directory.CreateSymbolicLink(Path.Combine(main, "external"), outside.FullName);
-            Assert.False(GitRepositoryApprovalScope.TryResolveCandidate(
+            Assert.False(RepositoryIdentity.TryResolve(
                 "external/marker",
                 main,
                 out _));
@@ -200,7 +191,7 @@ public sealed class GitRepositoryApprovalScopeTests
                 main, "link", "..", ".git", "worktrees", "sibling");
             File.WriteAllText(Path.Combine(sibling, ".git"), $"gitdir: {deceptivePointer}\n");
 
-            Assert.False(GitRepositoryApprovalScope.TryResolve(sibling, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, sibling, out _));
 
             Directory.CreateSymbolicLink(
                 Path.Combine(main, "dangling"), Path.Combine(root.FullName, "missing"));
@@ -208,14 +199,14 @@ public sealed class GitRepositoryApprovalScopeTests
                 main, "dangling", "..", ".git", "worktrees", "sibling");
             File.WriteAllText(Path.Combine(sibling, ".git"), $"gitdir: {danglingPointer}\n");
 
-            Assert.False(GitRepositoryApprovalScope.TryResolve(sibling, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, sibling, out _));
 
             File.WriteAllText(Path.Combine(main, "marker"), "file");
             var filePointer = Path.Combine(
                 main, "marker", "..", ".git", "worktrees", "sibling");
             File.WriteAllText(Path.Combine(sibling, ".git"), $"gitdir: {filePointer}\n");
 
-            Assert.False(GitRepositoryApprovalScope.TryResolve(sibling, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, sibling, out _));
         }
         finally
         {

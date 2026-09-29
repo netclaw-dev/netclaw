@@ -47,11 +47,11 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellPolicyEvaluation.CandidateState.ApplyActorEvidence` | Actor evidence cannot replace existing candidate coverage | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers must stay one-time, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 56 killed | `./scripts/run-shell-assignment-mutations.sh` |
-| Approval scope and repository persistence | Folder and repository grants require candidate scope, identity, registration, and containment | 12 killed | `./scripts/run-approval-directory-mutations.sh` |
+| Filesystem authority folder membership, repository identity, and repository persistence | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it | 12 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
-| `SkillManageTool.GuardMutationTarget` | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 3 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
+| `SkillManageTool.GuardMutationTarget` and the filesystem authority link and protection results | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 5 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -131,16 +131,20 @@ Run the approval directory gate:
 ```
 
 The script reuses the xUnit 2 harness.
-It selects six security source regions and three approval actor conditions:
+It selects six security source regions and three approval actor conditions.
+Folder containment and link checks are in the filesystem authority
+(`src/Netclaw.Security/Authorization/Filesystem`). Bash and PowerShell grants use
+the same containment rule and the same link walker, so one containment target
+replaces the two shell-specific targets.
 
 | Decision | Expected mutants |
 |----------|------------------|
-| Windows path containment | 1 killed: remove the logical negation |
-| POSIX path containment | 1 killed: remove the logical negation |
-| POSIX link rejection | 2 killed: force either conditional outcome |
+| Folder containment (`FileSystemAuthority`, both shells) | 1 killed: remove the logical negation |
+| Folder link rule starts below the grant root (`LinkRule.BelowRoot`) | 1 killed: include the root in the link check |
+| Link rejection result | 2 killed: force either conditional outcome |
 | Candidate repository scope and identity | 3 killed: force a result or relax the identity check |
-| Common identity across candidates | 1 killed: remove the logical negation |
-| Reciprocal worktree registration | 1 killed: remove the logical negation |
+| Common identity across candidates (`RepositoryIdentity`) | 1 killed: remove the logical negation |
+| Reciprocal worktree registration (`RepositoryIdentity`) | 1 killed: remove the logical negation |
 | Persistence candidate resolution | 1 killed: remove the logical negation |
 | Persistence common identity | 1 killed: remove the logical negation |
 | Persistence worktree root | 1 killed: remove the logical negation |
@@ -150,13 +154,14 @@ It fails if a target is absent, survives, exceeds its time limit, or cannot comp
 The source selector rejects an absent or duplicate boundary before Stryker starts.
 This protects the gate when the authorization code and diagnostic code contain similar conditions.
 
-Seventeen cases exercise the approval matcher and persistence gate with real directories and links.
+Eighteen cases exercise the approval matcher and persistence gate with real directories and links.
 They cover the grant root, normal descendants, sibling prefixes, traversal, relative paths, and candidate scope that differs from cwd.
+One case proves that a grant root which is itself a link still covers its children (R3).
 The repository cases cover candidate resolution, mixed identities, reciprocal registration, and a nested registered worktree.
 The link cases prove that the link reaches the sibling directory before they require denial.
 Windows path cases cover case rules, drive boundaries, and traversal on every host.
 The native filesystem cases select Bash on POSIX hosts and PowerShell on Windows.
-The Linux mutation job does not mutate the Windows link branch; the ordinary Windows test job exercises that branch.
+The Linux mutation job runs the shared link walker on POSIX links only; the ordinary Windows test job exercises Windows links.
 
 The matcher shares `EvaluateApprovalScope` with `ToolApprovalActor` and shell approval evidence validation.
 These tests preserve PRD-002 SEC-003 and
@@ -224,24 +229,32 @@ Run the skill_manage guard gate:
 ./scripts/run-skill-manage-guard-mutations.sh
 ```
 
-The script reuses the xUnit 2 harness and selects three decisions in
-`SkillManageTool.GuardMutationTarget`:
+The script reuses the xUnit 2 harness. `SkillManageTool.GuardMutationTarget`
+asks the filesystem authority for the link and protection decisions, so two
+targets are in `FileSystemAuthority` (project `Netclaw.Security`) and one is in
+`SkillManageTool` (project `Netclaw.Actors`):
 
-| Decision | Expected mutant |
-|----------|-----------------|
-| Link check | Negate the `PathUtility.ContainsSymlinkSegment` result |
-| Protected-path check | Negate the `ToolPathPolicy.IsDenied` result |
-| Atomic-write temp file | Remove the statement that adds `<target>.tmp` to the checked paths |
+| Decision | Expected mutants |
+|----------|------------------|
+| Link check result | 2 killed: force either conditional outcome |
+| Protected-path check result | 2 killed: force either conditional outcome |
+| Atomic-write temp file | 1 killed: remove the statement that adds `<target>.tmp` to the checked paths |
 
-Each location must produce one killed mutant. The report must contain exactly three tested mutants.
+The claims did not change. The count changed from three to five because each
+authority result is a conditional expression. Stryker tests "always" and
+"never" for it, where the earlier `if` call had one negation. The approval
+directory gate also covers the shared link result line.
+Each location must produce its killed mutants, and each report must contain
+exactly that many tested mutants.
 The gate fails if a marker is absent or duplicated, a mutant survives, or a mutant cannot compile.
 
 Four cases use a real temp skills tree and the production `DaemonToolPathPolicyFactory` deny list.
 A control write must succeed. A write through a linked directory, a write through a link at
 `<target>.tmp`, and a flat-file skill write into `.system` must fail and leave outside files unchanged.
 
-The gate omits the `catch` branch. No deterministic test can make the helpers throw yet,
-so a mutant that allows on error would survive.
+The gate omits the inspection-failure branch (`PathDecision.Unverifiable`). No
+deterministic test can make the link walker fail yet, so a mutant that allows on
+error would survive.
 The gate does not prove the absence of a race between the check and the write.
 
 The local run took 1 minute 54 seconds after package restore.

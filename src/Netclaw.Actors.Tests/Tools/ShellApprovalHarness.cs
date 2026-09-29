@@ -15,6 +15,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -518,7 +519,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         ApprovalShell shell,
         string worktree)
     {
-        if (!GitRepositoryApprovalScope.TryResolve(worktree, out var scope))
+        if (!RepositoryIdentity.TryResolve(candidateDirectory: null, worktree, out var scope))
             throw new InvalidOperationException("The test repository worktree is not registered.");
 
         return CreateGrant(pattern, shell, directory: null) with
@@ -544,7 +545,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         if (grant.Repository is not null)
         {
             if (grant.RepositoryWorktree is null
-                || !GitRepositoryApprovalScope.TryResolveCandidate(
+                || !RepositoryIdentity.TryResolve(
                     grant.Candidate.Directory,
                     grant.RepositoryWorktree,
                     out var scope)

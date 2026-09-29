@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -25,23 +26,23 @@ internal static class ManagedTemporaryEnvironment
 
         try
         {
-            var normalizedRoot = PathUtility.Normalize(location.StorageRoot.Value);
             var normalizedTemporaryDirectory = PathUtility.Normalize(location.Directory.Value);
+            if (!CanonicalPath.TryCreateHost(location.StorageRoot.Value, relativeBase: null, out var root)
+                || !CanonicalPath.TryCreateHost(normalizedTemporaryDirectory, relativeBase: null, out var temporary))
+            {
+                return "Error: The managed temporary directory contains an unsafe filesystem link.";
+            }
 
-            if (PathUtility.ContainsSymlinkSegment(
-                    normalizedRoot,
-                    normalizedTemporaryDirectory,
-                    includeRoot: true))
+            // Check before and after creation: a link can appear between the two.
+            PathBoundary[] storage = [new PathBoundary.Folder(root, LinkRule.IncludingRoot)];
+            if (FileSystemAuthority.EvaluateMembership(temporary, storage) is not PathDecision.Allowed)
                 return "Error: The managed temporary directory contains an unsafe filesystem link.";
 
             Directory.CreateDirectory(normalizedTemporaryDirectory);
             if (!Directory.Exists(normalizedTemporaryDirectory))
                 return $"Error: Managed temporary directory '{normalizedTemporaryDirectory}' was not created.";
 
-            if (PathUtility.ContainsSymlinkSegment(
-                    normalizedRoot,
-                    normalizedTemporaryDirectory,
-                    includeRoot: true))
+            if (FileSystemAuthority.EvaluateMembership(temporary, storage) is not PathDecision.Allowed)
                 return "Error: The managed temporary directory contains an unsafe filesystem link.";
 
             startInfo.Environment["TMPDIR"] = normalizedTemporaryDirectory;

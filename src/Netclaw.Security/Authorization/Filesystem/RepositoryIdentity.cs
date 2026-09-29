@@ -1,61 +1,75 @@
 // -----------------------------------------------------------------------
-// <copyright file="GitRepositoryApprovalScope.cs" company="Petabridge, LLC">
+// <copyright file="RepositoryIdentity.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
-namespace Netclaw.Security;
+namespace Netclaw.Security.Authorization.Filesystem;
 
 /// <summary>
-/// A repository grant uses reciprocal Git worktree metadata as its authority.
-/// A .git pointer alone does not register a worktree.
+/// The Git repository that owns a directory. The identity is the Git common
+/// directory. A linked worktree counts only with reciprocal worktree metadata; a
+/// <c>.git</c> pointer alone does not register a worktree.
 /// </summary>
-internal sealed record GitRepositoryApprovalScope(
+/// <remarks>
+/// <see cref="TryResolve"/> reads Git metadata on every call and caches nothing
+/// (R9). A cached identity would accept a worktree registration that changed after
+/// the prompt. The resolver takes raw text so that it can refuse a <c>..</c> segment
+/// before normalization (R14). Any link from the volume root to a Git file refuses
+/// the identity.
+/// </remarks>
+internal sealed record RepositoryIdentity(
     string WorktreeRoot,
     string CommonDirectory,
     string ResolvedDirectory)
 {
     private const int MaximumPointerBytes = 4096;
 
-    internal static bool TryResolveCandidates(
-        IReadOnlyList<ApprovalCandidate> candidates,
+    /// <summary>Resolves every directory to one repository, or fails.</summary>
+    internal static bool TryResolveAll(
+        IReadOnlyList<string?> candidateDirectories,
         string? cwd,
-        out IReadOnlyList<GitRepositoryApprovalScope>? scopes)
+        out IReadOnlyList<RepositoryIdentity>? identities)
     {
-        scopes = null;
-        if (candidates.Count == 0)
+        identities = null;
+        if (candidateDirectories.Count == 0)
             return false;
 
-        var resolved = new GitRepositoryApprovalScope[candidates.Count];
-        for (var index = 0; index < candidates.Count; index++)
+        var resolved = new RepositoryIdentity[candidateDirectories.Count];
+        for (var index = 0; index < candidateDirectories.Count; index++)
         {
-            if (!TryResolveCandidate(candidates[index].Directory, cwd, out var scope)
-                || scope is null
+            if (!TryResolve(candidateDirectories[index], cwd, out var identity)
+                || identity is null
                 || index > 0
-                && !PathUtility.AreEquivalentPaths(resolved[0].CommonDirectory, scope.CommonDirectory))
+                && !PathUtility.AreEquivalentPaths(resolved[0].CommonDirectory, identity.CommonDirectory))
             {
                 return false;
             }
 
-            resolved[index] = scope;
+            resolved[index] = identity;
         }
 
-        scopes = Array.AsReadOnly(resolved);
+        identities = Array.AsReadOnly(resolved);
         return true;
     }
 
-    internal static bool TryResolveCandidate(
+    /// <summary>
+    /// Resolves the repository of <paramref name="candidateDirectory"/>, or of
+    /// <paramref name="cwd"/> when the candidate is null. A relative candidate
+    /// resolves against the cwd after home expansion.
+    /// </summary>
+    internal static bool TryResolve(
         string? candidateDirectory,
         string? cwd,
-        out GitRepositoryApprovalScope? scope)
+        out RepositoryIdentity? identity)
     {
-        scope = null;
+        identity = null;
         if (candidateDirectory is not null
             && (string.IsNullOrWhiteSpace(candidateDirectory)
-                || ShellPathRules.HasParentDirectorySegment(candidateDirectory)
+                || CanonicalPath.HasParentSegment(candidateDirectory)
                 || !Path.IsPathFullyQualified(candidateDirectory)
                 && (string.IsNullOrWhiteSpace(cwd)
                     || !Path.IsPathFullyQualified(cwd)
-                    || ShellPathRules.HasParentDirectorySegment(cwd))))
+                    || CanonicalPath.HasParentSegment(cwd))))
         {
             return false;
         }
@@ -65,21 +79,20 @@ internal sealed record GitRepositoryApprovalScope(
             var effectiveDirectory = candidateDirectory is null
                 ? cwd
                 : PathUtility.ExpandAndNormalize(candidateDirectory, cwd);
-            return TryResolve(effectiveDirectory, out scope);
+            return TryResolveDirectory(effectiveDirectory, out identity);
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException
-                                   or UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception ex) when (FileSystemAuthority.IsInspectionFailure(ex))
         {
             return false;
         }
     }
 
-    internal static bool TryResolve(string? cwd, out GitRepositoryApprovalScope? scope)
+    private static bool TryResolveDirectory(string? cwd, out RepositoryIdentity? identity)
     {
-        scope = null;
+        identity = null;
         if (string.IsNullOrWhiteSpace(cwd)
             || !Path.IsPathFullyQualified(cwd)
-            || ShellPathRules.HasParentDirectorySegment(cwd))
+            || CanonicalPath.HasParentSegment(cwd))
         {
             return false;
         }
@@ -97,7 +110,7 @@ internal sealed record GitRepositoryApprovalScope(
                 {
                     if (!HasLink(dotGit) && IsGitCommonDirectory(dotGit))
                     {
-                        scope = new GitRepositoryApprovalScope(root, dotGit, candidate);
+                        identity = new RepositoryIdentity(root, dotGit, candidate);
                         return true;
                     }
 
@@ -143,12 +156,11 @@ internal sealed record GitRepositoryApprovalScope(
                     return false;
                 }
 
-                scope = new GitRepositoryApprovalScope(root, common, candidate);
+                identity = new RepositoryIdentity(root, common, candidate);
                 return true;
             }
         }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException
-                                   or UnauthorizedAccessException or System.Security.SecurityException)
+        catch (Exception ex) when (FileSystemAuthority.IsInspectionFailure(ex))
         {
             return false;
         }
@@ -189,8 +201,13 @@ internal sealed record GitRepositoryApprovalScope(
     }
 
     private static bool HasLink(string path)
-        => PathUtility.ContainsSymlinkSegment(Path.GetPathRoot(path)!, path, includeRoot: true);
+        => FileSystemAuthority.CrossesLink(Path.GetPathRoot(path)!, path, includeAnchor: true);
 
+    /// <summary>
+    /// Walks an authored Git pointer and refuses a link, a file in a directory
+    /// position, or a target of the wrong kind. The general link walker cannot do
+    /// this: it does not know which segment must be a directory.
+    /// </summary>
     private static bool HasUnsafePointerSegment(
         string pointer,
         string baseDirectory,

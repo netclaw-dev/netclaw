@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
@@ -22,10 +23,9 @@ internal static class BashCausalApprovalIntent
         ShellExecutionEnvironment environment,
         ShellCommandAnalysis execution,
         ShellApprovalMatcher matcher,
-        Func<string, bool> isAllowedHostPath,
+        LinkRule hostLinks,
         out IReadOnlyList<BashCausalApprovalCandidate> candidates)
     {
-        ArgumentNullException.ThrowIfNull(isAllowedHostPath);
         candidates = [];
         if (environment.Grammar != ShellGrammar.Bash
             || !execution.IsResolved
@@ -37,13 +37,16 @@ internal static class BashCausalApprovalIntent
 
         var projected = new List<BashCausalApprovalCandidate>();
         var prerequisites = new List<int>();
-        if (!ShellPathRules.TryNormalize(
+        if (!CanonicalPath.TryCreate(
                 execution.WorkingDirectory,
+                relativeBase: null,
                 ShellPathStyle.Posix,
-                out var initialDirectory))
+                out var initialPath))
         {
             return false;
         }
+
+        var initialDirectory = initialPath.Value;
 
         var fallbackDirectories = new List<string> { initialDirectory };
         string? intentDirectory = null;
@@ -65,7 +68,7 @@ internal static class BashCausalApprovalIntent
                         matcher,
                         occurrence,
                         execution.WorkingDirectory,
-                        isAllowedHostPath,
+                        hostLinks,
                         out var transitionCandidates))
                 {
                     return false;
@@ -78,7 +81,7 @@ internal static class BashCausalApprovalIntent
                         matcher,
                         firstAction,
                         execution.WorkingDirectory,
-                        isAllowedHostPath,
+                        hostLinks,
                         out var actionCandidates))
                 {
                     return false;
@@ -111,7 +114,7 @@ internal static class BashCausalApprovalIntent
                 occurrence,
                 intentDirectory,
                 resolveUnknownPathsFromEffectiveValues: true,
-                isAllowedHostPath);
+                hostLinks);
             if (intentCandidates is not { Count: > 0 }
                 || intentCandidates.Any(candidate =>
                     candidate.Directory is { } directory
@@ -193,14 +196,14 @@ internal static class BashCausalApprovalIntent
         ShellApprovalMatcher matcher,
         CommandOccurrence occurrence,
         string? executionWorkingDirectory,
-        Func<string, bool> isAllowedHostPath,
+        LinkRule hostLinks,
         out IReadOnlyList<ApprovalCandidate> candidates)
     {
         candidates = matcher.ExtractCandidatesForOccurrence(
             occurrence,
             executionWorkingDirectory,
             resolveUnknownPathsFromEffectiveValues: false,
-            isAllowedHostPath) ?? [];
+            hostLinks) ?? [];
         return candidates.Count > 0
                && !candidates.Any(ApprovalPatternMatching.IsPureSideEffect);
     }
@@ -241,10 +244,9 @@ internal static class BashCausalApprovalIntent
             return false;
         }
 
-        return ShellPathRules.TryNormalize(
-            exact.Value,
-            ShellPathStyle.Posix,
-            out target);
+        var created = CanonicalPath.TryCreate(exact.Value, relativeBase: null, ShellPathStyle.Posix, out var path);
+        target = created ? path.Value : string.Empty;
+        return created;
     }
 
     private static bool HasUnknownArgumentValue(CommandOccurrence occurrence) =>
@@ -252,20 +254,12 @@ internal static class BashCausalApprovalIntent
             !argument.Argument.IsPath
             && argument.Value is ShellValueDomain.Unknown);
 
+    // An intent directory is approval scope, not a trusted root. Its candidates
+    // must stay inside it without a link below it.
     private static bool IsWithinIntent(string path, string intentDirectory)
-    {
-        try
-        {
-            return PathUtility.IsWithinRoot(path, intentDirectory)
-                   && !PathUtility.ContainsSymlinkSegment(intentDirectory, path);
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or IOException
-                                      or NotSupportedException
-                                      or UnauthorizedAccessException
-                                      or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
+        => CanonicalPath.TryCreateHost(path, relativeBase: null, out var candidate)
+           && CanonicalPath.TryCreateHost(intentDirectory, relativeBase: null, out var intent)
+           && FileSystemAuthority.EvaluateMembership(
+               candidate,
+               [new PathBoundary.Folder(intent, LinkRule.BelowRoot)]) is PathDecision.Allowed;
 }

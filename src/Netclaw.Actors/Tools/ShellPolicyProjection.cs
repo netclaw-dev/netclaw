@@ -6,6 +6,7 @@
 using System.Collections.Frozen;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -115,14 +116,13 @@ internal sealed record ShellPolicyProjection
         ShellCommandAnalysis? execution,
         ToolApprovalContext approvalContext,
         ToolExecutionContext context,
-        Func<string, bool> isAllowedHostPath,
+        LinkRule hostLinks,
         out ShellPolicyProjection? projection)
     {
         ArgumentNullException.ThrowIfNull(environment);
         ArgumentNullException.ThrowIfNull(matcher);
         ArgumentNullException.ThrowIfNull(approvalContext);
         ArgumentNullException.ThrowIfNull(context);
-        ArgumentNullException.ThrowIfNull(isAllowedHostPath);
 
         projection = null;
         if (approvalContext.Candidates is null)
@@ -135,7 +135,7 @@ internal sealed record ShellPolicyProjection
                 environment,
                 execution,
                 matcher,
-                isAllowedHostPath,
+                hostLinks,
                 out var causalCandidates))
         {
             return TryCreateCausal(

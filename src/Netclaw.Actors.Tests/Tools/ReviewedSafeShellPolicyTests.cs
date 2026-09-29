@@ -6,6 +6,7 @@
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 using Xunit;
@@ -553,25 +554,25 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         try
         {
             Directory.CreateSymbolicLink(alias, target);
+            // The intent root is a link that an earlier stage already accepted.
+            // Build the consumer candidate the way causal projection does, so
+            // this case checks only the reviewed-safe root rule (R3).
             var environment = ShellExecutionEnvironmentDefaults.Bash;
             var command = $"cd {alias} && inspect > result.log 2>&1; head result.log";
             var analysis = new ShellCommandAnalyzer(environment).Analyze(command, _projectDir);
-            var matcher = new ShellApprovalMatcher(environment);
-            Assert.True(BashCausalApprovalIntent.TryProject(
-                environment,
-                analysis,
-                matcher,
-                path => PathUtility.IsWithinRoot(path, alias),
-                out var causalCandidates));
-
-            var source = causalCandidates[^1];
+            var consumer = analysis.Commands[^1];
+            var candidate = Assert.Single(new ShellApprovalMatcher(environment).ExtractCandidatesForOccurrence(
+                consumer,
+                alias,
+                resolveUnknownPathsFromEffectiveValues: true,
+                LinkRule.FromVolumeRoot)!);
             var projected = new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(0),
-                source.Candidate,
-                source.SourceOccurrence)
+                candidate with { Directory = null, SourceOccurrence = null },
+                consumer)
             {
-                Role = source.Role,
-                IntentDirectory = source.IntentDirectory
+                Role = ShellPolicyCandidateRole.CausalIntentConsumer,
+                IntentDirectory = alias
             };
             var facts = Assert.Single(ShellPolicyPathFacts.Create(
                 [projected],
@@ -587,6 +588,31 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         {
             SafeDelete(target);
         }
+    }
+
+    [Fact]
+    public void Global_read_root_allows_a_file_read_but_not_reviewed_safe_coverage()
+    {
+        // R12: reviewed-safe roots are only the session and the project. A global
+        // read root (skills, identity, workspaces) lets file tools read. It must
+        // not let a safe verb run there without a prompt.
+        var skillDirectory = Path.Combine(_paths.SkillsDirectory, "example");
+        Directory.CreateDirectory(skillDirectory);
+        var unattended = TestToolExecutionContext.CreateBound("session-1", _sessionDir, new TestToolExecutionContextOptions
+        {
+            Audience = TrustAudience.Personal,
+            ProjectDirectory = _projectDir,
+            InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
+        }).Invocation;
+        var pathPolicy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
+        var policy = CreatePolicy(VerbList("cat"));
+
+        Assert.IsType<PathAccessPolicy.PathAccessDecision.Allowed>(pathPolicy.Evaluate(
+            Path.Combine(skillDirectory, "SKILL.md"),
+            unattended,
+            PathAccessPolicy.FileOperation.Read));
+        Assert.False(AllShortCircuit(policy, [Candidate("cat", skillDirectory)], skillDirectory, unattended));
+        Assert.True(AllShortCircuit(policy, [Candidate("cat", _projectDir)], _projectDir, unattended));
     }
 
     [Fact]

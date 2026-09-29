@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -36,13 +37,14 @@ internal sealed record BashStaticCompoundApprovalProjection(
                 {
                     Target: ShellValueDomain.Exact
                 })
-            || !ShellPathRules.TryNormalize(
+            || !CanonicalPath.TryCreate(
                 source.WorkingDirectory,
+                relativeBase: null,
                 ShellPathStyle.Posix,
                 out var initialDirectory)
             || !source.Environment.TryProjectFiniteBashScopes(
                 source.Source,
-                initialDirectory,
+                initialDirectory.Value,
                 out var finite)
             || finite is null
             || source.Commands.Count != finite.Parsed.Commands.Count
@@ -62,17 +64,19 @@ internal sealed record BashStaticCompoundApprovalProjection(
                 || scoped.Source.Length > source.Source.Length - scoped.SourceStart
                 || !source.Source.AsSpan(scoped.SourceStart, scoped.Source.Length)
                     .SequenceEqual(scoped.Source.AsSpan())
-                || !ShellPathRules.TryNormalize(
+                || !CanonicalPath.TryCreate(
                     scoped.WorkingDirectory,
+                    relativeBase: null,
                     ShellPathStyle.Posix,
-                    out var directory)
-                || !string.Equals(directory, scoped.WorkingDirectory, StringComparison.Ordinal)
+                    out var scopedPath)
+                || !string.Equals(scopedPath.Value, scoped.WorkingDirectory, StringComparison.Ordinal)
                 || scoped.ScopedOccurrence.WorkingDirectory is not ShellValueDomain.Exact scopedDirectory
-                || !string.Equals(scopedDirectory.Value, directory, StringComparison.Ordinal))
+                || !string.Equals(scopedDirectory.Value, scopedPath.Value, StringComparison.Ordinal))
             {
                 return false;
             }
 
+            var directory = scopedPath.Value;
             var analysis = commandPolicy.Analyze(scoped.Source, directory);
             if (!analysis.IsResolved
                 || analysis.HasDynamicSyntax

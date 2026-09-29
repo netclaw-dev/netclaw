@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -40,7 +41,7 @@ public sealed class ShellProcessLaunch
         WorkingDirectory = workingDirectory;
         if (!Path.IsPathFullyQualified(WorkingDirectory))
             throw new ShellProcessStartException("Shell execution requires an absolute working directory.");
-        if (ShellPathRules.HasParentDirectorySegment(WorkingDirectory))
+        if (CanonicalPath.HasParentSegment(WorkingDirectory))
             throw new ShellProcessStartException("Shell execution requires a working directory without parent traversal segments.");
         _context = context;
         _commandPolicy = commandPolicy;
@@ -113,7 +114,7 @@ public sealed class ShellProcessLaunch
 
         return paths.Order(StringComparer.Ordinal).Select(static path =>
         {
-            ToolPathPolicy.TryResolveSymlinksInPath(path, out var target);
+            FileSystemAuthority.TryResolveLinks(path, out var target);
             return new LaunchPathState(path, target, Directory.Exists(path));
         }).ToArray();
 

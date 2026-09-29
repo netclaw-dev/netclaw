@@ -6,6 +6,7 @@
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -123,7 +124,7 @@ internal sealed class ShellPolicyCoordinator(
                 continuation.Analysis,
                 continuation.ApprovalContext,
                 context,
-                policy.IsEligiblePlatformTemporaryPath,
+                LinkRule.FromVolumeRootExceptTemporaryAlias,
                 out var projection)
             || projection is null)
         {
@@ -260,27 +261,23 @@ internal sealed class ShellPolicyCoordinator(
             || !ReferenceEquals(simple.Clause, first.Clause)
             || list.Items[1].Operator != CompoundOperator.AndIf
             || exact.Value.Any(char.IsControl)
-            || !ShellPathRules.TryNormalize(exact.Value, ShellPathStyle.Posix, out var target))
+            || !CanonicalPath.TryCreate(exact.Value, relativeBase: null, ShellPathStyle.Posix, out var target)
+            || !CanonicalPath.TryCreateHost(projectDirectory, relativeBase: null, out var project))
         {
             return null;
         }
 
-        try
-        {
-            if (!PathUtility.IsWithinRoot(target, projectDirectory)
-                || PathUtility.AreEquivalentPaths(target, projectDirectory)
-                || PathUtility.ContainsSymlinkSegment(projectDirectory, target)
-                || !Directory.Exists(target))
-            {
-                return null;
-            }
-        }
-        catch (Exception ex) when (ex is ArgumentException or IOException or NotSupportedException or UnauthorizedAccessException)
+        // Advice only: the target must be strictly below the project without a link.
+        if (target.IsSamePath(project)
+            || FileSystemAuthority.EvaluateMembership(
+                target,
+                [new PathBoundary.Folder(project, LinkRule.BelowRoot)]) is not PathDecision.Allowed
+            || !Directory.Exists(target.Value))
         {
             return null;
         }
 
-        return new ToolCorrection.ShellWorkingDirectorySuggested(target);
+        return new ToolCorrection.ShellWorkingDirectorySuggested(target.Value);
     }
 
     private ToolCorrection.ProjectDirectorySuggested? GetAvailableProjectCorrection(
