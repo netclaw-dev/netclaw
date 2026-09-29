@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using System.Text.Json;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -350,6 +351,218 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
         Assert.Equal("freshdesk ticket reply 605 --message (2 lines, 42 chars)", observed.Prompt!.DisplayText);
     }
 
+    // ── 3 (continued). Home expansion, custom workspaces, and no trusted roots ──
+    // Old coverage: PathAccessPolicyHomeExpansionTests, UnattendedPathAccessTests.
+
+    [SlopwatchSuppress("SW001", "The home tokens use POSIX shell syntax.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The home tokens use POSIX shell syntax.")]
+    [InlineData("~")]
+    [InlineData("$HOME")]
+    [InlineData("${HOME}")]
+    public async Task Configured_write_root_expands_the_home_directory(string homeToken)
+    {
+        var folder = $".netclaw-home-root-{Guid.NewGuid():N}";
+        await using var harness = await CreateHarnessAsync(
+            "home-root",
+            policy: new ShellApprovalHarnessPolicy
+            {
+                ConfigureTools = config =>
+                {
+                    config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots
+                    };
+                    config.AudienceProfiles.Personal.WriteFiles.Roots.Add($"{homeToken}/{folder}");
+                }
+            });
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var inside = Path.Combine(home, folder, "notes.txt");
+        var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
+
+        var allowed = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", inside, "Content", "x"), Ct);
+        var denied = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", outside, "Content", "x"), Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, allowed.Outcome);
+        Assert.Equal(ApprovalOutcome.Denied, denied.Outcome);
+        Assert.Equal("path_access_denied", denied.DenyReason);
+        Assert.False(Directory.Exists(Path.Combine(home, folder)));
+    }
+
+    [Fact]
+    public async Task Unattended_session_can_write_a_configured_custom_workspaces_directory()
+    {
+        var custom = ApprovalTestGit.CreateRoot("netclaw-custom-workspaces-");
+        try
+        {
+            await using var harness = await CreateHarnessAsync(
+                "custom-workspaces",
+                new ShellApprovalInvocation("true", Interactive: false),
+                policy: new ShellApprovalHarnessPolicy { WorkspacesDirectory = custom.FullName });
+            var defaultLocation = Path.Combine(harness.Paths.BasePath, "workspaces", "state.json");
+
+            var customWrite = await harness.EvaluateToolAsync(
+                "file_write",
+                ToolInput.Create("Path", Path.Combine(custom.FullName, "state.json"), "Content", "x"),
+                Ct);
+            var defaultWrite = await harness.EvaluateToolAsync(
+                "file_write",
+                ToolInput.Create("Path", defaultLocation, "Content", "x"),
+                Ct);
+
+            Assert.Equal(ApprovalOutcome.Allowed, customWrite.Outcome);
+            Assert.Equal(ApprovalOutcome.Denied, defaultWrite.Outcome);
+            Assert.Equal(UnattendedRootsMessage, defaultWrite.DenyMessage);
+        }
+        finally
+        {
+            custom.Delete(recursive: true);
+        }
+    }
+
+    [Fact]
+    public async Task Unattended_call_without_a_session_or_project_fails_closed()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "no-trusted-roots",
+            new ShellApprovalInvocation("true", Interactive: false),
+            policy: new ShellApprovalHarnessPolicy { Sessionless = true });
+        var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
+
+        var write = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", outside, "Content", "x"), Ct);
+        var read = await harness.EvaluateToolAsync("file_read", ToolInput.Create("Path", outside), Ct);
+
+        Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
+        Assert.Equal("path_access_denied", write.DenyReason);
+        Assert.Equal(ApprovalOutcome.Denied, read.Outcome);
+        Assert.Equal("path_access_denied", read.DenyReason);
+    }
+
+    // ── 5 (continued). Nested secrets and the display size bound ──
+
+    // The MCP adapter rejects a tool name over 128 characters, so only an
+    // argument name can reach the display bound.
+    [Fact]
+    public async Task Mcp_approval_prompt_redacts_nested_secrets_and_bounds_an_oversized_argument_name()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "mcp-display-bounds",
+            policy: new ShellApprovalHarnessPolicy
+            {
+                PersonalApprovalOverrides = new Dictionary<string, ToolApprovalMode>
+                {
+                    ["service/configure"] = ToolApprovalMode.Approval
+                }
+            });
+        var toolName = harness.RegisterMcpTool("service", "configure");
+
+        var bounded = await harness.EvaluateToolAsync(
+            toolName,
+            new Dictionary<string, object?> { [new string('k', 10_000)] = "must-not-appear" },
+            Ct);
+        // Model tool arguments arrive as JSON elements.
+        using var settings = JsonDocument.Parse("""{"password":"nested-password","safe":"visible"}""");
+        var nested = await harness.EvaluateToolAsync(
+            toolName,
+            new Dictionary<string, object?> { ["settings"] = settings.RootElement.Clone() },
+            Ct);
+
+        var boundedDisplay = bounded.Prompt!.DisplayText;
+        Assert.True(boundedDisplay.Length <= 1_600, $"display length {boundedDisplay.Length}");
+        Assert.DoesNotContain("must-not-appear", boundedDisplay, StringComparison.Ordinal);
+        Assert.Contains("10000\\u0020chars", boundedDisplay, StringComparison.Ordinal);
+        Assert.DoesNotContain(new string('k', 2_000), boundedDisplay, StringComparison.Ordinal);
+        var nestedDisplay = nested.Prompt!.DisplayText;
+        Assert.DoesNotContain("nested-password", nestedDisplay, StringComparison.Ordinal);
+        Assert.Contains("REDACTED", nestedDisplay, StringComparison.Ordinal);
+        Assert.Contains("visible", nestedDisplay, StringComparison.Ordinal);
+    }
+
+    // ── 11 (continued). Fallback shell wrappers ──
+    // Old coverage: ShellAssignmentDigestTests Assignment_in_a_fallback_shell_wrapper_stays_one_time.
+
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData("bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("dash -c \"mode='fast'; inspect item\"")]
+    [InlineData("env bash -lc \"mode='fast'; inspect item\"")]
+    [InlineData("timeout 5 bash -lc \"mode='fast'; inspect item\"")]
+    public async Task Assignment_in_a_fallback_shell_wrapper_gets_only_a_one_time_answer(string command)
+    {
+        await using var harness = await CreateHarnessAsync(
+            "fallback-wrapper",
+            new ShellApprovalInvocation("true", Host: ShellApprovalHost.Bash52));
+
+        var assigned = await harness.EvaluateShellAsync(command, Ct);
+        var plain = await harness.EvaluateShellAsync("bash -lc \"inspect item\"", Ct);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, assigned.Outcome);
+        Assert.True(assigned.Prompt!.IsMessy);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], assigned.Prompt.OptionKeys);
+        Assert.False(plain.Prompt!.IsMessy);
+        Assert.Contains(ObservedOptionKeys.ApproveSession, plain.Prompt.OptionKeys);
+    }
+
+    // ── 14 (continued). Native temporary roots on macOS and Windows ──
+
+    public static bool IsMacOS => OperatingSystem.IsMacOS();
+
+    public static bool IsWindows => OperatingSystem.IsWindows();
+
+    [SlopwatchSuppress("SW001", "The macOS temporary directory is /var/folders behind the /var link.")]
+    [Fact(SkipUnless = nameof(IsMacOS), Skip = "The macOS temporary directory is /var/folders behind the /var link.")]
+    public async Task MacOS_temporary_directory_gets_advice_with_its_canonical_root()
+    {
+        await using var harness = await CreateHarnessAsync("macos-temporary-root");
+        var temporary = Path.TrimEndingDirectorySeparator(Path.GetTempPath());
+        var canonical = CanonicalPath(temporary);
+
+        var observed = await harness.EvaluateShellAsync($"cd '{temporary}' && touch marker.txt", Ct);
+
+        Assert.StartsWith("/private/var/", canonical, StringComparison.Ordinal);
+        Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, observed.Outcome);
+        Assert.Equal(ApprovalCorrection.ManagedTemporaryDirectory, observed.AgentCorrection);
+        Assert.Equal(canonical, observed.PlatformTemporaryRoot);
+    }
+
+    [SlopwatchSuppress("SW001", "The case uses native Windows %TEMP% and PowerShell semantics.")]
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "The case uses native Windows %TEMP% and PowerShell semantics.")]
+    public async Task Windows_temporary_directory_as_working_directory_gets_advice()
+    {
+        var root = ApprovalTestGit.CreateRoot("netclaw-windows-temporary-root-");
+        try
+        {
+            var project = Directory.CreateDirectory(Path.Combine(root.FullName, "project")).FullName;
+            var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session")).FullName;
+            await using var harness = await CreateHarnessAsync(
+                "windows-temporary-root",
+                new ShellApprovalInvocation("Get-Content result.log", Host: ShellApprovalHost.PowerShell7),
+                scope: new ShellApprovalHarnessScope(project, session, "signalr/windows-temporary-root", []));
+            var temporary = Path.TrimEndingDirectorySeparator(Path.GetTempPath());
+
+            var observed = await harness.EvaluateShellAsync("Get-Content result.log", Ct, temporary);
+
+            Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, observed.Outcome);
+            Assert.Equal(ApprovalCorrection.ManagedTemporaryDirectory, observed.AgentCorrection);
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    private static string CanonicalPath(string path)
+    {
+        var root = Path.GetPathRoot(path)!;
+        var current = root;
+        foreach (var segment in path[root.Length..].Split('/', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var candidate = Path.Combine(current, segment);
+            current = new DirectoryInfo(candidate).ResolveLinkTarget(returnFinalTarget: true)?.FullName ?? candidate;
+        }
+
+        return current;
+    }
+
     // ── 7. Legacy tokenizer inputs to hard deny and protected paths ──
     // Old coverage: ShellTokenizerTests. A background "&" leaves the structural
     // analysis unresolved, so these checks use the legacy tokenizer.
@@ -380,6 +593,8 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [InlineData("git tag 0.4.2", "git tag")]
     [InlineData("freshdesk ticket get 123", "freshdesk ticket get")]
     [InlineData("git log v0.4.1..dev", "git log")]
+    [InlineData("timeout 30 curl http://example.com", "timeout")]
+    [InlineData("git commit -m \"fix the bug\"", "git commit")]
     public async Task Prompt_candidate_drops_trailing_version_and_number_operands(string command, string candidate)
     {
         await using var harness = await CreateHarnessAsync("pattern-v3");
@@ -635,52 +850,6 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
                 RepositoryGrantWorktree = grantWorktree
             });
 
-    // ── 10. Bash startup and loader overrides at launch ──
-    // Old coverage: ShellExecutionEnvironmentTests, ShellAssignmentMutationTests.
-    //
-    // This case changes the environment of the test process for the duration
-    // of one launch. The names are probes without effect on other processes:
-    // the startup file only exports a variable, and no loader reads the
-    // LD_/DYLD_ probe names.
-    [SlopwatchSuppress("SW001", "The launch runs /bin/bash, which exists only on POSIX hosts.")]
-    [Fact(SkipUnless = nameof(IsPosix), Skip = "The launch runs /bin/bash.")]
-    public async Task Shell_launch_removes_bash_startup_and_loader_overrides()
-    {
-        await using var harness = await CreateHarnessAsync(
-            "launch-environment",
-            new ShellApprovalInvocation("printenv"),
-            Approvals.PersistentAnywhere("printenv"));
-        var startupFile = Path.Combine(harness.ProjectDirectory, "startup.sh");
-        await File.WriteAllTextAsync(startupFile, "export NETCLAW_BASH_ENV_PROBE=probe-bash-env\n", Ct);
-        var probes = new Dictionary<string, string>
-        {
-            ["NETCLAW_LAUNCH_PROBE"] = "probe-kept",
-            ["BASH_ENV"] = startupFile,
-            ["LD_NETCLAW_PROBE"] = "probe-ld",
-            ["DYLD_NETCLAW_PROBE"] = "probe-dyld",
-        };
-
-        ToolRunObservation run;
-        try
-        {
-            foreach (var (name, value) in probes)
-                Environment.SetEnvironmentVariable(name, value);
-            run = await harness.RunShellAsync(
-                "printenv NETCLAW_LAUNCH_PROBE NETCLAW_BASH_ENV_PROBE LD_NETCLAW_PROBE DYLD_NETCLAW_PROBE",
-                Ct);
-        }
-        finally
-        {
-            foreach (var name in probes.Keys)
-                Environment.SetEnvironmentVariable(name, null);
-        }
-
-        Assert.Equal(ApprovalOutcome.Allowed, run.Outcome);
-        Assert.Contains("probe-kept", run.Output);
-        Assert.DoesNotContain("probe-bash-env", run.Output);
-        Assert.DoesNotContain("probe-ld", run.Output);
-        Assert.DoesNotContain("probe-dyld", run.Output);
-    }
 }
 
 /// <summary>
@@ -734,5 +903,74 @@ internal static class ApprovalTestGit
         Assert.True(
             process.ExitCode == 0,
             $"git failed: {await standardOutput}\n{await standardError}");
+    }
+}
+
+/// <summary>
+/// Runs the launch environment case alone. The case changes the environment
+/// of the test process, so no other test may run at the same time.
+/// </summary>
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class ApprovalLaunchEnvironmentCollection : ICollectionFixture<ShellApprovalMatrixFixture>
+{
+    public const string Name = "Approval launch environment";
+}
+
+/// <summary>
+/// Boundary case for the launch environment of a shell process.
+/// </summary>
+[Collection(ApprovalLaunchEnvironmentCollection.Name)]
+public sealed class ApprovalLaunchEnvironmentTests(ShellApprovalMatrixFixture fixture)
+{
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
+    private static CancellationToken Ct => TestContext.Current.CancellationToken;
+
+    // ── 10. Bash startup and loader overrides at launch ──
+    // Old coverage: ShellExecutionEnvironmentTests, ShellAssignmentMutationTests.
+    //
+    // This case changes the environment of the test process for the duration
+    // of one launch. Its collection disables parallel runs, so no other test
+    // starts a process while the probe names are set.
+    [SlopwatchSuppress("SW001", "The launch runs /bin/bash, which exists only on POSIX hosts.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The launch runs /bin/bash.")]
+    public async Task Shell_launch_removes_bash_startup_and_loader_overrides()
+    {
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            "launch-environment",
+            new ShellApprovalInvocation("printenv"),
+            Approvals.PersistentAnywhere("printenv"),
+            fixture.ActorSystem,
+            Ct);
+        var startupFile = Path.Combine(harness.ProjectDirectory, "startup.sh");
+        await File.WriteAllTextAsync(startupFile, "export NETCLAW_BASH_ENV_PROBE=probe-bash-env\n", Ct);
+        var probes = new Dictionary<string, string>
+        {
+            ["NETCLAW_LAUNCH_PROBE"] = "probe-kept",
+            ["BASH_ENV"] = startupFile,
+            ["LD_NETCLAW_PROBE"] = "probe-ld",
+            ["DYLD_NETCLAW_PROBE"] = "probe-dyld",
+        };
+
+        ToolRunObservation run;
+        try
+        {
+            foreach (var (name, value) in probes)
+                Environment.SetEnvironmentVariable(name, value);
+            run = await harness.RunShellAsync(
+                "printenv NETCLAW_LAUNCH_PROBE NETCLAW_BASH_ENV_PROBE LD_NETCLAW_PROBE DYLD_NETCLAW_PROBE",
+                Ct);
+        }
+        finally
+        {
+            foreach (var name in probes.Keys)
+                Environment.SetEnvironmentVariable(name, null);
+        }
+
+        Assert.Equal(ApprovalOutcome.Allowed, run.Outcome);
+        Assert.Contains("probe-kept", run.Output);
+        Assert.DoesNotContain("probe-bash-env", run.Output);
+        Assert.DoesNotContain("probe-ld", run.Output);
+        Assert.DoesNotContain("probe-dyld", run.Output);
     }
 }

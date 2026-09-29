@@ -142,6 +142,15 @@ internal sealed record ShellApprovalHarnessPolicy
     /// <summary>The Personal audience approval overrides, keyed by tool or tool category.</summary>
     public IReadOnlyDictionary<string, ToolApprovalMode> PersonalApprovalOverrides { get; init; }
         = new Dictionary<string, ToolApprovalMode>();
+
+    /// <summary>Changes other <c>Tools</c> configuration values before the registration reads them.</summary>
+    public Action<ToolConfig>? ConfigureTools { get; init; }
+
+    /// <summary>A custom workspaces directory, as <c>NetclawPaths</c> accepts from the operator.</summary>
+    public string? WorkspacesDirectory { get; init; }
+
+    /// <summary>True when the tool call runs without a bound session and without a project.</summary>
+    public bool Sessionless { get; init; }
 }
 
 internal sealed record ShellApprovalHarnessScope(
@@ -265,7 +274,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         // declare it as a project.
         var paths = new NetclawPaths(
             Path.Combine(rootDirectory, "netclaw"),
-            Path.Combine(rootDirectory, "netclaw", "workspaces"));
+            policy?.WorkspacesDirectory ?? Path.Combine(rootDirectory, "netclaw", "workspaces"));
         if (policy?.HardDenyOverridesJson is { } hardDenyOverrides)
         {
             Directory.CreateDirectory(paths.ConfigDirectory);
@@ -341,15 +350,18 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             approvalSessionDirectory,
             approvalExternalDirectory);
         var toolCall = CreateShellCall(caseId, invocation.Command, workingDirectory);
-        var context = TestToolExecutionContext.CreateBound(
-            scope?.InvocationSessionId ?? InvocationSessionId,
-            approvalSessionDirectory,
-            new TestToolExecutionContextOptions
-            {
-                Audience = invocation.Audience,
-                ProjectDirectory = approvalProjectDirectory,
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(invocation.Interactive)
-            });
+        var contextOptions = new TestToolExecutionContextOptions
+        {
+            Audience = invocation.Audience,
+            ProjectDirectory = policy?.Sessionless == true ? null : approvalProjectDirectory,
+            InteractiveApproval = TestToolExecutionContext.InteractiveApproval(invocation.Interactive)
+        };
+        var context = policy?.Sessionless == true
+            ? TestToolExecutionContext.CreateUnbound(contextOptions)
+            : TestToolExecutionContext.CreateBound(
+                scope?.InvocationSessionId ?? InvocationSessionId,
+                approvalSessionDirectory,
+                contextOptions);
         if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
         {
             context.Approval.SeedOneTimeApproval(
@@ -820,6 +832,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             config.HardDenyPatterns = [.. policy.HardDenyPatterns];
             foreach (var (key, value) in policy.PersonalApprovalOverrides)
                 config.AudienceProfiles.Personal.ApprovalPolicy!.ToolOverrides[key] = value;
+            policy.ConfigureTools?.Invoke(config);
         }
 
         return config;
