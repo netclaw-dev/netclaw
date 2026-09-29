@@ -12,21 +12,18 @@ namespace Netclaw.Actors.Tests.Channels;
 public sealed class TrustContextDeriverTests
 {
     [Fact]
-    public void Derive_uses_deployment_defaults_when_source_missing()
+    public void Derive_refuses_a_missing_source_instead_of_using_the_deployment_audience()
     {
+        // A Personal deployment default must not become the audience of a
+        // turn that has no source. The old code returned the deployment
+        // audience here, which is a silent fallback.
         var deriver = new TrustContextDeriver(new EffectivePolicyDefaults(
-            DeploymentPosture.Public,
-            TrustAudience.Public,
-            ShellExecutionMode.Off,
-            UsedStrictFallback: true));
+            DeploymentPosture.Personal,
+            TrustAudience.Personal,
+            ShellExecutionMode.HostAllowed,
+            UsedStrictFallback: false));
 
-        var result = deriver.Derive(null);
-
-        Assert.Equal(TrustAudience.Public, result.EffectiveAudience);
-        Assert.Equal(PrincipalClassification.UntrustedExternal, result.Principal);
-        Assert.Equal(TransportAuthenticity.Unverified, result.TransportAuthenticity);
-        Assert.Equal(PayloadTaint.Public, result.PayloadTaint);
-        Assert.True(result.UsedStrictFallback);
+        Assert.Throws<ArgumentNullException>(() => deriver.Derive(null!));
     }
 
     [Fact]

@@ -49,7 +49,7 @@ public sealed partial class SqliteFindMemoriesTool : NetclawTool<SqliteFindMemor
             ? "manual/tool"
             : context.SessionId!;
         var sessionId = (SessionId)sessionIdRaw;
-        var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionIdRaw);
+        var audience = context.Audience;
 
         var request = _planner.BuildRequest(
             sessionId,

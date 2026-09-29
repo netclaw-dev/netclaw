@@ -175,6 +175,65 @@ public sealed class TurnContextTests
         Assert.Equal(original.SupportsInteractiveApproval, restored.SupportsInteractiveApproval);
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    [InlineData(TrustAudience.Personal)]
+    public void TryFromRecord_restores_each_defined_audience(TrustAudience audience)
+    {
+        var record = MinimalTurnContext(audience).ToRecord();
+
+        Assert.True(TurnContext.TryFromRecord(record, out var restored, out var reason), reason);
+        Assert.Equal(audience, restored!.Audience);
+    }
+
+    [Fact]
+    public void TryFromRecord_refuses_an_undefined_audience_value()
+    {
+        // Proto3 carries an unknown enum number through the mapper cast. The
+        // old code restored it as an audience, and rank comparisons then
+        // treated it as broader than Personal.
+        var record = MinimalTurnContext(TrustAudience.Team).ToRecord() with
+        {
+            Audience = (TrustAudience)7
+        };
+
+        Assert.False(TurnContext.TryFromRecord(record, out var restored, out var reason));
+        Assert.Null(restored);
+        Assert.Equal("invalid trust audience '7'", reason);
+    }
+
+    [Fact]
+    public void Restore_legacy_approval_event_refuses_an_undefined_audience_value()
+    {
+        var evt = new ToolApprovalRequested
+        {
+            SessionId = new SessionId("C123/1700000000.000001"),
+            CallId = "call-legacy-invalid-audience",
+            Audience = (TrustAudience)7,
+            ChannelType = ChannelType.Slack.ToWireValue(),
+            RequesterSenderId = new SenderId("U12345"),
+            RequesterPrincipal = PrincipalClassification.TrustedInternal
+        };
+
+        var context = ToolApprovalTurnContext.Restore(evt, out var failure);
+
+        Assert.Null(context);
+        Assert.Equal("legacy approval event has invalid trust audience '7'", failure);
+    }
+
+    private static TurnContext MinimalTurnContext(TrustAudience audience) => new()
+    {
+        SessionId = new SessionId("C123/1700000000.000001"),
+        TurnId = new TurnId("turn-audience"),
+        Audience = audience,
+        Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
+        ChannelType = ChannelType.Slack,
+        RequesterSenderId = new SenderId("U12345"),
+        RequesterPrincipal = PrincipalClassification.TrustedInternal,
+        Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Community)
+    };
+
     [Fact]
     public void Restore_legacy_approval_event_builds_turn_context_from_legacy_fields()
     {

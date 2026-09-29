@@ -127,10 +127,15 @@ public sealed class ToolAccessPolicy
         _temporaryPathCorrectionPolicy = platformTemporaryScopePolicy;
     }
 
+    /// <summary>
+    /// Filters the tools that the model can see for a turn. The trust context
+    /// is required. A caller without a resolved audience must refuse tool
+    /// exposure itself. This method does not treat a missing audience as Public.
+    /// </summary>
     public IReadOnlyList<AITool> FilterExposedTools(
         IEnumerable<AITool> tools,
         ToolRegistry registry,
-        EffectiveTrustContext? trustContext)
+        EffectiveTrustContext trustContext)
         => tools
             .Where(tool =>
             {
@@ -148,8 +153,8 @@ public sealed class ToolAccessPolicy
         ToolInvocationContext context)
         => tools.Where(tool => IsToolExposed(tool, context)).ToList();
 
-    public bool IsToolExposed(ToolRegistration registration, EffectiveTrustContext? trustContext)
-        => IsToolExposed(registration.Tool, ResolveAudience(trustContext));
+    public bool IsToolExposed(ToolRegistration registration, EffectiveTrustContext trustContext)
+        => IsToolExposed(registration.Tool, trustContext.EffectiveAudience);
 
     public bool IsToolExposed(INetclawTool tool, ToolInvocationContext context)
         => IsToolExposed(tool, ResolveAudience(context));
@@ -1266,9 +1271,6 @@ public sealed class ToolAccessPolicy
 
     private ShellExecutionMode ResolveShellMode()
         => _toolConfig.ShellMode ?? _defaults.ShellExecutionMode;
-
-    private static TrustAudience ResolveAudience(EffectiveTrustContext? trustContext)
-        => trustContext?.EffectiveAudience ?? TrustAudience.Public;
 
     private static TrustAudience ResolveAudience(ToolInvocationContext context)
         => context.Audience;

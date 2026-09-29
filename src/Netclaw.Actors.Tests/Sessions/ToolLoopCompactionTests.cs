@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Channels;
 using Netclaw.Configuration;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -68,6 +69,13 @@ public class ToolLoopCompactionTests : LlmSessionTestBase
             "builtin");
         services.AddSingleton(registry);
         services.AddSingleton(TestToolAccessPolicy.Create(new ToolConfig()));
+        // Tool exposure needs a resolved trust context. A Public deployment
+        // ceiling keeps the Public exposure that these tests assert.
+        services.AddSingleton(new TrustContextDeriver(new EffectivePolicyDefaults(
+            DeploymentPosture.Public,
+            TrustAudience.Public,
+            ShellExecutionMode.Off,
+            UsedStrictFallback: true)));
     }
 
     [Fact]

@@ -42,15 +42,19 @@ public sealed class TrustContextDeriver
         _defaults = defaults;
     }
 
-    public EffectiveTrustContext Derive(MessageSource? source, WorkingContextOverride? workingContext = null)
+    /// <summary>
+    /// Derives the trust context for a message source. The source is required.
+    /// A missing source has no audience, and this method does not replace it
+    /// with the deployment default audience.
+    /// </summary>
+    public EffectiveTrustContext Derive(MessageSource source, WorkingContextOverride? workingContext = null)
     {
-        var sourceAudience = source?.Audience ?? _defaults.Audience;
-        var boundary = source?.Boundary ?? SecurityPolicyDefaults.ResolveBoundaryFromAudience(sourceAudience);
-        var principal = source?.Principal ?? PrincipalClassification.UntrustedExternal;
-        // Fail-closed conservative provenance when the turn has no source at all
-        // (Unverified transport, Public taint) — the most restrictive markers.
-        var provenance = source?.Provenance
-            ?? new SourceProvenance(TransportAuthenticity.Unverified, PayloadTaint.Public);
+        ArgumentNullException.ThrowIfNull(source);
+
+        var sourceAudience = source.Audience;
+        var boundary = source.Boundary;
+        var principal = source.Principal;
+        var provenance = source.Provenance;
 
         var effectiveAudience = Narrowest(_defaults.Audience, sourceAudience);
         var downgradeReason = (string?)null;

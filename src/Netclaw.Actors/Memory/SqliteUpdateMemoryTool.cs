@@ -45,8 +45,7 @@ public sealed partial class SqliteUpdateMemoryTool : NetclawTool<SqliteUpdateMem
         if (string.IsNullOrWhiteSpace(args.Id))
             return "Error: memory ID is required.";
 
-        var sessionId = string.IsNullOrWhiteSpace(context.SessionId) ? "manual/tool" : context.SessionId!;
-        var audience = MemoryPolicyScopeResolver.ResolveAudience(context.Audience, sessionId);
+        var audience = context.Audience;
         var boundary = MemoryPolicyScopeResolver.ResolveBoundary(context.Boundary?.Value);
         var resolved = await _store.ResolveMemoryHandleAsync(args.Id, boundary, audience, ct);
         if (!resolved.Resolved)

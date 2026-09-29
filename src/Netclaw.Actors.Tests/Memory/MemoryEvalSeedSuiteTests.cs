@@ -203,7 +203,8 @@ public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
             Sensitivity: "normal",
             RecallMode: "auto",
             Confidence: 0.8,
-            FreshnessAtMs: now);
+            FreshnessAtMs: now,
+            Audience: TrustAudience.Public.ToWireValue());
 
         var candidates = extractor.Extract(payload, new HashSet<string>(StringComparer.OrdinalIgnoreCase));
         var candidate = Assert.Single(candidates);
