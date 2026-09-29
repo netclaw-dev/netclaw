@@ -53,7 +53,7 @@ class MetricsTests(unittest.TestCase):
         self.write("src/Netclaw.Actors.Tests/Authorization/Filesystem/LinkTests.cs", "public class LinkTests {}\n")
         self.commit()
 
-        results = metrics.measure(metrics.Source(self.root, "HEAD"))
+        results = metrics.measure(metrics.Source(self.root, "HEAD")).groups
 
         filesystem = self.group(results, "7.")
         self.assertEqual(
@@ -75,11 +75,32 @@ class MetricsTests(unittest.TestCase):
         self.commit()
         self.write("src/Netclaw.Actors/Tools/ShellProcessLaunch.cs", "a\nb\nc\nd\n")
 
-        at_head = self.group(metrics.measure(metrics.Source(self.root, "HEAD")), "10.")
-        working = self.group(metrics.measure(metrics.Source(self.root, None)), "10.")
+        at_head = self.group(metrics.measure(metrics.Source(self.root, "HEAD")).groups, "10.")
+        working = self.group(metrics.measure(metrics.Source(self.root, None)).groups, "10.")
 
         self.assertEqual(2, at_head.loc)
         self.assertEqual(4, working.loc)
+
+    def test_relocation_to_an_unlisted_path_stays_in_the_whole_tree_total(self):
+        self.write("src/Netclaw.Actors/Tools/ShellProcessLaunch.cs", "public class ShellProcessLaunch\n{\n}\n")
+        self.write("src/Netclaw.Actors.Tests/LaunchTests.cs", "public class LaunchTests\n{\n}\n")
+        self.commit()
+        os.makedirs(os.path.join(self.root, "src/Netclaw.Actors/Misc"))
+        self.git("mv", "src/Netclaw.Actors/Tools/ShellProcessLaunch.cs", "src/Netclaw.Actors/Misc/Launch.cs")
+        self.commit()
+
+        base = metrics.measure(metrics.Source(self.root, "HEAD~1"))
+        head = metrics.measure(metrics.Source(self.root, "HEAD"))
+
+        self.assertEqual(3, base.grouped_loc)
+        self.assertEqual(0, head.grouped_loc)
+        self.assertEqual(3, base.production_loc)
+        self.assertEqual(3, head.production_loc)
+        self.assertEqual(1, head.production_types)
+        report = metrics.render_compare(base, head)
+        self.assertIn("All production .cs under src/", report)
+        self.assertIn("WARNING:", report)
+        self.assertIn("src/Netclaw.Actors/Tools/ShellProcessLaunch.cs  [10. Launch-time re-authorization]", report)
 
 
 if __name__ == "__main__":
