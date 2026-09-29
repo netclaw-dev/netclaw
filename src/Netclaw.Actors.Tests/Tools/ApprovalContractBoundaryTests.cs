@@ -554,7 +554,7 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Git layout uses POSIX paths and the git CLI.")]
     public async Task Repository_grant_does_not_cover_a_worktree_whose_registration_points_elsewhere()
     {
-        var root = Directory.CreateTempSubdirectory("netclaw-reverse-gitdir-");
+        var root = ApprovalTestGit.CreateRoot("netclaw-reverse-gitdir-");
         try
         {
             var main = Path.Combine(root.FullName, "main");
@@ -592,7 +592,7 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Git layout uses POSIX paths and the git CLI.")]
     public async Task Repository_grant_does_not_cover_a_separate_git_directory_checkout()
     {
-        var root = Directory.CreateTempSubdirectory("netclaw-separate-gitdir-");
+        var root = ApprovalTestGit.CreateRoot("netclaw-separate-gitdir-");
         try
         {
             var granted = Path.Combine(root.FullName, "granted");
@@ -688,6 +688,16 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
 /// </summary>
 internal static class ApprovalTestGit
 {
+    /// <summary>
+    /// Creates a test root under the user profile. Repository scope rejects a
+    /// path that passes through a link, and the macOS temporary directory
+    /// (<c>/var/folders</c>) passes through the <c>/var</c> link.
+    /// </summary>
+    public static DirectoryInfo CreateRoot(string prefix)
+        => Directory.CreateDirectory(Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+            $".{prefix}{Guid.NewGuid():N}"));
+
     public static async Task CreateRepositoryAsync(string directory)
     {
         await RunAsync(directory, "init", "--quiet");
