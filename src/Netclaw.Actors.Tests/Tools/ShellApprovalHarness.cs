@@ -170,6 +170,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     private readonly FunctionCallContent _toolCall;
     private readonly ToolExecutionContext _context;
     private readonly DispatchingToolExecutor _executor;
+    private readonly ToolRegistry _registry;
 
     private ShellApprovalHarness(
         string rootDirectory,
@@ -183,6 +184,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         DispatchingToolExecutor executor,
+        ToolRegistry registry,
         CountingApprovalService approvalService)
     {
         _rootDirectory = rootDirectory;
@@ -196,6 +198,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         _toolCall = toolCall;
         _context = context;
         _executor = executor;
+        _registry = registry;
         ApprovalService = approvalService;
     }
 
@@ -366,6 +369,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             toolCall,
             context,
             executor,
+            provider.GetRequiredService<ToolRegistry>(),
             approvalService);
     }
 
@@ -384,23 +388,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddSingleton(environment);
-        var policy = services.AddDaemonToolAuthorization(
-            paths,
-            environment,
-            config,
-            SecurityPolicyDefaults.Resolve(new SecurityPolicyConfig
-            {
-                DeploymentPosture = DeploymentPosture.Personal,
-                StrictDefaults = false
-            }),
-            toolPathPolicy,
-            safeVerbs,
-            FeatureGates.AllEnabled,
-            timeProvider);
-        var registry = new ToolRegistry();
-        registry.WithFirstPartyTools(policy);
-        services.AddDaemonToolExecutor(registry, policy);
+        AddProductionToolAuthorization(services, paths, environment, config, toolPathPolicy, safeVerbs, timeProvider);
 
         var stub = new StubRequiredActor(actorSystem);
         approvalActor = stub;
@@ -419,6 +407,53 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             (IToolApprovalService)sp.GetRequiredService(implementation)));
         services.AddSingleton<IToolApprovalService>(sp => sp.GetRequiredService<CountingApprovalService>());
         return services;
+    }
+
+    /// <summary>
+    /// Registers the tool authorization system and the tool executor with the
+    /// daemon registration methods, for a Personal deployment on the given host shell.
+    /// </summary>
+    internal static void AddProductionToolAuthorization(
+        IServiceCollection services,
+        NetclawPaths paths,
+        ShellExecutionEnvironment environment,
+        ToolConfig config)
+        => AddProductionToolAuthorization(
+            services,
+            paths,
+            environment,
+            config,
+            DaemonToolPathPolicyFactory.Create(paths, environment),
+            SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows),
+            TimeProvider.System);
+
+    private static void AddProductionToolAuthorization(
+        IServiceCollection services,
+        NetclawPaths paths,
+        ShellExecutionEnvironment environment,
+        ToolConfig config,
+        ToolPathPolicy toolPathPolicy,
+        SafeVerbList safeVerbs,
+        TimeProvider timeProvider)
+    {
+        // The daemon registers its host shell before the tool registration runs.
+        services.AddSingleton(environment);
+        var policy = services.AddDaemonToolAuthorization(
+            paths,
+            environment,
+            config,
+            SecurityPolicyDefaults.Resolve(new SecurityPolicyConfig
+            {
+                DeploymentPosture = DeploymentPosture.Personal,
+                StrictDefaults = false
+            }),
+            toolPathPolicy,
+            safeVerbs,
+            FeatureGates.AllEnabled,
+            timeProvider);
+        var registry = new ToolRegistry();
+        registry.WithFirstPartyTools(policy);
+        services.AddDaemonToolExecutor(registry, policy);
     }
 
     // The daemon protects the control plane of its Netclaw home. A Windows host
@@ -546,10 +581,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         IDictionary<string, object?> arguments,
         CancellationToken ct)
     {
+        var runArguments = new Dictionary<string, object?>(arguments);
+        runArguments.TryAdd("_rationale", "Observe the approval contract.");
         try
         {
             var output = await _executor.ExecuteAsync(
-                new FunctionCallContent(_toolCall.CallId, toolName, arguments),
+                new FunctionCallContent(_toolCall.CallId, toolName, runArguments),
                 _context,
                 ct);
             return new ToolRunObservation(ApprovalOutcome.Allowed, null, null, output);
@@ -566,6 +603,21 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         {
             return new ToolRunObservation(ApprovalOutcome.RequiresAgentCorrection, null, null, null);
         }
+    }
+
+    /// <summary>
+    /// Adds one MCP server tool to the live registry, as the daemon MCP client
+    /// manager does after it connects. The tool returns a fixed marker.
+    /// </summary>
+    /// <returns>The registered tool name.</returns>
+    public string RegisterMcpTool(string serverName, string toolName)
+    {
+        var tool = new McpToolAdapter(
+            AIFunctionFactory.Create(() => "mcp-tool-ran", toolName),
+            serverName,
+            toolName);
+        _registry.Register(tool);
+        return tool.Name;
     }
 
     /// <summary>Runs another shell command through the executor.</summary>
