@@ -294,6 +294,10 @@ A list in `Tools` that has default items replaces its default list. It does not 
   `secrets.json` sets items for the same key; an attachment category that is not one defined
   name (for example `"Bogus"`, `"3"`, or `"Pdf, Document"`). Category names match without case.
 
+`netclaw doctor` warns, with no auto-fix, when a Public or Team allowlist does not include
+`tool_output_read`. A large tool result spills to a file, and the notice tells the model to
+call that tool.
+
 Older installs: `netclaw init` 0.8.0 to 0.25.4, and 0.26.0-beta.1 to beta.5, wrote the
 complete Public and Team default `AllowedTools` lists. Later releases changed those defaults;
 for example, 0.26.0 added `file_search` and `tool_output_read`. The old binder added the current

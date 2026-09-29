@@ -611,6 +611,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is an older Netclaw default list", result.Message, StringComparison.Ordinal);
         Assert.Contains("adds file_search, tool_output_read", result.Message, StringComparison.Ordinal);
         Assert.Contains("netclaw doctor --fix` to remove the key", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tools.AudienceProfiles.Team.AllowedTools does not include", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -623,7 +624,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
 
         Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is a copy of the current Netclaw default list", result.Message, StringComparison.Ordinal);
         Assert.Contains("netclaw doctor --fix` to remove the key", result.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("Tools.AudienceProfiles.Public.AllowedTools", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tools.AudienceProfiles.Public.AllowedTools is", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -661,6 +662,32 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain("AllowedTools is", result.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("\"file_read\"", true)]
+    [InlineData("\"file_read\", \"tool_output_read\"", false)]
+    public async Task Allowlist_without_tool_output_read_is_an_advisory_warning(string publicTools, bool warns)
+    {
+        WriteConfig(
+            $$"""
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Public": { "ToolsMode": "Allowlist", "AllowedTools": [{{publicTools}}] },
+                  "Team": { "ToolsMode": "Allowlist", "AllowedTools": ["file_read", "tool_output_read"] },
+                  "Personal": { "ToolsMode": "All", "McpServersMode": "All" }
+                }
+              }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(warns, result.Message.Contains(
+            "Tools.AudienceProfiles.Public.AllowedTools does not include tool_output_read", StringComparison.Ordinal));
+        Assert.DoesNotContain("Tools.AudienceProfiles.Team.AllowedTools does not include", result.Message, StringComparison.Ordinal);
     }
 
     private static string LegacyTeamConfig(string teamTools)

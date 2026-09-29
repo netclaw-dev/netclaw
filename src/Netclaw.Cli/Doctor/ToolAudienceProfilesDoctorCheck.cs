@@ -78,6 +78,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         var warnings = new List<string>();
 
         CheckExplicitPersonalShellAuto(toolConfig, warnings);
+        CheckMissingToolOutputRead(toolConfig.AudienceProfiles, warnings);
 
         CheckDefaultAllowedToolsCopies(root, warnings);
 
@@ -127,6 +128,28 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         return Task.FromResult(DoctorCheckResult.Pass(
             "Tool Audience Profiles",
             "Public and Team tool restrictions remain scoped."));
+    }
+
+    // Advisory only, with no auto-fix: a narrow allowlist can be intentional. A large tool
+    // result spills to a file, and the inline notice tells the model to call tool_output_read.
+    // Without that tool, the model cannot read the rest of the output.
+    private static void CheckMissingToolOutputRead(ToolAudienceProfiles profiles, List<string> warnings)
+    {
+        foreach (var (audience, profile) in (ReadOnlySpan<(TrustAudience, ToolAudienceProfile)>)
+                 [(TrustAudience.Public, profiles.Public), (TrustAudience.Team, profiles.Team)])
+        {
+            if (profile.ToolsMode != ToolProfileMode.Allowlist
+                || profile.AllowedTools.Contains(ToolAudienceProfileToolCatalog.ToolOutputRead, StringComparer.Ordinal)
+                || ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, profile.AllowedTools))
+            {
+                continue;
+            }
+
+            warnings.Add(
+                $"Tools.AudienceProfiles.{audience}.AllowedTools does not include {ToolAudienceProfileToolCatalog.ToolOutputRead}. "
+                + "When a tool result is too large, Netclaw spills it to a file and tells the model to call "
+                + $"{ToolAudienceProfileToolCatalog.ToolOutputRead}. Add it to the list unless you want to block that.");
+        }
     }
 
     // A stored copy of a shipped default list does not follow later defaults. The daemon maps an
