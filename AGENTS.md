@@ -50,6 +50,7 @@ Read first:
 - `TOOLING.md`
 - `IMPLEMENTATION_PLAN.md`
 - `docs/prd/README.md`
+- `docs/architecture/*.md`
 - `.opencode/skills/netclaw-*/SKILL.md`
 - `.claude/skills/ralph-*.md`
 - relevant `openspec/specs/*/spec.md`
@@ -125,6 +126,21 @@ task checkboxes in `openspec/changes/*/tasks.md` during RALPH iterations.
 - Name the component that owns each decision. State whether its data is
   call-local, actor-local, or durable.
 - Label pseudocode as schematic when it omits a security gate or runtime step.
+
+## Architecture Document Rule
+
+`docs/architecture/` holds the canonical architecture documents for people.
+`docs/architecture/tool-authorization.md` describes tool authorization: its
+contexts, owners, diagrams, guidelines, and future scenarios.
+
+- A PR that changes an authorization context must update
+  `docs/architecture/tool-authorization.md` in the same diff.
+- An authorization context change includes a new decision owner, a moved
+  check, a new grant scope, a new candidate kind, or a new consent surface.
+- The document describes the current code. Put a planned shape only in its
+  "Future scenarios" section.
+- Keep testable rules in `openspec/specs/tool-authorization/spec.md`. The
+  document links to those rules and does not copy them.
 
 ## Discovery Rules
 

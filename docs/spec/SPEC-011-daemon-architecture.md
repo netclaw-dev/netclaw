@@ -488,7 +488,7 @@ docker run -d \
 
 - Runtime boundaries: SPEC-001
 - Session lifecycle: SPEC-002
-- Security controls: SPEC-003
+- Security controls: SPEC-003 (pointer to `docs/architecture/tool-authorization.md`)
 - CLI contract: SPEC-004
 - Operator UI: SPEC-005
 - Gateway exposure: SPEC-006

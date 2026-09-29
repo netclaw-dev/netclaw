@@ -24,6 +24,9 @@ These files define how planning and implementation work should be routed:
 ## Planning Artifacts
 
 - `docs/prd/` — product requirements and acceptance criteria
+- `docs/architecture/` — canonical architecture documents for people: diagrams,
+  decision owners, guidelines, and future scenarios (start with
+  [`docs/architecture/README.md`](docs/architecture/README.md))
 - `docs/spec/` — engineering specifications and contracts
 - `docs/ui/` — management UI mockups
 - `openspec/specs/` — capability specs for ongoing evolution
