@@ -280,7 +280,7 @@ shape, confirm that strict-default fallback is active, or verify that
 | `EnvironmentVariables` | object? | `null` | Environment overlay for stdio-launched MCP processes. |
 | `Headers` | object? | `null` | Additional headers for remote HTTP/SSE MCP servers. |
 | `Enabled` | bool | `true` | Whether the server is loaded at startup. |
-| `GrantCategory` | string? | `null` | Optional ACL grant category. Defaults to `mcp:{serverName}` when omitted. |
+| `GrantCategory` | string? | `null` | Tool metadata category. Defaults to `mcp:{serverName}` when omitted. Authorization does not read it; use audience `AllowedMcpServers` and `McpServerToolGrants`. |
 | `OAuthClientId` | string? | `null` | Static OAuth client ID for servers without dynamic client registration. |
 | `OAuthScope` | string? | `null` | Optional OAuth scope override. |
 

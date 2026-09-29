@@ -118,6 +118,9 @@ SHALL fall back to the narrowest audience, `Public`. No fallback SHALL select
 a broader audience than the source provides. An audience derived from a
 deployment default and a source audience SHALL be the narrower of the two.
 
+A tool execution context SHALL hold the audience as a parsed value. Tool
+authorization SHALL read that value and SHALL NOT parse a wire string again.
+
 Planned change (owner decision, September 29): a missing or unreadable
 audience becomes an error in every component. A follow-up code PR implements
 it. Until that PR merges, the `Public` fallback above is the current behavior.
@@ -145,6 +148,13 @@ except for a verified-automation principal.
 - **WHEN** a tool call requires consent
 - **THEN** the call fails closed without a prompt
 - **AND** Netclaw does not create a requester
+
+#### Scenario: Tool authorization reads the parsed audience
+
+- **GIVEN** a tool execution context with the parsed audience `Team`
+- **WHEN** authorization evaluates a tool call
+- **THEN** it uses `Team` without a string parse
+- **AND** it applies no parse-failure fallback
 
 ### Requirement: TA-2 Schema exposure grants no authority
 
@@ -195,6 +205,9 @@ The default profiles SHALL be monotonic: every profile-managed tool of
 MCP `GrantCategory` values and tool grant categories SHALL NOT be an
 authorization input.
 
+Invalid `Tools.AudienceProfiles.ChannelAttachments` configuration SHALL stop
+daemon startup with an error that names the invalid entries.
+
 #### Scenario: Public cannot edit files
 
 - **GIVEN** a Public session with the default profile
@@ -213,6 +226,12 @@ authorization input.
 - **GIVEN** a Team session with the default profile
 - **WHEN** the model calls `web_fetch`
 - **THEN** the admission check passes
+
+#### Scenario: Invalid attachment configuration stops startup
+
+- **GIVEN** an audience profile with an invalid `ChannelAttachments` entry
+- **WHEN** the daemon starts
+- **THEN** startup fails with `Invalid Tools.AudienceProfiles.ChannelAttachments configuration`
 
 ### Requirement: TA-4 Consent mode and shell mode resolve per audience and tool
 
@@ -318,8 +337,14 @@ the link check, then protection.
   envelope of the session, the declared project directory, and the global read
   roots (`{skills_dir}`, `{identity_dir}`, `{workspaces_dir}`) for `Read` only
   and never for `Public`.
-- Only `Personal` SHALL get the shared Netclaw sessions root. `Team` and
-  `Public` SHALL get only their own session envelope and session directory.
+- Only `Personal` SHALL get the shared Netclaw sessions root and the legacy
+  logs root. `Team` and `Public` SHALL get only their own session envelope
+  and session directory. A child run SHALL inherit the audience and workspace
+  limits of its parent.
+- A legacy run MAY read its own exact raw log. That exact-file authority SHALL
+  NOT cover the parent directory, an adjacent file, or a project declaration.
+  A storage ancestor that Netclaw reads for a link check SHALL NOT grant
+  directory authority.
 - Interactive `Personal` with mode `All` SHALL skip root checks. An unattended
   run SHALL be confined to its trusted roots and SHALL fail closed without
   them. Consent SHALL NOT widen an explicit `Roots` or `None` profile.
@@ -339,6 +364,13 @@ the link check, then protection.
   checks SHALL ignore case.
 - A path access denial SHALL be terminal and SHALL NOT reveal root paths to a
   Public session.
+- Tool capability and shell command policy SHALL run before file protection.
+  File authority SHALL NOT enable shell. Netclaw SHALL derive the known real
+  paths of a shell call from the command analysis, independent of approval
+  candidates, and SHALL check known causal-intent and fallback paths before
+  stored or reviewed-safe coverage.
+- A readable `netclaw.json` SHALL NOT imply write, edit, attach, or shell
+  authority. Secret values SHALL live only in protected stores.
 
 #### Scenario: Ordinary config is readable but not by shell text
 
@@ -359,6 +391,18 @@ the link check, then protection.
 - **WHEN** the model calls `file_read` with a relative path
 - **THEN** the path access decision denies the read
 - **AND** Netclaw does not retry against the session directory
+
+#### Scenario: Restricted session cannot read a sibling session
+
+- **GIVEN** a Team session
+- **WHEN** the model calls `file_read` on the raw log of another session
+- **THEN** the path access decision denies the read
+
+#### Scenario: Personal session keeps cross-session read access
+
+- **GIVEN** an interactive Personal session
+- **WHEN** the model calls `file_read` on a file in another session directory
+- **THEN** the path access decision allows the read
 
 ### Requirement: TA-7 Shell analysis uses general syntax facts
 
@@ -519,6 +563,13 @@ removed, the requester, the candidates, the working directory, the offered
 options, and the authorization attempt identifier. It SHALL NOT carry a
 `DirectoryRoots` field.
 
+The consent request SHALL also carry adopted-context provenance.
+`HasAdoptedContext` SHALL be true for any non-empty adopted window. The
+adopted speakers SHALL list every adopted sender, including the requester.
+`HasThirdPartyAdoptedContext` SHALL be a separate flag and SHALL NOT trim that
+list. Adopted context SHALL stay quoted background and SHALL NOT originate a
+consent request.
+
 The options SHALL come from this set, in this order, with these stable keys
 and labels:
 
@@ -579,6 +630,13 @@ and labels:
 - **WHEN** the prompt is built
 - **THEN** it does not offer `Always here`
 - **AND** its global option has the label `Always allow this tool`
+
+#### Scenario: Self-only adopted window keeps its provenance
+
+- **GIVEN** a turn whose adopted window holds only earlier messages of the requester
+- **WHEN** a tool call in that turn asks for consent
+- **THEN** the consent request has `HasAdoptedContext` true and lists the requester as an adopted speaker
+- **AND** `HasThirdPartyAdoptedContext` is false
 
 ### Requirement: TA-11 An unanswered consent request survives restart
 

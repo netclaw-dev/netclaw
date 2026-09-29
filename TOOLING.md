@@ -114,8 +114,9 @@ Approval cases first prove that the same approval keys permit the call.
 Each denial must preserve the probe call count.
 
 These tests preserve PRD-002 SEC-003 and PRD-006 MCP-003.
-See [the ACL contract](openspec/specs/netclaw-acl/spec.md) and
-[the approval contract](openspec/specs/tool-approval-gates/spec.md).
+See [TA-3 (audience admission)](openspec/specs/tool-authorization/spec.md#requirement-ta-3-audience-profiles-admit-tools) and
+[TA-5 (hard deny)](openspec/specs/tool-authorization/spec.md#requirement-ta-5-hard-deny-precedes-grant-lookup-and-repeats-at-launch)
+in the tool authorization contract.
 The gate covers authorization before dispatch. It does not prove MCP transport or native shell containment.
 
 The final local run took 88 seconds after package restore.
@@ -165,7 +166,7 @@ The Linux mutation job runs the shared link walker on POSIX links only; the ordi
 
 The matcher shares `EvaluateApprovalScope` with `ToolApprovalActor` and shell approval evidence validation.
 These tests preserve PRD-002 SEC-003 and
-[the directory-root approval contract](openspec/specs/tool-approval-gates/spec.md#requirement-directory-root-approvals-for-shell_execute).
+[TA-8 of the tool authorization contract](openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage).
 They prove folder-grant decisions. They do not prove native process containment or races between authorization and file access.
 
 The final local run took less than four minutes after package restore.

@@ -399,7 +399,8 @@ not execute tools.
 
 - `netclaw init` TUI wizard (writes incrementally per section)
 - Manual file editing by operator
-- Agent self-configuration via `config_write` tool grant (SEC-008)
+- Not agent file tools: tool authorization write-denies the config directory
+  (see `docs/architecture/tool-authorization.md`)
 
 All changes go to disk first. The `FileSystemWatcher` is the single reload
 trigger — there is no in-memory config mutation path.

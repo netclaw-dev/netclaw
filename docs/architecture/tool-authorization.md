@@ -559,8 +559,10 @@ the approval boundary set and the outcome direction check for every recipe.
 1. Admission: add the tool to the audience profile defaults and the schema.
    Add a `ToolOverrides` mode only when the default is wrong.
 2. Consent: give the tool one candidate. Today a non-shell tool uses its tool
-   name. Add a path-scoped candidate only when the tool writes a protected
-   path (see `FilePathApprovalMatcher`).
+   name. `FilePathApprovalMatcher` shows the one path-scoped form today: a
+   control-plane key for `file_write` and `file_edit`. In the daemon, the
+   write-deny list denies the config directory before that key applies
+   (consolidation plan D5, tier A). Do not copy that pattern for a new tool.
 3. Consent delivery: confirm that the prompt shows a safe display text.
 
 Tests: an Admission case per audience (see `McpToolAudienceGrantsTests`), a

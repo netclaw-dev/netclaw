@@ -766,13 +766,13 @@ Done when:
   stayed below threshold. Prompt equivalents fell from 32 to 25, while the
   explicit directory-transition shell attempts fell from 24 to 12. These
   variable results remain recorded, not converted into weaker assertions.
-  See `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-guidance-fresh-session-eval-results.json`.
+  See `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-guidance-fresh-session-eval-results.json`.
 - [x] PR #1982 merged as `9d02d19efd75fe871c8603e151e3e7169a9d9433`.
   The live daemon preserved a rollback binary, swapped to that exact commit,
   recovered its session catalog, and passed five natural fixed-pipeline runs
   without an approval or complex marker.
 - [x] Forty-five post-swap fresh sessions are frozen in
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-9d02d19-binary-swap-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-9d02d19-binary-swap-eval-results.json`.
   The original eight workloads improved from 17/40 to 23/40 behavior passes;
   the added fixed-pipeline case passed 5/5. Observed prompt equivalents fell
   from 25 to 2, but 446 historical grants make that prompt delta non-causal.
@@ -787,7 +787,7 @@ Done when:
   one additional shell call after denial. The initial controlled DeepSeek run
   was blocked by provider billing, so the live comparison is operational
   deployment evidence rather than a same-model causal estimate. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-7efa7fd-followup-live-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-7efa7fd-followup-live-eval-results.json`.
 - [x] After billing resumed, an isolated same-model rerun of the exact merged
   image passed known-file and disposable-output cases 10/10, but the terminal
   directory-denial case passed only 3/5. Both failures followed stale inherited
@@ -797,7 +797,7 @@ Done when:
   affected cases passed 15/15. Structured-file cases used no shell. All five
   external directory transitions produced exactly one hard denial, no scope
   correction, and no retry. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-terminal-denial-guidance-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-terminal-denial-guidance-eval-results.json`.
 - [x] The terminal-denial guidance correction merged in PR #1985. The exact
   merged binary was swapped into the live daemon. Five fresh live sessions
   retained all five required denials. Three stopped without a substitute call;
@@ -814,7 +814,7 @@ Done when:
   compound run. Generic independent-operation guidance raised the exact
   committed image to 5/5. It produced five successful single-operation shell
   calls and no approval equivalent. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-independent-operation-guidance-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-independent-operation-guidance-eval-results.json`.
 - [x] The initial follow-up disposable eval was discarded. Its prompt requested
   a diagnostic command but omitted the exact content required by its assertion.
   The corrected case names the disposable file effect and exact content without
@@ -1478,7 +1478,7 @@ Done when:
   still produce terminal failed `spawn_agent` results.
 - [ ] No turn loop can report success while a tool result is still pending.
 - [ ] Logs/traces correlate model call, tool call, approval, and session turn.
-  `openspec/changes/correlate-tool-authorization-attempts/` implements the
+  `openspec/changes/archive/2026-09-29-correlate-tool-authorization-attempts/` implements the
   call-local authorization-attempt link across policy, correction, prompt,
   decision, retry, recovery, and result. Model-call and session-turn links
   remain part of the broader observability item.
