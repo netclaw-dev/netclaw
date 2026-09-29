@@ -268,7 +268,13 @@ A list in `Tools` that has default items replaces its default list. It does not 
   name (for example `"Bogus"`, `"3"`, or `"Pdf, Document"`). Category names match without case.
 
 The daemon reads `netclaw.json`, then `secrets.json`, then `NETCLAW_*` variables. A later
-source wins. `netclaw doctor` reads only `netclaw.json`.
+source wins for each key. `netclaw doctor` reads only `netclaw.json`.
+
+A later source does not replace a whole list. `IConfiguration` merges list items by index. For
+example, `secrets.json` with `"AllowedTools": ["file_list"]` over `netclaw.json` with
+`"AllowedTools": ["file_read", "attach_file"]` gives `["file_list", "attach_file"]`. The
+`NETCLAW_*` form sets one index, for example `NETCLAW_Tools__WebFetch__HttpAllowList__0`. To
+change a list, set it in one source only.
 
 ### MCP Servers
 

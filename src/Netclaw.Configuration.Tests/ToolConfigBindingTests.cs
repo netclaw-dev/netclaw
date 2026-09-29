@@ -51,6 +51,8 @@ public sealed class ToolConfigBindingTests : IDisposable
         { ReadRoots, null, "", [], null },
         { TeamTools, """["file_read"]""", "", null, "has list items and also a value" },
         { TeamTools, "\"file_read\"", null, null, "must be a list" },
+        { TeamTools, """["file_read", { "name": "file_list" }]""", null, null, "has an item that is not a valid String" },
+        { ReadRoots, """["{skills_dir}", ["/srv/a"]]""", null, null, "has an item that is not a valid String" },
         { TeamCategories, """["Image", "Bogus"]""", null, null, "is not a valid AttachmentCategory name" },
         { TeamCategories, """["Image", "Pdf, Document"]""", null, null, "is not a valid AttachmentCategory name" },
         { TeamCategories, """["Image", "3"]""", null, null, "is not a valid AttachmentCategory name" },
@@ -158,24 +160,55 @@ public sealed class ToolConfigBindingTests : IDisposable
         return [.. list.Cast<object>().Select(item => item.ToString()!)];
     }
 
+    // Walks by type, not only by default value. A config type behind a null default (for
+    // example ApprovalPolicy) or inside a list or dictionary gets a new instance, because the
+    // binder creates one when the key is configured. Its default list items then count too.
     private static void CollectListsWithDefaultItems(object target, string path, List<string> found)
+        => CollectListsWithDefaultItems(target, path, found, [target.GetType()]);
+
+    private static void CollectListsWithDefaultItems(object target, string path, List<string> found, HashSet<Type> visiting)
     {
         foreach (var property in target.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
-            if (property.GetIndexParameters().Length > 0 || property.GetValue(target) is not { } value)
+            if (property.GetIndexParameters().Length > 0)
                 continue;
 
             var propertyPath = $"{path}.{property.Name}";
-            if (value is IEnumerable items and not string)
+            var type = property.PropertyType;
+            var value = property.GetValue(target);
+            if (type != typeof(string) && typeof(IEnumerable).IsAssignableFrom(type))
             {
-                if (items.Cast<object>().Any())
+                if (value is IEnumerable items && items.Cast<object>().Any())
                     found.Add(propertyPath);
+
+                // A list item or a dictionary value of a config type is also bound from configuration.
+                var elementType = type.IsArray ? type.GetElementType() : type.GetGenericArguments().LastOrDefault();
+                if (elementType is not null)
+                    WalkConfigType(elementType, $"{propertyPath}[]", found, visiting);
             }
-            else if (property.PropertyType.IsClass && property.PropertyType != typeof(string)
-                     && property.PropertyType.Namespace?.StartsWith("Netclaw", StringComparison.Ordinal) == true)
+            else if (value is not null && IsConfigType(type) && visiting.Add(type))
             {
-                CollectListsWithDefaultItems(value, propertyPath, found);
+                CollectListsWithDefaultItems(value, propertyPath, found, visiting);
+                visiting.Remove(type);
+            }
+            else if (value is null)
+            {
+                WalkConfigType(Nullable.GetUnderlyingType(type) ?? type, propertyPath, found, visiting);
             }
         }
     }
+
+    private static void WalkConfigType(Type type, string path, List<string> found, HashSet<Type> visiting)
+    {
+        if (!IsConfigType(type) || type.GetConstructor(Type.EmptyTypes) is null || !visiting.Add(type))
+            return;
+
+        CollectListsWithDefaultItems(Activator.CreateInstance(type)!, path, found, visiting);
+        visiting.Remove(type);
+    }
+
+    private static bool IsConfigType(Type type)
+        => type.IsClass && type != typeof(string)
+            && type.Namespace?.StartsWith("Netclaw", StringComparison.Ordinal) == true
+            && !typeof(IEnumerable).IsAssignableFrom(type);
 }
