@@ -46,8 +46,11 @@ public class SkillToolTests : IDisposable
 
     public void Dispose()
     {
-        if (Directory.Exists(_skillsDir))
-            Directory.Delete(_skillsDir, true);
+        if (!Directory.Exists(_skillsDir))
+            return;
+
+        WindowsJunction.RemoveJunctionsUnder(_skillsDir);
+        Directory.Delete(_skillsDir, true);
     }
 
     [Fact]
@@ -1621,23 +1624,28 @@ public class SkillToolTests : IDisposable
             Assert.Empty(Directory.EnumerateFileSystemEntries(outsideDir));
     }
 
-    [Fact(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),
+    [Theory(SkipType = typeof(TestPlatform), SkipUnless = nameof(TestPlatform.IsWindows),
         Skip = "This case uses native Windows junction semantics.")]
     [SlopwatchSuppress("SW001", "This regression requires native Windows junction semantics.")]
-    public async Task AtomicWrite_does_not_use_a_junction_at_the_temp_name()
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task AtomicWrite_does_not_use_a_junction_at_the_temp_name(bool liveJunction)
     {
         var outsideDir = CreateOutsideDirectory();
+        var junctionTarget = liveJunction ? outsideDir : Path.Combine(outsideDir, "missing");
         var skillDir = Path.Combine(_paths.SkillsDirectory, "race-skill");
         Directory.CreateDirectory(skillDir);
         var target = Path.Combine(skillDir, "guide.md");
-        await WindowsJunction.CreateAsync(target + ".tmp", outsideDir, TestContext.Current.CancellationToken);
+        await WindowsJunction.CreateAsync(target + ".tmp", junctionTarget, TestContext.Current.CancellationToken);
 
         var result = SkillManageTool.AtomicWrite(target, "attacker text");
 
         Assert.NotNull(result);
         Assert.StartsWith(UnverifiedTargetMessage, result);
         Assert.False(File.Exists(target));
+        Assert.False(Directory.Exists(target));
         Assert.Empty(Directory.EnumerateFileSystemEntries(outsideDir));
+        Assert.True((File.GetAttributes(target + ".tmp") & FileAttributes.ReparsePoint) != 0);
     }
 
     [Fact]

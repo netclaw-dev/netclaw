@@ -506,8 +506,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     /// The link walk starts below the native skills root. The operator owns that
     /// root, and OS links above it (macOS <c>/var</c>) are not traversal. When
     /// <paramref name="atomicWrite"/> is true, the check also covers the
-    /// <c>.tmp</c> file that <see cref="AtomicWrite"/> writes first, because
-    /// <see cref="File.WriteAllText(string, string?)"/> follows a link at that name.
+    /// <c>.tmp</c> file that <see cref="AtomicWrite"/> writes first. Thus a link at
+    /// that name fails with a clear error before any write. The exclusive open in
+    /// <see cref="AtomicWrite"/> also rejects a link that appears after this check.
     /// A failure to inspect the path denies the operation.
     /// </remarks>
     private string? GuardMutationTarget(string skillRoot, string targetPath, bool atomicWrite)
@@ -550,8 +551,10 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     /// POSIX, CREATE_NEW on Windows). That open fails when any entry has the name,
     /// including a live or dangling link, so a link that appears after
     /// <see cref="GuardMutationTarget"/> cannot redirect the write. A crash can leave
-    /// a stale regular temp file. Only a regular file is removed, and the open then
-    /// runs again with the same exclusive mode. The rename replaces a link at
+    /// a stale temp file. The write removes an entry at the temp name only when it is
+    /// not a link and not a directory. That includes a regular file, a FIFO, or a hard
+    /// link. A delete removes only the name and never changes another file. The open
+    /// then runs again with the same exclusive mode. The rename replaces a link at
     /// <paramref name="path"/> and does not follow it.
     /// </remarks>
     internal static string? AtomicWrite(string path, string content)
@@ -593,6 +596,7 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
         {
             // File.Exists is true for a dangling link, and the attributes of a link
             // describe the link itself. A link or a directory stays and fails the write.
+            // Any other entry (regular file, FIFO, hard link) loses only its name.
             if (!File.Exists(tempPath))
                 return false;
 

@@ -18,7 +18,11 @@ public sealed class BuiltInSkillSeedingTests : IDisposable
 {
     private readonly DisposableTempDir _directory = new();
 
-    public void Dispose() => _directory.Dispose();
+    public void Dispose()
+    {
+        WindowsJunction.RemoveJunctionsUnder(_directory.Path);
+        _directory.Dispose();
+    }
 
     [Fact]
     public void Restore_writes_the_complete_embedded_tree()

@@ -40,4 +40,30 @@ public static class WindowsJunction
         if ((File.GetAttributes(link) & FileAttributes.ReparsePoint) == 0)
             throw new InvalidOperationException("mklink did not create a reparse point.");
     }
+
+    /// <summary>
+    /// Removes each directory junction or directory link below <paramref name="root"/>
+    /// without a visit to its target. A recursive <see cref="Directory.Delete(string, bool)"/>
+    /// treats a junction as a volume mount point and fails with "The parameter is
+    /// incorrect". A non-recursive delete removes only the link entry. Call this
+    /// before the recursive delete of a test root. The method does nothing on POSIX.
+    /// </summary>
+    public static void RemoveJunctionsUnder(string root)
+    {
+        if (!OperatingSystem.IsWindows() || !Directory.Exists(root))
+            return;
+
+        var options = new EnumerationOptions
+        {
+            AttributesToSkip = 0,
+            RecurseSubdirectories = false
+        };
+        foreach (var directory in Directory.EnumerateDirectories(root, "*", options))
+        {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                Directory.Delete(directory, recursive: false);
+            else
+                RemoveJunctionsUnder(directory);
+        }
+    }
 }
