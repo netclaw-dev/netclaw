@@ -38,6 +38,10 @@ code reads the files from the output directory, so the test code did not change:
 | `ToolFrictionEvidence/tool-friction-fixtures.json` | Sanitized tool-friction cases. | `ToolFrictionEvidenceContractTests`, `ToolFrictionReplayTests` |
 | `ToolFootprintEvidence/tool-schema-footprint-baseline.json` | Tool schema size baseline for main and sub-agent sessions. | `SubAgentSpawnIntegrationTests` |
 
+The tests hash the exact bytes of some files. The root `.gitattributes` keeps
+every `*.json` file in this folder as LF on every platform. Do not remove that
+rule.
+
 `ShellApprovalEvidenceContractTests.Approval_evidence_contains_no_source_identity`
 reads every `*.json` file in the `ApprovalEvidence` output folder. Put only
 sanitized evidence in `ApprovalEvidence/`.
