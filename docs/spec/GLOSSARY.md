@@ -246,8 +246,14 @@ Tool exposure, a receipt, and a correction instruction do not add authority.
 
 ### Approval
 
-Approval is an operator decision for a call that requires consent. Approval is
-one input to authorization. It is not the same as schema exposure.
+Approval is the operator's consent act for a call that requires consent. The
+operator gives a [consent answer](#consent-answer). Approval is one input to
+authorization. It is not the same as schema exposure.
+
+Do not use "approval" for the consent mode (`ApprovalPolicy` in config), for a
+stored grant, or for the whole authorization gate. Use
+[consent mode](#consent-mode), [grant](#grant), and "authorization". The code
+names `ApprovalPolicy`, `ToolApprovalActor`, and `IsApproved` stay as they are.
 
 Example:
 
@@ -432,6 +438,137 @@ http, no headers, no tokens, isError "token expired"   -> not OAuth-managed; sta
 
 **Code anchors:** `McpClientManager.HasStoredOAuthTokens`, `McpClientManager.IsOAuthChallenge`
 
+## Authorization Language
+
+These terms name the stages and parts of tool authorization. The
+[tool authorization architecture](../architecture/tool-authorization.md)
+shows which context owns each term. Each term has one meaning. The table under
+each term maps the term to current code names. This glossary does not rename
+code.
+
+### Audience
+
+An audience is the trust level of the person or system that talks to Netclaw:
+`Personal`, `Team`, or `Public`. The audience selects a tool profile and a
+consent mode. Do not call an audience a "trust".
+
+**Code anchor:** `TrustAudience`
+
+### Consent mode
+
+A consent mode states what a tool call needs before it runs, per audience and
+tool: `Auto` (no consent), `Approval` (operator consent), or `Deny` (never).
+The configuration key is `ApprovalPolicy` and stays so.
+
+**Code anchors:** `ToolApprovalMode`, `ToolApprovalConfig`
+
+### Candidate
+
+A candidate is one unit of a tool call that needs coverage. A shell call has
+one candidate per command occurrence. A non-shell tool has one candidate: its
+tool name, or a path-scoped name for a protected write target.
+
+**Code anchors:** `ApprovalCandidate`, `ShellPolicyCandidate`
+
+### Coverage
+
+Coverage is the reason that a candidate needs no prompt: a one-time consent, a
+chat grant, a persistent grant, reviewed-safe policy, or an approval-exempt
+output command. A call can run without a prompt only when every candidate has
+coverage.
+
+**Code anchors:** `ShellCoverageKind`, `ToolAllowReason`
+
+### Grant
+
+A grant is a stored operator consent. A chat grant lives in memory for one
+session. A persistent grant lives in `tool-approvals.json`. A grant applies
+only to the audience and tool that it names.
+
+A one-time consent is not a grant. An MCP server or tool allow list is not a
+grant; it is audience profile data. `McpServerToolGrants` and `GrantCategory`
+keep their code names.
+
+**Code anchors:** `ApprovalEntry`, `ToolApprovalGrant`, `ToolApprovalStore`
+
+### Grant scope
+
+A grant scope states where a grant applies: this chat, one folder, one Git
+repository, or everywhere. "Scope" in new prose means a grant scope only. Use
+"boundary" for a filesystem check, "run" for a run context, and "project
+directory" for a project declaration.
+
+**Code anchors:** `ApprovalGrantScope`, `ApprovalEntry.Directory`,
+`ApprovalEntry.Repository`
+
+### One-time consent
+
+A one-time consent lets the exact blocked call run once. Netclaw stores
+nothing. The retry passes every check again.
+
+**Code anchors:** `OneTimeApprovalKeys`, `ToolApprovalAttempt`
+
+### Consent request
+
+A consent request asks the operator to answer for the uncovered candidates of
+one call. It carries the options that the operator can choose and a display
+text with secrets removed.
+
+**Code anchors:** `ToolApprovalContext`, `ToolInteractionRequest`
+
+### Consent answer
+
+A consent answer is the option that the operator chooses: once, a grant with a
+scope, or a refusal. Do not call it a "decision".
+
+**Code anchors:** `ApprovalDecision`, `ParentApprovalDecision`,
+`ApprovalOptionKeys`
+
+### Decision
+
+A decision is the authorization outcome of one call: allowed, requires
+consent, requires correction, or denied.
+
+**Code anchors:** `ToolAuthorizationDecision`, `ToolAuthorizationOutcome`
+
+### Policy data
+
+Policy data is configuration that authorization reads: audience profiles,
+consent modes, deny rules, the reviewed-safe catalog, and protected paths.
+Name an evaluator class after its context, not "policy", in new prose. Current
+class names such as `ToolAccessPolicy` stay.
+
+### Phrase
+
+A phrase is the display and match unit of a shell candidate, for example
+`git status`. A stored shell grant stores phrase tokens.
+
+**Code anchors:** `ApprovalCandidate.Verb`, `VerbTokens`, `ApprovalPhrase`
+
+### Pattern
+
+A pattern is a glob path pattern only. Use [phrase](#phrase) for a shell
+display or match unit and "deny rule" for a hard-deny entry. The code names
+`Patterns`, `HardDenyPatterns`, and `DenyPattern` stay.
+
+**Code anchor:** `PathPattern`
+
+### Deny rule
+
+A deny rule forbids a command or a path whatever consent exists. No operator
+answer can override a deny rule.
+
+**Code anchors:** `HardDenyRule`, `ShellCommandPolicy`, `ToolPathPolicy`
+
+### Unresolved syntax
+
+Unresolved syntax is a shell fact: the parser cannot prove the full effect of
+a command, for example a dynamic command name. A call with unresolved syntax
+can get only a one-time consent. A non-interactive run denies it. Do not use
+the word "messy" in new prose.
+
+**Code anchor:** `IsMessy`
+
 ## Filesystem and Output Terms
 
 ### Project scope
@@ -565,9 +702,10 @@ A trusted root is a configured or context-derived directory boundary that can
 supply filesystem authority. A path below this root can still fail an audience,
 file-operation, link, or protected-path check.
 
-The `netclaw-tools` capability owns the trusted-root interpretation and the
-filesystem authorization decision. Session and cwd capabilities only supply
-roots and candidate paths.
+The `tool-authorization` capability owns the trusted-root interpretation and
+the filesystem authorization decision. Session and cwd capabilities only supply
+roots and candidate paths. "Trust" in new prose means a trusted root only. Use
+"audience" for `TrustAudience`.
 
 Stable machine-readable reason codes can retain legacy tokens such as
 `trust_zone`. These tokens are compatibility keys, not current engineering
@@ -587,7 +725,12 @@ Those stores and control-plane state remain read-denied.
 ### Canonical path
 
 A canonical path is a fully qualified, normalized path with no unresolved dot
-segments. Canonical form does not by itself grant access.
+segments. Canonical form does not resolve links. A shell canonical path also
+carries its path style (`CanonicalShellPath`). Canonical form does not by
+itself grant access.
+
+A resolved path is a canonical path after link resolution. Do not call a
+resolved path "canonical".
 
 ### Path relationship
 
@@ -607,8 +750,8 @@ operation.
 
 A path access decision is the typed allow or deny result for one canonical
 path and file operation. A denied decision contains a failure category and
-human-readable detail. The `netclaw-tools` capability owns this decision and
-applies these inputs:
+human-readable detail. The `tool-authorization` capability owns this decision
+and applies these inputs:
 
 - the path relationship to each trusted root;
 - the file operation;
@@ -640,7 +783,8 @@ relative path. An available base can enter filesystem authorization. An
 unavailable base is absent or unusable before authorization starts.
 
 Availability does not mean that a path is safe or authorized. After
-`session-cwd` selects a base, `netclaw-tools` creates the path access decision.
+`session-cwd` selects a base, the path access decision starts
+(`tool-authorization`).
 Netclaw does not try another base after that decision denies access.
 
 Example:

@@ -100,10 +100,10 @@ the smallest repeatable manual script plus expected output.
 
 - Product: `PROJECT_CONTEXT.md`, `docs/prd/README.md`, `docs/prd/PRD-001-netclaw-mvp.md`
 - CLI/config: `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/spec/SPEC-004-cli-contract.md`, `docs/spec/SPEC-007-guided-onboarding.md`, `openspec/specs/netclaw-config-command/spec.md`, `openspec/changes/netclaw-config-command/tasks.md`
-- Security/gateway: `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/spec/SPEC-001-runtime-boundaries.md`, `docs/spec/SPEC-003-acl-policy-and-security-controls.md`, `openspec/specs/netclaw-acl/spec.md`, `openspec/specs/netclaw-gateway-security/spec.md`
+- Security/gateway: `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/spec/SPEC-001-runtime-boundaries.md`, `docs/architecture/tool-authorization.md`, `openspec/specs/tool-authorization/spec.md`
 - Input adapters: `docs/prd/PRD-009-input-adapters-and-unified-input.md`, `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/changes/add-mattermost-channel/tasks.md`
 - Models/providers: `docs/prd/PRD-005-model-provider-strategy.md`, `docs/spec/SPEC-008-model-provider-abstraction.md`, `openspec/specs/netclaw-model-providers/spec.md`
-- MCP/tools: `docs/prd/PRD-006-mcp-tool-integration.md`, `openspec/specs/netclaw-mcp/spec.md`, `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+- MCP/tools: `docs/prd/PRD-006-mcp-tool-integration.md`, `openspec/specs/netclaw-mcp/spec.md`, `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-authorization/spec.md`
 - Memory/personality: `docs/prd/PRD-007-agent-personality-and-local-memory.md`, `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/project-instructions/spec.md`
 - Scheduling: `docs/prd/PRD-008-scheduling-and-periodic-tasks.md`, `openspec/specs/netclaw-scheduling/spec.md`, `openspec/specs/reminder-execution-history/spec.md`
 - Testing: `docs/spec/SPEC-010-testing-and-smoke-strategy.md`, `TOOLING.md`
@@ -395,7 +395,7 @@ Done when:
 ### Priority: Preserve The Daemon Working Directory
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** daemon lifecycle, path normalization, shell authorization
 **Verification:** L1 plus a live daemon restart
 
@@ -463,7 +463,7 @@ Done when:
 ### Priority: Reduce Shell Approval Fatigue
 
 **PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
-**Spec:** `openspec/specs/tool-approval-gates/spec.md`
+**Spec:** `openspec/specs/tool-authorization/spec.md`
 **Surface area:** shell authorization, approval matching, security corpus
 **Verification:** L2
 
@@ -1129,7 +1129,7 @@ Done when:
 #### Task 1.3: Complete `Security & Access` config area
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/prd/PRD-002-gateway-security-envelope.md`
-**Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/security-posture-tui/spec.md`, `openspec/specs/netclaw-acl/spec.md`
+**Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/security-posture-tui/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** UI, config, security
 **Verification:** L3
 
@@ -1365,7 +1365,7 @@ according to the same security envelope.
 #### Task 3.1: Add adapter config-to-runtime contract tests
 
 **PRD:** `docs/prd/PRD-009-input-adapters-and-unified-input.md`, `docs/prd/PRD-002-gateway-security-envelope.md`
-**Spec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/specs/netclaw-acl/spec.md`
+**Spec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** runtime, config, ACL
 **Verification:** L2
 
