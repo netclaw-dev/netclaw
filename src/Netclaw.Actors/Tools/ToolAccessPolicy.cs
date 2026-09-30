@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Diagnostics.CodeAnalysis;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
@@ -216,12 +217,28 @@ public sealed class ToolAccessPolicy
             return AuthorizeMcpInvocation(mcp, context, arguments);
 
         var toolName = new ToolName(tool.Name);
-        if (!_profileResolver.IsToolAllowed(toolName, context.Invocation))
-            return ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile");
+        if (AdmitAudience(tool, context) is { } audienceDenial)
+            return audienceDenial;
 
         return string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
             ? AuthorizeBackgroundJobControl(context)
             : AuthorizeStructuredInvocation(tool, toolName, context, arguments);
+    }
+
+    /// <summary>
+    /// Decides whether the caller's audience may use the tool. An MCP tool needs
+    /// its server and the tool in the audience allow lists. Another tool needs its
+    /// name in the audience profile.
+    /// </summary>
+    /// <returns>A denial, or null when the audience may use the tool.</returns>
+    internal ToolAuthorizationDecision? AdmitAudience(INetclawTool tool, ToolExecutionContext context)
+    {
+        if (tool is McpToolAdapter mcp)
+            return AdmitMcpAudience(mcp, context);
+
+        return _profileResolver.IsToolAllowed(new ToolName(tool.Name), context.Invocation)
+            ? null
+            : ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile");
     }
 
     /// <summary>Builds canonical shell analysis and applies synchronous access rules before approval evidence.</summary>
@@ -236,10 +253,23 @@ public sealed class ToolAccessPolicy
         ShellCommandAnalysis? analysis = null;
         BashDirectoryScopeProjection? directoryScopes = null;
         var toolName = new ToolName(tool.Name);
-        var decision = !_profileResolver.IsToolAllowed(toolName, context.Invocation)
-            ? ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile")
-            : AuthorizeShellInvocation(toolName, context, arguments, out analysis, out directoryScopes);
+        var decision = AdmitAudience(tool, context)
+            ?? AuthorizeShellInvocation(toolName, context, arguments, out analysis, out directoryScopes);
+        return CompleteShellPreflight(decision, analysis, directoryScopes);
+    }
 
+    /// <summary>
+    /// Converts the result of the shell screens and the consent mode into the
+    /// preflight result that correction and coverage selection read.
+    /// </summary>
+    /// <param name="decision">The screen denial, the automatic allow, or the consent request.</param>
+    /// <param name="analysis">The command analysis, or null when the call has no command text or a screen denied it.</param>
+    /// <param name="directoryScopes">The directory proof that supplied the candidates, or null.</param>
+    internal static ShellPolicyPreflightResult CompleteShellPreflight(
+        ToolAuthorizationDecision decision,
+        ShellCommandAnalysis? analysis,
+        BashDirectoryScopeProjection? directoryScopes)
+    {
         if (!decision.NeedsApproval)
         {
             return new ShellPolicyPreflightResult.Complete(
@@ -269,22 +299,11 @@ public sealed class ToolAccessPolicy
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments)
     {
-        var serverName = new McpServerName(tool.ServerName);
-        if (!_profileResolver.IsMcpServerAllowed(serverName, context.Invocation))
-            return ToolAuthorizationDecision.Deny("mcp_server_not_allowed_for_audience_profile");
-
-        if (!_profileResolver.IsMcpToolAllowed(
-                serverName,
-                new ToolName(tool.BareToolName),
-                context.Invocation))
-        {
-            return ToolAuthorizationDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
-        }
+        if (AdmitMcpAudience(tool, context) is { } audienceDenial)
+            return audienceDenial;
 
         var toolName = new ToolName(tool.Name);
-        var (_, approvalArguments) = ToolCallMeta.ExtractFrom(
-            arguments,
-            key => ToolArgumentValidator.ResolveMetaField(tool, key));
+        var approvalArguments = GetApprovalArguments(tool, arguments);
         var approvalMode = GetApprovalMode(
             toolName,
             context,
@@ -297,6 +316,48 @@ public sealed class ToolAccessPolicy
             McpApprovalMatcher.Instance,
             approvalMode);
     }
+
+    private ToolAuthorizationDecision? AdmitMcpAudience(
+        McpToolAdapter tool,
+        ToolExecutionContext context)
+    {
+        var serverName = new McpServerName(tool.ServerName);
+        if (!_profileResolver.IsMcpServerAllowed(serverName, context.Invocation))
+            return ToolAuthorizationDecision.Deny("mcp_server_not_allowed_for_audience_profile");
+
+        if (!_profileResolver.IsMcpToolAllowed(
+                serverName,
+                new ToolName(tool.BareToolName),
+                context.Invocation))
+        {
+            return ToolAuthorizationDecision.Deny("mcp_tool_not_allowed_for_audience_profile");
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns the arguments that consent reads. An MCP call drops the Netclaw
+    /// metadata fields, so a grant never depends on them.
+    /// </summary>
+    internal static IDictionary<string, object?>? GetApprovalArguments(
+        INetclawTool tool,
+        IDictionary<string, object?>? arguments)
+    {
+        if (tool is not McpToolAdapter)
+            return arguments;
+
+        var (_, approvalArguments) = ToolCallMeta.ExtractFrom(
+            arguments,
+            key => ToolArgumentValidator.ResolveMetaField(tool, key));
+        return approvalArguments;
+    }
+
+    /// <summary>Selects the matcher that gives the candidates and the mode key of a call that is not a shell call.</summary>
+    internal IToolApprovalMatcher SelectApprovalMatcher(INetclawTool tool)
+        => tool is McpToolAdapter
+            ? McpApprovalMatcher.Instance
+            : SelectMatcherForTool(new ToolName(tool.Name));
 
     private ToolAuthorizationDecision AuthorizeStructuredInvocation(
         INetclawTool tool,
@@ -330,75 +391,33 @@ public sealed class ToolAccessPolicy
             return capabilityDecision;
 
         var shellCommand = ExtractShellCommand(arguments);
-        var workingDirectory = context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
+        var workingDirectory = ResolveShellWorkingDirectory(context, arguments);
         ShellCommandAnalysis? shellAnalysis = null;
         if (shellCommand is not null)
         {
             shellAnalysis = _shellCommandPolicy.Analyze(shellCommand, workingDirectory);
-            var hardDenyDecision = _shellCommandPolicy.Evaluate(shellAnalysis);
-            if (!hardDenyDecision.Allowed)
-                return ToolAuthorizationDecision.Deny(
-                    $"hard_deny_{hardDenyDecision.DenyCategory?.ToWireName() ?? "unknown"}");
+            if (ScreenHardDeny(shellAnalysis) is { } hardDeny)
+                return hardDeny;
 
-            if (_toolPathPolicy.CommandReferencesDeniedPath(shellAnalysis))
-                return ToolAuthorizationDecision.Deny("shell_references_protected_path");
+            if (ScreenProtectedShellText(shellAnalysis) is { } protectedPath)
+                return protectedPath;
         }
 
-        // The OS resolves ".." after a symlink. Lexical policy normalization does not.
-        if (workingDirectory is not null && CanonicalPath.HasParentSegment(workingDirectory))
-            return ToolAuthorizationDecision.Deny("shell_invalid_working_directory");
+        if (ScreenShellWorkingDirectory(workingDirectory) is { } invalidWorkingDirectory)
+            return invalidWorkingDirectory;
 
-        // All shell policy checks use the directory that ShellTool executes.
-        // The explicit tool argument can be absent while the context supplies
-        // an active project, session, or inherited directory.
-        var analysisArguments = WithResolvedShellWorkingDirectory(arguments, workingDirectory);
         var shellApproval = shellAnalysis is null
             ? null
-            : _shellApprovalMatcher.AnalyzeInvocation(
-                toolName,
-                analysisArguments,
-                shellAnalysis);
+            : AnalyzeShellApproval(toolName, arguments, workingDirectory, shellAnalysis);
 
-        // A complete directory proof gives each occurrence its own directory and clears
-        // the unresolved-input gate. An unattended causal list keeps that gate, as it did
-        // before causal lists used this proof.
         if (shellAnalysis is not null
-            && shellApproval is { IsMessy: true, Candidates.Count: 0 }
-            && BashDirectoryScopeProjection.TryCreate(
-                shellAnalysis,
-                _shellCommandPolicy,
-                _shellApprovalMatcher,
-                out var projection)
-            && (!projection.IsCausalList
-                || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available)
-            && projection.Slices.All(slice => IsDirectoryScopeEligible(slice.WorkingDirectory)))
+            && shellApproval is not null
+            && TryProveDirectoryScopes(shellAnalysis, shellApproval, context, out var projection))
         {
-            foreach (var slice in projection.Slices)
-            {
-                var scopedDeny = _shellCommandPolicy.Evaluate(slice.Analysis);
-                if (!scopedDeny.Allowed)
-                {
-                    return ToolAuthorizationDecision.Deny(
-                        $"hard_deny_{scopedDeny.DenyCategory?.ToWireName() ?? "unknown"}");
-                }
+            if (ScreenDirectoryScopes(projection, context) is { } scopedDeny)
+                return scopedDeny;
 
-                if (_toolPathPolicy.CommandReferencesDeniedPath(slice.Analysis))
-                    return ToolAuthorizationDecision.Deny("shell_references_protected_path");
-
-                var scopedPathDeny = EnforceShellFileProtection(
-                    slice.Approval,
-                    slice.Analysis,
-                    slice.WorkingDirectory,
-                    context);
-                if (scopedPathDeny is not null)
-                    return scopedPathDeny;
-            }
-
-            shellApproval = shellApproval with
-            {
-                Candidates = projection.Candidates,
-                IsMessy = false
-            };
+            shellApproval = WithDirectoryScopes(shellApproval, projection);
             directoryScopes = projection;
         }
 
@@ -416,19 +435,11 @@ public sealed class ToolAccessPolicy
                 return pathAccessDeny;
         }
 
-        var configuredMode = GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher);
-        var mode = ResolveShellApprovalMode(
-            configuredMode,
-            shellAnalysis?.RequiresExactTreeApproval == true);
-        var approvalModeDecision = GetApprovalModeDecision(mode);
-        if (approvalModeDecision is { Outcome: ToolAuthorizationOutcome.Denied })
-            return approvalModeDecision;
+        var mode = GetShellApprovalMode(toolName, context, arguments, shellAnalysis);
+        if (ScreenApprovalModeDenial(mode) is { } approvalModeDenial)
+            return approvalModeDenial;
 
         authorizedAnalysis = shellAnalysis;
-
-        if (approvalModeDecision is not null)
-            return approvalModeDecision;
-
         return AuthorizeShellApproval(
             toolName,
             context,
@@ -438,11 +449,140 @@ public sealed class ToolAccessPolicy
             workingDirectory);
     }
 
-    private ToolAuthorizationDecision AuthorizeBackgroundJobControl(ToolExecutionContext context)
+    /// <summary>Returns the directory that ShellTool executes in, from the argument or the context.</summary>
+    /// <remarks>
+    /// All shell policy checks use this directory. The explicit tool argument can
+    /// be absent while the context supplies an active project, session, or
+    /// inherited directory.
+    /// </remarks>
+    internal static string? ResolveShellWorkingDirectory(
+        ToolExecutionContext context,
+        IDictionary<string, object?>? arguments)
+        => context.ResolveShellCwd(ExtractWorkingDirectory(arguments));
+
+    /// <summary>Applies the hard-deny list to the parsed command.</summary>
+    /// <returns>A denial that names the deny category, or null.</returns>
+    internal ToolAuthorizationDecision? ScreenHardDeny(ShellCommandAnalysis analysis)
+    {
+        var hardDenyDecision = _shellCommandPolicy.Evaluate(analysis);
+        if (!hardDenyDecision.Allowed)
+            return ToolAuthorizationDecision.Deny(
+                $"hard_deny_{hardDenyDecision.DenyCategory?.ToWireName() ?? "unknown"}");
+
+        return null;
+    }
+
+    /// <summary>Denies shell text that names a protected path, whatever the operation.</summary>
+    internal ToolAuthorizationDecision? ScreenProtectedShellText(ShellCommandAnalysis analysis)
+        => _toolPathPolicy.CommandReferencesDeniedPath(analysis)
+            ? ToolAuthorizationDecision.Deny("shell_references_protected_path")
+            : null;
+
+    /// <summary>Denies a working directory with a <c>..</c> segment.</summary>
+    /// <remarks>The OS resolves ".." after a symlink. Lexical policy normalization does not.</remarks>
+    internal static ToolAuthorizationDecision? ScreenShellWorkingDirectory(string? workingDirectory)
+        => workingDirectory is not null && CanonicalPath.HasParentSegment(workingDirectory)
+            ? ToolAuthorizationDecision.Deny("shell_invalid_working_directory")
+            : null;
+
+    /// <summary>Projects the parsed command to its consent candidates in the resolved working directory.</summary>
+    internal ShellApprovalAnalysis AnalyzeShellApproval(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        string? workingDirectory,
+        ShellCommandAnalysis analysis)
+        => _shellApprovalMatcher.AnalyzeInvocation(
+            toolName,
+            WithResolvedShellWorkingDirectory(arguments, workingDirectory),
+            analysis);
+
+    /// <summary>
+    /// Returns true when a complete directory proof gives each occurrence of an
+    /// unresolved compound its own directory.
+    /// </summary>
+    /// <remarks>
+    /// A complete directory proof clears the unresolved-input gate. An
+    /// unattended causal list keeps that gate, as it did before causal lists
+    /// used this proof. The caller must screen each slice before it uses the
+    /// proof candidates.
+    /// </remarks>
+    internal bool TryProveDirectoryScopes(
+        ShellCommandAnalysis analysis,
+        ShellApprovalAnalysis approval,
+        ToolExecutionContext context,
+        [NotNullWhen(true)] out BashDirectoryScopeProjection? proof)
+    {
+        proof = null;
+        if (approval is not { IsMessy: true, Candidates.Count: 0 }
+            || !BashDirectoryScopeProjection.TryCreate(
+                analysis,
+                _shellCommandPolicy,
+                _shellApprovalMatcher,
+                out var projection)
+            || (projection.IsCausalList
+                && context.RunScope.InteractiveApproval is not InteractiveApprovalCapability.Available)
+            || !projection.Slices.All(slice => IsDirectoryScopeEligible(slice.WorkingDirectory)))
+        {
+            return false;
+        }
+
+        proof = projection;
+        return true;
+    }
+
+    /// <summary>Screens each slice of a directory proof in slice order.</summary>
+    /// <returns>The first denial of a slice: hard deny, protected text, or file protection.</returns>
+    internal ToolAuthorizationDecision? ScreenDirectoryScopes(
+        BashDirectoryScopeProjection proof,
+        ToolExecutionContext context)
+    {
+        foreach (var slice in proof.Slices)
+        {
+            var sliceDeny = ScreenHardDeny(slice.Analysis)
+                ?? ScreenProtectedShellText(slice.Analysis)
+                ?? EnforceShellFileProtection(
+                    slice.Approval,
+                    slice.Analysis,
+                    slice.WorkingDirectory,
+                    context);
+            if (sliceDeny is not null)
+                return sliceDeny;
+        }
+
+        return null;
+    }
+
+    /// <summary>Replaces the unresolved candidates with the candidates of a screened directory proof.</summary>
+    internal static ShellApprovalAnalysis WithDirectoryScopes(
+        ShellApprovalAnalysis approval,
+        BashDirectoryScopeProjection proof)
+        => approval with
+        {
+            Candidates = proof.Candidates,
+            IsMessy = false
+        };
+
+    /// <summary>Resolves the consent mode of a shell call. Auto becomes Approval for a link-following tree effect.</summary>
+    internal ToolApprovalMode GetShellApprovalMode(
+        ToolName toolName,
+        ToolExecutionContext context,
+        IDictionary<string, object?>? arguments,
+        ShellCommandAnalysis? analysis)
+        => ResolveShellApprovalMode(
+            GetApprovalMode(toolName, context, arguments, _shellApprovalMatcher),
+            analysis?.RequiresExactTreeApproval == true);
+
+    /// <summary>Returns the denial for a Deny consent mode or an unknown mode, or null.</summary>
+    internal static ToolAuthorizationDecision? ScreenApprovalModeDenial(ToolApprovalMode mode)
+        => GetApprovalModeDecision(mode) is { Outcome: ToolAuthorizationOutcome.Denied } denial
+            ? denial
+            : null;
+
+    internal ToolAuthorizationDecision AuthorizeBackgroundJobControl(ToolExecutionContext context)
         => EvaluateShellCapability(context.Invocation)
            ?? ToolAuthorizationDecision.Allow(ToolAllowReason.BackgroundJobLifecycle);
 
-    private ToolAuthorizationDecision? EvaluateShellCapability(ToolInvocationContext context)
+    internal ToolAuthorizationDecision? EvaluateShellCapability(ToolInvocationContext context)
     {
         var shellMode = ResolveShellMode();
         if (shellMode == ShellExecutionMode.Off)
@@ -499,10 +639,19 @@ public sealed class ToolAccessPolicy
         ShellCommandAnalysis analysis,
         string? workingDirectory,
         ToolExecutionContext context)
+        => ScreenUnresolvedShellInput(approval, context)
+           ?? ScreenShellTrustZone(analysis, workingDirectory, context);
+
+    /// <summary>Denies unresolved shell syntax when no operator can answer a prompt.</summary>
+    /// <remarks>
+    /// Unattended runs cannot send unresolved path syntax to a user. An
+    /// interactive run keeps the existing one-shot approval path for that
+    /// syntax. Known paths still pass Write protection in <see cref="ScreenShellTrustZone"/>.
+    /// </remarks>
+    internal static ToolAuthorizationDecision? ScreenUnresolvedShellInput(
+        ShellApprovalAnalysis approval,
+        ToolExecutionContext context)
     {
-        // Unattended runs cannot send unresolved path syntax to a user. An
-        // interactive run keeps the existing one-shot approval path for that
-        // syntax. Known paths still pass Write protection below.
         if (approval.IsMessy
             && context.RunScope.InteractiveApproval
             is InteractiveApprovalCapability.Unavailable)
@@ -510,6 +659,18 @@ public sealed class ToolAccessPolicy
             return ToolAuthorizationDecision.Deny("shell_unresolved_trust_zone_input");
         }
 
+        return null;
+    }
+
+    /// <summary>
+    /// Requires the working directory and every known path of the command to be
+    /// inside a trusted root for Write.
+    /// </summary>
+    internal ToolAuthorizationDecision? ScreenShellTrustZone(
+        ShellCommandAnalysis analysis,
+        string? workingDirectory,
+        ToolExecutionContext context)
+    {
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             var expandedWorkingDirectory = PathUtility.ExpandAndNormalize(workingDirectory, workingDirectory: null);
@@ -592,7 +753,7 @@ public sealed class ToolAccessPolicy
         => path.Style == ShellPathStyle.Posix
            && string.Equals(path.Value, "/dev/null", StringComparison.Ordinal);
 
-    private ToolAuthorizationDecision? PreflightStructuredPathAccess(
+    internal ToolAuthorizationDecision? PreflightStructuredPathAccess(
         INetclawTool tool,
         ToolInvocationContext context,
         IDictionary<string, object?>? arguments)
@@ -629,7 +790,7 @@ public sealed class ToolAccessPolicy
             : null;
     }
 
-    private static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
+    internal static string? ExtractShellCommand(IDictionary<string, object?>? arguments)
     {
         // Use the shared extractor so JsonElement-valued arguments (the
         // shape LLM-generated tool calls arrive in) get string-converted
@@ -680,11 +841,19 @@ public sealed class ToolAccessPolicy
         IDictionary<string, object?>? arguments,
         IToolApprovalMatcher matcher,
         ToolApprovalMode mode)
-    {
-        var approvalModeDecision = GetApprovalModeDecision(mode);
-        if (approvalModeDecision is not null)
-            return approvalModeDecision;
+        => GetApprovalModeDecision(mode)
+           ?? BuildNonShellConsentRequest(toolName, context, arguments, matcher);
 
+    /// <summary>
+    /// Builds the consent request of a call that is not a shell call: its
+    /// candidates, display text, offered options, and any temporary-directory advice.
+    /// </summary>
+    internal ToolAuthorizationDecision BuildNonShellConsentRequest(
+        ToolName toolName,
+        ToolExecutionContext context,
+        IDictionary<string, object?>? arguments,
+        IToolApprovalMatcher matcher)
+    {
         var patterns = matcher.ExtractPatterns(toolName, arguments);
         var candidates = matcher.ExtractCandidates(toolName, arguments);
         var displayText = matcher.FormatForDisplay(toolName, arguments);
@@ -706,7 +875,7 @@ public sealed class ToolAccessPolicy
             directoryApprovalAvailable: false);
     }
 
-    private ToolAuthorizationDecision AuthorizeShellApproval(
+    internal ToolAuthorizationDecision AuthorizeShellApproval(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
@@ -834,7 +1003,7 @@ public sealed class ToolAccessPolicy
         return new ToolCorrection.ProjectDirectorySuggested(cwd!);
     }
 
-    private ToolApprovalMode GetApprovalMode(
+    internal ToolApprovalMode GetApprovalMode(
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,

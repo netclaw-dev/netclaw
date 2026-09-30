@@ -8,6 +8,8 @@ using System.Runtime.CompilerServices;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Authorization;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Sessions.Pipelines;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -27,6 +29,14 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
     private readonly ShellPolicyCoordinator _shellPolicyCoordinator;
     private readonly ILogger _logger;
 
+    /// <summary>
+    /// The linear authorizer that later slices of authorization PR 6 switch this
+    /// executor to. It uses the same registry, policy, approval service, and
+    /// shell coordinator as the gate below. No production path calls it yet;
+    /// the differential tests prove that it gives the same decision.
+    /// </summary>
+    internal ToolAuthorizer Authorizer { get; }
+
     public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy,
         IToolApprovalService? approvalService = null, ILogger<DispatchingToolExecutor>? logger = null)
         : this(registry, policy, approvalService, logger is null ? NullLogger.Instance : logger)
@@ -43,6 +53,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         _policy = policy;
         _approvalService = approvalService;
         _shellPolicyCoordinator = new ShellPolicyCoordinator(registry, policy, approvalService);
+        Authorizer = new ToolAuthorizer(registry, policy, approvalService, _shellPolicyCoordinator);
         _logger = logger;
     }
 
@@ -418,7 +429,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         CancellationToken ct)
         => (await EvaluateAuthorizationResultAsync(toolCall, context, ct)).Decision;
 
-    private async Task<ToolAuthorizationResult> EvaluateAuthorizationResultAsync(
+    internal async Task<ToolAuthorizationResult> EvaluateAuthorizationResultAsync(
             FunctionCallContent toolCall,
             ToolExecutionContext context,
             CancellationToken ct)
@@ -450,48 +461,22 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         {
             var approvalContext = accessDecision.ApprovalContext
                 ?? throw new InvalidOperationException("Approval decision missing approval context.");
-            var candidatesForCheck = approvalContext.Candidates is { Count: > 0 } candidates
-                ? candidates.ToList()
-                : approvalContext.CandidateVerbs
-                    .Select(verb => new ApprovalCandidate(verb, Directory: null))
-                    .ToList();
-
-            if (candidatesForCheck.Count > 0)
+            var grantCheck = await StoredGrantCheck.RunAsync(
+                _approvalService,
+                new ToolName(tool.Name),
+                approvalContext,
+                context,
+                ct);
+            approvalMatches = grantCheck.Matches;
+            if (grantCheck.StoreUnavailableForMiss)
             {
-                var approvalCheck = await _approvalService.CheckApprovalAsync(
-                    ToApprovalSessionId(context.SessionId),
-                    context.Audience,
-                    new ToolName(tool.Name),
-                    candidatesForCheck,
-                    context.Approval.Cwd,
-                    ct);
-                approvalMatches = approvalCheck.ApprovedMatches;
-                var hasExactCandidateChecks = TryGetExactUnapprovedCandidates(
-                    approvalCheck,
-                    candidatesForCheck,
-                    out _);
-                var hasInconsistentCandidateChecks = approvalCheck.CandidateChecks is not null
-                                                     && !hasExactCandidateChecks;
-                var storeUnavailableForMiss = approvalCheck.PersistentStoreFailure is not null
-                                              && approvalCheck.UnapprovedPatterns.Count > 0;
-
-                if (storeUnavailableForMiss)
-                {
-                    accessDecision = IsOneTimeApprovalSatisfied(context, toolCall, approvalContext)
-                        ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
-                        : ToolAuthorizationDecision.Deny("approval_store_unavailable");
-                }
-                else if (approvalCheck.UnapprovedPatterns.Count == 0
-                         && !hasInconsistentCandidateChecks)
-                {
-                    accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval);
-                }
-                else
-                {
-                    accessDecision = ToolAuthorizationDecision.RequiresApproval(
-                        approvalContext,
-                        accessDecision.AgentCorrection);
-                }
+                accessDecision = IsOneTimeApprovalSatisfied(context, toolCall, approvalContext)
+                    ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
+                    : ToolAuthorizationDecision.Deny("approval_store_unavailable");
+            }
+            else if (grantCheck.AllCovered)
+            {
+                accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval);
             }
         }
 
@@ -606,49 +591,6 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         return (tool, authorization);
     }
 
-    private static bool TryGetExactUnapprovedCandidates(
-        ToolApprovalCheckResult result,
-        IReadOnlyList<ApprovalCandidate> checkedCandidates,
-        out IReadOnlyList<ApprovalCandidate> unapprovedCandidates)
-    {
-        unapprovedCandidates = [];
-        if (result.CandidateChecks is not { } candidateChecks
-            || candidateChecks.Count != checkedCandidates.Count)
-        {
-            return false;
-        }
-
-        var exactUnapprovedCandidates = new List<ApprovalCandidate>();
-        var exactUnapprovedPatterns = new List<string>();
-        var exactApprovedMatches = new List<ToolApprovalMatch>();
-        for (var index = 0; index < candidateChecks.Count; index++)
-        {
-            var check = candidateChecks[index];
-            var checkedCandidate = checkedCandidates[index];
-            if (!checkedCandidate.HasSameApprovalFacts(check.Candidate))
-                return false;
-
-            if (check.ApprovedMatch is { } approvedMatch)
-                exactApprovedMatches.Add(approvedMatch);
-            else
-            {
-                exactUnapprovedCandidates.Add(checkedCandidate);
-                exactUnapprovedPatterns.Add(checkedCandidate.Verb);
-            }
-        }
-
-        if (!exactUnapprovedPatterns.SequenceEqual(
-                result.UnapprovedPatterns,
-                StringComparer.OrdinalIgnoreCase)
-            || !exactApprovedMatches.SequenceEqual(result.ApprovedMatches))
-        {
-            return false;
-        }
-
-        unapprovedCandidates = exactUnapprovedCandidates;
-        return true;
-    }
-
     private void LogAuthorizationDecision(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
@@ -734,9 +676,6 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 toolCall.CallId);
         }
     }
-
-    private static ToolApprovalSessionId? ToApprovalSessionId(string? sessionId)
-        => sessionId is null ? null : (ToolApprovalSessionId)sessionId;
 
     private static bool IsOneTimeApprovalSatisfied(
         ToolExecutionContext context,

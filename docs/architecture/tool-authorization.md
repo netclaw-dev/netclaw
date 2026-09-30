@@ -161,8 +161,33 @@ The arrows show the order in the current shell path. A non-shell call skips
 - [`ShellPolicyCoordinator`](../../src/Netclaw.Actors/Tools/ShellPolicyCoordinator.cs)
   orders the shell checks, the advice, and the coverage.
 
-**Planned:** one `ToolAuthorizer` owns the order for every tool (consolidation
-PR 6).
+[`ToolAuthorizer`](../../src/Netclaw.Actors/Authorization/ToolAuthorizer.cs)
+(consolidation PR 6a) states the same order as one list of rules: one line per
+rule, and the first rule that decides wins. It returns a closed
+[`AuthorizationDecision`](../../src/Netclaw.Actors/Authorization/AuthorizationDecision.cs)
+(Allowed, NeedsConsent, CorrectionRequired, or Denied) and throws no exception
+for an outcome. Each rule calls the component that owns its question. No
+production path calls `ToolAuthorizer` yet. A differential test proves that it
+gives the same decision as the three classes above. Its shell rules, in order:
+
+1. Admission: audience, then shell capability.
+2. Prohibition: hard deny, then protected shell text.
+3. Filesystem authority: a `..` in the working directory, then each slice of a
+   `cd` directory proof.
+4. Unresolved input when no operator can answer.
+5. Filesystem authority: the working directory and the known paths must be in
+   a trusted root. Today this rule precedes the covering grant, also for an
+   unattended call in Approval mode.
+6. Admission: a Deny consent mode.
+7. Advice: a native tool, then Auto mode with its directory advice.
+8. A call without command text, the projected trusted-root check, and unresolved
+   input: one-time consent or a Once-only request.
+9. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
+   policy), then the uncovered candidates.
+
+**Planned:** PR 6b and 6c switch the callers, and PR 6d deletes the old gate.
+By owner decision, PR 6e moves the covering grant ahead of the trusted-root
+check for unattended Approval mode.
 
 Each context below lists its question, the classes that answer it today, its
 published contract today, what it must not know, and where its data lives.
@@ -682,6 +707,8 @@ and the approval tooling is in
 | Non-interactive runs cannot get new consent. | Evals Category 9 in `evals/run-evals.sh`; `evals/background_evals.py` |
 | `skill_manage` mutations refuse links and protected paths. | `SkillToolTests`; the skill_manage guard mutation gate ([TOOLING.md § Skill Manage Guard Gate](../../TOOLING.md#skill-manage-guard-gate)) |
 | A shell grant never authorizes `file_read`. | No test yet. Consolidation PR 1b adds it. |
+| `ToolAuthorizer` gives the same decision as the current gate. | `ToolAuthorizerDifferentialTests` ([TOOLING.md § Authorizer Differential](../../TOOLING.md#authorizer-differential)) |
+| No `ToolAuthorizer` rule can move ahead of an earlier rule. | The tool authorizer order mutation gate ([TOOLING.md § Tool Authorizer Order Gate](../../TOOLING.md#tool-authorizer-order-gate)) |
 
 Model guidance (which tool the model should choose, and how it should declare
 a project directory) is not an authorization rule, and no spec owns it. The

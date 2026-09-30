@@ -9,6 +9,7 @@ using Akka.Pattern;
 using System.Globalization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
@@ -180,6 +181,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     private readonly ServiceProvider _services;
     private readonly StubRequiredActor _approvalActor;
     private readonly FunctionCallContent _toolCall;
+    private readonly Func<ToolExecutionContext> _createContext;
     private readonly ToolExecutionContext _context;
     private readonly DispatchingToolExecutor _executor;
     private readonly ToolRegistry _registry;
@@ -194,7 +196,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         ServiceProvider services,
         StubRequiredActor approvalActor,
         FunctionCallContent toolCall,
-        ToolExecutionContext context,
+        Func<ToolExecutionContext> createContext,
         DispatchingToolExecutor executor,
         ToolRegistry registry,
         CountingApprovalService approvalService)
@@ -208,7 +210,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         _services = services;
         _approvalActor = approvalActor;
         _toolCall = toolCall;
-        _context = context;
+        _createContext = createContext;
+        _context = createContext();
         _executor = executor;
         _registry = registry;
         ApprovalService = approvalService;
@@ -358,17 +361,25 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ProjectDirectory = policy?.Sessionless == true ? null : approvalProjectDirectory,
             InteractiveApproval = TestToolExecutionContext.InteractiveApproval(invocation.Interactive)
         };
-        var context = policy?.Sessionless == true
-            ? TestToolExecutionContext.CreateUnbound(contextOptions)
-            : TestToolExecutionContext.CreateBound(
-                scope?.InvocationSessionId ?? InvocationSessionId,
-                approvalSessionDirectory,
-                contextOptions);
-        if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
+        // Each call of this factory gives a new context with the same facts. A
+        // comparison runs each path on its own context, so the state that one
+        // path writes (for example the approval directory) cannot reach the other.
+        ToolExecutionContext CreateContext()
         {
-            context.Approval.SeedOneTimeConsent(new OneTimeConsent(
-                ShellTool.ToolName,
-                oneTimeApprovalKeys));
+            var context = policy?.Sessionless == true
+                ? TestToolExecutionContext.CreateUnbound(contextOptions)
+                : TestToolExecutionContext.CreateBound(
+                    scope?.InvocationSessionId ?? InvocationSessionId,
+                    approvalSessionDirectory,
+                    contextOptions);
+            if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
+            {
+                context.Approval.SeedOneTimeConsent(new OneTimeConsent(
+                    ShellTool.ToolName,
+                    oneTimeApprovalKeys));
+            }
+
+            return context;
         }
 
         return new ShellApprovalHarness(
@@ -381,7 +392,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             provider,
             approvalActor,
             toolCall,
-            context,
+            CreateContext,
             executor,
             provider.GetRequiredService<ToolRegistry>(),
             approvalService);
@@ -593,6 +604,95 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         var decision = await _executor.EvaluateAuthorizationAsync(call, _context, ct);
         return Observe(decision, ApprovalService.CheckCount - before);
     }
+
+    /// <summary>
+    /// Evaluates the case's own call through the current gate and through
+    /// <see cref="ToolAuthorizer"/>. Each path gets a new context.
+    /// </summary>
+    public Task<AuthorizationComparison> CompareAsync(CancellationToken ct)
+        => CompareAsync(_toolCall, ct);
+
+    /// <summary>Compares another shell command in the same session, project, and approval state.</summary>
+    public Task<AuthorizationComparison> CompareShellAsync(
+        string command,
+        CancellationToken ct,
+        string? workingDirectory = null)
+        => CompareAsync(CreateShellCall(_toolCall.CallId, command, workingDirectory), ct);
+
+    /// <summary>Compares a call of any registered tool in the same session, project, and approval state.</summary>
+    public Task<AuthorizationComparison> CompareToolAsync(
+        string toolName,
+        IDictionary<string, object?> arguments,
+        CancellationToken ct)
+        => CompareAsync(new FunctionCallContent(_toolCall.CallId, toolName, arguments), ct);
+
+    /// <summary>
+    /// Compares a call, and then, when the current gate asks for consent, the
+    /// retry that carries a "Once" answer to that exact request.
+    /// </summary>
+    public async Task<IReadOnlyList<AuthorizationComparison>> CompareWithOnceRetryAsync(
+        string toolName,
+        IDictionary<string, object?> arguments,
+        CancellationToken ct)
+    {
+        var call = new FunctionCallContent(_toolCall.CallId, toolName, arguments);
+        var first = await CompareAsync(call, ct);
+        if (first.Request is not { } request)
+            return [first];
+
+        var retry = await CompareAsync(call, ct, OneTimeApprovalKeys.CreateConsent(toolName, request));
+        return [first, retry];
+    }
+
+    /// <summary>Records a chat grant for each candidate of a consent request, as a "This chat" answer does.</summary>
+    public Task RecordChatGrantAsync(AuthorizationComparison comparison, CancellationToken ct)
+    {
+        var request = comparison.Request
+            ?? throw new InvalidOperationException("The comparison has no consent request.");
+        var candidates = request.Candidates is { Count: > 0 } requestCandidates
+            ? requestCandidates
+            : request.CandidateVerbs.Select(verb => new ApprovalCandidate(verb, Directory: null)).ToList();
+        return ApprovalService.RecordApprovalCandidatesAsync(
+            (ToolApprovalSessionId)InvocationSessionIdOf(_context),
+            _context.Audience,
+            new ToolName(request.ToolName),
+            candidates.Select(candidate => new ToolApprovalGrant(candidate, GrantScope.Session.Instance)).ToList(),
+            ct);
+    }
+
+    /// <summary>Adds tools to the live registry with the daemon registration helpers.</summary>
+    public void RegisterTools(Action<ToolRegistry, ToolAccessPolicy> register)
+        => register(_registry, _services.GetRequiredService<ToolAccessPolicy>());
+
+    private async Task<AuthorizationComparison> CompareAsync(
+        FunctionCallContent call,
+        CancellationToken ct,
+        OneTimeConsent? oneTimeConsent = null)
+    {
+        var currentContext = _createContext();
+        var authorizerContext = _createContext();
+        if (oneTimeConsent is not null)
+        {
+            currentContext.Approval.SeedOneTimeConsent(oneTimeConsent);
+            authorizerContext.Approval.SeedOneTimeConsent(oneTimeConsent);
+        }
+
+        var before = ApprovalService.CheckCount;
+        var current = await _executor.EvaluateAuthorizationResultAsync(call, currentContext, ct);
+        var middle = ApprovalService.CheckCount;
+        var authorized = await _executor.Authorizer.AuthorizeAsync(call, authorizerContext, ct);
+        var after = ApprovalService.CheckCount;
+        return new AuthorizationComparison(
+            AuthorizationFingerprint.Of(current, middle - before),
+            AuthorizationFingerprint.Of(call.Name, authorized, after - middle))
+        {
+            Request = current.Decision.ApprovalContext
+        };
+    }
+
+    private static string InvocationSessionIdOf(ToolExecutionContext context)
+        => context.SessionId
+           ?? throw new InvalidOperationException("A chat grant requires a bound session.");
 
     /// <summary>Runs a call of any registered tool through the executor and observes the result.</summary>
     public async Task<ToolRunObservation> RunToolAsync(
@@ -913,6 +1013,186 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         public Task<IActorRef> GetAsync(CancellationToken cancellationToken = default)
             => Task.FromResult(ActorRef);
     }
+}
+
+/// <summary>
+/// The canonical text of one authorization decision from each path. Equal text
+/// means an equal decision: outcome, reason, advice, consent request with its
+/// candidates and offered options, matched grants, per-candidate coverage
+/// trace, store lookups, and the analysis that the process may execute.
+/// </summary>
+internal sealed record AuthorizationComparison(string Current, string Authorizer)
+{
+    public bool IsIdentical => string.Equals(Current, Authorizer, StringComparison.Ordinal);
+
+    /// <summary>The first line of the current decision, for example <c>outcome=Denied</c>.</summary>
+    public string Outcome => Current[..Current.IndexOf('\n', StringComparison.Ordinal)];
+
+    /// <summary>The consent request of the current gate, when it asks for consent.</summary>
+    public ToolApprovalContext? Request { get; init; }
+}
+
+/// <summary>
+/// Renders both decision shapes as one canonical text. This is the only place
+/// that reads the fields of the two production decision types for the differential.
+/// </summary>
+internal static class AuthorizationFingerprint
+{
+    public static string Of(ToolAuthorizationResult result, int approvalChecks)
+    {
+        var decision = result.Decision;
+        var execution = result switch
+        {
+            ToolAuthorizationResult.ShellExecution shell => $"shell-execution:{Describe(shell.Analysis)}",
+            ToolAuthorizationResult.ShellValidation => "shell-validation",
+            ToolAuthorizationResult.DirectExecution => "direct",
+            ToolAuthorizationResult.Stopped => "stopped",
+            _ => throw new ArgumentOutOfRangeException(nameof(result), result, "Unknown authorization result.")
+        };
+        return Render(
+            decision.Outcome.ToString(),
+            decision.AllowReason?.ToString(),
+            decision.DenyReason,
+            decision.DenyMessage,
+            decision.AgentCorrections?.Items,
+            decision.ApprovalContext,
+            decision.ApprovalMatches,
+            decision.ShellPolicyTrace,
+            approvalChecks,
+            execution);
+    }
+
+    public static string Of(string toolName, AuthorizationDecision decision, int approvalChecks)
+    {
+        var isShell = string.Equals(toolName, ShellTool.ToolName, StringComparison.Ordinal);
+        return decision switch
+        {
+            AuthorizationDecision.Allowed allowed => Render(
+                nameof(ToolAuthorizationOutcome.Allowed),
+                allowed.Reason.ToString(),
+                null,
+                null,
+                null,
+                null,
+                allowed.Matches,
+                allowed.Trace,
+                approvalChecks,
+                (isShell, allowed.Analysis) switch
+                {
+                    (true, { } analysis) => $"shell-execution:{Describe(analysis)}",
+                    (true, null) => "shell-validation",
+                    (false, null) => "direct",
+                    (false, not null) => throw new InvalidOperationException("Only a shell call can carry an analysis.")
+                }),
+            AuthorizationDecision.NeedsConsent consent => Render(
+                nameof(ToolAuthorizationOutcome.RequiresApproval),
+                null,
+                null,
+                null,
+                null,
+                consent.Request,
+                consent.Matches,
+                consent.Trace,
+                approvalChecks,
+                "stopped"),
+            AuthorizationDecision.CorrectionRequired correction => Render(
+                nameof(ToolAuthorizationOutcome.RequiresAgentCorrection),
+                null,
+                null,
+                null,
+                correction.Corrections.Items,
+                null,
+                correction.Matches,
+                correction.Trace,
+                approvalChecks,
+                "stopped"),
+            AuthorizationDecision.Denied denied => Render(
+                nameof(ToolAuthorizationOutcome.Denied),
+                null,
+                denied.Reason,
+                denied.Message,
+                null,
+                null,
+                denied.Matches,
+                denied.Trace,
+                approvalChecks,
+                "stopped"),
+            _ => throw new ArgumentOutOfRangeException(nameof(decision), decision, "Unknown authorization decision.")
+        };
+    }
+
+    private static string Render(
+        string outcome,
+        string? allowReason,
+        string? denyReason,
+        string? denyMessage,
+        IReadOnlyList<ToolCorrection>? corrections,
+        ToolApprovalContext? request,
+        IReadOnlyList<ToolApprovalMatch> matches,
+        ShellPolicyDecisionTrace trace,
+        int approvalChecks,
+        string execution)
+    {
+        var lines = new List<string>
+        {
+            $"outcome={outcome}",
+            $"allow={allowReason}",
+            $"deny={denyReason}",
+            $"deny-message={denyMessage}",
+            $"corrections={string.Join(";", corrections?.Select(Describe) ?? [])}",
+            $"matches={string.Join(";", matches.Select(match => $"{match.Scope}:{match.Pattern}"))}",
+            $"checks={approvalChecks}",
+            $"execution={execution}",
+        };
+        if (request is not null)
+        {
+            lines.Add($"request.tool={request.ToolName}");
+            lines.Add($"request.display={request.DisplayText}");
+            lines.Add($"request.patterns={string.Join(";", request.Patterns)}");
+            lines.Add($"request.verbs={string.Join(";", request.CandidateVerbs)}");
+            lines.Add($"request.options={string.Join(";", request.Options.Select(option => $"{option.Key.Value}={option.Label}"))}");
+            lines.Add($"request.cwd={request.Cwd}");
+            lines.Add($"request.messy={request.IsMessy}");
+            lines.Add($"request.candidates={string.Join(";", request.Candidates?.Select(Describe) ?? ["<null>"])}");
+            lines.Add($"request.retry={request.IsManagedTemporaryRetry}:{request.ManagedTemporaryDirectory}:{request.PlatformTemporaryRoot}");
+            lines.Add($"request.repository={request.RepositoryCommonDirectory}");
+        }
+
+        lines.AddRange(trace.Rows.Select(row => string.Join(
+            '|',
+            "trace",
+            row.Stage,
+            row.CandidateId?.Value.ToString(CultureInfo.InvariantCulture) ?? string.Empty,
+            row.ExecutableBasename ?? string.Empty,
+            row.Outcome,
+            row.Reason,
+            row.Coverage?.ToString() ?? string.Empty,
+            row.ScopeRelation,
+            row.GrantTimestamp?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty)));
+        return string.Join('\n', lines);
+    }
+
+    private static string Describe(ShellCommandAnalysis analysis)
+        => $"{analysis.Source}@{analysis.WorkingDirectory}";
+
+    private static string Describe(ApprovalCandidate candidate)
+        => string.Join(
+            '|',
+            candidate.Verb,
+            candidate.Directory ?? "<cwd>",
+            candidate.Shell?.ToString() ?? "<none>",
+            candidate.VerbTokens is null ? "<none>" : string.Join(' ', candidate.VerbTokens),
+            candidate.AssignmentDigest?.Value ?? "<none>");
+
+    private static string Describe(ToolCorrection correction)
+        => correction switch
+        {
+            ToolCorrection.ManagedTemporaryDirectorySuggested temporary => $"temporary:{temporary.Target}",
+            ToolCorrection.NativeToolSuggested native => $"native:{native.ToolName.Value}",
+            ToolCorrection.ProjectDirectorySuggested project => $"project:{project.Directory}",
+            ToolCorrection.ShellWorkingDirectorySuggested directory => $"directory:{directory.Directory}",
+            _ => throw new ArgumentOutOfRangeException(nameof(correction), correction, "Unknown correction.")
+        };
 }
 
 internal sealed class CountingApprovalService(IToolApprovalService inner) :

@@ -47,6 +47,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
@@ -125,6 +126,40 @@ The final local run took 88 seconds after package restore.
 The authorization PR 4 re-run killed the same 3 + 2 mutants in about 5 minutes.
 The separate CI job retains a 10-minute timeout and uploads `tool-authorization-mutation-report`.
 Its report directory is `artifacts/stryker/tool-authorization`.
+
+### Tool Authorizer Order Gate
+
+Run the rule-order gate of the linear authorizer:
+
+```bash
+./scripts/run-tool-authorizer-order-mutations.sh
+```
+
+`ToolAuthorizer` (authorization PR 6a) states its rule order as one
+`decision ??= Rule(call);` line per rule. The script selects three lines of the
+shell rule list: hard deny, the trusted-root check, and the covering grant.
+Stryker turns `??=` into `=` on each line. The rule then runs after an earlier
+decision and replaces it, so the rule moves ahead of every earlier rule. The
+script requires one killed mutant on each line and three tested mutants overall.
+A missing or duplicated rule line fails before Stryker starts.
+
+`ToolAuthorizerOrderMutationTests` kills the mutants. A covering grant exists in
+every case:
+
+- A hard-denied phrase stays denied. A control with a granted phrase is allowed.
+- A Team audience stays denied. No later rule can clear an admission denial.
+- An unattended call with a path or a working directory outside every trusted
+  root stays denied. The interactive control with the same grant is allowed.
+
+The last case pins today's order, in which the trusted-root check precedes the
+covering grant. Authorization PR 6e changes that order for unattended Approval
+mode by owner decision. That PR changes this case and this section.
+
+The tests pick the host shell and a temporary root without links, so they also
+pass in the normal Windows and macOS test jobs. The local run took about
+2 minutes after package restore. CI runs it in the `authorization` group of the
+`mutation-gates` job. Its report directory is
+`artifacts/stryker/tool-authorizer-order`.
 
 ### Approval Directory Gate
 
@@ -433,6 +468,23 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v          # self-
 Exit status 0 means pass, 1 means a rule violation, and 2 means bad input. The
 `Approval Outcome Direction` job in `pr_validation.yml` runs the self-tests and
 the check against the base of each pull request.
+
+### Authorizer Differential
+
+`ToolAuthorizerDifferentialTests` runs each input through the current gate
+(`DispatchingToolExecutor.EvaluateAuthorizationResultAsync`) and through
+`ToolAuthorizer`, each with a new context. The two decisions must be identical:
+outcome, reason, advice, the consent request with its candidates and options,
+matched grants, the per-candidate coverage trace, store lookups, and the
+analysis that the process may execute. When the current gate asks for consent,
+the test also compares the retry with a "Once" answer.
+
+The inputs are every catalog case in four states (interactive or unattended,
+Approval or Auto), the hard-deny parity corpus, a shell corpus in twelve grant
+and mode states, and the other tool families (file, web, MCP, skill, reminder,
+webhook, and background job tools) for each audience and consent mode. The
+test is part of the normal `Netclaw.Actors.Tests` run. The test must pass until
+authorization PR 6d deletes the current gate.
 
 ### Authorization Metrics
 
