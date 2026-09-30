@@ -8,6 +8,7 @@ using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using Netclaw.Actors.Reminders;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
@@ -26,6 +27,16 @@ public sealed class DaemonApi
 
     private static readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan LongTimeout = TimeSpan.FromSeconds(30);
+
+    /// <summary>
+    /// Client-side timeout for <see cref="RunReminderAsync"/>. The daemon
+    /// itself waits up to <see cref="ReminderProtocol.ManualRunMaxWaitTimeout"/>
+    /// for the manual run to settle before answering with a "still running"
+    /// result, so this must exceed that bound — with margin for network and
+    /// JSON round-trip time — or the CLI would give up before the daemon replies.
+    /// </summary>
+    private static readonly TimeSpan ReminderRunTimeout =
+        ReminderProtocol.ManualRunMaxWaitTimeout + TimeSpan.FromSeconds(30);
 
     private readonly IHttpClientFactory _factory;
     private readonly string _endpoint;
@@ -265,6 +276,20 @@ public sealed class DaemonApi
         using var cts = CreateTimeoutCts(DefaultTimeout, ct);
         var client = CreateHttpClient();
         return await client.GetAsync($"{_endpoint}/api/reminders/{id}/status", cts.Token);
+    }
+
+    /// <summary>
+    /// Runs a reminder now and waits for the daemon to report the settled
+    /// result. This request has a long, bounded timeout — see
+    /// <see cref="ReminderRunTimeout"/> — since the daemon itself waits for
+    /// the manual run to finish before responding.
+    /// </summary>
+    public async Task<HttpResponseMessage> RunReminderAsync(string id, CancellationToken ct = default)
+    {
+        var client = CreateHttpClient();
+        client.Timeout = ReminderRunTimeout;
+        using var cts = CreateTimeoutCts(ReminderRunTimeout, ct);
+        return await client.PostAsync($"{_endpoint}/api/reminders/{id}/run", content: null, cts.Token);
     }
 
     public async Task<HttpResponseMessage> EnableReminderAsync(string id, CancellationToken ct = default)

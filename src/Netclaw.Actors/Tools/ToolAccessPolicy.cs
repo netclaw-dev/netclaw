@@ -1280,7 +1280,7 @@ public sealed class ToolAccessPolicy
                 => !_featureGates.SkillSyncEnabled,
             "spawn_agent"
                 => !_featureGates.SubAgentsEnabled,
-            "set_reminder" or "cancel_reminder" or "list_reminders" or "get_reminder_history"
+            "set_reminder" or "cancel_reminder" or "list_reminders" or "get_reminder_history" or "run_reminder"
                 => !_featureGates.SchedulingEnabled,
             _ => false
         };

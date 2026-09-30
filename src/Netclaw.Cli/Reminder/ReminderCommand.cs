@@ -71,6 +71,7 @@ internal static class ReminderCommand
             "delete" => await RunDeleteAsync(daemonApi, args),
             "disable" => await RunDisableAsync(daemonApi, args),
             "enable" => await RunEnableAsync(daemonApi, args),
+            "run" => await RunRunAsync(daemonApi, args),
             "import" => await RunImportAsync(daemonApi, args),
             "show" => await RunShowAsync(daemonApi, args),
             "history" => await RunHistoryAsync(daemonApi, args),
@@ -315,6 +316,114 @@ internal static class ReminderCommand
         }
     }
 
+    /// <summary>
+    /// Runs a reminder now and waits for the daemon to report the settled
+    /// result (<c>ok</c>, <c>failed</c>, or <c>timed_out</c>). Exit code is 0
+    /// only for <c>ok</c>.
+    /// </summary>
+    private static async Task<int> RunRunAsync(DaemonApi api, string[] args)
+    {
+        if (args.Length < 3)
+        {
+            Console.Error.WriteLine("Usage: netclaw reminder run <id> [--json]");
+            return 1;
+        }
+
+        var id = args[2];
+        var jsonOutput = false;
+        for (var i = 3; i < args.Length; i++)
+        {
+            if (args[i] == "--json")
+                jsonOutput = true;
+        }
+
+        try
+        {
+            using var response = await api.RunReminderAsync(id);
+            var json = await response.Content.ReadAsStringAsync();
+
+            if (!response.IsSuccessStatusCode)
+            {
+                if (response.StatusCode == System.Net.HttpStatusCode.NotFound)
+                {
+                    Console.Error.WriteLine($"[FAIL] Reminder '{id}' not found.");
+                    return 1;
+                }
+
+                var errorBody = JsonSerializer.Deserialize<JsonElement>(json);
+                if (errorBody.TryGetProperty("error", out var err))
+                    Console.Error.WriteLine($"[FAIL] {err.GetString()}");
+                else if (errorBody.TryGetProperty("detail", out var detail))
+                    Console.Error.WriteLine($"[FAIL] {detail.GetString()}");
+                else
+                    Console.Error.WriteLine($"[FAIL] {json}");
+                return 1;
+            }
+
+            var result = JsonSerializer.Deserialize<ReminderRunResultView>(json, JsonOptions);
+            if (result is null)
+            {
+                Console.Error.WriteLine("[FAIL] could not parse run result.");
+                return 1;
+            }
+
+            if (jsonOutput)
+                Console.WriteLine(JsonSerializer.Serialize(result, JsonOptions));
+            else
+                PrintRunResult(result);
+
+            return result.Status == "ok" ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"[FAIL] unable to reach daemon: {ex.Message}");
+            Console.Error.WriteLine("       fix: run `netclaw daemon start` and retry.");
+            return 1;
+        }
+    }
+
+    private static void PrintRunResult(ReminderRunResultView result)
+    {
+        var status = result.Status switch
+        {
+            "ok" => "ok",
+            "failed" => "failed",
+            "timed_out" => "timed out",
+            _ => result.Status
+        };
+
+        Console.WriteLine($"Reminder: {result.Id}");
+        Console.WriteLine($"Source:   {result.Source}");
+        Console.WriteLine($"Status:   {status}");
+        Console.WriteLine($"Duration: {(result.DurationMs is { } ms ? $"{ms} ms" : "n/a")}");
+        Console.WriteLine($"Session:  {result.SessionId ?? "unknown"}");
+        Console.WriteLine($"Delivery: {result.DeliveryTarget}");
+        Console.WriteLine();
+
+        if (result.Status == "ok")
+        {
+            Console.WriteLine("Reply:");
+            Console.WriteLine(string.IsNullOrWhiteSpace(result.ReplyText)
+                ? "  (no reply text captured for this delivery kind)"
+                : result.ReplyText);
+            if (result.ReplyTextTrimmed)
+                Console.WriteLine("  (reply text trimmed to fit)");
+        }
+        else if (!string.IsNullOrWhiteSpace(result.ErrorMessage))
+        {
+            Console.WriteLine($"Error: {result.ErrorMessage}");
+        }
+
+        // The CLI has no standalone transcript viewer; resuming the session
+        // in chat is the existing way to see what a session actually did.
+        if (!string.IsNullOrWhiteSpace(result.SessionId))
+        {
+            Console.WriteLine();
+            Console.WriteLine("View the session:");
+            Console.WriteLine($"  netclaw chat --resume {result.SessionId}");
+        }
+    }
+
     private static async Task<int> RunImportAsync(DaemonApi api, string[] args)
     {
         if (args.Length < 3)
@@ -548,14 +657,16 @@ internal static class ReminderCommand
             const int colFiredAt = 25;
             const int colStatus = 8;
             const int colDuration = 12;
+            const int colSource = 10;
 
-            Console.WriteLine($"{"fired_at",-colFiredAt}  {"status",-colStatus}  {"duration_ms",-colDuration}  session_id");
-            Console.WriteLine(new string('-', colFiredAt + colStatus + colDuration + 34));
+            Console.WriteLine($"{"fired_at",-colFiredAt}  {"status",-colStatus}  {"duration_ms",-colDuration}  {"source",-colSource}  session_id");
+            Console.WriteLine(new string('-', colFiredAt + colStatus + colDuration + colSource + 44));
 
             foreach (var r in records)
             {
                 var status = r.Success ? "ok" : "failed";
-                Console.WriteLine($"{r.FiredAt:u,-colFiredAt}  {status,-colStatus}  {r.DurationMs,-colDuration}  {r.SessionId}");
+                var source = r.Source == ReminderExecutionSource.Manual ? "manual" : "scheduled";
+                Console.WriteLine($"{r.FiredAt,-colFiredAt:u}  {status,-colStatus}  {r.DurationMs,-colDuration}  {source,-colSource}  {r.SessionId}");
             }
 
             return 0;
@@ -633,8 +744,9 @@ internal static class ReminderCommand
                 foreach (var r in history.Reverse())
                 {
                     var outcome = r.Success ? "ok" : "failed";
+                    var source = r.Source == ReminderExecutionSource.Manual ? "manual" : "scheduled";
                     var err = string.IsNullOrEmpty(r.ErrorMessage) ? "" : $" — {r.ErrorMessage}";
-                    Console.WriteLine($"  {r.FiredAt:u}  {outcome}{err}");
+                    Console.WriteLine($"  {r.FiredAt:u}  {outcome}  {source}{err}");
                 }
             }
 
@@ -667,6 +779,22 @@ internal static class ReminderCommand
         string? LastFailureReason,
         string CompletionStatus);
 
+    /// <summary>
+    /// CLI-side projection of the daemon's <c>POST /{id}/run</c> result JSON.
+    /// <see cref="Status"/> is <c>ok</c>, <c>failed</c>, or <c>timed_out</c>.
+    /// </summary>
+    private sealed record ReminderRunResultView(
+        string Id,
+        string Source,
+        string Status,
+        DateTimeOffset? StartedAt,
+        long? DurationMs,
+        string? SessionId,
+        string DeliveryTarget,
+        string? ReplyText,
+        bool ReplyTextTrimmed,
+        string? ErrorMessage);
+
     private static int WriteHelp(TextWriter output)
     {
         output.WriteLine("Usage: netclaw reminder <subcommand>");
@@ -678,6 +806,7 @@ internal static class ReminderCommand
         output.WriteLine("  delete <id>                                   Permanently delete a reminder and its history");
         output.WriteLine("  disable <id>                                  Disable a reminder");
         output.WriteLine("  enable <id>                                   Enable a reminder");
+        output.WriteLine("  run <id> [--json]                             Run a reminder now, wait, and print the result");
         output.WriteLine("  import <file> [--replace|--upsert]            Import one reminder file");
         output.WriteLine("  validate <file>                               Validate reminder file");
         output.WriteLine("  show <id>                                     Show reminder details");
@@ -692,6 +821,15 @@ internal static class ReminderCommand
         output.WriteLine("  --expires-in <duration>  Auto-disable after duration (e.g. '24h', '7d')");
         output.WriteLine();
         output.WriteLine("If a reminder with the given ID already exists, it will be updated (upsert).");
+        output.WriteLine();
+        output.WriteLine("Run options:");
+        output.WriteLine("  --json                   Print the run result as JSON instead of a text block");
+        output.WriteLine();
+        output.WriteLine("`run` starts the reminder now and waits for it to finish, then prints the");
+        output.WriteLine("result: status, duration, session, delivery target, and the reply or error.");
+        output.WriteLine("A manual run does not change the reminder's schedule. It requires Operator");
+        output.WriteLine("authority. Exit code is 0 for a successful run, non-zero for a failed or");
+        output.WriteLine("timed-out run.");
         output.WriteLine();
         output.WriteLine("Schedule types: once, interval, cron");
         output.WriteLine("Schedule examples: '30m', '2h', '1d', '0 */6 * * *'");

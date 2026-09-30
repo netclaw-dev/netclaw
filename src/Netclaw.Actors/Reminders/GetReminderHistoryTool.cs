@@ -62,6 +62,7 @@ public sealed partial class GetReminderHistoryTool : NetclawTool<GetReminderHist
             sb.AppendLine($"  fired_at:    {r.FiredAt:u}");
             sb.AppendLine($"  success:     {r.Success}");
             sb.AppendLine($"  duration_ms: {r.DurationMs}");
+            sb.AppendLine($"  source:      {(r.Source == ReminderExecutionSource.Manual ? "manual" : "scheduled")}");
             sb.AppendLine($"  session_id:  {r.SessionId}");
             if (r.ErrorMessage is not null)
                 sb.AppendLine($"  error:       {r.ErrorMessage}");

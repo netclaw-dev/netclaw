@@ -25,7 +25,23 @@ internal sealed class ActiveExecutionTracker
         Guid executionId,
         ReminderEnvelope<ReminderPayload> envelope,
         DateTimeOffset startedAt) =>
-        _executing.Add(reminderId, new ActiveReminderExecution(executionId, envelope, startedAt));
+        _executing.Add(
+            reminderId,
+            new ActiveReminderExecution(executionId, envelope, startedAt, ReminderExecutionSource.Scheduled));
+
+    /// <summary>
+    /// Records an in-flight <c>netclaw reminder run</c> execution. A manual run
+    /// has no Akka.Reminders occurrence behind it, so there is no envelope to
+    /// track — carrying a fake one would let settlement Ack/Nack a durable
+    /// occurrence that does not exist for this run.
+    /// </summary>
+    public void AddManual(
+        ReminderId reminderId,
+        Guid executionId,
+        DateTimeOffset startedAt) =>
+        _executing.Add(
+            reminderId,
+            new ActiveReminderExecution(executionId, Envelope: null, startedAt, ReminderExecutionSource.Manual));
 
     public bool TryGet(ReminderId reminderId, out ActiveReminderExecution execution) =>
         _executing.TryGetValue(reminderId, out execution!);
@@ -49,5 +65,6 @@ internal sealed class ActiveExecutionTracker
 
 internal sealed record ActiveReminderExecution(
     Guid ExecutionId,
-    ReminderEnvelope<ReminderPayload> Envelope,
-    DateTimeOffset StartedAt);
+    ReminderEnvelope<ReminderPayload>? Envelope,
+    DateTimeOffset StartedAt,
+    ReminderExecutionSource Source);
