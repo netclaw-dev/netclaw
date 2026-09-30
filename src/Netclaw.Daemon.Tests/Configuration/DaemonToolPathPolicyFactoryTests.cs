@@ -6,6 +6,7 @@
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 using Xunit;
 
@@ -21,8 +22,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
             paths,
             ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
 
-        Assert.False(policy.IsReadDenied(paths.NetclawConfigPath));
-        Assert.True(policy.IsDenied(paths.NetclawConfigPath));
+        Assert.False(policy.FileSystem.IsProtected(paths.NetclawConfigPath, PathOperation.Read));
+        Assert.True(policy.FileSystem.IsProtected(paths.NetclawConfigPath, PathOperation.Write));
         Assert.True(policy.CommandReferencesDeniedPath($"cat '{paths.NetclawConfigPath}'"));
     }
 
@@ -48,7 +49,7 @@ public sealed class DaemonToolPathPolicyFactoryTests
             paths.RestartManifestPath
         ];
 
-        Assert.All(protectedPaths, path => Assert.True(policy.IsReadDenied(path), path));
+        Assert.All(protectedPaths, path => Assert.True(policy.FileSystem.IsProtected(path, PathOperation.Read), path));
     }
 
     [Theory]
@@ -66,8 +67,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
         var policy = DaemonToolPathPolicyFactory.Create(paths, environment);
         var skillPath = Path.Combine(paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md");
 
-        Assert.False(policy.IsReadDenied(skillPath));
-        Assert.True(policy.IsDenied(skillPath));
+        Assert.False(policy.FileSystem.IsProtected(skillPath, PathOperation.Read));
+        Assert.True(policy.FileSystem.IsProtected(skillPath, PathOperation.Write));
     }
 
     [Theory]
@@ -81,8 +82,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
             ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
         var catalogPath = Path.Combine([paths.ToolingShadowDirectory, .. relativePath.Split('/')]);
 
-        Assert.True(policy.IsDenied(catalogPath));
-        Assert.True(policy.IsReadDenied(catalogPath));
+        Assert.True(policy.FileSystem.IsProtected(catalogPath, PathOperation.Write));
+        Assert.True(policy.FileSystem.IsProtected(catalogPath, PathOperation.Read));
         Assert.True(policy.CommandReferencesDeniedPath($"inspect '{catalogPath}'"));
         Assert.True(policy.CommandReferencesDeniedPath("find", catalogPath));
     }

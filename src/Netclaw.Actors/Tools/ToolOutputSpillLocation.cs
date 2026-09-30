@@ -5,7 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Security.Cryptography;
 using System.Text;
-using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 
 namespace Netclaw.Actors.Tools;
 
@@ -91,20 +91,15 @@ internal static class ToolOutputSpillLocation
             ? StringComparison.OrdinalIgnoreCase
             : StringComparison.Ordinal;
 
+    /// <summary>
+    /// Returns true when the session directory exists, is not a link, and no link
+    /// exists between it and the spill file.
+    /// </summary>
     public static bool IsSafeForIo(string sessionDirectory, string path)
-    {
-        try
-        {
-            if ((File.GetAttributes(sessionDirectory) & FileAttributes.ReparsePoint) != 0)
-                return false;
-
-            return !PathUtility.ContainsSymlinkSegment(sessionDirectory, path, includeRoot: true);
-        }
-        catch (Exception ex) when (ex is IOException
-                                   or UnauthorizedAccessException
-                                   or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
+        => Path.Exists(sessionDirectory)
+           && CanonicalPath.TryCreateHost(sessionDirectory, relativeBase: null, out var session)
+           && CanonicalPath.TryCreateHost(path, relativeBase: null, out var spill)
+           && FileSystemAuthority.EvaluateMembership(
+               spill,
+               [new PathBoundary.Folder(session, LinkRule.IncludingRoot)]) is PathDecision.Allowed;
 }

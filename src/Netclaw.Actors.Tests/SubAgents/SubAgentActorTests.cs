@@ -20,6 +20,7 @@ using Netclaw.Actors.Tests.Sessions;
 using ApprovalOptionKeys = Netclaw.Actors.Protocol.ApprovalOptionKeys;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using FakeChatClient = Netclaw.Tests.Utilities.FakeChatClient;
 using Netclaw.Tools;
@@ -1629,7 +1630,11 @@ public class SubAgentActorTests : TestKit
             string path,
             ShellPathStyle pathStyle,
             out string resolvedRoot)
-            => ShellPathRules.TryNormalize(path, pathStyle, out resolvedRoot);
+        {
+            var created = CanonicalPath.TryCreate(path, relativeBase: null, pathStyle, out var root);
+            resolvedRoot = created ? root.Value : string.Empty;
+            return created;
+        }
 
         public bool HasNoLinkEscape(string root, string path, ShellPathStyle pathStyle)
             => true;

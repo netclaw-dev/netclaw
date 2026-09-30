@@ -88,3 +88,58 @@ run. Recovery SHALL reseed the core and SHALL NOT require a durable migration.
 - **WHEN** that child stops and another child starts
 - **THEN** the new child receives only its policy-exposed core
 - **AND** it does not inherit the prior child lease
+
+### Requirement: Agent correction can expose one deferred first-party tool
+
+The closed `UseNativeTool` remediation code and its `NativeToolSuggested` correction fact SHALL be able to request actor-local exposure of one policy-visible deferred first-party tool.
+
+The actor SHALL record the correction result before activating the schema. It
+SHALL recheck current exposure policy. It SHALL NOT persist the activation or
+treat schema exposure as execution authority.
+
+Required order:
+
+```text
+1. Record the model-facing correction result.
+2. Read the separate exposure fact with the exact registered tool name.
+3. Resolve the exact registration again.
+4. Recheck current exposure policy.
+5. Add only the schema to the current actor exposure set.
+6. Run normal authorization if the model later calls the tool.
+```
+
+Exposure examples and counterexamples:
+
+| Correction target | Required exposure result |
+|---|---|
+| Policy-visible Deferred `list_reminders` | Add only that schema to the next actor request. |
+| Policy-visible Core `file_read` | Keep the existing Core schema. Add no duplicate. |
+| A tool that policy hides before activation | Add no schema. Reveal no new tool detail. |
+| A registration removed before activation | Add no schema. Execute nothing. |
+| A later native call after activation | Run normal authorization. The exposure fact grants nothing. |
+
+Main-session recovery and child completion discard the activated deferred
+schema. They do not discard a main-session correction message that already
+entered durable chat history.
+
+#### Scenario: Deferred target appears on the next model request
+
+- **GIVEN** a complete static shell call contains the exact executable name of a policy-visible deferred first-party tool
+- **WHEN** the runtime returns the native-tool correction
+- **THEN** the correction result enters model history
+- **AND** the next model request contains the target schema
+- **AND** calling that schema still enters normal authorization
+
+#### Scenario: Hidden target is not exposed
+
+- **GIVEN** a registered first-party tool is hidden or denied by current policy
+- **WHEN** its exact name appears as a shell executable token
+- **THEN** no native-tool correction confirms the tool
+- **AND** no schema activation occurs
+
+#### Scenario: Activation remains actor-local
+
+- **GIVEN** a correction activates a deferred tool in one actor
+- **WHEN** that child completes, the model call fails and evicts leases, or the session recovers
+- **THEN** the later exposure set is rebuilt from the policy-filtered core
+- **AND** the correction does not create durable exposure state

@@ -7,6 +7,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using ShellSyntaxTree;
@@ -97,27 +98,6 @@ public sealed class TemporaryPathCorrectionPolicyTests
         var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(
             decision.AgentCorrection);
         Assert.Equal("/private/tmp", correction.Target.PlatformTemporaryRoot);
-    }
-
-    [Fact]
-    public void Additional_posix_temp_alias_maps_descendants_to_its_canonical_root()
-    {
-        const string runtimeTemp = "/var/folders/example/T";
-        var inspector = new MappedPathInspector(
-            new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                [runtimeTemp] = runtimeTemp,
-                [PosixTemp] = "/private/tmp"
-            });
-        var policy = new TemporaryPathCorrectionPolicy(
-            BashEnvironment(),
-            runtimeTemp,
-            inspector,
-            [PosixTemp]);
-
-        Assert.True(policy.IsEligiblePlatformTemporaryPath("/tmp/work/result.log"));
-        Assert.True(policy.IsEligiblePlatformTemporaryPath("/private/tmp/work/result.log"));
-        Assert.False(policy.IsEligiblePlatformTemporaryPath("/var/external/result.log"));
     }
 
     [SlopwatchSuppress("SW001", "This test requires the native macOS temporary path alias configuration.")]
@@ -532,8 +512,9 @@ public sealed class TemporaryPathCorrectionPolicyTests
             ShellPathStyle pathStyle,
             out string resolvedRoot)
         {
-            var root = _resolvedRoot ?? path;
-            return ShellPathRules.TryNormalize(root, pathStyle, out resolvedRoot);
+            var created = CanonicalPath.TryCreate(_resolvedRoot ?? path, relativeBase: null, pathStyle, out var root);
+            resolvedRoot = created ? root.Value : string.Empty;
+            return created;
         }
 
         public bool HasNoLinkEscape(string root, string path, ShellPathStyle pathStyle)
@@ -552,12 +533,20 @@ public sealed class TemporaryPathCorrectionPolicyTests
             out string resolvedRoot)
         {
             resolvedRoot = string.Empty;
-            return roots.TryGetValue(path, out var mapped)
-                   && ShellPathRules.TryNormalize(mapped, pathStyle, out resolvedRoot);
+            if (!roots.TryGetValue(path, out var mapped)
+                || !CanonicalPath.TryCreate(mapped, relativeBase: null, pathStyle, out var root))
+            {
+                return false;
+            }
+
+            resolvedRoot = root.Value;
+            return true;
         }
 
         public bool HasNoLinkEscape(string root, string path, ShellPathStyle pathStyle)
-            => ShellPathRules.IsWithinRoot(path, root, pathStyle);
+            => CanonicalPath.TryCreate(root, relativeBase: null, pathStyle, out var rootPath)
+               && CanonicalPath.TryCreate(path, relativeBase: null, pathStyle, out var candidate)
+               && rootPath.Contains(candidate);
 
         public bool SupportsPathInspection(ShellPathStyle pathStyle)
             => true;

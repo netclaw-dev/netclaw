@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
@@ -44,12 +45,12 @@ internal sealed record ShellPolicySourcePathFact(
 internal sealed record ShellPolicyResolvedPathFact(
     ShellPolicySourcePathFact Source,
     ShellPolicyPathResolutionState State,
-    IReadOnlyList<CanonicalShellPath> Paths);
+    IReadOnlyList<CanonicalPath> Paths);
 
 internal sealed record ShellPolicyScopePathFact(
     string? AuthoredValue,
     ShellPolicyPathResolutionState State,
-    CanonicalShellPath? Path);
+    CanonicalPath? Path);
 
 internal sealed record ShellPolicyResolvedPathView(
     ShellPolicyScopePathFact ResolutionBase,
@@ -167,11 +168,10 @@ internal static class ShellPolicyPathFacts
         string? value,
         ShellPathStyle pathStyle)
     {
-        CanonicalShellPath path = default;
+        CanonicalPath path = default;
         var state = string.IsNullOrWhiteSpace(value)
             ? ShellPolicyPathResolutionState.UnknownDynamic
-            : ShellPathRules.TryNormalize(value, pathStyle, out var normalized)
-              && CanonicalShellPath.TryCreate(normalized, pathStyle, out path)
+            : CanonicalPath.TryCreate(value, relativeBase: null, pathStyle, out path)
                 ? ShellPolicyPathResolutionState.Known
                 : ShellPolicyPathResolutionState.InvalidKnownValue;
         return new ShellPolicyScopePathFact(
@@ -344,11 +344,11 @@ internal sealed class ShellPolicyOccurrencePathFacts
         };
         if (values is { Count: > 0 })
         {
-            var paths = new CanonicalShellPath[values.Count];
+            var paths = new CanonicalPath[values.Count];
             var resolvedAll = true;
             for (var index = 0; index < values.Count; index++)
             {
-                if (TryResolveCanonicalPath(
+                if (CanonicalPath.TryCreate(
                         values[index],
                         resolutionBase,
                         pathStyle,
@@ -376,7 +376,7 @@ internal sealed class ShellPolicyOccurrencePathFacts
         // must still rebase for causal intent and fallback views.
         if (values is not { Count: > 1 }
             && !string.IsNullOrWhiteSpace(fact.ParserResolvedPath)
-            && TryResolveCanonicalPath(
+            && CanonicalPath.TryCreate(
                 fact.ParserResolvedPath,
                 resolutionBase,
                 pathStyle,
@@ -394,20 +394,5 @@ internal sealed class ShellPolicyOccurrencePathFacts
                 ? ShellPolicyPathResolutionState.UnknownDynamic
                 : ShellPolicyPathResolutionState.InvalidKnownValue,
             []);
-    }
-
-    internal static bool TryResolveCanonicalPath(
-        string value,
-        string? resolutionBase,
-        ShellPathStyle pathStyle,
-        out CanonicalShellPath path)
-    {
-        path = default;
-        return ShellPathRules.TryResolve(
-                   value,
-                   resolutionBase,
-                   pathStyle,
-                   out var resolved)
-               && CanonicalShellPath.TryCreate(resolved, pathStyle, out path);
     }
 }

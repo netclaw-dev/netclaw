@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 
 namespace Netclaw.Actors.Sessions;
 
@@ -111,8 +112,10 @@ internal static class ApprovalBucketBuilder
         IReadOnlyList<ApprovalCandidate> candidates,
         ApprovalGrantScope.Repository repository)
     {
-        if (!GitRepositoryApprovalScope.TryResolveCandidates(
-                candidates, repository.WorkingDirectory, out var repositoryScopes)
+        if (!RepositoryIdentity.TryResolveAll(
+                candidates.Select(static candidate => candidate.Directory).ToArray(),
+                repository.WorkingDirectory,
+                out var repositoryScopes)
             || !ToolApprovalEntryComparer.Equals(
                 repositoryScopes![0].CommonDirectory, repository.CommonDirectory))
         {

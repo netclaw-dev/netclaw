@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.75.4"
+  version: "2.76.1"
 ---
 
 # Netclaw Operations
@@ -528,12 +528,15 @@ tree as a safe space. If they keep getting prompted for the same mutating
 verb (e.g. `git push`), suggest `Always here` to persist
 `(git push, effective directory)`.
 
-When auditing repeated prompts, check both the tool audit trail and daemon
-logs. A later call satisfied by an existing grant records
-`ApprovalDecision=PreviouslyApproved` and an `ApprovalPattern` like
-`git push [persistent: git push in /home/user/repo]`. If the daemon prompts
-despite a same-verb persisted grant, it logs an approval near-miss with the
-candidate directory, cwd, persisted grant, creation time, and mismatch reason.
+When you check repeated prompts, read the daemon log. Netclaw has no separate
+tool audit store. Each decision logs `Tool authorization evaluated: <tool>
+outcome=<outcome>` with an `authorizationAttemptId`; a denial also logs
+`reason=`. Each shell decision logs ordered `Shell policy trace:` rows. A row
+for a covered candidate names its coverage, for example `PersistentFolder`. If
+the daemon prompts despite a same-verb saved grant, the `StoredGrantMatch` row
+gives the near-miss reason (`TokenMismatch`, `ShellMismatch`,
+`OutsideDirectory`, or `Symlink`) and the grant creation time. The trace never
+holds raw paths or arguments.
 
 ### Inspecting, revoking, and pre-approving grants
 

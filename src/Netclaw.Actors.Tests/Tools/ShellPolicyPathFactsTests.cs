@@ -7,6 +7,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using ShellSyntaxTree;
 using Xunit;
@@ -58,10 +59,10 @@ public sealed class ShellPolicyPathFactsTests
         Assert.Contains(
             view.Facts,
             fact => fact.State == ShellPolicyPathResolutionState.Known
-                    && fact.Paths.Any(path => ShellPathRules.Equals(
+                    && fact.Paths.Any(path => string.Equals(
                         path.Value,
                         @"C:\external\file.log",
-                        ShellPathStyle.Windows)));
+                        StringComparison.OrdinalIgnoreCase)));
     }
 
     [Theory]
@@ -70,7 +71,7 @@ public sealed class ShellPolicyPathFactsTests
     [InlineData(@"FileSystem::C:\external\file.log")]
     public void Ambiguous_windows_root_forms_remain_strict(string value)
     {
-        Assert.False(ShellPolicyOccurrencePathFacts.TryResolveCanonicalPath(
+        Assert.False(CanonicalPath.TryCreate(
             value,
             @"C:\work",
             ShellPathStyle.Windows,
@@ -416,7 +417,7 @@ public sealed class ShellPolicyPathFactsTests
             execution: null,
             approvalContext,
             context,
-            static _ => false,
+            LinkRule.FromVolumeRoot,
             out var projection));
         return new ShellPolicyEvaluation(
             Assert.IsType<ShellPolicyProjection>(projection),

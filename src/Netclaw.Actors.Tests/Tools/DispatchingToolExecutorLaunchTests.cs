@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tests.Utilities;
 using Netclaw.Tools;
 using Xunit;
@@ -51,7 +52,7 @@ public partial class DispatchingToolExecutorTests
     {
         using var directory = new DisposableTempDir();
         // macOS temporary roots contain symlinks. Stored-grant tests need a physical path, not an exact-approval path.
-        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
+        FileSystemAuthority.TryResolveLinks(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var checks = 0;
         var service = new FixedShellApprovalService(request =>
@@ -93,7 +94,7 @@ public partial class DispatchingToolExecutorTests
     public async Task Launch_retains_exact_arguments_and_starts_once()
     {
         using var directory = new DisposableTempDir();
-        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
+        FileSystemAuthority.TryResolveLinks(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var service = new FixedShellApprovalService(request => LaunchGrantResult(request, true));
         var executor = new DispatchingToolExecutor(registry, policy, service);
@@ -120,7 +121,7 @@ public partial class DispatchingToolExecutorTests
     public async Task Launch_cancellation_after_authorization_creates_no_process()
     {
         using var directory = new DisposableTempDir();
-        ToolPathPolicy.TryResolveSymlinksInPath(directory.Path, out var sessionDirectory);
+        FileSystemAuthority.TryResolveLinks(directory.Path, out var sessionDirectory);
         var (registry, policy) = CreateApprovalGatedShellRegistryAndPolicy(ShellEnvironment);
         var executor = new DispatchingToolExecutor(registry, policy, GrantEveryShellCandidate());
         var context = TestToolExecutionContext.CreateBound("launch/cancel", sessionDirectory,

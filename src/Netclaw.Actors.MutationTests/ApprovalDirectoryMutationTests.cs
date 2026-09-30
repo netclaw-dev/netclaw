@@ -7,6 +7,7 @@ using System.Diagnostics;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using Xunit;
 
@@ -73,6 +74,31 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
         Assert.True(Matches(Path.Combine(_grantRoot, "src"), _grantRoot));
     }
 
+    [Fact]
+    public void Folder_grant_trusts_a_link_at_its_own_root()
+    {
+        // A folder grant refuses links only below its root (R3). The operator
+        // approved the root by name, and an OS alias such as macOS /tmp can be it.
+        var alias = Path.Combine(_basePath, "app-alias");
+        Directory.CreateSymbolicLink(alias, _grantRoot);
+        var grant = ApprovalEntry.CreateTokenPrefix(_shell, ["git", "status"], alias);
+
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+            CreateCandidate(_shell, Path.Combine(alias, "src")), alias, [grant]));
+    }
+
+    [Fact]
+    public void Folder_grant_compares_posix_paths_with_case()
+    {
+        // R4: allow checks keep case on POSIX hosts, macOS included.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Assert.False(Matches(_grantRoot.ToUpperInvariant(), _grantRoot));
+        Assert.False(Matches(Path.Combine(_grantRoot, "src").ToUpperInvariant(), _grantRoot));
+        Assert.True(Matches(Path.Combine(_grantRoot, "src"), _grantRoot));
+    }
+
     [Theory]
     [InlineData(@"C:\repo\app", true)]
     [InlineData(@"c:\REPO\APP\src", true)]
@@ -80,6 +106,8 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
     [InlineData(@"C:\repo\app\..\app-other", false)]
     [InlineData(@"D:\repo\app\src", false)]
     [InlineData(@"..\app-other", false)]
+    [InlineData(@"\repo\app\src", false)]
+    [InlineData(@"~\src", false)]
     public void PowerShell_scope_preserves_windows_path_boundaries(string directory, bool allowed)
     {
         var grant = ApprovalEntry.CreateTokenPrefix(ApprovalShell.PowerShell, ["git", "status"], @"C:\repo\app");
@@ -109,18 +137,10 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
             CreateCandidate(ApprovalShell.Bash, null), sibling, [otherRepositoryGrant]));
         Assert.False(ApprovalPatternMatching.MatchesShellApproval(
             CreateCandidate(ApprovalShell.Bash, _outside), sibling, [grant]));
-        Assert.False(GitRepositoryApprovalScope.TryResolveCandidate("relative", cwd: null, out _));
+        Assert.False(RepositoryIdentity.TryResolve("relative", cwd: null, out _));
 
-        Assert.True(GitRepositoryApprovalScope.TryResolveCandidates(
-            [CreateCandidate(ApprovalShell.Bash, main),
-                CreateCandidate(ApprovalShell.Bash, sibling)],
-            _outside,
-            out _));
-        Assert.False(GitRepositoryApprovalScope.TryResolveCandidates(
-            [CreateCandidate(ApprovalShell.Bash, main),
-                CreateCandidate(ApprovalShell.Bash, unrelated)],
-            _outside,
-            out _));
+        Assert.True(RepositoryIdentity.TryResolveAll([main, sibling], _outside, out _));
+        Assert.False(RepositoryIdentity.TryResolveAll([main, unrelated], _outside, out _));
     }
 
     [Fact]
@@ -163,7 +183,7 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
 
         Directory.Delete(candidateDirectory);
         RunGit(main, "worktree", "add", "--orphan", "-b", "nested-candidate", candidateDirectory);
-        Assert.True(GitRepositoryApprovalScope.TryResolveCandidate(
+        Assert.True(RepositoryIdentity.TryResolve(
             candidateDirectory, cwd: null, out var nestedScope));
         Assert.True(PathUtility.AreEquivalentPaths(
             nestedScope!.CommonDirectory, grant.Repository));

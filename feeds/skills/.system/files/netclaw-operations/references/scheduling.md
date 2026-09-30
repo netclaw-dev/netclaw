@@ -319,8 +319,8 @@ Rules:
 - Job definitions persist to `~/.netclaw/jobs/{id}.json` until 24 hours after
   the job reaches a terminal state.
 
-`check_background_job` is only available when shell execution is granted (same
-`shell` grant category). It validates that the requesting session matches the
+`check_background_job` is only available when `shell_execute` is available: the
+Personal audience and a host shell mode. It validates that the requesting session matches the
 submitting session's audience and boundary.
 
 After submitting a long finite job, schedule a check-back reminder so you report

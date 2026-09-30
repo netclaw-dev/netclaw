@@ -45,6 +45,7 @@ command text, file paths, schema bodies, or hidden tool names.
 - **WHEN** a subagent begins a run
 - **THEN** one structured diagnostic records its three tool counts
 - **AND** the event contains no authored payload or path
+
 ### Requirement: Subagent execution contract
 
 The system SHALL run subagents as ephemeral actors (`SubAgentActor`) that
@@ -332,54 +333,6 @@ sub-agent denylist to prevent recursive delegation through `spawn_agent`.
 - **WHEN** a sub-agent is spawned
 - **THEN** `spawn_agent` is removed from the sub-agent's exposed tool surface
 - **AND** the sub-agent cannot recursively delegate to another sub-agent
-
-### Requirement: Sub-agent approval lifecycle is actor-local
-
-Sub-agent approval waits SHALL be owned by the live `SubAgentActor` run that encountered the approval-gated tool call. The sub-agent SHALL NOT persist approval wait state or reuse the session approval recovery/redrive lifecycle from `LlmSessionActor`.
-
-#### Scenario: Approval wait belongs to live child actor
-- **GIVEN** a sub-agent tool call requires approval
-- **WHEN** the sub-agent enters an approval wait
-- **THEN** the wait is tracked by the live `SubAgentActor`
-- **AND** no sub-agent approval wait state is written to the session journal
-
-#### Scenario: Parent stop cancels sub-agent approval wait
-- **GIVEN** a sub-agent is waiting for parent approval
-- **WHEN** the parent session stops or cancels the `spawn_agent` tool call
-- **THEN** the sub-agent approval wait is cancelled
-- **AND** the sub-agent completes at most once with a failed `SubAgentResult`
-- **AND** the gated tool is not executed after cancellation
-
-#### Scenario: Parent session recovery expires live-only prompt
-- **GIVEN** a sub-agent is waiting for parent approval
-- **WHEN** the parent session cold-recovers before the user responds
-- **THEN** the sub-agent approval prompt has no durable redrive state
-- **AND** a later approval response is rejected as expired
-
-### Requirement: Sub-agent approval uses parent turn authority
-
-Sub-agent approval prompts SHALL use the parent session turn's execution authority context for approval requester, principal, audience, boundary, channel capability, provenance, adopted-context safety, and filesystem grounding. The implementation SHALL reuse the `TurnContext` or shared execution-authority subset from #1213 when available, and SHALL keep any interim field mapping isolated to the parent-to-child spawn boundary.
-
-#### Scenario: Approval prompt carries parent requester context
-- **GIVEN** a sub-agent spawned from a parent turn with a requester sender id and principal
-- **WHEN** the sub-agent emits an approval prompt
-- **THEN** the prompt carries the parent requester sender id and principal
-- **AND** approval authorization is evaluated as if the parent turn had requested the tool
-
-#### Scenario: Missing authority fails closed
-- **GIVEN** a sub-agent approval-gated tool call has no parent approval bridge or required authority context
-- **WHEN** approval is required
-- **THEN** the gated tool is not executed
-- **AND** the sub-agent completes with a failed `SubAgentResult`
-- **AND** no default `Personal` audience or synthetic requester is substituted
-
-#### Scenario: Human approval requires requester binding
-- **GIVEN** a sub-agent approval-gated tool call has a parent approval bridge
-- **AND** the parent turn is not verified automation
-- **AND** the parent turn has no requester sender identity or no requester principal
-- **WHEN** approval is required
-- **THEN** no approval prompt is emitted
-- **AND** the sub-agent completes with a failed `SubAgentResult`
 
 ### Requirement: Sub-agent watchdog pauses during human approval
 

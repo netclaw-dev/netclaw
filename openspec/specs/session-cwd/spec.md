@@ -54,6 +54,7 @@ project declaration SHALL replace the project and reload its instructions.
 - **WHEN** `set_working_directory` is denied for `/workspace/new`
 - **THEN** the project directory remains `/workspace/old`
 - **AND** project instructions are not loaded from the denied path
+
 ### Requirement: Session-scoped project directory
 
 Each session SHALL maintain a mutable `ProjectDirectory` in `WorkingContext`
@@ -96,72 +97,63 @@ survive compaction, actor recovery, and daemon restart.
 
 ### Requirement: set_working_directory tool
 
-The system SHALL provide a `set_working_directory` tool that sets the
-session's project directory to a specified path. A successful declaration adds
-that directory to the trusted roots for Personal and Team audiences.
-The tool SHALL validate that the target path is a real directory,
-resolve it to a canonical path, and request a path access decision for the read
-file operation.
-The tool SHALL be profile-managed
-so that audiences without directory navigation privileges (Public,
-Team by default) cannot use it. The working-directory declaration is
-deliberately NOT granted interactive Personal shell-equivalent reach
-(netclaw-dev/netclaw#1724). Every audience and mode SHALL limit declarations
-to the session directory, project directory, and configured global read roots.
-A declaration changes the roots that reviewed-safe policy uses. It also
-loads project identity files into the system prompt.
+The system SHALL provide a `set_working_directory` tool that declares the
+session's project directory. The tool SHALL validate that the target is a real
+directory, resolve its canonical path, and request the shared
+`DeclareProjectScope` path access decision. That operation SHALL use read-file
+authority while remaining distinct from an ordinary read.
 
-The model-visible tool description SHALL tell the agent to declare its project
-root. The declaration adds the project directory as a trusted root for
-reviewed-safe shell policy. The description SHALL NOT present the tool as a
-`cd`-style cwd change. The declaration tells Netclaw which project the agent
-uses. This declaration can reduce approval prompts for project-scoped work.
+The audience profile `AllowedTools` SHALL control whether the tool is exposed.
+Every audience and mode SHALL limit project declarations to the session
+directory, current project directory, and configured read roots. User approval
+and the default interactive Personal `All` file profile SHALL NOT widen those
+declaration roots.
+
+A successful declaration SHALL update project scope, add the directory to the
+trusted roots used by reviewed-safe shell policy, and load project identity
+files into the system prompt. The model-visible description SHALL present the
+tool as project declaration, not as a shell `cd` command.
 
 #### Scenario: set_working_directory updates project directory
 
 - **GIVEN** a session with no project directory set
-- **AND** the audience trust profile allows reads under `/home/user`
+- **AND** the audience trust profile allows declarations under `/home/user`
 - **WHEN** the agent invokes `set_working_directory` with
   path `/home/user/workspaces/akadonic`
 - **THEN** the session project directory is set to
   `/home/user/workspaces/akadonic`
 - **AND** the project's identity file is loaded on the next LLM call
-- **AND** subsequent shell calls with cwd inside that directory may receive
-  reviewed-safe coverage
+- **AND** subsequent shell calls inside that directory may receive reviewed-safe
+  coverage
 
 #### Scenario: set_working_directory rejected outside trusted roots
 
-- **GIVEN** a session with audience profile allowing reads only under
-  `/home/user`
+- **GIVEN** a session whose project declarations are limited to `/home/user`
 - **WHEN** the agent invokes `set_working_directory` with path `/etc/nginx`
 - **THEN** the project directory remains unchanged
-- **AND** the tool returns an error indicating the path is outside trusted
-  roots
+- **AND** the tool reports that the path is outside trusted roots
 
 #### Scenario: set_working_directory rejected for nonexistent directory
 
-- **GIVEN** a session with audience profile allowing reads under `/home/user`
+- **GIVEN** a session with read authority under `/home/user`
 - **WHEN** the agent invokes `set_working_directory` with
   path `/home/user/nonexistent`
 - **THEN** the project directory remains unchanged
-- **AND** the tool returns an error indicating the directory does not exist
+- **AND** the tool reports that the directory does not exist
 
 #### Scenario: Personal audience limits project declaration to trusted roots
 
-- **GIVEN** a session with personal audience (`ToolFilesystemMode.All`)
-- **AND** the target directory is outside the trusted roots for project
-  declaration
-  (session directory, project directory, and configured global read roots)
-- **WHEN** the agent invokes `set_working_directory` with that valid directory
-- **THEN** the project directory is NOT updated
-- **AND** the tool returns an error indicating the target is outside the
-  session, project, or configured trusted roots
-- **AND** `file_read` / `file_list` / `attach_file` on the same path still
-  resolve (interactive Personal shell-equivalent reach, netclaw-dev/netclaw#1724)
+- **GIVEN** a default Personal file profile with broad interactive read access
+- **AND** a valid target outside the session, current project, and configured
+  read roots
+- **WHEN** the agent invokes `set_working_directory` with that target
+- **THEN** the project directory is not updated
+- **AND** the declaration is denied even though an ordinary interactive
+  Personal read of the same path may be allowed
 
 #### Scenario: set_working_directory not exposed to public audience
 
-- **GIVEN** a session with public audience
+- **GIVEN** a Public session
 - **WHEN** the tool exposure list is computed
 - **THEN** `set_working_directory` is not included
 
@@ -173,8 +165,7 @@ uses. This declaration can reduce approval prompts for project-scoped work.
 - **THEN** the project directory changes to `/home/user/workspaces/other-project`
 - **AND** the next LLM call loads identity files from the new project
 - **AND** the old project's identity files are no longer injected
-- **AND** the project trusted root for shell invocations switches
-  to the new project directory
+- **AND** the reviewed-safe trusted root switches to the new project directory
 
 ### Requirement: Shell tool cwd selection is explicit and deterministic
 
@@ -279,35 +270,6 @@ non-temp cwd.
 - **WHEN** a shell call is denied because its cwd is outside trusted roots
 - **THEN** the result does NOT include a working-directory remediation hint
 
-### Requirement: set_working_directory adds a project trusted root
-
-Setting `WorkingContext.ProjectDirectory` SHALL add that directory to the
-trusted roots for Personal and Team audiences. A later shell invocation below
-that root can receive reviewed-safe coverage. The reviewed-safe
-catalog and link checks still apply. Public audiences SHALL NOT receive
-`set_working_directory`, and their trusted roots SHALL remain unchanged.
-
-This requirement defines the dependency between `session-cwd` and
-`tool-approval-gates`. A project declaration supplies a trusted root. The path
-access decision remains the authority owner.
-
-#### Scenario: Setting project_dir relaxes future approval prompts
-
-- **GIVEN** a Personal session with `project_dir` initially null
-- **AND** the agent has previously been denied `grep` calls in
-  `~/repos/foo/`
-- **WHEN** the agent calls `set_working_directory ~/repos/foo/`
-- **AND** the agent retries `grep -r "x" .` with cwd `~/repos/foo/`
-- **THEN** reviewed-safe policy covers the call below the trusted root
-- **AND** no prompt is rendered
-
-#### Scenario: Public audience does not get a project trusted root
-
-- **GIVEN** a Public session
-- **WHEN** the tool exposure list is computed
-- **THEN** `set_working_directory` is not included
-- **AND** its trusted roots remain unchanged
-
 ### Requirement: Working context block includes project directory
 
 The system SHALL include the current project directory in the
@@ -367,6 +329,15 @@ For Team and Personal turns whose `WorkingContext.ProjectDirectory` is declared 
 - **THEN** the inspector returns the existing unavailable outcome with a bounded reason
 - **AND** the model receives no contradictory branch or tracking state
 
+
+#### Scenario: Invalid public Git snapshot does not interrupt a turn
+
+- **GIVEN** a caller constructs or deserializes a Git snapshot with contradictory head fields
+- **WHEN** the context renderer processes the snapshot
+- **THEN** it emits the existing unavailable status with a reason
+- **AND** it emits no branch or commit details and does not modify the snapshot
+- **AND** the session can continue its turn
+
 ### Requirement: Project-directory declarations reject control characters
 
 The `set_working_directory` tool SHALL reject a path that contains NUL, CR, or
@@ -392,25 +363,26 @@ echoing the authored path.
 ### Requirement: Existing session context announces managed paths
 
 The system SHALL preserve the existing `[session]` context block and its
-`session_dir` entry. It SHALL extend that block with the applicable `temp_dir`,
-`artifact_dir`, `worktree_dir`, and `log_path` entries. This rule applies to
-Personal and Team parent and child runs. The system SHALL NOT add a second
-context block or repeat these paths in per-turn guidance.
+`session_dir` entry. It SHALL extend that same block with the applicable
+`temp_dir`, `artifact_dir`, `worktree_dir`, and `log_path` entries for Personal
+and Team parent and child runs. It SHALL NOT add a second context block or
+repeat these paths in per-turn guidance.
 
 The system SHALL state the distinct purpose of each path. Public context SHALL
 retain its existing private-path policy. The guidance SHALL preserve an
 explicitly required platform temporary path.
 
 The context SHALL derive from the existing parent or child run scope. It SHALL
-NOT add a public protocol field or persist a path as agent identity. It SHALL
-NOT change shell authorization.
+NOT add a public protocol field, persist a path as agent identity, or change
+shell authorization.
 
 For a parent with a version-2 storage binding, `session_dir` SHALL mean
 `<session-envelope>/workspace`. For a child, `temp_dir` and `artifact_dir`
 SHALL be siblings below `<session-envelope>/subagents/<run-id>`. The context
 SHALL NOT use `session_dir` as a synonym for the complete storage envelope.
 It SHALL describe `session_dir` as the working directory and relative-path
-fallback. It SHALL describe `temp_dir` as disposable run-local storage.
+fallback. It SHALL describe `temp_dir` as disposable run-local storage. Current
+runtime prompts and tool schemas SHALL NOT call either path “session scratch.”
 
 #### Scenario: Example - Personal child receives distinct managed paths
 
@@ -477,14 +449,14 @@ fallback. It SHALL describe `temp_dir` as disposable run-local storage.
 - **WHEN** its model-visible schema describes path resolution
 - **THEN** it says that the current project is tried before the session
   directory
-- **AND** it does not describe the session directory as disposable storage
+- **AND** it does not describe the session directory as disposable scratch
 
 #### Scenario: Counterexample - disposable guidance cannot point to session_dir
 
 - **GIVEN** the model needs a location for disposable run-local output
 - **WHEN** Netclaw renders managed-path guidance
 - **THEN** the guidance points to `temp_dir`
-- **AND** it does not tell the model to use `session_dir` for disposable output
+- **AND** it does not tell the model to use `session_dir` as scratch
 
 ### Requirement: Managed temporary directory is the private temporary location
 
@@ -493,14 +465,14 @@ parent and child run. A version-2 parent SHALL use
 `<session-envelope>/tmp/parent`. A child SHALL use
 `<session-envelope>/subagents/<run-id>/tmp`. The system SHALL identify this
 directory as the preferred location for disposable files. It SHALL use the
-session directory as the shell working-directory fallback when no other cwd
-exists. It SHALL NOT use the complete envelope as that fallback.
+session directory, not the complete envelope, as the shell working-directory
+fallback when no project or explicit working directory exists.
 
 Personal and Team working context and correction text SHALL provide the
 absolute managed temporary path when the agent needs an alternative to the
 platform temporary root. Public context SHALL retain existing private-path
-redaction. The system SHALL NOT silently substitute a path. It SHALL NOT imply
-that this behavior deletes temporary files.
+redaction. The system SHALL NOT silently substitute a path or imply that
+temporary-directory cleanup occurs as part of this behavior.
 
 #### Scenario: Example - no-project shell separates cwd and temp
 
@@ -605,7 +577,7 @@ Windows temporary path.
 
 The system SHALL distinguish managed worktrees from ordinary temporary files.
 It SHALL expose `<session-envelope>/worktrees` as `worktree_dir` in the existing
-session context. It SHALL NOT place that directory below a run's managed
+session context and SHALL NOT place that directory below a run's managed
 temporary directory. Agents SHALL use existing shell and project-scope tools
 to create and adopt worktrees. This capability SHALL NOT define automatic
 worktree cleanup or a worktree-specific tool.
@@ -630,3 +602,127 @@ worktree cleanup or a worktree-specific tool.
 - **WHEN** Netclaw has injected the run environment
 - **THEN** the API resolves below `temp_dir`
 - **AND** it does not resolve below `worktree_dir`
+
+### Requirement: Project work takes precedence over managed temporary work
+
+Parent and subagent guidance SHALL use declared project scope for work that
+belongs to that project. The managed temporary directory SHALL hold disposable
+work outside a project. A successful project declaration SHALL not cause later
+project commands to select `temp_dir` as an explicit
+`WorkingDirectory`. This guidance SHALL NOT change runtime cwd resolution or
+grant shell authority.
+
+#### Scenario: Declared project remains the default for project work
+
+- **GIVEN** `project_dir` names the project for the current task
+- **WHEN** the agent runs a project shell command without a one-call override
+- **THEN** guidance tells it to omit `WorkingDirectory`
+- **AND** runtime cwd resolution selects `project_dir`
+- **AND** guidance does not select `session_dir` for that command
+
+#### Scenario: A named project is declared before project tool use
+
+- **GIVEN** a task names a project that differs from `project_dir`
+- **AND** `set_working_directory` is available
+- **WHEN** the task needs a shell or file tool in that project
+- **THEN** guidance tells the agent to declare the project once
+- **AND** the declaration precedes the first shell or file tool call
+- **AND** the declaration does not grant shell authority
+
+#### Scenario: A rejected named path is corrected before project work
+
+- **GIVEN** a task names a project path and a fallback project path
+- **AND** `set_working_directory` is available
+- **WHEN** the first declaration is rejected
+- **THEN** guidance declares the fallback before another project tool
+- **AND** the first declaration uses the task's first project path exactly
+- **AND** guidance does not substitute an enclosing directory before rejection
+- **AND** guidance does not probe either path before its declaration
+- **AND** neither declaration grants shell authority
+
+#### Scenario: Child declaration governs later child project commands
+
+- **GIVEN** a subagent successfully declares a different user-named project
+- **WHEN** it runs later shell commands for that project
+- **THEN** guidance uses the child `project_dir`
+- **AND** it does not pass the parent `temp_dir` as `WorkingDirectory`
+- **AND** it does not add an inline directory change to reach the project
+
+#### Scenario: One call in a child directory uses typed scope
+
+- **GIVEN** `project_dir` names a project root
+- **AND** one shell call must run in a named child directory or worktree
+- **WHEN** the agent authors that call
+- **THEN** `Command` contains only the shell operation
+- **AND** `WorkingDirectory` contains the exact child directory
+- **AND** the persistent project root does not change
+
+#### Scenario: Disposable work outside a project uses managed temporary storage
+
+- **GIVEN** a task creates disposable artifacts that do not belong to a project
+- **AND** the audience can see its managed temporary directory
+- **AND** the task does not require a platform temporary path
+- **WHEN** the agent selects a working directory
+- **THEN** guidance selects `temp_dir`
+- **AND** writable artifacts do not use platform temporary storage
+- **AND** it does not declare the managed temporary directory as a project
+
+#### Scenario: Requested directory transition remains authored behavior
+
+- **GIVEN** the task explicitly asks to test or perform a shell directory transition
+- **WHEN** the agent authors the shell call
+- **THEN** guidance preserves the inline transition
+- **AND** the call follows ordinary approval policy
+
+#### Scenario: Project declaration does not authorize project commands
+
+- **GIVEN** an agent successfully declares a project
+- **WHEN** it authors a prompt-worthy command in that project
+- **THEN** the declaration supplies only a trusted root
+- **AND** the command still needs reviewed-safe, one-time, session, or stored authority
+
+### Requirement: Parent and child contexts share one directory-selection order
+
+Personal and Team parent and subagent contexts SHALL state the same directory
+selection order. Project work SHALL use `project_dir`. A named one-call child
+scope SHALL use typed `WorkingDirectory`. Disposable non-project work SHALL use
+`temp_dir`. An inline directory change SHALL remain only for requested
+directory behavior. Public context SHALL not reveal a private project or
+session path.
+
+#### Scenario: Parent context contains the complete order
+
+- **GIVEN** a Personal or Team parent context has project and session paths
+- **WHEN** the context is assembled
+- **THEN** it distinguishes project work from managed temporary work
+- **AND** it distinguishes one-call typed scope from persistent project scope
+
+#### Scenario: Child context contains the complete order
+
+- **GIVEN** a Personal or Team child receives project and session context
+- **WHEN** its first model message is assembled
+- **THEN** it receives the same directory-selection order as the parent
+- **AND** the session rule does not use an unconditional temporary-directory instruction
+
+#### Scenario: Project refresh does not duplicate temporary guidance
+
+- **GIVEN** a child context already contains one managed-temporary-directory rule
+- **WHEN** `set_working_directory` refreshes child project context
+- **THEN** the next prompt contains the updated `project_dir`
+- **AND** it contains exactly one managed-temporary-directory rule
+- **AND** the directory-selection order remains unchanged
+
+#### Scenario: Public context stays redacted
+
+- **GIVEN** a Public parent or subagent context
+- **WHEN** the context is assembled
+- **THEN** no private `project_dir` or `session_dir` value is disclosed
+- **AND** no unavailable scope tool is recommended
+
+#### Scenario: Failed declaration preserves prior scope
+
+- **GIVEN** `set_working_directory` rejects a requested path
+- **WHEN** the next model call starts
+- **THEN** the prior project scope remains unchanged
+- **AND** guidance does not treat the rejected path as declared
+- **AND** an authored shell call follows ordinary approval policy

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 using Xunit;
@@ -1209,7 +1210,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         string path,
         string resolutionBase)
     {
-        Assert.False(ShellPathRules.TryResolve(
+        Assert.False(CanonicalPath.TryCreate(
             path,
             resolutionBase,
             pathStyle,
@@ -1754,12 +1755,14 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Null(matcher.ExtractCandidatesForOccurrence(
             occurrence,
             "/tmp",
-            resolveUnknownPathsFromEffectiveValues: false));
+            resolveUnknownPathsFromEffectiveValues: false,
+            LinkRule.FromVolumeRoot));
 
         var candidate = Assert.Single(matcher.ExtractCandidatesForOccurrence(
             occurrence,
             "/tmp",
-            resolveUnknownPathsFromEffectiveValues: true)!);
+            resolveUnknownPathsFromEffectiveValues: true,
+            LinkRule.FromVolumeRoot)!);
         Assert.Equal("head", candidate.Verb);
         Assert.Equal("/tmp", candidate.Directory);
     }

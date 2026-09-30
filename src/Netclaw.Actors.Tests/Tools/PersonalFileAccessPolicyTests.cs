@@ -291,4 +291,52 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
         else
             AssertDenied(decision, Path.GetFullPath(path));
     }
+
+    // A filesystem root ("/" or a drive root) is not a usable trusted root. The
+    // earlier path API trimmed "/" to an empty path and failed at that root. An
+    // earlier root that contains the path still decides first.
+    [Fact]
+    public void Filesystem_root_in_the_root_list_fails_closed_after_earlier_roots()
+    {
+        var config = BuildPersonalRootsConfig(_sessionDir);
+        config.AudienceProfiles.GlobalReadRoots = [Path.GetPathRoot(_dir.Path)!];
+        var policy = new PathAccessPolicy(config, _paths, new ToolPathPolicy([]));
+        var ctx = Ctx(TrustAudience.Personal, autonomous: false);
+        var inside = Path.Combine(_sessionDir, "notes.txt");
+        var outside = Path.Combine(_outsideDir, "notes.txt");
+
+        AssertAllowed(policy.Evaluate(inside, ctx, PathAccessPolicy.FileOperation.Read), inside);
+        var denied = Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(
+            policy.Evaluate(outside, ctx, PathAccessPolicy.FileOperation.Read));
+        Assert.Contains("could not verify the path relationship", denied.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Filesystem_root_profile_root_denies_every_file()
+    {
+        var policy = new PathAccessPolicy(
+            BuildPersonalRootsConfig(Path.GetPathRoot(_dir.Path)!),
+            _paths,
+            new ToolPathPolicy([]));
+        var ctx = Ctx(TrustAudience.Personal, autonomous: false);
+
+        var denied = Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(
+            policy.Evaluate(Path.Combine(_outsideDir, "notes.txt"), ctx, PathAccessPolicy.FileOperation.Read));
+        Assert.Contains("could not verify the path relationship", denied.Error, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Filesystem_root_output_directory_is_not_a_generated_destination()
+    {
+        var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
+        var root = Path.GetPathRoot(_dir.Path)!;
+
+        var denied = Assert.IsType<PathAccessPolicy.PathAccessDecision.Denied>(
+            policy.EvaluateGeneratedDestination(Path.Combine(_outsideDir, "fetched.html"), root));
+        Assert.Equal(PathAccessPolicy.PathAccessFailure.AccessDenied, denied.Failure);
+        Assert.Equal("Error: File destination must stay inside its output directory without links.", denied.Error);
+        AssertAllowed(
+            policy.EvaluateGeneratedDestination(Path.Combine(_outsideDir, "fetched.html"), _outsideDir),
+            Path.Combine(_outsideDir, "fetched.html"));
+    }
 }

@@ -10,6 +10,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Security.Tests;
 using Netclaw.Tools;
 using Xunit;
@@ -203,7 +204,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var approvals = CreateApprovals(policyCase.Available);
         var environment = invocation.CreateEnvironment();
         var materializeFileSystemFacts = policyCase.UsePhysicalHarnessScope
-                                         && ShellPathRules.UsesHostPathStyle(
+                                         && CanonicalPath.IsHostPathStyle(
                                              environment.PathStyle);
         var scope = materializeFileSystemFacts
             ? null
@@ -308,7 +309,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
                 environment,
                 analysis,
                 new ShellApprovalMatcher(environment),
-                TemporaryPathCorrectionPolicy.Create(environment).IsEligiblePlatformTemporaryPath,
+                LinkRule.FromVolumeRootExceptTemporaryAlias,
                 out var causalCandidates));
             Assert.Equal(policyCase.Candidates.Count, causalCandidates.Count);
             for (var index = 0; index < policyCase.Candidates.Count; index++)
@@ -442,16 +443,18 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var pathStyle = host == ShellApprovalHost.Bash
             ? ShellPathStyle.Posix
             : ShellPathStyle.Windows;
-        if (!CanonicalShellPath.TryCreate(
+        if (!CanonicalPath.TryCreate(
                 policyCase.ProjectDirectory,
+                relativeBase: null,
                 pathStyle,
                 out var normalizedProjectDirectory)
             || !string.Equals(
                 normalizedProjectDirectory.Value,
                 policyCase.ProjectDirectory,
                 StringComparison.Ordinal)
-            || !CanonicalShellPath.TryCreate(
+            || !CanonicalPath.TryCreate(
                 policyCase.SessionDirectory,
+                relativeBase: null,
                 pathStyle,
                 out var normalizedSessionDirectory)
             || !string.Equals(

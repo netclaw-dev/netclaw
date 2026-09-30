@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 using Xunit;
 
@@ -92,47 +93,30 @@ public sealed class BashCausalApprovalIntentTests
     }
 
     [Fact]
-    public void Captured_temporary_alias_allows_redirect_projection_without_allowing_other_aliases()
+    public void Link_below_the_platform_temporary_root_is_not_an_alias()
     {
         if (OperatingSystem.IsWindows())
             return;
 
+        // Only the platform temporary root itself can be an alias (R7). A link
+        // that a process plants below it must not open a causal intent.
         var testRoot = Path.Combine(
             Path.GetTempPath(),
             $"netclaw-causal-alias-{Guid.NewGuid():N}");
-        var canonicalTemp = Path.Combine(testRoot, "canonical-temp");
-        var authoredTemp = Path.Combine(testRoot, "authored-temp");
-        var otherTarget = Path.Combine(testRoot, "other-target");
-        var otherAlias = Path.Combine(testRoot, "other-alias");
-        Directory.CreateDirectory(canonicalTemp);
-        Directory.CreateDirectory(otherTarget);
-        Directory.CreateSymbolicLink(authoredTemp, canonicalTemp);
-        Directory.CreateSymbolicLink(otherAlias, otherTarget);
+        var target = Path.Combine(testRoot, "target");
+        var alias = Path.Combine(testRoot, "alias");
+        Directory.CreateDirectory(target);
+        Directory.CreateSymbolicLink(alias, target);
 
         try
         {
-            var policy = new TemporaryPathCorrectionPolicy(
-                BashEnvironment,
-                authoredTemp,
-                HostPlatformTemporaryPathInspector.Instance);
-            var allowedCommand =
-                $"cd {authoredTemp} && inspect > result.log 2>&1; head result.log";
-            var otherCommand =
-                $"cd {otherAlias} && inspect > result.log 2>&1; head result.log";
-
-            Assert.True(policy.IsEligiblePlatformTemporaryPath(authoredTemp));
-            Assert.True(policy.IsEligiblePlatformTemporaryPath(canonicalTemp));
-            Assert.True(policy.IsEligiblePlatformTemporaryPath(Path.Combine(authoredTemp, "result.log")));
-
             Assert.True(TryProject(
                 BashEnvironment,
-                allowedCommand,
-                policy.IsEligiblePlatformTemporaryPath,
+                $"cd {target} && inspect > result.log 2>&1; head result.log",
                 out _));
             Assert.False(TryProject(
                 BashEnvironment,
-                otherCommand,
-                policy.IsEligiblePlatformTemporaryPath,
+                $"cd {alias} && inspect > result.log 2>&1; head result.log",
                 out _));
         }
         finally
@@ -151,24 +135,13 @@ public sealed class BashCausalApprovalIntentTests
         ShellExecutionEnvironment environment,
         string command,
         out IReadOnlyList<BashCausalApprovalCandidate> projected)
-        => TryProject(
-            environment,
-            command,
-            TemporaryPathCorrectionPolicy.Create(environment).IsEligiblePlatformTemporaryPath,
-            out projected);
-
-    private static bool TryProject(
-        ShellExecutionEnvironment environment,
-        string command,
-        Func<string, bool> isAllowedHostPath,
-        out IReadOnlyList<BashCausalApprovalCandidate> projected)
     {
         var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
         return BashCausalApprovalIntent.TryProject(
             environment,
             analysis,
             new ShellApprovalMatcher(environment),
-            isAllowedHostPath,
+            LinkRule.FromVolumeRootExceptTemporaryAlias,
             out projected);
     }
 

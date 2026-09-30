@@ -14,8 +14,10 @@ through conversation and execute tasks autonomously.
 The agent SHALL create scheduled tasks when the user requests recurring or
 timed actions through conversation. The agent SHALL assign a human-readable
 task ID and confirm the schedule. Tasks SHALL support fixed interval and cron
-expression schedule types. Tasks requesting tool grants that cannot be
-satisfied by ACL policy SHALL be rejected at creation time.
+expression schedule types. Task creation SHALL NOT grant tool authority. Each
+tool call of a task SHALL pass tool authorization when the task runs, with the
+stored task audience (`tool-authorization` TA-3 and TA-4). Tool grant
+categories are metadata; the per-audience tool allow lists are the control.
 
 Reminder definitions minted through conversation, tool calls, CLI, REST, or
 import SHALL persist an execution audience that is less than or equal to the
@@ -30,7 +32,7 @@ is always allowed.
 - **WHEN** the agent parses the request as a fixed-interval schedule
 - **THEN** the agent creates a task with the specified interval
 - **AND** assigns a human-readable task ID
-- **AND** confirms the schedule, next run time, and required tool grants
+- **AND** confirms the schedule and next run time
 
 #### Scenario: Create cron-based scheduled task
 
@@ -41,10 +43,10 @@ is always allowed.
 
 #### Scenario: Reject task with ungrantable tools
 
-- **GIVEN** the user requests a scheduled task that requires the `shell` tool
-- **WHEN** the `shell` grant is not available in the ACL policy for that sender
-- **THEN** the agent rejects the task at creation time
-- **AND** explains which tool grants are missing
+- **GIVEN** a Team-audience scheduled task whose prompt asks for `shell_execute`
+- **WHEN** the task runs and the model calls `shell_execute`
+- **THEN** tool authorization denies the call with `tool_not_allowed_for_audience_profile`
+- **AND** the task definition itself carried no tool authority
 
 #### Scenario: Task ID collision avoided
 
@@ -1105,3 +1107,41 @@ Netclaw SHALL save a successful run and reset the poison count before it sends a
 - **WHEN** the process stops before it saves the terminal outcome
 - **THEN** reconciliation reads the durable delivered state
 - **AND** reconciliation records the completed removal
+
+### Requirement: Fail-closed reminder write validation
+
+Reminder write surfaces SHALL validate reminder audience server-side before
+persisting or importing a reminder definition. This applies to REST, admin,
+CLI, and import paths in addition to conversational tool calls. Invalid
+audience values, missing required authority context, or requested audiences
+that exceed the caller's source authority SHALL be rejected with clear error
+messages. Execution may trust the stored reminder audience because minting-time
+validation is mandatory.
+
+#### Scenario: REST create rejects invalid audience value
+
+- **GIVEN** a REST reminder create request provides `audience: "superuser"`
+- **WHEN** the server validates the request
+- **THEN** the request is rejected with a clear validation error
+- **AND** no reminder definition is persisted
+
+#### Scenario: Admin import rejects over-privileged reminder
+
+- **GIVEN** an admin or import request is authenticated with source audience `Team`
+- **WHEN** the request submits a reminder definition with stored audience `Personal`
+- **THEN** the server rejects the request with a clear over-privilege error
+- **AND** the reminder is not written to disk
+
+#### Scenario: Write path fails closed without authority context
+
+- **GIVEN** a non-conversational reminder write path cannot determine the caller's source audience / authority
+- **WHEN** the request attempts to create or import a reminder definition
+- **THEN** the server rejects the request
+- **AND** the error states that reminder audience authorization context is required
+
+#### Scenario: Execution trusts stored audience after validated minting
+
+- **GIVEN** a reminder definition was accepted by the server's minting validation
+- **WHEN** the reminder executes later on a timer
+- **THEN** the execution path uses the stored audience as authoritative
+- **AND** no deployment-default fallback broadens that audience

@@ -100,10 +100,10 @@ the smallest repeatable manual script plus expected output.
 
 - Product: `PROJECT_CONTEXT.md`, `docs/prd/README.md`, `docs/prd/PRD-001-netclaw-mvp.md`
 - CLI/config: `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/spec/SPEC-004-cli-contract.md`, `docs/spec/SPEC-007-guided-onboarding.md`, `openspec/specs/netclaw-config-command/spec.md`, `openspec/changes/netclaw-config-command/tasks.md`
-- Security/gateway: `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/spec/SPEC-001-runtime-boundaries.md`, `docs/spec/SPEC-003-acl-policy-and-security-controls.md`, `openspec/specs/netclaw-acl/spec.md`, `openspec/specs/netclaw-gateway-security/spec.md`
+- Security/gateway: `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/spec/SPEC-001-runtime-boundaries.md`, `docs/architecture/tool-authorization.md`, `openspec/specs/tool-authorization/spec.md`
 - Input adapters: `docs/prd/PRD-009-input-adapters-and-unified-input.md`, `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/changes/add-mattermost-channel/tasks.md`
 - Models/providers: `docs/prd/PRD-005-model-provider-strategy.md`, `docs/spec/SPEC-008-model-provider-abstraction.md`, `openspec/specs/netclaw-model-providers/spec.md`
-- MCP/tools: `docs/prd/PRD-006-mcp-tool-integration.md`, `openspec/specs/netclaw-mcp/spec.md`, `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+- MCP/tools: `docs/prd/PRD-006-mcp-tool-integration.md`, `openspec/specs/netclaw-mcp/spec.md`, `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-authorization/spec.md`
 - Memory/personality: `docs/prd/PRD-007-agent-personality-and-local-memory.md`, `openspec/specs/netclaw-agent-memory/spec.md`, `openspec/specs/project-instructions/spec.md`
 - Scheduling: `docs/prd/PRD-008-scheduling-and-periodic-tasks.md`, `openspec/specs/netclaw-scheduling/spec.md`, `openspec/specs/reminder-execution-history/spec.md`
 - Testing: `docs/spec/SPEC-010-testing-and-smoke-strategy.md`, `TOOLING.md`
@@ -395,7 +395,7 @@ Done when:
 ### Priority: Preserve The Daemon Working Directory
 
 **PRD:** `docs/prd/PRD-001-netclaw-mvp.md`
-**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-approval-gates/spec.md`
+**Specs:** `openspec/specs/netclaw-tools/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** daemon lifecycle, path normalization, shell authorization
 **Verification:** L1 plus a live daemon restart
 
@@ -463,7 +463,7 @@ Done when:
 ### Priority: Reduce Shell Approval Fatigue
 
 **PRDs:** `docs/prd/PRD-002-gateway-security-envelope.md`, `docs/prd/PRD-006-mcp-tool-integration.md`
-**Spec:** `openspec/specs/tool-approval-gates/spec.md`
+**Spec:** `openspec/specs/tool-authorization/spec.md`
 **Surface area:** shell authorization, approval matching, security corpus
 **Verification:** L2
 
@@ -766,13 +766,13 @@ Done when:
   stayed below threshold. Prompt equivalents fell from 32 to 25, while the
   explicit directory-transition shell attempts fell from 24 to 12. These
   variable results remain recorded, not converted into weaker assertions.
-  See `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-guidance-fresh-session-eval-results.json`.
+  See `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-guidance-fresh-session-eval-results.json`.
 - [x] PR #1982 merged as `9d02d19efd75fe871c8603e151e3e7169a9d9433`.
   The live daemon preserved a rollback binary, swapped to that exact commit,
   recovered its session catalog, and passed five natural fixed-pipeline runs
   without an approval or complex marker.
 - [x] Forty-five post-swap fresh sessions are frozen in
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-9d02d19-binary-swap-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-9d02d19-binary-swap-eval-results.json`.
   The original eight workloads improved from 17/40 to 23/40 behavior passes;
   the added fixed-pipeline case passed 5/5. Observed prompt equivalents fell
   from 25 to 2, but 446 historical grants make that prompt delta non-causal.
@@ -787,7 +787,7 @@ Done when:
   one additional shell call after denial. The initial controlled DeepSeek run
   was blocked by provider billing, so the live comparison is operational
   deployment evidence rather than a same-model causal estimate. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-7efa7fd-followup-live-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-7efa7fd-followup-live-eval-results.json`.
 - [x] After billing resumed, an isolated same-model rerun of the exact merged
   image passed known-file and disposable-output cases 10/10, but the terminal
   directory-denial case passed only 3/5. Both failures followed stale inherited
@@ -797,7 +797,7 @@ Done when:
   affected cases passed 15/15. Structured-file cases used no shell. All five
   external directory transitions produced exactly one hard denial, no scope
   correction, and no retry. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-terminal-denial-guidance-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-terminal-denial-guidance-eval-results.json`.
 - [x] The terminal-denial guidance correction merged in PR #1985. The exact
   merged binary was swapped into the live daemon. Five fresh live sessions
   retained all five required denials. Three stopped without a substitute call;
@@ -814,7 +814,7 @@ Done when:
   compound run. Generic independent-operation guidance raised the exact
   committed image to 5/5. It produced five successful single-operation shell
   calls and no approval equivalent. See
-  `openspec/changes/reduce-fresh-session-approval-spam/evidence/post-independent-operation-guidance-eval-results.json`.
+  `src/Netclaw.Security.Tests/Evidence/ApprovalEvidence/post-independent-operation-guidance-eval-results.json`.
 - [x] The initial follow-up disposable eval was discarded. Its prompt requested
   a diagnostic command but omitted the exact content required by its assertion.
   The corrected case names the disposable file effect and exact content without
@@ -1129,7 +1129,7 @@ Done when:
 #### Task 1.3: Complete `Security & Access` config area
 
 **PRD:** `docs/prd/PRD-004-cli-onboarding-and-config.md`, `docs/prd/PRD-002-gateway-security-envelope.md`
-**Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/security-posture-tui/spec.md`, `openspec/specs/netclaw-acl/spec.md`
+**Spec:** `openspec/specs/netclaw-config-command/spec.md`, `openspec/specs/security-posture-tui/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** UI, config, security
 **Verification:** L3
 
@@ -1365,7 +1365,7 @@ according to the same security envelope.
 #### Task 3.1: Add adapter config-to-runtime contract tests
 
 **PRD:** `docs/prd/PRD-009-input-adapters-and-unified-input.md`, `docs/prd/PRD-002-gateway-security-envelope.md`
-**Spec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/specs/netclaw-acl/spec.md`
+**Spec:** `openspec/specs/netclaw-input-adapters/spec.md`, `openspec/specs/netclaw-slack-socket/spec.md`, `openspec/specs/netclaw-discord-socket/spec.md`, `openspec/specs/tool-authorization/spec.md`
 **Surface area:** runtime, config, ACL
 **Verification:** L2
 
@@ -1478,7 +1478,7 @@ Done when:
   still produce terminal failed `spawn_agent` results.
 - [ ] No turn loop can report success while a tool result is still pending.
 - [ ] Logs/traces correlate model call, tool call, approval, and session turn.
-  `openspec/changes/correlate-tool-authorization-attempts/` implements the
+  `openspec/changes/archive/2026-09-29-correlate-tool-authorization-attempts/` implements the
   call-local authorization-attempt link across policy, correction, prompt,
   decision, retry, recovery, and result. Model-call and session-turn links
   remain part of the broader observability item.

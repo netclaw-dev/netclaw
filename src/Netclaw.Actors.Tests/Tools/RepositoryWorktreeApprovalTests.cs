@@ -8,6 +8,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using Xunit;
 
@@ -439,7 +440,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             File.WriteAllText(Path.Combine(sibling, ".git"),
                 $"gitdir: {swappedAdmin.FullName}\n");
             RunGit(sibling, "rev-parse", "--show-toplevel");
-            Assert.True(Netclaw.Security.GitRepositoryApprovalScope.TryResolve(sibling, out var swappedScope));
+            Assert.True(RepositoryIdentity.TryResolve(candidateDirectory: null, sibling, out var swappedScope));
             Assert.Equal(Path.Combine(unrelated, ".git"), swappedScope!.CommonDirectory);
             Assert.Throws<InvalidOperationException>(() => ApprovalBucketBuilder.BuildGrants(
                 promptDecision.ApprovalContext.Candidates!, grantScope));
@@ -471,7 +472,7 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             var metadata = Path.Combine(root.FullName, "metadata");
             var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session"));
             RunGit(root.FullName, "init", "--separate-git-dir", metadata, checkout);
-            Assert.False(Netclaw.Security.GitRepositoryApprovalScope.TryResolve(checkout, out _));
+            Assert.False(RepositoryIdentity.TryResolve(candidateDirectory: null, checkout, out _));
 
             await using var harness = await CreateHarnessAsync(
                 "repository-separate-git-directory",

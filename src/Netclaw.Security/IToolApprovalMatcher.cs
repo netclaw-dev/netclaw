@@ -7,6 +7,7 @@ using System.Collections;
 using System.Text;
 using System.Text.Json;
 using Netclaw.Configuration;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -274,7 +275,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             var occurrenceCandidates = ExtractCandidatesForOccurrence(
                 occurrence,
                 workingDirectory,
-                resolveUnknownPathsFromEffectiveValues: false);
+                resolveUnknownPathsFromEffectiveValues: false,
+                LinkRule.FromVolumeRoot);
             if (occurrenceCandidates is null)
                 return [];
 
@@ -288,7 +290,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         CommandOccurrence occurrence,
         string? workingDirectory,
         bool resolveUnknownPathsFromEffectiveValues,
-        Func<string, bool>? isAllowedHostPath = null)
+        LinkRule hostLinks)
     {
         ArgumentNullException.ThrowIfNull(occurrence);
 
@@ -316,7 +318,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             workingDirectory,
             Environment.PathStyle,
             resolveUnknownPathsFromEffectiveValues,
-            isAllowedHostPath);
+            hostLinks);
         if (directories is null)
             return null;
 
@@ -366,7 +368,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         string? workingDirectory,
         ShellPathStyle pathStyle,
         bool resolveUnknownPathsFromEffectiveValues,
-        Func<string, bool>? isAllowedHostPath)
+        LinkRule hostLinks)
     {
         var clause = occurrence.Clause;
         var directories = new List<string?>();
@@ -425,7 +427,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     argument.AuthoredFileSystemValue,
                     clauseWorkingDirectory,
                     pathStyle,
-                    isAllowedHostPath);
+                    hostLinks);
                 if (authoredDirectories is null)
                     return null;
 
@@ -438,7 +440,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             var redirectDirectories = ResolveRedirectDirectories(
                 redirect,
                 pathStyle,
-                isAllowedHostPath);
+                hostLinks);
             if (redirectDirectories is null)
                 return null;
 
@@ -528,7 +530,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellValueDomain domain,
         string? workingDirectory,
         ShellPathStyle pathStyle,
-        Func<string, bool>? isAllowedHostPath)
+        LinkRule hostLinks)
     {
         if (domain is ShellValueDomain.Unknown)
             return [];
@@ -547,58 +549,26 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         var directories = new List<string>(paths.Count);
+        var canonicalDirectories = new List<CanonicalPath>(paths.Count);
         foreach (var path in paths)
         {
-            if (string.IsNullOrWhiteSpace(path)
-                || !IsRootedForPathStyle(path, pathStyle)
-                || ShellPathRules.UsesHostPathStyle(pathStyle)
-                && HasUnsafeHostPath(path)
-                && isAllowedHostPath?.Invoke(path) != true)
+            if (!CanonicalPath.TryCreate(path, relativeBase: null, pathStyle, out var canonical)
+                || !FileSystemAuthority.IsLinkFreeFromVolumeRoot(canonical, hostLinks))
             {
                 return null;
             }
 
             directories.Add(path);
+            canonicalDirectories.Add(canonical);
         }
 
-        if (!string.IsNullOrWhiteSpace(workingDirectory)
-            && IsRootedForPathStyle(workingDirectory, pathStyle)
-            && directories.All(path => IsWithinRootForPathStyle(
-                path,
-                workingDirectory,
-                pathStyle)))
+        if (CanonicalPath.TryCreate(workingDirectory, relativeBase: null, pathStyle, out var cwd)
+            && canonicalDirectories.All(cwd.Contains))
         {
             return [workingDirectory];
         }
 
         return directories;
-    }
-
-    private static bool IsWithinRootForPathStyle(
-        string path,
-        string root,
-        ShellPathStyle pathStyle)
-    {
-        // Parser values can describe Windows paths on a POSIX test host.
-        // Host Path APIs cannot make this grammar-specific comparison.
-        var comparison = pathStyle == ShellPathStyle.Windows
-            ? StringComparison.OrdinalIgnoreCase
-            : StringComparison.Ordinal;
-        if (string.Equals(path, root, comparison))
-            return true;
-        if (!path.StartsWith(root, comparison))
-            return false;
-        if (root.EndsWith("/", StringComparison.Ordinal)
-            || pathStyle == ShellPathStyle.Windows
-            && root.EndsWith("\\", StringComparison.Ordinal))
-        {
-            return true;
-        }
-
-        return path.Length > root.Length
-               && (path[root.Length] == '/'
-                   || pathStyle == ShellPathStyle.Windows
-                   && path[root.Length] == '\\');
     }
 
     private static string? ResolveAuthorizationScope(
@@ -670,18 +640,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             : staticPrefix.LastIndexOf('/');
         var coveringPath = CoveringPath(staticPrefix, separator, pathStyle);
 
-        if (!ShellPathRules.TryResolve(
+        if (!CanonicalPath.TryCreate(
                 coveringPath,
                 workingDirectory,
                 pathStyle,
                 out var coveringDirectory)
-            || ShellPathRules.UsesHostPathStyle(pathStyle)
-            && ContainsUnsafeSymlinkEntry(coveringDirectory))
+            || !FileSystemAuthority.HasOnlyContainedLinkEntries(coveringDirectory))
         {
             return null;
         }
 
-        return coveringDirectory;
+        return coveringDirectory.Value;
     }
 
     private static string CoveringPath(
@@ -703,50 +672,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return staticPrefix[..separator];
-    }
-
-    private static bool ContainsUnsafeSymlinkEntry(string directory)
-    {
-        if (!Directory.Exists(directory))
-            return false;
-
-        try
-        {
-            var normalizedDirectory = PathUtility.Normalize(directory);
-            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
-            {
-                // Netclaw does not reproduce Bash glob rules here. Unicode,
-                // brackets, and escapes differ from .NET wildcard rules.
-                // Every link must resolve inside the fixed glob root.
-                var attributes = File.GetAttributes(entry);
-                if ((attributes & FileAttributes.ReparsePoint) == 0)
-                    continue;
-
-                FileSystemInfo link = (attributes & FileAttributes.Directory) != 0
-                    ? new DirectoryInfo(entry)
-                    : new FileInfo(entry);
-                var target = link.ResolveLinkTarget(returnFinalTarget: true);
-                if (target is null
-                    || !target.Exists
-                    || !PathUtility.TryNormalize(target.FullName, out var normalizedTarget)
-                    || !PathUtility.IsNormalizedWithinRoot(normalizedTarget, normalizedDirectory)
-                    || PathUtility.ContainsSymlinkSegment(normalizedDirectory, normalizedTarget))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                   or IOException
-                                   or NotSupportedException
-                                   or UnauthorizedAccessException
-                                   or System.Security.SecurityException)
-        {
-            // The matcher cannot prove the expansion stays in the fixed scope.
-            return true;
-        }
     }
 
     private static bool IsAuthorizationPathArg(
@@ -784,21 +709,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return true;
         }
 
-        try
-        {
-            var normalizedPath = PathUtility.Normalize(arg.Resolved);
-            if (!PathUtility.IsNormalizedWithinRoot(normalizedPath, workingDirectory))
-                return true;
-
-            return PathUtility.ContainsSymlinkSegment(workingDirectory, normalizedPath);
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or IOException
-                                      or NotSupportedException
-                                      or System.Security.SecurityException)
-        {
-            return true;
-        }
+        return !CanonicalPath.TryCreateHost(arg.Resolved, relativeBase: null, out var resolved)
+               || !CanonicalPath.TryCreateHost(workingDirectory, relativeBase: null, out var cwd)
+               || FileSystemAuthority.EvaluateMembership(
+                   resolved,
+                   [new PathBoundary.Folder(cwd, LinkRule.BelowRoot)]) is not PathDecision.Allowed;
     }
 
     /// <summary>
@@ -843,7 +758,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     private static IReadOnlyList<string>? ResolveRedirectDirectories(
         ShellSyntaxTree.RedirectAnalysis redirect,
         ShellPathStyle pathStyle,
-        Func<string, bool>? isAllowedHostPath)
+        LinkRule hostLinks)
     {
         if (!redirect.IsComplete)
             return null;
@@ -865,8 +780,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (file.Target is ShellSyntaxTree.ShellValueDomain.PathPattern pattern)
         {
             var coveringDirectory = pattern.CoveringDirectory;
-            return string.IsNullOrWhiteSpace(coveringDirectory)
-                || ContainsUnsafeSymlinkEntry(coveringDirectory)
+            return !CanonicalPath.TryCreate(coveringDirectory, relativeBase: null, pathStyle, out var covering)
+                || !FileSystemAuthority.HasOnlyContainedLinkEntries(covering)
                 ? null
                 : [coveringDirectory];
         }
@@ -885,12 +800,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var directories = new List<string>(targets.Count);
         foreach (var target in targets)
         {
-            if (string.IsNullOrWhiteSpace(target))
-                return null;
-
-            if (ShellPathRules.UsesHostPathStyle(pathStyle)
-                && HasUnsafeHostPath(target)
-                && isAllowedHostPath?.Invoke(target) != true)
+            if (!CanonicalPath.TryCreate(target, relativeBase: null, pathStyle, out var canonicalTarget)
+                || !FileSystemAuthority.IsLinkFreeFromVolumeRoot(canonicalTarget, hostLinks))
                 return null;
 
             // The resolved POSIX null device creates no reusable filesystem
@@ -913,9 +824,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     private static string? GetRedirectDirectory(string target, ShellPathStyle pathStyle)
     {
-        if (!IsRootedForPathStyle(target, pathStyle))
-            return null;
-
         var separator = pathStyle == ShellPathStyle.Windows
             ? target.LastIndexOfAny(['/', '\\'])
             : target.LastIndexOf('/');
@@ -932,39 +840,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return target[..separator];
-    }
-
-    private static bool IsRootedForPathStyle(string path, ShellPathStyle pathStyle)
-        => pathStyle switch
-        {
-            ShellPathStyle.Posix => path.Length > 0 && path[0] == '/',
-            ShellPathStyle.Windows => (path.Length >= 3
-                                       && char.IsAsciiLetter(path[0])
-                                       && path[1] == ':'
-                                       && path[2] is '/' or '\\')
-                                      || (path.Length >= 5
-                                          && path[0] is '/' or '\\'
-                                          && path[1] is '/' or '\\'),
-            _ => false
-        };
-
-    private static bool HasUnsafeHostPath(string target)
-    {
-        try
-        {
-            var pathRoot = Path.GetPathRoot(target);
-            return string.IsNullOrWhiteSpace(pathRoot)
-                   || PathUtility.ContainsSymlinkSegment(pathRoot, target);
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                   or IOException
-                                   or NotSupportedException
-                                   or PathTooLongException
-                                   or UnauthorizedAccessException
-                                   or System.Security.SecurityException)
-        {
-            return true;
-        }
     }
 
     /// <summary>
@@ -1311,7 +1186,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     workingDirectory,
                     Environment.PathStyle,
                     resolveUnknownPathsFromEffectiveValues: false,
-                    isAllowedHostPath: null) is null))
+                    LinkRule.FromVolumeRoot) is null))
         {
             return true;
         }

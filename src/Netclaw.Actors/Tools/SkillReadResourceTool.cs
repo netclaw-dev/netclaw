@@ -7,6 +7,7 @@ using System.ComponentModel;
 using Netclaw.Actors.Skills;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Security.Skills;
 using Netclaw.Tools;
 
@@ -59,19 +60,25 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         if (!SkillResourcePath.TryNormalize(args.ResourcePath, out var resourcePath, out var pathError))
             return SkillResourcePath.FormatReadError(pathError);
 
-        // Resolve the full path and verify it's within the skill directory
+        // The skill root and its ancestors are trusted: the registry placed the
+        // skill there, and on macOS those ancestors include OS links such as
+        // /var -> /private/var. A link below the root is traversal.
         var fullPath = Path.GetFullPath(Path.Combine(fileSource.SkillDirectory, resourcePath));
-        var skillDirFull = Path.GetFullPath(fileSource.SkillDirectory);
-
-        if (!PathUtility.IsWithinRoot(fullPath, skillDirFull))
+        if (!CanonicalPath.TryCreateHost(fullPath, relativeBase: null, out var resource)
+            || !CanonicalPath.TryCreateHost(fileSource.SkillDirectory, relativeBase: null, out var skillRoot))
+        {
             return "Resolved path is outside the skill directory.";
+        }
 
-        // Check for symlinks introduced *within* the skill directory. The skill
-        // root and its ancestors are trusted (the registry placed the skill
-        // there) — and on macOS those ancestors include OS-level symlinks such
-        // as /var -> /private/var, so walking past the root would false-positive.
-        if (ContainsSymlink(fullPath, skillDirFull))
-            return "Symlink traversal is not allowed in resource paths.";
+        switch (FileSystemAuthority.EvaluateMembership(
+                    resource,
+                    [new PathBoundary.Folder(skillRoot, LinkRule.BelowRoot)]))
+        {
+            case PathDecision.Outside:
+                return "Resolved path is outside the skill directory.";
+            case PathDecision.CrossesLink or PathDecision.Unverifiable:
+                return "Symlink traversal is not allowed in resource paths.";
+        }
 
         if (!File.Exists(fullPath))
         {
@@ -99,33 +106,5 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
         {
             return $"Failed to read resource: {ex.Message}";
         }
-    }
-
-    /// <summary>
-    /// Returns true if any path component strictly between <paramref name="root"/>
-    /// (exclusive) and <paramref name="path"/> (inclusive) is a symlink. The walk
-    /// stops at the skill root so OS-level symlinks above it (e.g. macOS
-    /// <c>/var</c> -&gt; <c>/private/var</c>) do not register as traversal.
-    /// </summary>
-    private static bool ContainsSymlink(string path, string root)
-    {
-        var rootFull = Path.TrimEndingDirectorySeparator(root);
-        var current = path;
-        while (!string.IsNullOrEmpty(current)
-            && !string.Equals(
-                Path.TrimEndingDirectorySeparator(current), rootFull, StringComparison.Ordinal))
-        {
-            if (File.Exists(current) || Directory.Exists(current))
-            {
-                if (new FileInfo(current).LinkTarget is not null)
-                    return true;
-
-                if (new DirectoryInfo(current).LinkTarget is not null)
-                    return true;
-            }
-
-            current = Path.GetDirectoryName(current);
-        }
-        return false;
     }
 }

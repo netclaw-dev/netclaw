@@ -13,6 +13,7 @@ and working-context blocks, file-access denial messaging, implicit file roots,
 and audience derivation, with secure-by-default behavior and no default-audience
 fallback.
 ## Requirements
+
 ### Requirement: Context layer audience filtering
 
 The context layer system SHALL accept a `TrustAudience` parameter on `IContextLayerProvider.GetContextLayer()`. Each context layer implementation SHALL use the audience to determine what content to return. The `ContextAssemblyInput` record SHALL include a `TrustAudience Audience` field. When a feature is disabled deployment-wide, the corresponding context layer SHALL also return empty even for non-Public audiences. The skill context layer SHALL use separate Team and Personal index values when source permissions differ.
@@ -117,19 +118,6 @@ that include trusted roots.
 
 - **WHEN** a Team-audience session attempts to read a file outside trusted roots
 - **THEN** the error message includes the list of trusted root paths
-
-### Requirement: Public audience has no implicit internal file roots
-
-Public file access SHALL NOT implicitly include identity, skills, or workspaces
-roots through global/default file-root configuration.
-
-#### Scenario: Public file access is session-scoped only
-
-- **GIVEN** a Public-audience session with default file access configuration
-- **WHEN** it resolves implicit readable roots
-- **THEN** the resolved roots include only session-scoped locations
-- **AND** identity, skills, and workspaces roots are absent unless explicitly
-  configured for a non-Public audience
 
 ### Requirement: Audience derivation has no default-audience fallback
 

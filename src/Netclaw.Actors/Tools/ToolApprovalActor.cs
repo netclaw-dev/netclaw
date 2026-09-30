@@ -9,6 +9,7 @@ using Netclaw.Actors.Protocol;
 using Netclaw.Actors.SubAgents;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using static Netclaw.Actors.Tools.ToolApprovalProtocol;
 
@@ -353,7 +354,7 @@ internal sealed class ToolApprovalActor : ReceiveActor
                             return false;
                         }
 
-                        var candidateResolved = GitRepositoryApprovalScope.TryResolveCandidate(
+                        var candidateResolved = RepositoryIdentity.TryResolve(
                             grant.Candidate.Directory, cwd: null, out var scope);
                         if (!candidateResolved)
                         {

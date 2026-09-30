@@ -40,8 +40,7 @@ This directory contains product requirements for Netclaw.
 ## Planned OpenSpec Capability Mapping
 
 - Session and persistence -> `openspec/specs/netclaw-session/spec.md`
-- Gateway security envelope -> `openspec/specs/netclaw-gateway-security/spec.md`
-- ACL and policy -> `openspec/specs/netclaw-acl/spec.md`
+- Tool authorization (ACL, approval, and policy) -> `openspec/specs/tool-authorization/spec.md`; architecture in `docs/architecture/tool-authorization.md`
 - Operator UI -> `openspec/specs/netclaw-operator-ui/spec.md`
 - CLI -> `openspec/specs/netclaw-cli/spec.md`
 - Onboarding -> `openspec/specs/netclaw-onboarding/spec.md`

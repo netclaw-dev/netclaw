@@ -9,6 +9,7 @@ using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -59,9 +60,6 @@ public sealed class ToolAccessPolicy
     internal ShellCommandPolicy ShellCommandPolicy => _shellCommandPolicy;
 
     internal PathAccessPolicy SharedPathAccessPolicy => _pathAccessPolicy;
-
-    internal bool IsEligiblePlatformTemporaryPath(string path)
-        => _temporaryPathCorrectionPolicy.IsEligiblePlatformTemporaryPath(path);
 
     public ToolAccessPolicy(
         NetclawPaths paths,
@@ -343,7 +341,7 @@ public sealed class ToolAccessPolicy
         }
 
         // The OS resolves ".." after a symlink. Lexical policy normalization does not.
-        if (workingDirectory is not null && ShellPathRules.HasParentDirectorySegment(workingDirectory))
+        if (workingDirectory is not null && CanonicalPath.HasParentSegment(workingDirectory))
             return ToolAuthorizationDecision.Deny("shell_invalid_working_directory");
 
         // All shell policy checks use the directory that ShellTool executes.
@@ -366,7 +364,7 @@ public sealed class ToolAccessPolicy
                 ShellEnvironment,
                 shellAnalysis,
                 _shellApprovalMatcher,
-                IsEligiblePlatformTemporaryPath,
+                LinkRule.FromVolumeRootExceptTemporaryAlias,
                 out _)
             && BashStaticCompoundApprovalProjection.TryCreate(
                 shellAnalysis,
@@ -524,37 +522,15 @@ public sealed class ToolAccessPolicy
                 || fact.Paths.Any(path =>
                     _toolPathPolicy.IsShellDeniedProjectedPath(path))));
 
+    /// <summary>
+    /// Returns true when a canonical Bash intent directory has no link from the
+    /// volume root, except the platform temporary alias (R7).
+    /// </summary>
     internal bool IsCausalIntentDirectoryEligible(string intentDirectory)
-    {
-        if (ShellEnvironment.Grammar != ShellGrammar.Bash
-            || !ShellPathRules.TryNormalize(
-                intentDirectory,
-                ShellEnvironment.PathStyle,
-                out var normalized)
-            || !ShellPathRules.Equals(
-                normalized,
-                intentDirectory,
-                ShellEnvironment.PathStyle))
-        {
-            return false;
-        }
-
-        if (_temporaryPathCorrectionPolicy.IsEligiblePlatformTemporaryPath(normalized))
-            return true;
-
-        try
-        {
-            return !PathUtility.ContainsSymlinkSegment("/", normalized);
-        }
-        catch (Exception ex) when (ex is ArgumentException
-                                      or IOException
-                                      or NotSupportedException
-                                      or UnauthorizedAccessException
-                                      or System.Security.SecurityException)
-        {
-            return false;
-        }
-    }
+        => ShellEnvironment.Grammar == ShellGrammar.Bash
+           && CanonicalPath.TryCreate(intentDirectory, relativeBase: null, ShellEnvironment.PathStyle, out var directory)
+           && string.Equals(directory.Value, intentDirectory, StringComparison.Ordinal)
+           && FileSystemAuthority.IsLinkFreeFromVolumeRoot(directory, LinkRule.FromVolumeRootExceptTemporaryAlias);
 
     internal bool AreCausalIntentDirectoriesEligible(
         string intentDirectory,
@@ -621,12 +597,12 @@ public sealed class ToolAccessPolicy
             context);
 
     private ToolAuthorizationDecision? EnforceKnownShellPaths(
-        IEnumerable<CanonicalShellPath> paths,
+        IEnumerable<CanonicalPath> paths,
         ToolInvocationContext context)
     {
         foreach (var path in paths
                      .Where(static path => !IsNullDevice(path))
-                     .DistinctBy(static path => (path.PathStyle, path.Value)))
+                     .DistinctBy(static path => (path.Style, path.Value)))
         {
             if (_pathAccessPolicy.EvaluateShellPath(path, context) is not PathAccessPolicy.PathAccessDecision.Allowed)
                 return ToolAuthorizationDecision.Deny("shell_path_outside_trust_zone");
@@ -635,7 +611,7 @@ public sealed class ToolAccessPolicy
         return null;
     }
 
-    private static IEnumerable<CanonicalShellPath> EnumerateKnownShellPaths(
+    private static IEnumerable<CanonicalPath> EnumerateKnownShellPaths(
         ShellPolicyCandidatePathFacts candidate)
     {
         if (candidate.RealScope.Path is { } realScope)
@@ -657,7 +633,7 @@ public sealed class ToolAccessPolicy
         }
     }
 
-    private static IEnumerable<CanonicalShellPath> EnumerateKnownShellPaths(
+    private static IEnumerable<CanonicalPath> EnumerateKnownShellPaths(
         ShellPolicyResolvedPathView view)
     {
         if (view.ResolutionBase.Path is { } resolutionBase)
@@ -671,8 +647,8 @@ public sealed class ToolAccessPolicy
         }
     }
 
-    private static bool IsNullDevice(CanonicalShellPath path)
-        => path.PathStyle == ShellPathStyle.Posix
+    private static bool IsNullDevice(CanonicalPath path)
+        => path.Style == ShellPathStyle.Posix
            && string.Equals(path.Value, "/dev/null", StringComparison.Ordinal);
 
     private ToolAuthorizationDecision? PreflightStructuredPathAccess(
@@ -1183,12 +1159,15 @@ public sealed class ToolAccessPolicy
             .ToArray();
         if (isMessy || !hasReusablePhrase
             || !string.Equals(toolName.Value, ShellTool.ToolName, StringComparison.Ordinal)
-            || !GitRepositoryApprovalScope.TryResolveCandidates(grantCandidates, cwd, out var scopes))
+            || !RepositoryIdentity.TryResolveAll(
+                grantCandidates.Select(static candidate => candidate.Directory).ToArray(),
+                cwd,
+                out var repositories))
         {
             return null;
         }
 
-        return scopes![0].CommonDirectory;
+        return repositories![0].CommonDirectory;
     }
 
     private static bool HasReusableShellPhrase(ApprovalCandidate candidate) =>
@@ -1208,7 +1187,7 @@ public sealed class ToolAccessPolicy
         if (string.IsNullOrWhiteSpace(cwd))
             return false;
 
-        return !ShellPathRules.TryGetRootRelativeDepth(cwd, pathStyle, out var depth)
+        return !CanonicalPath.TryGetRootDepth(cwd, pathStyle, out var depth)
                || depth < 2;
     }
 

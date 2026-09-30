@@ -50,6 +50,7 @@ Read first:
 - `TOOLING.md`
 - `IMPLEMENTATION_PLAN.md`
 - `docs/prd/README.md`
+- `docs/architecture/*.md`
 - `.opencode/skills/netclaw-*/SKILL.md`
 - `.claude/skills/ralph-*.md`
 - relevant `openspec/specs/*/spec.md`
@@ -125,6 +126,21 @@ task checkboxes in `openspec/changes/*/tasks.md` during RALPH iterations.
 - Name the component that owns each decision. State whether its data is
   call-local, actor-local, or durable.
 - Label pseudocode as schematic when it omits a security gate or runtime step.
+
+## Architecture Document Rule
+
+`docs/architecture/` holds the canonical architecture documents for people.
+`docs/architecture/tool-authorization.md` describes tool authorization: its
+contexts, owners, diagrams, guidelines, and future scenarios.
+
+- A PR that changes an authorization context must update
+  `docs/architecture/tool-authorization.md` in the same diff.
+- An authorization context change includes a new decision owner, a moved
+  check, a new grant scope, a new candidate kind, or a new consent surface.
+- The document describes the current code. Put a planned shape only in its
+  "Future scenarios" section.
+- Keep testable rules in `openspec/specs/tool-authorization/spec.md`. The
+  document links to those rules and does not copy them.
 
 ## Discovery Rules
 
@@ -237,6 +253,35 @@ generator's `feeds/scripts/semver_key.py` are two implementations of one precede
 kept in lockstep by a shared fixture (`feeds/scripts/semver-order.txt`) — change both
 (and the fixture) together if precedence ever changes. Never hand-edit the release
 manifest or installer feed.
+
+## Stacked Pull Requests
+
+Stack PRs only when a change needs several reviewable steps that depend on
+each other. Otherwise, open one PR.
+
+- You need contributor (write) access to `netclaw-dev/netclaw` to stack. A
+  PR's base must be a branch in the base repository, so each stack branch must
+  live upstream. A contributor without write access opens one PR from a fork.
+- Name each branch that another PR uses as its base `feature/<topic>` from
+  the start. `pr_validation` runs only for PRs into `dev`, `main`, `master`,
+  or `feature/*`; a PR into another base gets no test CI.
+- Caution: a branch rename retargets the PRs that use the branch as their
+  base, but it closes the PR whose head is that branch. That PR cannot be
+  reopened. If a head branch must be renamed, open a replacement PR from the
+  renamed branch and link the closed PR to it.
+- Write each PR description so that it stands alone, and name its base PR.
+- Verify each PR on the combined stack, not on its isolated branch.
+- Merge from the bottom up. GitHub treats dependent PRs as a native stack, and
+  `gh pr merge` fails with "must be merged using the asynchronous merge REST
+  API". Use `PUT /repos/{owner}/{repo}/pulls/{n}/merge-async` with
+  `merge_method=squash` and `sha=<head>`. Then poll
+  `GET /repos/{owner}/{repo}/pulls/{n}/merge-async/{uuid}` until the state is
+  `merged`.
+- After a squash merge, GitHub retargets the next PR to `dev` and can rebase
+  it. If the next PR shows a conflict, run
+  `git rebase --onto origin/dev <old base head>` so that only its own commits
+  remain. Then push with `--force-with-lease`.
+- The repository deletes merged head branches automatically.
 
 ## Universal Quality Bar
 

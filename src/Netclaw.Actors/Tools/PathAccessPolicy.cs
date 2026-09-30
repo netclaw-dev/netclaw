@@ -5,18 +5,22 @@
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Resolves file paths, checks the caller's file permissions, and applies protected-file rules.
+/// Chooses the path boundaries that a file tool holds, and turns the filesystem
+/// authority's answer into the file-tool result.
 /// </summary>
 /// <remarks>
-/// Permission to use a directory does not permit access to protected files inside it.
-/// A path returned by a child agent must pass the same checks as any other path.
-/// Shell callers must also check shell permissions separately.
+/// The boundaries come only from the audience profile, the session, and the
+/// project. No approval grant enters this list, so a shell grant never authorizes
+/// a file tool (R8). Only this class produces <see cref="PathBoundary.Unrestricted"/>
+/// (R1). Permission to use a directory does not permit access to protected files
+/// inside it. Shell callers must also check shell permissions separately.
 /// </remarks>
 internal sealed class PathAccessPolicy
 {
@@ -93,7 +97,7 @@ internal sealed class PathAccessPolicy
     }
 
     private readonly ToolAudienceProfileResolver _profileResolver;
-    private readonly ToolPathPolicy _protectedPaths;
+    private readonly FileSystemAuthority _fileSystem;
     private readonly Lazy<IReadOnlyList<string>> _cachedGlobalReadRoots;
     private readonly Lazy<string?> _cachedWorkspacesRoot;
     private readonly IReadOnlyList<string> _sessionRoots;
@@ -110,7 +114,7 @@ internal sealed class PathAccessPolicy
         ToolPathPolicy protectedPaths)
     {
         _profileResolver = new ToolAudienceProfileResolver(toolConfig, paths);
-        _protectedPaths = protectedPaths;
+        _fileSystem = protectedPaths.FileSystem;
 
         // SessionsDirectory contains version-2 envelopes and legacy workspaces.
         // SessionLogsDirectory contains only legacy raw logs. Both roots remain
@@ -141,21 +145,67 @@ internal sealed class PathAccessPolicy
         ToolInvocationContext context,
         FileOperation operation)
     {
-        if (!TryResolvePath(
-                rawPath,
-                context,
-                operation,
-                out var canonicalPath,
-                out var error,
-                out var failure))
+        if (!TryResolvePath(rawPath, context, operation, out var fullPath, out var error, out var failure))
+            return PathAccessDecision.Deny(error, failure, fullPath);
+
+        var protectionOperation = ToProtectionOperation(operation);
+        var access = GetAccessProfile(_profileResolver.ResolveProfile(context), operation);
+        var label = GetAudienceLabel(context.Audience);
+        var confined = access.Mode == ToolFilesystemMode.All
+                       && (operation == FileOperation.DeclareProjectScope
+                           || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable);
+
+        IReadOnlyList<string> roots = [];
+        IReadOnlyList<PathBoundary> boundaries;
+        var stoppedAtUnusableRoot = false;
+        if (access.Mode == ToolFilesystemMode.All && !confined)
+        {
+            // An interactive Mode.All profile grants broad file authority.
+            // Approval is a later gate and does not widen this file profile.
+            boundaries = [new PathBoundary.Unrestricted()];
+        }
+        else if (access.Mode == ToolFilesystemMode.None)
         {
             return PathAccessDecision.Deny(
-                error,
-                failure ?? throw new InvalidOperationException("A denied path decision must include a failure."),
-                canonicalPath);
+                $"Error: {label} trust context does not allow {ToOperationText(protectionOperation)} access to local files.",
+                PathAccessFailure.AccessDenied,
+                fullPath);
+        }
+        else
+        {
+            // Unattended runs stay confined to trusted roots because they cannot
+            // request new authority from a user. Project-scope declarations opt
+            // out of interactive Personal reach: the declaration supplies the
+            // project directory to reviewed-safe policy and to the prompt.
+            roots = confined
+                ? ResolveUnattendedTrustedRoots(context, operation)
+                : ResolveAndMergeRoots(access, context, context.Audience, operation);
+            if (roots.Count == 0)
+            {
+                return PathAccessDecision.Deny(
+                    confined
+                        ? "Error: unattended session has no trusted file roots."
+                        : $"Error: {label} trust context does not have any configured local file roots for {ToOperationText(protectionOperation)} access.",
+                    PathAccessFailure.AccessDenied,
+                    fullPath);
+            }
+
+            boundaries = CreateRootBoundaries(roots, fullPath, context, operation, out stoppedAtUnusableRoot);
         }
 
-        return AllowIfUnprotected(canonicalPath, ToProtectionOperation(operation));
+        if (!CanonicalPath.TryCreateHost(fullPath, relativeBase: null, out var path))
+            return DenyFileRelationship(PathDecision.Unverifiable, confined, label, context.Audience, roots, fullPath);
+
+        var decision = _fileSystem.Evaluate(path, ToAuthorityOperation(protectionOperation), boundaries);
+        if (stoppedAtUnusableRoot && decision is PathDecision.Outside)
+            decision = PathDecision.Unverifiable;
+
+        return decision switch
+        {
+            PathDecision.Allowed => PathAccessDecision.Allow(fullPath),
+            PathDecision.Protected => DenyProtected(fullPath, protectionOperation),
+            _ => DenyFileRelationship(decision, confined, label, context.Audience, roots, fullPath)
+        };
     }
 
     /// <summary>Checks a file that a tool creates as part of an already permitted operation.</summary>
@@ -168,34 +218,33 @@ internal sealed class PathAccessPolicy
         if (string.IsNullOrWhiteSpace(outputDirectory))
             return PathAccessDecision.Deny("Error: invalid_context: No output directory available.", PathAccessFailure.InvalidInput);
 
-        string canonicalPath;
-        string directory;
-        try
-        {
-            canonicalPath = PathUtility.Normalize(path);
-            directory = PathUtility.Normalize(outputDirectory);
-        }
-        catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
+        if (!CanonicalPath.TryCreateHost(path, relativeBase: null, out var destination)
+            || !CanonicalPath.TryCreateHost(outputDirectory, relativeBase: null, out var directory))
         {
             return PathAccessDecision.Deny("Error: Invalid destination path.", PathAccessFailure.InvalidInput);
         }
 
-        if (GetHostPathRelationship(canonicalPath, [directory]) != PathRelationship.WithinTrustedRoot)
+        // A drive root (or "/") is never an output directory. It would contain every path.
+        var decision = directory.IsDriveRoot
+            ? PathDecision.Unverifiable
+            : _fileSystem.Evaluate(destination, PathOperation.Write, [CreateTrustedFolder(directory)]);
+        return decision switch
         {
-            return PathAccessDecision.Deny(
+            PathDecision.Allowed => PathAccessDecision.Allow(destination.Value),
+            PathDecision.Protected => DenyProtected(destination.Value, FileOperation.Write),
+            _ => PathAccessDecision.Deny(
                 "Error: File destination must stay inside its output directory without links.",
-                PathAccessFailure.AccessDenied, canonicalPath);
-        }
-
-        return AllowIfUnprotected(canonicalPath, FileOperation.Write);
+                PathAccessFailure.AccessDenied,
+                destination.Value)
+        };
     }
 
     /// <summary>Applies file protection to one parser-canonical shell path.</summary>
     public PathAccessDecision EvaluateShellPath(
-        CanonicalShellPath path,
+        CanonicalPath path,
         ToolInvocationContext context)
     {
-        if (ShellPathRules.UsesHostPathStyle(path.PathStyle))
+        if (path.IsHostStyle)
             return Evaluate(path.Value, context, FileOperation.Write);
 
         // Cross-platform parser tests can supply paths from another host style.
@@ -216,7 +265,7 @@ internal sealed class PathAccessPolicy
     /// <remarks>
     /// The caller first checks shell capability, shell command policy, and the
     /// conservative <see cref="FileOperation.Write"/> file-protection decision.
-    /// This method adds only the narrower reviewed-safe root requirement. It
+    /// This method adds only the narrower reviewed-safe root requirement (R12). It
     /// grants neither shell nor file authority.
     /// </remarks>
     /// <param name="canonicalPath">The parser-resolved path to evaluate.</param>
@@ -247,66 +296,39 @@ internal sealed class PathAccessPolicy
                 roots.Add(proposedProjectRoot);
         }
 
+        var links = includeRootInLinkCheck ? LinkRule.IncludingRoot : LinkRule.BelowRoot;
         foreach (var root in roots.Distinct(PathComparer))
         {
-            try
+            // Compare with the parser-declared shell style first. This supports
+            // Windows syntax on a non-Windows review host. Otherwise both values
+            // must be absolute host paths.
+            CanonicalPath path;
+            CanonicalPath rootPath;
+            if (!CanonicalPath.TryCreate(canonicalPath, relativeBase: null, pathStyle, out path)
+                || !CanonicalPath.TryCreate(root, relativeBase: null, pathStyle, out rootPath))
             {
-                // First, compare paths with the parser-declared shell style.
-                // This supports Windows syntax on a non-Windows review host.
-                var normalizedPath = string.Empty;
-                var normalizedRoot = string.Empty;
-                var usesShellPathStyle = ShellPathRules.TryNormalize(canonicalPath, pathStyle, out normalizedPath)
-                                         && ShellPathRules.TryNormalize(root, pathStyle, out normalizedRoot);
-                if (usesShellPathStyle
-                    && !ShellPathRules.IsWithinRoot(normalizedPath, normalizedRoot, pathStyle))
-                {
+                if (!Path.IsPathFullyQualified(canonicalPath) || !Path.IsPathFullyQualified(root))
                     continue;
-                }
 
-                // A valid foreign-style path can use lexical containment only.
-                if (!usesShellPathStyle)
+                if (!CanonicalPath.TryCreateHost(canonicalPath, relativeBase: null, out path)
+                    || !CanonicalPath.TryCreateHost(root, relativeBase: null, out rootPath))
                 {
-                    // Host-style paths use the platform path API. Both inputs
-                    // must be absolute before the policy compares them.
-                    if (!Path.IsPathFullyQualified(canonicalPath)
-                        || !Path.IsPathFullyQualified(root))
-                    {
-                        continue;
-                    }
-
-                    normalizedPath = PathUtility.Normalize(canonicalPath);
-                    normalizedRoot = PathUtility.Normalize(root);
-                    if (!PathUtility.IsNormalizedWithinRoot(normalizedPath, normalizedRoot))
-                        continue;
+                    return DenyUnverifiedReviewedPath(canonicalPath);
                 }
+            }
 
-                // The host can inspect links only for its own path style.
-                // Foreign-style paths stay lexical and fail closed elsewhere.
-                if ((!usesShellPathStyle || ShellPathRules.UsesHostPathStyle(pathStyle))
-                    && PathUtility.ContainsSymlinkSegment(
-                        normalizedRoot,
-                        normalizedPath,
-                        includeRootInLinkCheck))
-                {
+            // Shell protected-path policy ran before this bounded-root check.
+            switch (FileSystemAuthority.EvaluateMembership(path, [new PathBoundary.Folder(rootPath, links)]))
+            {
+                case PathDecision.Allowed:
+                    return PathAccessDecision.Allow(path.Value);
+                case PathDecision.CrossesLink:
                     return PathAccessDecision.Deny(
                         "Error: Path crosses a filesystem link inside a trusted root.",
                         PathAccessFailure.AccessDenied,
-                        normalizedPath);
-                }
-
-                // Shell protected-path policy ran before this bounded-root check.
-                return PathAccessDecision.Allow(normalizedPath);
-            }
-            catch (Exception ex) when (ex is ArgumentException
-                                           or IOException
-                                           or NotSupportedException
-                                           or UnauthorizedAccessException
-                                           or System.Security.SecurityException)
-            {
-                return PathAccessDecision.Deny(
-                    "Error: Path relationship could not be verified.",
-                    PathAccessFailure.AccessDenied,
-                    canonicalPath);
+                        path.Value);
+                case PathDecision.Unverifiable:
+                    return DenyUnverifiedReviewedPath(canonicalPath);
             }
         }
 
@@ -330,62 +352,58 @@ internal sealed class PathAccessPolicy
         return ResolveAndMergeRoots(access, context, context.Audience, accessKind);
     }
 
+    /// <summary>Resolves the raw text to a host path. It checks no boundary.</summary>
+    /// <remarks>File tools never expand <c>~</c>: <c>~/x</c> is a relative literal under the base (R6).</remarks>
     private bool TryResolvePath(
         string rawPath,
         ToolInvocationContext context,
         FileOperation accessKind,
         out string fullPath,
         out string error,
-        out PathAccessFailure? failure)
+        out PathAccessFailure failure)
     {
+        fullPath = string.Empty;
+        error = string.Empty;
+        failure = PathAccessFailure.InvalidInput;
         try
         {
             if (string.IsNullOrWhiteSpace(rawPath) || rawPath.Any(char.IsControl))
             {
-                fullPath = string.Empty;
                 error = "Error: Invalid path.";
-                failure = PathAccessFailure.InvalidInput;
                 return false;
             }
 
             if (Path.IsPathFullyQualified(rawPath))
             {
                 fullPath = Path.GetFullPath(rawPath);
+                return true;
             }
-            else if (Path.IsPathRooted(rawPath))
+
+            if (Path.IsPathRooted(rawPath))
             {
-                fullPath = string.Empty;
                 error = "Error: Invalid path: partially qualified paths are not supported.";
-                failure = PathAccessFailure.InvalidInput;
                 return false;
+            }
+
+            var baseResult = TryGetRelativePathBase(context, accessKind, out var baseDirectory);
+            if (baseResult == PathBaseStatus.Resolved)
+            {
+                fullPath = Path.GetFullPath(rawPath, baseDirectory);
+                return true;
+            }
+
+            if (baseResult == PathBaseStatus.Denied)
+            {
+                error = "Error: The project or session directory contains an unsafe filesystem link.";
+                failure = PathAccessFailure.AccessDenied;
             }
             else
             {
-                var baseResult = TryGetRelativePathBase(
-                    context,
-                    accessKind,
-                    out var baseDirectory);
-                if (baseResult == PathBaseStatus.Resolved)
-                {
-                    fullPath = Path.GetFullPath(rawPath, baseDirectory);
-                }
-                else
-                {
-                    fullPath = string.Empty;
-                    if (baseResult == PathBaseStatus.Denied)
-                    {
-                        error = "Error: The project or session directory contains an unsafe filesystem link.";
-                        failure = PathAccessFailure.AccessDenied;
-                    }
-                    else
-                    {
-                        error = "Error: invalid_context: No project or session directory is available.";
-                        failure = PathAccessFailure.MissingBase;
-                    }
-
-                    return false;
-                }
+                error = "Error: invalid_context: No project or session directory is available.";
+                failure = PathAccessFailure.MissingBase;
             }
+
+            return false;
         }
         catch (Exception ex) when (ex is ArgumentException or NotSupportedException or PathTooLongException)
         {
@@ -394,80 +412,6 @@ internal sealed class PathAccessPolicy
             failure = PathAccessFailure.InvalidInput;
             return false;
         }
-
-        var profile = _profileResolver.ResolveProfile(context);
-        var access = GetAccessProfile(profile, accessKind);
-        var audience = context.Audience;
-        var protectionOperation = ToProtectionOperation(accessKind);
-
-        if (access.Mode == ToolFilesystemMode.All)
-        {
-            // An interactive Mode.All profile grants broad file authority.
-            // Approval is a later gate and does not widen this file profile.
-            // Unattended runs remain confined to trusted roots because they
-            // cannot request new authority from a user.
-            // Project-scope declarations opt out of interactive Personal reach.
-            // They stay confined to trusted roots even for default
-            // Mode.All profiles: its declaration supplies the project directory
-            // to reviewed-safe policy and feeds project identity files into the prompt.
-            if (accessKind == FileOperation.DeclareProjectScope
-                || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable)
-            {
-                var allowed = TryResolveWithinTrustedRoots(fullPath, context, accessKind, out error);
-                failure = allowed ? null : PathAccessFailure.AccessDenied;
-                return allowed;
-            }
-
-            error = string.Empty;
-            failure = null;
-            return true;
-        }
-
-        var label = GetAudienceLabel(audience);
-
-        if (access.Mode == ToolFilesystemMode.None)
-        {
-            error = $"Error: {label} trust context does not allow {protectionOperation.ToString().ToLowerInvariant()} access to local files.";
-            failure = PathAccessFailure.AccessDenied;
-            return false;
-        }
-
-        var roots = ResolveAndMergeRoots(access, context, audience, accessKind);
-
-        if (roots.Count == 0)
-        {
-            error = $"Error: {label} trust context does not have any configured local file roots for {protectionOperation.ToString().ToLowerInvariant()} access.";
-            failure = PathAccessFailure.AccessDenied;
-            return false;
-        }
-
-        var relationship = GetFilePathRelationship(fullPath, roots, context, accessKind);
-        if (relationship == PathRelationship.WithinTrustedRoot)
-        {
-            error = string.Empty;
-            failure = null;
-            return true;
-        }
-
-        if (relationship == PathRelationship.CrossesLinkBoundary)
-        {
-            error = $"Error: {label} trust context may not access files through symlinked paths inside the current session directory or configured roots.";
-            failure = PathAccessFailure.AccessDenied;
-            return false;
-        }
-
-        if (relationship == PathRelationship.Unverifiable)
-        {
-            error = $"Error: {label} trust context could not verify the path relationship to the current session directory or configured roots.";
-            failure = PathAccessFailure.AccessDenied;
-            return false;
-        }
-
-        error = audience == TrustAudience.Public
-            ? $"Error: {label} trust context may only access files inside the current session directory."
-            : $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}.";
-        failure = PathAccessFailure.AccessDenied;
-        return false;
     }
 
     private PathBaseStatus TryGetRelativePathBase(
@@ -478,12 +422,16 @@ internal sealed class PathAccessPolicy
         var projectResult = TryNormalizeAbsoluteBase(
             context.ProjectDirectory,
             requireExistingDirectory: true,
-            out baseDirectory);
+            out baseDirectory,
+            out var projectPath);
         if (projectResult == PathBaseStatus.Resolved)
         {
-            var relationship = GetPathRelationship(baseDirectory, context, accessKind);
-            if (relationship == PathRelationship.WithinTrustedRoot
-                || (relationship == PathRelationship.OutsideTrustedRoots
+            var boundaries = CreateFolders(GetProjectBaseRoots(context, accessKind), out var stoppedAtUnusableRoot);
+            var decision = FileSystemAuthority.EvaluateMembership(projectPath, boundaries);
+            if (stoppedAtUnusableRoot && decision is PathDecision.Outside)
+                decision = PathDecision.Unverifiable;
+            if (decision is PathDecision.Allowed
+                || (decision is PathDecision.Outside
                     && HasUnrestrictedInteractiveFileAccess(context, accessKind)))
             {
                 return PathBaseStatus.Resolved;
@@ -496,7 +444,11 @@ internal sealed class PathAccessPolicy
         if (projectResult == PathBaseStatus.Denied)
             return PathBaseStatus.Denied;
 
-        return TryNormalizeAbsoluteBase(context.SessionDirectory, requireExistingDirectory: false, out baseDirectory);
+        return TryNormalizeAbsoluteBase(
+            context.SessionDirectory,
+            requireExistingDirectory: false,
+            out baseDirectory,
+            out _);
     }
 
     private bool HasUnrestrictedInteractiveFileAccess(
@@ -507,13 +459,10 @@ internal sealed class PathAccessPolicy
            && GetAccessProfile(_profileResolver.ResolveProfile(context), operation).Mode
            == ToolFilesystemMode.All;
 
-    private PathRelationship GetPathRelationship(
-        string projectDirectory,
-        ToolInvocationContext context,
-        FileOperation accessKind)
+    // A project base must derive from authority that existed before the
+    // declaration. Do not treat the project path as its own trusted root.
+    private List<string> GetProjectBaseRoots(ToolInvocationContext context, FileOperation accessKind)
     {
-        // A project base must derive from authority that existed before the
-        // declaration. Do not treat the project path as its own trusted root.
         var roots = new List<string>();
         AddSessionRoots(roots, context);
 
@@ -526,15 +475,17 @@ internal sealed class PathAccessPolicy
             roots.Add(workspacesRoot);
         }
 
-        return GetHostPathRelationship(projectDirectory, roots);
+        return roots;
     }
 
     private static PathBaseStatus TryNormalizeAbsoluteBase(
         string? candidate,
         bool requireExistingDirectory,
-        out string baseDirectory)
+        out string baseDirectory,
+        out CanonicalPath basePath)
     {
         baseDirectory = string.Empty;
+        basePath = default;
         if (string.IsNullOrWhiteSpace(candidate)
             || candidate.Any(char.IsControl)
             || !Path.IsPathFullyQualified(candidate))
@@ -545,11 +496,15 @@ internal sealed class PathAccessPolicy
             var normalized = Path.GetFullPath(candidate);
             if (requireExistingDirectory && !Directory.Exists(normalized))
                 return PathBaseStatus.Unavailable;
-            if (Directory.Exists(normalized)
-                && (File.GetAttributes(normalized) & FileAttributes.ReparsePoint) != 0)
-            {
+            if (!CanonicalPath.TryCreateHost(normalized, relativeBase: null, out basePath))
                 return PathBaseStatus.Denied;
-            }
+
+            // A base that is itself a link can move every relative path.
+            var baseLinks = FileSystemAuthority.EvaluateMembership(
+                basePath,
+                [new PathBoundary.Folder(basePath, LinkRule.IncludingRoot)]);
+            if (baseLinks is not PathDecision.Allowed)
+                return PathBaseStatus.Denied;
 
             baseDirectory = normalized;
             return PathBaseStatus.Resolved;
@@ -577,22 +532,6 @@ internal sealed class PathAccessPolicy
         Denied
     }
 
-    /// <summary>Describes one canonical path's relationship to trusted roots.</summary>
-    private enum PathRelationship
-    {
-        /// <summary>The path is not inside a trusted root.</summary>
-        OutsideTrustedRoots,
-
-        /// <summary>The path is inside a trusted root without a link escape.</summary>
-        WithinTrustedRoot,
-
-        /// <summary>The path uses a filesystem link inside a trusted root.</summary>
-        CrossesLinkBoundary,
-
-        /// <summary>The policy cannot prove the path relationship.</summary>
-        Unverifiable
-    }
-
     private static ToolFilesystemAccessProfile GetAccessProfile(ToolAudienceProfile profile, FileOperation accessKind) =>
         accessKind switch
         {
@@ -605,7 +544,7 @@ internal sealed class PathAccessPolicy
     /// <summary>
     /// Resolves profile roots and merges global read roots for read access.
     /// Single source of truth for root resolution — used by both
-    /// <see cref="GetTrustedRoots"/> and <see cref="TryResolvePath"/>.
+    /// <see cref="GetTrustedRoots"/> and <see cref="Evaluate"/>.
     /// Public audience is excluded from global read roots (skills, identity,
     /// workspaces). Its implicit roots cover only the current session.
     /// </summary>
@@ -629,103 +568,6 @@ internal sealed class PathAccessPolicy
         }
 
         return roots.Distinct(PathComparer).ToArray();
-    }
-
-    /// <summary>
-    /// Confines an unattended session whose audience would otherwise grant
-    /// unrestricted (<see cref="ToolFilesystemMode.All"/>) access to its
-    /// trusted roots. Fails closed when no trusted root is available.
-    /// </summary>
-    private bool TryResolveWithinTrustedRoots(
-        string fullPath,
-        ToolInvocationContext context,
-        FileOperation accessKind,
-        out string error)
-    {
-        var roots = ResolveUnattendedTrustedRoots(context, accessKind);
-        if (roots.Count == 0)
-        {
-            error = "Error: unattended session has no trusted file roots.";
-            return false;
-        }
-
-        var relationship = GetFilePathRelationship(fullPath, roots, context, accessKind);
-        if (relationship == PathRelationship.WithinTrustedRoot)
-        {
-            error = string.Empty;
-            return true;
-        }
-
-        if (relationship == PathRelationship.CrossesLinkBoundary)
-        {
-            error = "Error: unattended session may not access files through links inside trusted roots.";
-            return false;
-        }
-
-        if (relationship == PathRelationship.Unverifiable)
-        {
-            error = "Error: unattended session could not verify the path relationship to trusted roots.";
-            return false;
-        }
-
-        error = "Error: unattended session may only access files inside trusted roots.";
-        return false;
-    }
-
-    private PathRelationship GetFilePathRelationship(
-        string fullPath,
-        IEnumerable<string> roots,
-        ToolInvocationContext context,
-        FileOperation operation)
-    {
-        var relationship = GetHostPathRelationship(fullPath, roots);
-        // Older sessions keep their logs together outside their individual session directories.
-        // Allow this session's log without exposing the other logs beside it.
-        // This must not bypass a failed link check or permit access to a whole project directory.
-        if (relationship != PathRelationship.OutsideTrustedRoots
-            || operation == FileOperation.DeclareProjectScope
-            || context.SessionStorage is not { Binding: null } storage
-            || !PathComparer.Equals(fullPath, storage.LogPath.Value))
-        {
-            return relationship;
-        }
-
-        // Apply the same link checks to this one file.
-        return GetHostPathRelationship(fullPath, [fullPath]);
-    }
-
-    private PathRelationship GetHostPathRelationship(
-        string fullPath,
-        IEnumerable<string> roots)
-    {
-        foreach (var candidate in roots)
-        {
-            try
-            {
-                var root = Path.GetFullPath(candidate);
-                if (!PathUtility.IsWithinRoot(fullPath, root))
-                    continue;
-
-                // A session path can pass through a symlink in a parent directory.
-                // Check those parents too, without allowing access to their other files.
-                var linkRoot = _sessionRoots.FirstOrDefault(storageRoot =>
-                    PathUtility.IsWithinRoot(root, storageRoot)) ?? root;
-                return PathUtility.ContainsSymlinkSegment(linkRoot, fullPath, includeRoot: true)
-                    ? PathRelationship.CrossesLinkBoundary
-                    : PathRelationship.WithinTrustedRoot;
-            }
-            catch (Exception ex) when (ex is ArgumentException
-                                           or IOException
-                                           or NotSupportedException
-                                           or PathTooLongException
-                                           or UnauthorizedAccessException
-                                           or System.Security.SecurityException)
-            {
-                return PathRelationship.Unverifiable;
-            }
-        }
-
-        return PathRelationship.OutsideTrustedRoots;
     }
 
     /// <summary>
@@ -770,26 +612,129 @@ internal sealed class PathAccessPolicy
             roots.Add(context.SessionDirectory);
     }
 
-    private bool IsProtected(string path, FileOperation operation)
-        => operation == FileOperation.Write
-            ? _protectedPaths.IsDenied(path)
-            : _protectedPaths.IsReadDenied(path);
+    /// <summary>Builds the held boundaries for a file path from its trusted roots.</summary>
+    private List<PathBoundary> CreateRootBoundaries(
+        IReadOnlyList<string> roots,
+        string fullPath,
+        ToolInvocationContext context,
+        FileOperation operation,
+        out bool stoppedAtUnusableRoot)
+    {
+        var folders = CreateFolders(roots, out stoppedAtUnusableRoot);
+
+        // Older sessions keep their logs together outside their individual session
+        // directories. Allow this session's log without exposing the other logs
+        // beside it (R11). A declaration never uses the log. An unusable root
+        // decides before the log, as it did before.
+        if (!stoppedAtUnusableRoot
+            && operation != FileOperation.DeclareProjectScope
+            && context.SessionStorage is { Binding: null } storage
+            && PathComparer.Equals(fullPath, storage.LogPath.Value)
+            && CanonicalPath.TryCreateHost(storage.LogPath.Value, relativeBase: null, out var log))
+        {
+            folders.Add(new PathBoundary.ExactFile(log) { LinkAnchor = FindSessionStorageRoot(log) ?? log });
+        }
+
+        return folders;
+    }
+
+    /// <summary>
+    /// Builds one folder for each root, in root order. The first root decides
+    /// when it contains the path.
+    /// </summary>
+    /// <remarks>
+    /// An empty root, <c>/</c>, or a drive root such as <c>C:\</c> is unusable and
+    /// stops the list. The earlier path API trimmed <c>/</c> to an empty path and
+    /// failed there, and it trimmed <c>C:\</c> to <c>C:</c>, the drive's current directory.
+    /// A path that no earlier root contains is then unverifiable, which fails closed.
+    /// </remarks>
+    private List<PathBoundary> CreateFolders(IEnumerable<string> roots, out bool stoppedAtUnusableRoot)
+    {
+        var folders = new List<PathBoundary>();
+        foreach (var root in roots)
+        {
+            if (!CanonicalPath.TryCreateHost(root, relativeBase: null, out var rootPath) || rootPath.IsDriveRoot)
+            {
+                stoppedAtUnusableRoot = true;
+                return folders;
+            }
+
+            folders.Add(CreateTrustedFolder(rootPath));
+        }
+
+        stoppedAtUnusableRoot = false;
+        return folders;
+    }
+
+    // A session path can pass through a link in a parent directory. The link check
+    // starts at the enclosing session storage root, without access to its other files.
+    private PathBoundary.Folder CreateTrustedFolder(CanonicalPath root)
+        => new(root, LinkRule.IncludingRoot) { LinkAnchor = FindSessionStorageRoot(root) ?? root };
+
+    private CanonicalPath? FindSessionStorageRoot(CanonicalPath path)
+    {
+        foreach (var sessionRoot in _sessionRoots)
+        {
+            if (CanonicalPath.TryCreateHost(sessionRoot, relativeBase: null, out var storageRoot)
+                && storageRoot.Contains(path))
+            {
+                return storageRoot;
+            }
+        }
+
+        return null;
+    }
+
+    private static PathAccessDecision DenyFileRelationship(
+        PathDecision decision,
+        bool confined,
+        string label,
+        TrustAudience audience,
+        IReadOnlyList<string> roots,
+        string fullPath)
+    {
+        var error = (decision, confined) switch
+        {
+            (PathDecision.CrossesLink, true) =>
+                "Error: unattended session may not access files through links inside trusted roots.",
+            (PathDecision.Unverifiable, true) =>
+                "Error: unattended session could not verify the path relationship to trusted roots.",
+            (_, true) => "Error: unattended session may only access files inside trusted roots.",
+            (PathDecision.CrossesLink, false) =>
+                $"Error: {label} trust context may not access files through symlinked paths inside the current session directory or configured roots.",
+            (PathDecision.Unverifiable, false) =>
+                $"Error: {label} trust context could not verify the path relationship to the current session directory or configured roots.",
+            _ when audience == TrustAudience.Public =>
+                $"Error: {label} trust context may only access files inside the current session directory.",
+            _ => $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}."
+        };
+        return PathAccessDecision.Deny(error, PathAccessFailure.AccessDenied, fullPath);
+    }
+
+    private static PathAccessDecision DenyUnverifiedReviewedPath(string canonicalPath)
+        => PathAccessDecision.Deny(
+            "Error: Path relationship could not be verified.",
+            PathAccessFailure.AccessDenied,
+            canonicalPath);
+
+    private static PathAccessDecision DenyProtected(string canonicalPath, FileOperation operation)
+    {
+        var error = operation == FileOperation.Write
+            ? FileToolErrors.ControlPlaneWriteDenied(canonicalPath)
+            : FileToolErrors.CredentialReadDenied(canonicalPath);
+        return PathAccessDecision.Deny(error, PathAccessFailure.AccessDenied, canonicalPath);
+    }
 
     private static FileOperation ToProtectionOperation(FileOperation operation)
         => operation == FileOperation.DeclareProjectScope
             ? FileOperation.Read
             : operation;
 
-    private PathAccessDecision AllowIfUnprotected(string canonicalPath, FileOperation operation)
-    {
-        if (!IsProtected(canonicalPath, operation))
-            return PathAccessDecision.Allow(canonicalPath);
+    private static PathOperation ToAuthorityOperation(FileOperation protectionOperation)
+        => protectionOperation == FileOperation.Write ? PathOperation.Write : PathOperation.Read;
 
-        var error = operation == FileOperation.Write
-            ? FileToolErrors.ControlPlaneWriteDenied(canonicalPath)
-            : FileToolErrors.CredentialReadDenied(canonicalPath);
-        return PathAccessDecision.Deny(error, PathAccessFailure.AccessDenied, canonicalPath);
-    }
+    private static string ToOperationText(FileOperation protectionOperation)
+        => protectionOperation.ToString().ToLowerInvariant();
 
     private static string GetAudienceLabel(TrustAudience audience) => audience switch
     {
@@ -798,5 +743,4 @@ internal sealed class PathAccessPolicy
         TrustAudience.Personal => "Personal",
         _ => "Public"
     };
-
 }

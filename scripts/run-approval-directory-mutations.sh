@@ -16,39 +16,38 @@ import sys
 
 repo_root = Path(sys.argv[1])
 targets = [
+    # Folder grants: one containment rule and one link walker serve Bash and
+    # PowerShell. The two shell-specific containment copies are gone.
     (
-        "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "!IsWithinWindowsRoot(normalizedCandidate, normalizedRoot)",
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "!folder.Root.Contains(path)",
         1,
     ),
     (
-        "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "if (!PathUtility.IsNormalizedWithinRoot(normalizedCandidate, entry.Directory))\n"
-        "                return ShellApprovalScopeResult.OutsideDirectory;",
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "LinkRule.BelowRoot => CrossesLink(folder.LinkAnchor.Value, path.Value, includeAnchor: false)",
         1,
     ),
     (
-        "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "return PathUtility.ContainsSymlinkSegment(entry.Directory, effectiveDirectory)\n"
-        "                ? ShellApprovalScopeResult.Symlink\n"
-        "                : ShellApprovalScopeResult.Match;",
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "crossesLink ? PathDecision.CrossesLink : PathDecision.Allowed",
         2,
     ),
     (
         "src/Netclaw.Security/ApprovalPatternMatching.cs",
-        "return GitRepositoryApprovalScope.TryResolveCandidate(candidateDirectory, cwd, out var scope)\n"
-        "                   && ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, entry.Repository)\n"
+        "return RepositoryIdentity.TryResolve(candidateDirectory, cwd, out var repository)\n"
+        "                   && ToolApprovalEntryComparer.Equals(repository!.CommonDirectory, entry.Repository)\n"
         "                ? ShellApprovalScopeResult.Match\n"
         "                : ShellApprovalScopeResult.OutsideDirectory;",
         3,
     ),
     (
-        "src/Netclaw.Security/GitRepositoryApprovalScope.cs",
-        "!PathUtility.AreEquivalentPaths(resolved[0].CommonDirectory, scope.CommonDirectory)",
+        "src/Netclaw.Security/Authorization/Filesystem/RepositoryIdentity.cs",
+        "!PathUtility.AreEquivalentPaths(resolved[0].CommonDirectory, identity.CommonDirectory)",
         1,
     ),
     (
-        "src/Netclaw.Security/GitRepositoryApprovalScope.cs",
+        "src/Netclaw.Security/Authorization/Filesystem/RepositoryIdentity.cs",
         "!PathUtility.AreEquivalentPaths(reverse, dotGit)",
         1,
     ),
@@ -62,7 +61,7 @@ for relative_path, marker, expected_count in targets:
         raise SystemExit("An approval boundary is missing or duplicated.")
     line = text.count("\n", 0, start) + 1
     print(
-        source.name,
+        source.relative_to(repo_root / "src/Netclaw.Security").as_posix(),
         source,
         start,
         start + len(marker),
