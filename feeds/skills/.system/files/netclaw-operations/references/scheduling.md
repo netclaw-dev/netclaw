@@ -126,6 +126,100 @@ count, next retry time, and last failure reason.
 Use this command when a reminder stops its expected work. A failure count that
 increases usually means that the reminder or its delivery target is not healthy.
 
+### Manual run (fire now)
+
+An operator can run an existing reminder now, ahead of its schedule:
+
+```
+netclaw reminder run <id>
+```
+
+This command needs the daemon and Operator authority. It is not an agent
+tool — direct the operator to run it themselves; do not try to call it as a
+tool.
+
+The command waits for the run to finish, then prints a result block:
+
+```
+Reminder: daily-standup
+Source:   manual
+Status:   ok
+Duration: 4213 ms
+Session:  reminder/daily-standup/1758700000000
+Delivery: slack:#team-updates
+
+Reply:
+Posted the standup summary to #team-updates.
+
+View the session:
+  netclaw chat --resume reminder/daily-standup/1758700000000
+```
+
+Read the result:
+
+- `Status` is `ok`, `failed`, or `timed out`.
+- `Duration` is the run's wall-clock time in milliseconds.
+- `Session` is the session ID the run used. Pass it to the printed `netclaw
+  chat --resume <id>` line to see the full turn.
+- `Delivery` names the delivery target, or `none` for a silent reminder.
+- `Reply` shows the session's final assistant reply, trimmed to a sane
+  length. A failed run shows `Error` instead, with the failure reason.
+- Add `--json` to print the result as a JSON object instead of a text block.
+
+Exit codes:
+
+- `0` — the run finished and succeeded.
+- `1` — the run finished and failed, or timed out.
+
+**Timeout.** The wait has a bound: the run's own one-hour execution limit,
+plus a one-minute settlement margin. If the run has not finished by then, the
+command prints a `timed out` result with the session ID and exits non-zero.
+A timeout does not cancel the run — check `netclaw reminder status <id>` or
+the session later for the real outcome.
+
+Rules:
+
+- A manual run sends the reminder's real prompt to its real delivery target,
+  through the normal execution path.
+- A manual run does not alter the schedule. A one-shot reminder keeps its
+  original fire time. An interval or cron reminder keeps its next fire time.
+- `netclaw reminder history <id>` and `get_reminder_history` mark each run as
+  `manual` or `scheduled`.
+- A manual run does not count toward the auto-disable limit for scheduled
+  runs (5 consecutive failures).
+- If the reminder is already active, the manual run fails with a clear
+  error. It does not queue.
+- Offer a manual run only when `delivery_kind` is `channel` or `none`. Do not
+  offer it for `delivery_kind=current_session` — that mode returns to this
+  same session, and a manual run would add a confusing extra turn.
+- Do not call a manual run a "dry run." It sends the real prompt to the real
+  target and records real history.
+- Do not promise that a manual run skips tool approval prompts. It runs
+  through the same approval gate as a scheduled fire.
+
+### Test a reminder inside a session
+
+An agent can test the reminder mechanism inside the current conversation.
+Call `set_reminder` with a short one-shot schedule and
+`delivery_kind=current_session`:
+
+```
+set_reminder(
+  id: "test-reminder",
+  name: "Test reminder",
+  prompt: "Say hello and confirm the reminder fired.",
+  schedule_type: "once",
+  schedule: "10s",
+  delivery_kind: "current_session")
+```
+
+The reminder fires back into the same conversation about 10 seconds later,
+as a new turn. Use a short duration like `10s` or `30s` so the test finishes
+fast. A completed one-shot deletes its own definition and history
+automatically. To retry the test, cancel the reminder first with
+`cancel_reminder` or `netclaw reminder delete test-reminder`, so a duplicate
+fire does not arrive later.
+
 If `audience` is omitted during conversational scheduling, the reminder inherits
 the audience of the channel/session that created it. A reminder cannot be
 minted with broader audience than the creator currently holds; lowering the
