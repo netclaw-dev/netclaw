@@ -179,9 +179,11 @@ public static class ToolAudienceProfileToolCatalog
     // current default is not equal to the last row, so a change to a default needs a new row.
     //   0.8.0 to 0.19.0: a800e56e2 (#249).
     //   0.20.0 to 0.25.4, and 0.26.0-beta.1 to 0.26.0-beta.5: 980eab0d6 (#1111).
-    //   0.26.0 to the release where init stops writing lists: cfd528d5b (#2037), ecf70fc5d (#2038),
-    //   8bfe958b5 (#2045).
+    //   0.26.0 to 0.27.1-beta.1: cfd528d5b (#2037), ecf70fc5d (#2038), 8bfe958b5 (#2045).
     //   The intermediate file_read_many and json_read lists never shipped in a release tag.
+    // The tables are closed. Directory.Build.props has VersionPrefix 0.27.1 for this change: from
+    // the first 0.27.1 build after 0.27.1-beta.1, `netclaw init` stops writing lists. It writes
+    // only the posture and no audience profiles, so init cannot store a copy of a later default.
     public static IReadOnlyList<IReadOnlyList<string>> LegacyPublicDefaultAllowedTools { get; } =
     [
         [FileRead, FileWrite, AttachFile],
@@ -234,8 +236,10 @@ public static class ToolAudienceProfileDefaults
     };
 
     /// <summary>
-    /// Creates the audience profiles that a new installation stores for the selected posture.
-    /// Personal installations require approval for shell commands unless another authorization gate permits the command.
+    /// Creates the default audience profiles for a posture. The daemon binds the <c>Tools</c>
+    /// section on top of these profiles, so netclaw.json does not store them. Personal
+    /// installations require approval for shell commands unless another authorization gate
+    /// permits the command.
     /// </summary>
     public static ToolAudienceProfiles CreateProfilesForPosture(DeploymentPosture posture)
     {

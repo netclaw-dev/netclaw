@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.76.5"
+  version: "2.76.7"
 ---
 
 # Netclaw Operations
@@ -664,6 +664,13 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
   `AllowedTools` key, so the audience follows the default in later releases.
 - The daemon reads `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables.
   `netclaw doctor` reads only `netclaw.json`, so it can show a different list.
+- `netclaw init` writes only the posture (`Security.DeploymentPosture`,
+  `Security.ShellExecutionMode`, `Security.StrictDefaults`) and `Tools.ShellMode`. It does
+  not write `Tools.AudienceProfiles`. The daemon computes the profiles from the posture. An
+  absent profile is normal and gets the posture default. For the Personal posture, that
+  default requires approval for `shell_execute` on Personal.
+- Do not write a default list into `netclaw.json` to "make it visible". Write only the key
+  that you change.
 
 ## Diagnostics, Kill Switches & Self-Maintenance
 

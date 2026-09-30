@@ -71,11 +71,7 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
             ShellExecutionMode = shellMode
         };
 
-        builder.Tools = new ToolConfig
-        {
-            ShellMode = shellMode,
-            AudienceProfiles = BuildAudienceProfiles(posture)
-        };
+        builder.Tools = new ToolsConfigSection(shellMode);
     }
 
     public void ContributeSecrets(WizardSecretsBuilder builder)
@@ -117,7 +113,7 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
             new SectionFieldAction("Security.DeploymentPosture", SectionFieldActionKind.Set, posture.ToString()),
             new SectionFieldAction("Security.ShellExecutionMode", SectionFieldActionKind.Set, shellMode.ToString()),
             new SectionFieldAction("Security.StrictDefaults", SectionFieldActionKind.Set, true),
-            new SectionFieldAction("Tools", SectionFieldActionKind.Set, BuildToolsDictionary(posture, shellMode))
+            new SectionFieldAction("Tools", SectionFieldActionKind.Set, BuildToolsDictionary(shellMode))
         ]);
     }
 
@@ -134,18 +130,20 @@ public sealed class SecurityPostureStepViewModel : IWizardStepViewModel, ISectio
             : null;
     }
 
-    private static Dictionary<string, object> BuildToolsDictionary(DeploymentPosture posture, ShellExecutionMode shellMode)
+    // The posture step writes intent only: the posture in Security and the shell mode here. It
+    // replaces the whole Tools section, as before, but it does not write Tools.AudienceProfiles.
+    // The daemon binds the Tools section on top of the posture defaults
+    // (ToolAudienceProfileDefaults.CreateProfilesForPosture), which include the Personal
+    // shell_execute approval rule. A copy of a default list in netclaw.json would stop following
+    // later defaults. InitOutputEquivalenceTests proves that the daemon gets the same ToolConfig.
+    internal static Dictionary<string, object> BuildToolsDictionary(ShellExecutionMode shellMode)
         => new()
         {
-            ["ShellMode"] = shellMode.ToString(),
-            ["AudienceProfiles"] = BuildAudienceProfiles(posture)
+            ["ShellMode"] = shellMode.ToString()
         };
 
     private static ShellExecutionMode ShellModeFor(DeploymentPosture posture)
         => posture == DeploymentPosture.Personal ? ShellExecutionMode.HostAllowed : ShellExecutionMode.Off;
-
-    private static ToolAudienceProfiles BuildAudienceProfiles(DeploymentPosture posture)
-        => ToolAudienceProfileDefaults.CreateProfilesForPosture(posture);
 
     public void Dispose()
     {

@@ -9,6 +9,26 @@ using Netclaw.Media;
 namespace Netclaw.Configuration;
 
 /// <summary>
+/// The Security and Tools configuration that the daemon binds at startup. The Tools defaults
+/// depend on the resolved deployment posture, so both sections bind together here. The daemon,
+/// <c>netclaw doctor</c>, and the tests use this one path.
+/// </summary>
+public sealed record PolicyConfiguration(
+    SecurityPolicyConfig Security,
+    EffectivePolicyDefaults Defaults,
+    ToolConfig Tools,
+    IReadOnlyList<string> ToolWarnings)
+{
+    public static PolicyConfiguration Bind(IConfiguration configuration)
+    {
+        var security = configuration.GetSection("Security").Get<SecurityPolicyConfig>() ?? new SecurityPolicyConfig();
+        var defaults = SecurityPolicyDefaults.Resolve(security);
+        var tools = ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), defaults.DeploymentPosture, out var warnings);
+        return new PolicyConfiguration(security, defaults, tools, warnings);
+    }
+}
+
+/// <summary>
 /// Shared configuration for first-party tool execution.
 /// </summary>
 public sealed class ToolConfig
@@ -37,10 +57,20 @@ public sealed class ToolConfig
     public List<string> HardDenyPatterns { get; set; } = [];
 
     /// <summary>
-    /// Binds the daemon <c>Tools</c> section and validates the channel attachment policy.
-    /// The caller logs each item in <paramref name="warnings"/> at startup.
+    /// Binds the daemon <c>Tools</c> section on top of the defaults for
+    /// <paramref name="posture"/> and validates the channel attachment policy. The caller logs
+    /// each item in <paramref name="warnings"/> at startup.
     /// </summary>
     /// <remarks>
+    /// <para>
+    /// The defaults come from <see cref="ToolAudienceProfileDefaults.CreateProfilesForPosture"/>,
+    /// so a posture rule applies when netclaw.json does not set the key. For example, the
+    /// Personal posture requires approval for <c>shell_execute</c> on the Personal audience.
+    /// <c>netclaw init</c> writes only the posture, not the audience profiles. The caller passes
+    /// the posture that <see cref="SecurityPolicyDefaults.Resolve"/> gives for the same
+    /// configuration.
+    /// </para>
+    /// <para>
     /// The Microsoft binder adds configured items to a list that already has items, so an
     /// operator could not narrow a default grant list. This method binds each list in
     /// <see cref="DefaultedLists"/> with no default items, then applies the default only when
@@ -48,15 +78,23 @@ public sealed class ToolConfig
     /// empty value gives an empty list; <c>null</c> or <c>{}</c> gives an empty list and a
     /// warning; a scalar value, or a value from one source and items from another source,
     /// stops startup; an invalid enum item stops startup.
+    /// </para>
     /// </remarks>
-    public static ToolConfig BindFromConfiguration(IConfigurationSection section, out IReadOnlyList<string> warnings)
+    public static ToolConfig BindFromConfiguration(
+        IConfigurationSection section,
+        DeploymentPosture posture,
+        out IReadOnlyList<string> warnings)
     {
-        var toolConfig = new ToolConfig();
+        // An undefined posture would silently get the Team and Public defaults.
+        if (!Enum.IsDefined(posture))
+            throw new ArgumentOutOfRangeException(nameof(posture), posture, "Undefined deployment posture.");
+
+        var toolConfig = CreatePostureDefaults(posture);
         foreach (var list in DefaultedLists)
             list.Clear(toolConfig);
         section.Bind(toolConfig);
 
-        var defaults = new ToolConfig();
+        var defaults = CreatePostureDefaults(posture);
         var found = new List<string>();
         foreach (var list in DefaultedLists)
             list.ApplyConfiguredOrDefault(section, toolConfig, defaults, found);
@@ -74,6 +112,9 @@ public sealed class ToolConfig
 
         return toolConfig;
     }
+
+    private static ToolConfig CreatePostureDefaults(DeploymentPosture posture)
+        => new() { AudienceProfiles = ToolAudienceProfileDefaults.CreateProfilesForPosture(posture) };
 
     // `netclaw init` wrote the complete default list, and the old binder added the current
     // defaults to it. Replacement would silently remove tools that later releases added to the

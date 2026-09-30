@@ -251,7 +251,9 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
         vm.ChangeSelectedAudienceProfileRow(-1); // None: [] with zero caps
 
         var configuration = new ConfigurationBuilder().AddNetclawDaemonSources(Context.Paths).Build();
-        var toolConfig = ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), out var warnings);
+        var bound = PolicyConfiguration.Bind(configuration);
+        var toolConfig = bound.Tools;
+        var warnings = bound.ToolWarnings;
 
         var team = ToolAudienceProfileDefaults.GetResolvedProfile(toolConfig.AudienceProfiles, TrustAudience.Team);
         Assert.Equal(

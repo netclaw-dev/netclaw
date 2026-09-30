@@ -24,7 +24,8 @@ public sealed class DaemonConfigurationSourcesTests : IDisposable
         // The source check pins the calls. The binding below goes through the same calls.
         var program = File.ReadAllText(Path.Combine(FindRepoRoot(), "src", "Netclaw.Daemon", "Program.cs"));
         Assert.Contains("configuration.AddNetclawDaemonSources(bootstrapPaths);", program, StringComparison.Ordinal);
-        Assert.Contains("ToolConfig.BindFromConfiguration(configuration.GetSection(\"Tools\"), out var toolConfigWarnings)", program, StringComparison.Ordinal);
+        Assert.Contains("var policyConfiguration = PolicyConfiguration.Bind(configuration);", program, StringComparison.Ordinal);
+        Assert.Contains("var toolConfig = policyConfiguration.Tools;", program, StringComparison.Ordinal);
         Assert.Contains("startupLogger.LogWarning(\"Configuration warning: {ConfigurationWarning}\", warning);", program, StringComparison.Ordinal);
         Assert.DoesNotContain("Get<ToolConfig>", program, StringComparison.Ordinal);
 
@@ -51,7 +52,7 @@ public sealed class DaemonConfigurationSourcesTests : IDisposable
     private static List<string> BindHttpAllowList(NetclawPaths paths)
     {
         var configuration = new ConfigurationBuilder().AddNetclawDaemonSources(paths).Build();
-        return ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), out _).WebFetch.HttpAllowList;
+        return PolicyConfiguration.Bind(configuration).Tools.WebFetch.HttpAllowList;
     }
 
     private static string FindRepoRoot()

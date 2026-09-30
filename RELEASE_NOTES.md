@@ -12,6 +12,8 @@
   - **Edited older lists are applied as written.** An older list that was edited, for example with Web Access turned off in the TUI, or the 17-tool list that the 0.24 TUI wrote when it changed a profile from `All` to `Allowlist`, is not an exact match. The daemon applies it as written, so it does not get `file_search` or `tool_output_read`. Add those tools to the list by hand.
   - **Upgrade impact:** if `netclaw.json` has a narrowed list, the daemon now applies it. For example, `"Team": { "AllowedTools": ["file_read", "file_list"] }` gave all 15 Team tools before and gives only those two tools now. To add one entry to a default list, write the complete list, for example `"GlobalReadRoots": ["{skills_dir}", "{identity_dir}", "{workspaces_dir}", "/srv/docs"]`. Check each `Tools` list in `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables before you upgrade.
 
+- **`netclaw init` saves the posture, not the default tool lists.** Init writes `Security.DeploymentPosture`, `Security.ShellExecutionMode`, `Security.StrictDefaults`, and `Tools.ShellMode`. It does not write `Tools.AudienceProfiles`. The daemon computes the audience profiles from the posture, so a new install gets the tools that later releases add to its defaults. The Personal posture rule, approval for `shell_execute` on Personal, is now a daemon default. A new install gets the same effective tool configuration as before. `netclaw doctor` no longer asks for explicit audience profiles.
+
 ### Shell authorization
 
 - **Static shell assignments can use exact reusable approvals.** Netclaw binds each grant to a digest of the complete Bash or PowerShell assignment facts.

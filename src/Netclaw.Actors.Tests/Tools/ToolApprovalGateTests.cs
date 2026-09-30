@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -245,6 +246,43 @@ public sealed class ToolApprovalGateTests
         Assert.False(decision.Allowed);
         Assert.Equal("internal_policy_failure", decision.DenyReason);
         Assert.Null(context.Cwd);
+    }
+
+    // `netclaw init` writes only the posture and no audience profiles. The daemon adds the
+    // Personal posture rule, so shell needs approval on Personal unless another gate permits the
+    // command. An explicit operator choice in netclaw.json still wins.
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("Auto", false)]
+    public void Personal_posture_config_without_profiles_requires_shell_approval(string? shellOverride, bool needsApproval)
+    {
+        var profiles = shellOverride is null
+            ? string.Empty
+            : $$""", "AudienceProfiles": { "Personal": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "{{shellOverride}}" } } } }""";
+        var json = $$"""
+            {
+              "Security": { "DeploymentPosture": "Personal", "ShellExecutionMode": "HostAllowed", "StrictDefaults": true },
+              "Tools": { "ShellMode": "HostAllowed"{{profiles}} }
+            }
+            """;
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)))
+            .Build();
+        var bound = PolicyConfiguration.Bind(configuration);
+        var policy = new ToolAccessPolicy(
+            new NetclawPaths(),
+            bound.Tools,
+            bound.Defaults,
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        var decision = policy.GetShellPreflightDecision(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "git push"));
+
+        Assert.True(decision.Allowed || decision.NeedsApproval);
+        Assert.Equal(needsApproval, decision.NeedsApproval);
     }
 
     [Fact]
