@@ -6,9 +6,11 @@
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
+using Akka.Persistence.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Actors.Channels;
+using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Actors.Tests.Channels.TestHelpers;
@@ -35,6 +37,9 @@ public sealed class TelegramSessionBindingOutputTests(ITestOutputHelper output) 
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
+        // The binding journals pending-approval prompts, so the test system
+        // needs the same persistence setup as the channel contract tests.
+        builder.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization();
     }
 
     [Fact]

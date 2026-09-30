@@ -7,6 +7,7 @@ using System.Globalization;
 using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
+using Akka.Persistence;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
@@ -19,7 +20,7 @@ using static Netclaw.Actors.Reminders.ReminderProtocol;
 
 namespace Netclaw.Channels.Telegram;
 
-internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
+internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWithTimers
 {
     private static readonly TimeSpan OperationTimeout = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan TypingRefreshInterval = TimeSpan.FromSeconds(4);
@@ -30,6 +31,12 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
     internal const string EmptyTurnFallbackText =
         ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
 
+    internal const string ExpiredApprovalText = "This approval request expired.";
+    internal const string WrongRequesterText = "Only the requester can approve this action.";
+    internal const string NoLongerPendingText = "This approval request is no longer pending.";
+    internal const string FeedbackFailedText = "Netclaw could not record this decision.";
+    internal const string DecisionRecordedText = "Decision recorded.";
+
     private readonly SessionId _sessionId;
     private readonly TelegramChatId _chatId;
     private readonly int? _messageThreadId;
@@ -38,12 +45,12 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
     private readonly ILoggingAdapter _log;
     private readonly SafeTransportCall _safeTransport;
     private readonly ChannelOutputEngine<PendingApprovalRequest<int>, int> _outputEngine;
+    private readonly ApprovalResponseFlow<PendingApprovalRequest<int>, int> _approvalFlow;
 
-    // Telegram-side approval prompt UI state: one callback token per rendered
-    // option and the prompt's message id. Resolution stays in this actor until
-    // the shared ApprovalResponseFlow migration; the engine tracks the pending
-    // requests themselves.
-    private readonly Dictionary<string, PendingCallbackApproval> _pendingApprovals = new(StringComparer.Ordinal);
+    // Recovery scratch state for posted approval prompts, keyed by the prompt's
+    // Telegram message id. The journal (PendingApprovalPromptTracked/Cleared)
+    // is the durable record; replay on cold spawn repopulates this list so a
+    // callback resolves by prompt message id after passivation or restart.
     private readonly List<PendingApprovalRequest<int>> _pendingApprovalRequests = [];
 
     private volatile bool _processingIndicatorActive;
@@ -91,26 +98,45 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             postApprovalPromptAsync: SendApprovalPromptAsync,
             readPromptIdValue: promptMessageId => promptMessageId.ToString(CultureInfo.InvariantCulture),
             onApprovalPromptFailedAsync: request => SendApprovalDenyOnFailureAsync(request.CallId),
-            // The pending-prompt journal lands with the callback-identity
-            // migration; the binding is not persistent yet.
-            persistPromptTracked: _ => { },
+            persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: _ => { },
             postEmptyTurnFallbackAsync: () => PostReplyAsync(EmptyTurnFallbackText),
             onEmptyTurnSuppressedAsync: _ => Task.CompletedTask,
             readObservedAtMs: completed => completed.TimestampMs);
 
-        ReceiveAsync<TelegramSessionInbound>(HandleInboundAsync);
-        ReceiveAsync<OutputReceived>(HandleOutputReceivedAsync);
-        ReceiveAsync<TelegramCallbackQuery>(HandleCallbackAsync);
-        ReceiveAsync<StartTelegramProactiveChat>(HandleProactiveChatAsync);
-        ReceiveAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
-        Receive<OutputTerminated>(message =>
+        // Telegram approval feedback arrives as button clicks only; the
+        // callback answer below carries the wrong-requester warning, so the
+        // flow's separate warning post is intentionally a no-op here.
+        _approvalFlow = new ApprovalResponseFlow<PendingApprovalRequest<int>, int>(
+            sessionId: _sessionId,
+            channelType: ChannelType.Telegram,
+            channelName: "Telegram",
+            pipeline: _dependencies.Pipeline,
+            operationTimeout: OperationTimeout,
+            pendingRequests: _pendingApprovalRequests,
+            hasObservedApprovalRequest: () => _outputEngine.HasObservedApprovalRequest,
+            postWrongRequesterWarningAsync: () => Task.CompletedTask,
+            persistPromptCleared: callId => Persist(
+                new PendingApprovalPromptCleared { CallId = callId.Value },
+                ApplyPendingApprovalPromptCleared),
+            renderResolvedPromptAsync: ResolveApprovalPromptAsync,
+            log: _log);
+
+        Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
+        Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
+
+        CommandAsync<TelegramSessionInbound>(HandleInboundAsync);
+        CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
+        CommandAsync<TelegramCallbackQuery>(HandleCallbackAsync);
+        CommandAsync<StartTelegramProactiveChat>(HandleProactiveChatAsync);
+        CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
+        Command<OutputTerminated>(message =>
         {
             if (message.Generation == _handle.Generation)
                 Context.Stop(Self);
         });
-        ReceiveAsync<RefreshTyping>(HandleRefreshTypingAsync);
+        CommandAsync<RefreshTyping>(HandleRefreshTypingAsync);
     }
 
     public static Props CreateProps(
@@ -118,6 +144,8 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         TelegramChatId chatId,
         TelegramGatewayDependencies dependencies) =>
         Props.Create(() => new TelegramSessionBindingActor(sessionId, chatId, dependencies));
+
+    public override string PersistenceId => $"telegram-session-binding-{Uri.EscapeDataString(_sessionId.Value)}";
 
     private async Task HandleInboundAsync(TelegramSessionInbound inbound)
     {
@@ -304,10 +332,9 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
 
     private async Task HandleOutputReceivedAsync(OutputReceived message)
     {
-        // The binding is not persistent yet, so the returned prompt-cleared
-        // journal events have no store; they land with the callback-identity
-        // migration together with pending-prompt tracking.
-        await _outputEngine.HandleOutputAsync(message.Output);
+        var clearedPrompts = await _outputEngine.HandleOutputAsync(message.Output);
+        if (clearedPrompts.Count > 0)
+            PersistAll(clearedPrompts, ApplyPendingApprovalPromptCleared);
     }
 
     /// <summary>
@@ -341,14 +368,14 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
 
     private async Task<int?> SendApprovalPromptAsync(ToolInteractionRequest request)
     {
-        var pending = new PendingCallbackApproval(request);
-        var buttons = request.Options.Select((option, index) =>
-        {
-            var token = $"nc_{Guid.NewGuid():N}_{index}";
-            _pendingApprovals[token] = pending;
-            pending.Selections[token] = option.Key.Value;
-            return new TelegramApprovalButton(option.Label, token);
-        }).ToArray();
+        // callback_data carries only the option key. Telegram caps callback_data
+        // at 64 bytes and the shared ApprovalButtonValueCodec form can exceed
+        // that with real call ids. Requester and call identity come from the
+        // callback query sender and the pending request resolved by prompt
+        // message id — never from the button payload.
+        var buttons = request.Options
+            .Select(option => new TelegramApprovalButton(option.Label, option.Key.Value))
+            .ToArray();
 
         try
         {
@@ -359,13 +386,11 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
                 buttons,
                 messageThreadId: _messageThreadId,
                 cancellationToken: cts.Token);
-            pending.MessageId = messageId;
             _log.Info("Posted Telegram approval prompt for call {CallId}", request.CallId);
             return messageId;
         }
         catch (Exception ex)
         {
-            RemovePendingApproval(pending);
             _log.Error(ex, "Failed to post Telegram approval prompt; denying call {CallId}", request.CallId);
             // The engine routes this to the auto-deny hook so the blocked tool
             // call unwinds instead of waiting forever.
@@ -375,69 +400,75 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
 
     private async Task HandleCallbackAsync(TelegramCallbackQuery callback)
     {
-        if (!_pendingApprovals.TryGetValue(callback.Data, out var pending)
-            || !pending.Selections.TryGetValue(callback.Data, out var selectedKey))
+        await EnsureInitializedAsync();
+
+        // The prompt message id is the approval identity. An unknown message id
+        // or an unknown option key fails closed as an expired approval; nothing
+        // routes to the session.
+        var pending = _pendingApprovalRequests.FirstOrDefault(p => p.PromptId == callback.MessageId);
+        if (pending is null || !pending.OptionKeys.Contains(callback.Data, StringComparer.Ordinal))
         {
-            await SafeAnswerCallbackAsync(callback.QueryId, "This approval request expired.", showAlert: true);
+            await SafeAnswerCallbackAsync(callback.QueryId, ExpiredApprovalText, showAlert: true);
             return;
         }
 
-        var senderId = callback.UserId.ToString();
-        if (!ApprovalButtonValueCodec.CanApprove(
-                pending.Request.RequesterPrincipal,
-                pending.Request.RequesterSenderId?.Value,
-                senderId))
-        {
-            await SafeAnswerCallbackAsync(callback.QueryId, "Only the requester can approve this action.", showAlert: true);
-            return;
-        }
+        var senderId = callback.UserId.ToString(CultureInfo.InvariantCulture);
+        ISessionResponse? verdict = null;
+        await _approvalFlow.HandleApprovalResponseAsync(
+            pending.CallId,
+            callback.Data,
+            senderId,
+            payloadPromptId: callback.MessageId,
+            respondSynchronously: response => verdict = response);
 
-        ISessionResponse result;
-        try
+        switch (verdict)
         {
-            using var cts = new CancellationTokenSource(OperationTimeout);
-            result = await _dependencies.Pipeline.SendFeedbackAndWaitAsync(new ToolInteractionResponse
-            {
-                SessionId = _sessionId,
-                CallId = pending.Request.CallId,
-                SelectedKey = new ApprovalOptionKey(selectedKey),
-                SenderId = new SenderId(senderId)
-            }, cts.Token);
+            case CommandAck:
+                await SafeAnswerCallbackAsync(callback.QueryId, DecisionRecordedText);
+                break;
+            case CommandNack { Reason: ApprovalNackReasons.WrongRequester }:
+                await SafeAnswerCallbackAsync(callback.QueryId, WrongRequesterText, showAlert: true);
+                break;
+            case CommandNack { Reason: ApprovalNackReasons.PersistFailed }:
+                await SafeAnswerCallbackAsync(callback.QueryId, FeedbackFailedText, showAlert: true);
+                break;
+            default:
+                await SafeAnswerCallbackAsync(callback.QueryId, NoLongerPendingText, showAlert: true);
+                break;
         }
-        catch (Exception ex)
-        {
-            _log.Error(ex, "Failed to route Telegram approval response for call {CallId}", pending.Request.CallId);
-            await SafeAnswerCallbackAsync(callback.QueryId, "Netclaw could not record this decision.", showAlert: true);
-            return;
-        }
+    }
 
-        if (result is not CommandAck)
-        {
-            var message = result is CommandNack { Reason: ApprovalNackReasons.WrongRequester }
-                ? "Only the requester can approve this action."
-                : "This approval request is no longer pending.";
-            await SafeAnswerCallbackAsync(callback.QueryId, message, showAlert: true);
+    private async Task ResolveApprovalPromptAsync(
+        int? promptMessageId,
+        ToolInteractionRequest? request,
+        ToolCallId callId,
+        string selectedKey,
+        string senderId,
+        string? persistedToolName,
+        string? persistedDisplayText)
+    {
+        if (promptMessageId is not { } messageId)
             return;
-        }
 
-        RemovePendingApproval(pending);
-        await SafeAnswerCallbackAsync(callback.QueryId, "Decision recorded.");
+        var text = request is not null
+            ? TelegramApprovalPromptBuilder.BuildResolvedPrompt(request, selectedKey, senderId)
+            : TelegramApprovalPromptBuilder.BuildResolvedPromptWithoutRequest(
+                selectedKey,
+                senderId,
+                persistedToolName);
 
         try
         {
             using var cts = new CancellationTokenSource(OperationTimeout);
             await _dependencies.Transport.UpdateApprovalPromptAsync(
                 _chatId.Value,
-                pending.MessageId ?? callback.MessageId,
-                TelegramApprovalPromptBuilder.BuildResolvedPrompt(
-                    pending.Request,
-                    selectedKey,
-                    callback.UserId),
+                messageId,
+                text,
                 cts.Token);
         }
         catch (Exception ex)
         {
-            _log.Warning(ex, "Failed to update resolved Telegram approval prompt for call {CallId}", pending.Request.CallId);
+            _log.Warning(ex, "Failed to update resolved Telegram approval prompt for call {CallId}", callId);
         }
     }
 
@@ -472,11 +503,23 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         }
     }
 
-    private void RemovePendingApproval(PendingCallbackApproval pending)
-    {
-        foreach (var (key, _) in pending.Selections)
-            _pendingApprovals.Remove(key);
-    }
+    private void ApplyPendingApprovalPromptTracked(PendingApprovalPromptTracked tracked)
+        => PendingApprovalRecovery.ApplyTracked<PendingApprovalRequest<int>, int>(
+            _pendingApprovalRequests,
+            tracked,
+            wrapPromptId: value => int.Parse(value, CultureInfo.InvariantCulture),
+            createRequest: (callId, requesterSenderId, requesterPrincipal, optionKeys, promptId, toolName, displayText)
+                => new PendingApprovalRequest<int>(
+                    callId,
+                    requesterSenderId,
+                    requesterPrincipal,
+                    optionKeys,
+                    promptId,
+                    toolName,
+                    displayText));
+
+    private void ApplyPendingApprovalPromptCleared(PendingApprovalPromptCleared cleared)
+        => PendingApprovalRecovery.ApplyCleared<PendingApprovalRequest<int>, int>(_pendingApprovalRequests, cleared);
 
     private async Task<bool> SendFileOutputAsync(FileOutput output)
     {
@@ -621,14 +664,5 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
     private sealed record RefreshTyping
     {
         public static RefreshTyping Instance { get; } = new();
-    }
-
-    private sealed class PendingCallbackApproval(ToolInteractionRequest request)
-    {
-        public ToolInteractionRequest Request { get; } = request;
-
-        public Dictionary<string, string> Selections { get; } = new(StringComparer.Ordinal);
-
-        public int? MessageId { get; set; }
     }
 }

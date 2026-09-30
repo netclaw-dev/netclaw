@@ -207,7 +207,19 @@ public sealed class TelegramTransportTests
 
         public List<(long ChatId, string Text, ParseMode ParseMode, int? MessageThreadId)> SentTexts { get; } = [];
 
+        public List<(long ChatId, int MessageId, string Text, IEnumerable<IEnumerable<InlineKeyboardButton>> Rows)> SentKeyboards { get; } = [];
+
+        public List<(string QueryId, string? Text, bool ShowAlert)> AnsweredCallbacks { get; } = [];
+
+        public List<(long ChatId, int MessageId, string Text)> EditedMessages { get; } = [];
+
         public Queue<Exception> SendMessageFailures { get; } = new();
+
+        public Exception? EditMessageTextFailure { get; set; }
+
+        public Exception? AnswerCallbackFailure { get; set; }
+
+        private int _nextMessageId = 100;
 
         public TGFile? FakeFile { get; set; }
 
@@ -265,7 +277,14 @@ public sealed class TelegramTransportTests
             if (SendMessageFailures.TryDequeue(out var failure))
                 throw failure;
 
-            return Task.FromResult(new Message { Id = 1 });
+            if (replyMarkup is { } markup)
+            {
+                var messageId = Interlocked.Increment(ref _nextMessageId);
+                SentKeyboards.Add((chatId, messageId, text, markup.InlineKeyboard ?? []));
+                return Task.FromResult(new Message { Id = messageId });
+            }
+
+            return Task.FromResult(new Message { Id = Interlocked.Increment(ref _nextMessageId) });
         }
 
         public Task<Message> SendRichMessage(
@@ -282,8 +301,14 @@ public sealed class TelegramTransportTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException("Not exercised by these tests.");
 
-        public Task AnswerCallbackQuery(string queryId, string? text, bool showAlert, CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+        public Task AnswerCallbackQuery(string queryId, string? text, bool showAlert, CancellationToken cancellationToken = default)
+        {
+            AnsweredCallbacks.Add((queryId, text, showAlert));
+            if (AnswerCallbackFailure is { } failure)
+                throw failure;
+
+            return Task.CompletedTask;
+        }
 
         public Task EditMessageText(
             long chatId,
@@ -291,8 +316,14 @@ public sealed class TelegramTransportTests
             string text,
             ParseMode parseMode = default,
             InlineKeyboardMarkup? replyMarkup = null,
-            CancellationToken cancellationToken = default) =>
-            Task.CompletedTask;
+            CancellationToken cancellationToken = default)
+        {
+            EditedMessages.Add((chatId, messageId, text));
+            if (EditMessageTextFailure is { } failure)
+                throw failure;
+
+            return Task.CompletedTask;
+        }
 
         public Task<TelegramFile> GetFile(string fileId, CancellationToken cancellationToken = default) =>
             Task.FromResult(FakeFile ?? new TGFile { FileId = fileId });

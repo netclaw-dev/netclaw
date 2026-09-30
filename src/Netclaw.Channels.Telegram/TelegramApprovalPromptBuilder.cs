@@ -27,12 +27,31 @@ internal static class TelegramApprovalPromptBuilder
     public static string BuildResolvedPrompt(
         ToolInteractionRequest request,
         string selectedKey,
-        long senderId)
+        string senderId)
     {
         var label = ApprovalOptionKeys.LabelFor(selectedKey);
         var marker = selectedKey == ApprovalOptionKeys.Deny ? "⛔" : "✅";
         return $"{marker} Tool approval resolved\n"
                + $"Tool: {request.ToolName.Value}\n"
+               + $"Decision: {label}\n"
+               + $"By: {senderId}";
+    }
+
+    /// <summary>
+    /// Builds the resolved-state text when the binding holds no original
+    /// request, for example after a cold spawn recovered the prompt from the
+    /// journal. Pre-field journal entries fall back to an unknown tool.
+    /// </summary>
+    public static string BuildResolvedPromptWithoutRequest(
+        string selectedKey,
+        string senderId,
+        string? toolName)
+    {
+        var label = ApprovalOptionKeys.LabelFor(selectedKey);
+        var marker = selectedKey == ApprovalOptionKeys.Deny ? "⛔" : "✅";
+        var tool = string.IsNullOrEmpty(toolName) ? "unknown" : toolName;
+        return $"{marker} Tool approval resolved\n"
+               + $"Tool: {tool}\n"
                + $"Decision: {label}\n"
                + $"By: {senderId}";
     }

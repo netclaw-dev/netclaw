@@ -29,11 +29,33 @@ public sealed class TelegramApprovalPromptBuilderTests
     [InlineData(ApprovalOptionKeys.Deny, "Deny", "⛔")]
     public void Resolved_prompt_contains_decision(string key, string label, string marker)
     {
-        var prompt = TelegramApprovalPromptBuilder.BuildResolvedPrompt(Request(), key, 123);
+        var prompt = TelegramApprovalPromptBuilder.BuildResolvedPrompt(Request(), key, "123");
 
         Assert.Contains(label, prompt, StringComparison.Ordinal);
         Assert.Contains(marker, prompt, StringComparison.Ordinal);
         Assert.Contains("123", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolved_prompt_without_request_uses_recorded_tool_name()
+    {
+        var prompt = TelegramApprovalPromptBuilder.BuildResolvedPromptWithoutRequest(
+            ApprovalOptionKeys.Deny, "123", "execute_shell");
+
+        Assert.Contains("⛔", prompt, StringComparison.Ordinal);
+        Assert.Contains("execute_shell", prompt, StringComparison.Ordinal);
+        Assert.Contains("Deny", prompt, StringComparison.Ordinal);
+        Assert.Contains("123", prompt, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Resolved_prompt_without_request_falls_back_to_unknown_tool()
+    {
+        var prompt = TelegramApprovalPromptBuilder.BuildResolvedPromptWithoutRequest(
+            ApprovalOptionKeys.ApproveOnce, "123", toolName: null);
+
+        Assert.Contains("unknown", prompt, StringComparison.Ordinal);
+        Assert.Contains("✅", prompt, StringComparison.Ordinal);
     }
 
     private static ToolInteractionRequest Request() => new()
