@@ -1216,6 +1216,65 @@ public static class ShellApprovalCases
             Bash("cd . && cd .. && git status"),
             Approvals.None,
             ExpectedApproval.Require(["cd", "git status"])),
+        // The rows use a directory that no test creates: a glob in the shared /tmp
+        // reads entries that other processes change.
+        // A causal list (cd dir && action; diagnostic) and its negative controls.
+        Case(
+            "cd-causal-list-prompts-with-reusable-grants",
+            Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log; wc -c result.log"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true)),
+        Case(
+            "cd-causal-list-diagnostic-reuses-stored-grant",
+            Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),
+            Approvals.PersistentAnywhere("cd", "inspect", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalMatches: ["persistent:cd", "persistent:inspect"])),
+        Case(
+            "cd-causal-list-reviewed-diagnostic-keeps-intent-coverage",
+            Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; wc -c result.log; head -100 result.log"),
+            Approvals.PersistentAnywhere("cd", "gh api"),
+            ExpectedApproval.Allow(
+                ApprovalAllowReason.StoredApproval,
+                1,
+                "persistent:cd",
+                "persistent:gh api")),
+        Case(
+            "cd-causal-list-folder-grant-outside-target-prompts",
+            Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "cd", "inspect", "cat"),
+            ExpectedApproval.Require([], isMessy: true)),
+        Case(
+            "cd-alternate-branch-prompts-for-the-other-branch",
+            Bash("cd /netclaw-approval-external/cd-list && inspect || recover; cat *.md"),
+            Approvals.PersistentAnywhere("cd", "inspect", "cat"),
+            ExpectedApproval.Require(
+                ["recover"],
+                approvalMatches: ["persistent:cd", "persistent:inspect", "persistent:cat", "persistent:cat"])),
+        Case(
+            "cd-dynamic-target-stays-one-time",
+            Bash("cd \"$TARGET\" && inspect; cat *.md"),
+            Approvals.PersistentAnywhere("cd", "inspect", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "cd-previous-directory-stays-one-time",
+            Bash("cd - && inspect; cat *.md"),
+            Approvals.PersistentAnywhere("cd", "inspect", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "pushd-directory-stack-stays-one-time",
+            Bash("pushd /netclaw-approval-external/cd-list && inspect; cat *.md"),
+            Approvals.PersistentAnywhere("pushd", "inspect", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "cd-after-pipe-stays-one-time",
+            Bash("ls | cd /netclaw-approval-external/cd-list; cat *.md"),
+            Approvals.PersistentAnywhere("ls", "cd", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "cd-in-function-stays-one-time",
+            Bash("f() { cd /netclaw-approval-external/cd-list; }; f; cat *.md"),
+            Approvals.PersistentAnywhere("f", "cd", "cat"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "side-effect-before-mutation-prompts",
             Bash("echo ready && git push"),
