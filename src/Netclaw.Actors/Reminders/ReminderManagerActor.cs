@@ -85,6 +85,7 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         ReceiveAsync<EnableReminderCommand>(HandleEnableAsync);
         ReceiveAsync<ListRemindersCommand>(HandleListAsync);
         ReceiveAsync<GetReminderCommand>(HandleGetAsync);
+        ReceiveAsync<GetReminderHistoryQuery>(HandleGetHistoryAsync);
 
         ReceiveAsync<ReminderEnvelope<ReminderPayload>>(HandleReminderFiredAsync);
         ReceiveAsync<ReminderExecutionCompleted>(HandleExecutionOutcomeAsync);
@@ -212,6 +213,25 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             : ReminderIdGenerator.Generate(title);
 
         var exists = _definitionStore.Exists(id);
+        var existing = exists ? _definitionStore.Get(id) : null;
+
+        // The id collides with a reminder the caller cannot see. Reject the save
+        // outright — the same "not found" shape a genuinely missing id gets — for
+        // every write mode. Letting CreateOnly report Conflict would disclose that
+        // the id exists; letting Replace/Upsert proceed would silently overwrite a
+        // reminder outside the caller's audience.
+        if (existing is not null && !CanAccessAudience(cmd.Authorization, existing.Audience))
+        {
+            LogAudienceDenied("save", id, existing.Audience, cmd.Authorization);
+            replyTo.Tell(new ReminderSavedResponse(
+                id,
+                title,
+                Success: false,
+                NextFire: null,
+                Error: ReminderSaveError.NotFound,
+                ErrorMessage: $"Reminder '{id.Value}' was not found."));
+            return;
+        }
 
         switch (cmd.WriteMode)
         {
@@ -269,7 +289,6 @@ public sealed partial class ReminderManagerActor : ReceiveActor
 
         if (exists)
         {
-            var existing = _definitionStore.Get(id);
             normalized.CreatedAtMs = existing?.CreatedAtMs ?? (normalized.CreatedAtMs > 0 ? normalized.CreatedAtMs : now.ToUnixTimeMilliseconds());
         }
         else
@@ -377,6 +396,17 @@ public sealed partial class ReminderManagerActor : ReceiveActor
     private async Task HandleCancelAsync(CancelReminderCommand cmd)
     {
         var replyTo = Sender;
+        var target = _definitionStore.Get(cmd.Id);
+        if (target is null || !CanAccessAudience(cmd.Authorization, target.Audience))
+        {
+            if (target is not null)
+                LogAudienceDenied("cancel", cmd.Id, target.Audience, cmd.Authorization);
+
+            _log.Info("Cancel reminder '{0}': not found", cmd.Id.Value);
+            replyTo.Tell(new ReminderCancelledResponse(cmd.Id, Found: false));
+            return;
+        }
+
         var response = await DisableReminderInternalAsync(cmd.Id);
 
         _log.Info("Cancel reminder '{0}': {1}", cmd.Id.Value, response.Found ? "disabled" : "not found");
@@ -496,8 +526,13 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             var definitions = _definitionStore.List();
             var schedules = await ListScheduledRemindersAsync();
 
+            // Out-of-scope reminders are omitted, never flagged — a caller must not
+            // be able to tell an invisible reminder apart from one that does not
+            // exist. No logging here: List is not a per-id lookup, so there is no
+            // single denial to record.
             var infos = definitions
                 .Where(d => cmd.IncludeDisabled || d.Enabled)
+                .Where(d => CanAccessAudience(cmd.Authorization, d.Audience))
                 .OrderBy(d => d.Title, StringComparer.OrdinalIgnoreCase)
                 .Select(d => ToReminderInfo(d, schedules.GetValueOrDefault(d.Id.Value)))
                 .ToList();
@@ -517,8 +552,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         try
         {
             var definition = _definitionStore.Get(cmd.Id);
-            if (definition is null)
+            if (definition is null || !CanAccessAudience(cmd.Authorization, definition.Audience))
             {
+                if (definition is not null)
+                    LogAudienceDenied("get", cmd.Id, definition.Audience, cmd.Authorization);
+
                 replyTo.Tell(new GetReminderResponse(null));
                 return;
             }
@@ -1423,8 +1461,11 @@ public sealed partial class ReminderManagerActor : ReceiveActor
         try
         {
             var definition = _definitionStore.Get(query.Id);
-            if (definition is null)
+            if (definition is null || !CanAccessAudience(query.Authorization, definition.Audience))
             {
+                if (definition is not null)
+                    LogAudienceDenied("status", query.Id, definition.Audience, query.Authorization);
+
                 replyTo.Tell(new ReminderStatusResponse(
                     query.Id, Found: false, Enabled: false, Executing: false,
                     NextFire: null, ConsecutiveFailures: 0, SkippedDuplicates: 0,
@@ -1475,6 +1516,86 @@ public sealed partial class ReminderManagerActor : ReceiveActor
             _log.Error(ex, "Error getting status for reminder '{0}'", query.Id.Value);
             replyTo.Tell(new Status.Failure(ex));
         }
+    }
+
+    private async Task HandleGetHistoryAsync(GetReminderHistoryQuery query)
+    {
+        var replyTo = Sender;
+        try
+        {
+            var definition = _definitionStore.Get(query.Id);
+            if (definition is null || !CanAccessAudience(query.Authorization, definition.Audience))
+            {
+                if (definition is not null)
+                    LogAudienceDenied("history", query.Id, definition.Audience, query.Authorization);
+
+                replyTo.Tell(new ReminderHistoryResponse(query.Id, Found: false, Records: []));
+                return;
+            }
+
+            var records = await _historyStore.ReadAsync(query.Id, query.MaxRecords);
+            replyTo.Tell(new ReminderHistoryResponse(query.Id, Found: true, Records: records));
+        }
+        catch (Exception ex)
+        {
+            _log.Error(ex, "Error getting history for reminder '{0}'", query.Id.Value);
+            replyTo.Tell(new ReminderHistoryResponse(query.Id, Found: false, Records: []));
+        }
+    }
+
+    /// <summary>
+    /// The one place that decides whether a caller may see or act on a reminder.
+    /// A caller may access a reminder only when the reminder's audience is at or
+    /// below the caller's audience: Personal &gt; Team &gt; Public — a Personal
+    /// caller can reach Personal, Team, and Public reminders; a Team caller can
+    /// reach Team and Public; a Public caller can reach only Public.
+    /// <para>
+    /// A missing <paramref name="authorization"/>, or one with no
+    /// <see cref="ReminderAudienceAuthorizationContext.SourceAudience"/>, resolves
+    /// no caller audience at all and therefore denies access — it never grants it.
+    /// This intentionally does not use <c>authorization?.SourceAudience</c>: that
+    /// shorthand is how a missing value would silently widen access elsewhere, and
+    /// here it must do the opposite.
+    /// </para>
+    /// <para>
+    /// <see cref="ReminderDefinition.Audience"/> is a required, non-nullable field,
+    /// and <see cref="ReminderDefinitionStore"/> rejects and never loads a document
+    /// that predates it (see <c>LegacyTrustFieldGuard</c>), so a definition reaching
+    /// this method always carries a real audience. There is no "unknown audience"
+    /// branch to fall back on here; if that guarantee is ever relaxed, an unknown
+    /// audience must resolve to <see cref="TrustAudience.Personal"/> — the most
+    /// restrictive value — never to <see cref="TrustAudience.Team"/> or
+    /// <see cref="TrustAudience.Public"/>.
+    /// </para>
+    /// </summary>
+    internal static bool CanAccessAudience(
+        ReminderAudienceAuthorizationContext? authorization,
+        TrustAudience reminderAudience)
+    {
+        if (authorization is null || authorization.SourceAudience is not { } callerAudience)
+            return false;
+
+        return reminderAudience <= callerAudience;
+    }
+
+    /// <summary>
+    /// Logs an audience-scoped denial at Info so an operator can see access-control
+    /// activity without a debug build, while keeping the record free of reminder
+    /// content — only the id, its audience, and the caller's audience.
+    /// </summary>
+    private void LogAudienceDenied(
+        string operation,
+        ReminderId id,
+        TrustAudience reminderAudience,
+        ReminderAudienceAuthorizationContext? authorization)
+    {
+        _log.Info(
+            "Reminder '{0}' (audience={1}) is out of scope for a {2} caller (audience={3}, source={4}); treating as not found.",
+            id.Value,
+            reminderAudience.ToWireValue(),
+            operation,
+            authorization?.SourceAudience?.ToWireValue() ?? "none",
+            authorization?.SourceDescription ?? "unknown");
     }
 
     private async Task<ReminderOccurrenceStatus?> GetOccurrenceStatusAsync(ReminderDefinition definition)

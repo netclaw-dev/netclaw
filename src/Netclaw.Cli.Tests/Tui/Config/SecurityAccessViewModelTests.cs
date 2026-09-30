@@ -4,12 +4,14 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
 using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tests.Tui.Wizard;
 using Netclaw.Configuration;
+using Netclaw.Daemon.Configuration;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Config;
@@ -225,6 +227,40 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
         Assert.Equal("Customized", vm.AudienceOverrideMarker(TrustAudience.Team));
         Assert.Equal("", vm.AudienceOverrideMarker(TrustAudience.Public));
         Assert.Equal("Customized overrides", vm.SelectedAudienceOverrideStatus);
+    }
+
+    [Fact]
+    public void Narrowed_team_profile_round_trips_to_the_daemon_binding()
+    {
+        // Cross-boundary proof: the TUI writes narrowed Team lists, and the daemon sources and
+        // binder must produce the same lists. Before the fix, the daemon kept the Team defaults.
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" }
+            }
+            """);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.WebAccess;
+        vm.ActivateSelectedAudienceProfileRow();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.IncomingAttachments;
+        vm.ChangeSelectedAudienceProfileRow(-1); // Images
+        vm.ChangeSelectedAudienceProfileRow(-1); // None: [] with zero caps
+
+        var configuration = new ConfigurationBuilder().AddNetclawDaemonSources(Context.Paths).Build();
+        var bound = PolicyConfiguration.Bind(configuration);
+        var toolConfig = bound.Tools;
+        var warnings = bound.ToolWarnings;
+
+        var team = ToolAudienceProfileDefaults.GetResolvedProfile(toolConfig.AudienceProfiles, TrustAudience.Team);
+        Assert.Equal(
+            ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools.Except(ToolAudienceProfileToolCatalog.WebTools),
+            team.AllowedTools);
+        Assert.Empty(team.ChannelAttachments.AllowedCategories);
+        Assert.Empty(warnings);
     }
 
     [Fact]

@@ -13,7 +13,6 @@ on:
       - master
       - dev
       - main
-      - feature/*
     paths:
       - 'docker/Dockerfile'
       - 'docker/entrypoint.sh'

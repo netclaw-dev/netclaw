@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.76.1"
+  version: "2.76.8"
 ---
 
 # Netclaw Operations
@@ -32,6 +32,7 @@ a reference file — load the one matching the user's intent with
 | Manage skills and sources | `skill_read_resource('netclaw-operations', 'references/skills.md')` |
 | Manage inbound webhooks / attachments | `skill_read_resource('netclaw-operations', 'references/webhooks.md')` |
 | Add/switch LLM or search provider, OAuth login | `skill_read_resource('netclaw-operations', 'references/providers.md')` |
+| Change a `Tools` list (audience tools, roots, attachments, HTTP allow list) | [Tool Lists in Config](#tool-lists-in-config) |
 | Diagnose problems, kill switches, self-update | `skill_read_resource('netclaw-operations', 'references/diagnostics.md')` |
 | Rotate or repair secrets | `skill_read_resource('netclaw-operations', 'references/secrets.md')` |
 | Pair remote devices, manage access | `skill_read_resource('netclaw-operations', 'references/devices.md')` |
@@ -639,6 +640,40 @@ never by direct file edit. Protected paths (`secrets.json`, `.netclaw/keys`,
 Add or switch model providers (including OAuth login) and configure search backends
 (e.g. SearXNG) via provider config. Full setup:
 `skill_read_resource('netclaw-operations', 'references/providers.md')`.
+
+## Tool Lists in Config
+
+A list under `Tools` in `netclaw.json` replaces the built-in default list. It does not
+add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles` `Roots`,
+`ChannelAttachments.AllowedCategories`, `GlobalReadRoots`, and `WebFetch.HttpAllowList`.
+
+- To add one entry, write the complete list with the defaults. For example, to add
+  `/srv/docs` to `GlobalReadRoots`, write
+  `["{skills_dir}", "{identity_dir}", "{workspaces_dir}", "/srv/docs"]`.
+  `["/srv/docs"]` alone removes the skills, identity, and workspaces roots.
+- An absent key keeps the defaults. `[]`, `null`, and `{}` give an empty list.
+- The daemon stops at startup when a list key has a scalar value, when an attachment
+  category is not valid, or when an empty `NETCLAW_*` variable and a config file both set
+  the same list. The error names the key.
+- A Public or Team `AllowedTools` list that exactly matches an older Netclaw default gets
+  today's default, with a startup warning. Any other list is applied as written, which
+  includes an edited older list. If such a list lacks `file_search` or `tool_output_read`,
+  add them by hand.
+- `netclaw doctor` reports a list that exactly matches any Netclaw default, which includes
+  today's default. `netclaw doctor --fix` backs up `netclaw.json`, then deletes that
+  `AllowedTools` key, so the audience follows the default in later releases.
+- `netclaw doctor` warns when a Public or Team allowlist does not include
+  `tool_output_read`. A spilled tool result tells the model to call that tool. The warning
+  has no auto-fix, because a narrow list can be intentional.
+- The daemon reads `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables.
+  `netclaw doctor` reads only `netclaw.json`, so it can show a different list.
+- `netclaw init` writes only the posture (`Security.DeploymentPosture`,
+  `Security.ShellExecutionMode`, `Security.StrictDefaults`) and `Tools.ShellMode`. It does
+  not write `Tools.AudienceProfiles`. The daemon computes the profiles from the posture. An
+  absent profile is normal and gets the posture default. For the Personal posture, that
+  default requires approval for `shell_execute` on Personal.
+- Do not write a default list into `netclaw.json` to "make it visible". Write only the key
+  that you change.
 
 ## Diagnostics, Kill Switches & Self-Maintenance
 

@@ -66,31 +66,4 @@ public sealed class SecurityPostureStepViewModelTests : WizardStepTestBase
         Assert.NotNull(builder.Tools);
         Assert.Equal(ShellExecutionMode.HostAllowed, builder.Tools.ShellMode);
     }
-
-    [Fact]
-    public void ContributeConfig_Personal_WritesExplicitShellApprovalPolicy()
-    {
-        using var step = new SecurityPostureStepViewModel();
-        step.SelectedPosture = DeploymentPosture.Personal;
-
-        var builder = new WizardConfigBuilder(Context.Paths);
-        step.ContributeConfig(builder);
-
-        Assert.NotNull(builder.Tools?.AudienceProfiles.Personal.ApprovalPolicy);
-        Assert.Equal(
-            ToolApprovalMode.Approval,
-            builder.Tools!.AudienceProfiles.Personal.ApprovalPolicy!.GetEffectiveMode("shell_execute"));
-    }
-
-    [Fact]
-    public void ContributeConfig_Team_DoesNotWritePersonalShellApprovalPolicy()
-    {
-        using var step = new SecurityPostureStepViewModel();
-        step.SelectedPosture = DeploymentPosture.Team;
-
-        var builder = new WizardConfigBuilder(Context.Paths);
-        step.ContributeConfig(builder);
-
-        Assert.Null(builder.Tools?.AudienceProfiles.Personal.ApprovalPolicy);
-    }
 }

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Cli.Json;
@@ -25,36 +26,26 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             return Task.FromResult(DoctorCheckResult.Warning(
                 "Tool Audience Profiles",
                 "Config file is missing; strict tool trust defaults are active.",
-                "Run `netclaw init` to scaffold recommended audience profiles."));
+                "Run `netclaw init` to choose a security posture."));
 
-        if (root["Tools"] is not JsonObject toolsObject)
+        if (root["Tools"] is not JsonObject)
         {
             return Task.FromResult(DoctorCheckResult.Error(
                 "Tool Audience Profiles",
                 "Tools section is missing; tool trust policy cannot be evaluated.",
-                "Add a Tools section with AudienceProfiles or run `netclaw init` again."));
+                "Run `netclaw init` again to write the security posture and the Tools section."));
         }
 
-        var missingProfiles = new List<string>();
-        if (toolsObject["AudienceProfiles"] is not JsonObject rawProfiles)
-        {
-            return Task.FromResult(DoctorCheckResult.Warning(
-                "Tool Audience Profiles",
-                "Tools.AudienceProfiles is missing; built-in strict defaults are active.",
-                "Add explicit public/team/personal audience profiles to make tool policy visible."));
-        }
-
-        if (rawProfiles["Public"] is null)
-            missingProfiles.Add("public");
-        if (rawProfiles["Team"] is null)
-            missingProfiles.Add("team");
-        if (rawProfiles["Personal"] is null)
-            missingProfiles.Add("personal");
-
+        // Bind the same way as the daemon: the Tools section on top of the posture defaults. An
+        // absent profile or list is the posture default, which is the normal state after
+        // `netclaw init`, so it is not a warning. Doctor reads only netclaw.json.
         ToolConfig toolConfig;
         try
         {
-            toolConfig = JsonSerializer.Deserialize<ToolConfig>(toolsObject, JsonDefaults.ConfigRead) ?? new ToolConfig();
+            var configuration = new ConfigurationBuilder()
+                .AddJsonFile(paths.NetclawConfigPath, optional: false, reloadOnChange: false)
+                .Build();
+            toolConfig = PolicyConfiguration.Bind(configuration).Tools;
         }
         catch (Exception ex)
         {
@@ -85,24 +76,11 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
 
         var warnings = new List<string>();
-        if (missingProfiles.Count > 0)
-        {
-            warnings.Add($"Missing explicit profiles for {string.Join(", ", missingProfiles)}; fallback defaults are in effect.");
-        }
-
-        // Only warn about unrestricted Personal when it's using fallback defaults.
-        // If the Personal profile was explicitly written (e.g., by `netclaw init`),
-        // the user made an intentional choice and this warning is noise.
-        var personalExplicit = !missingProfiles.Contains("personal");
-        if (IsUnrestrictedPersonalProfile(toolConfig.AudienceProfiles.Personal)
-            && !personalExplicit)
-        {
-            warnings.Add("Personal profile allows all tools and unrestricted filesystem access.");
-            if (toolConfig.ShellMode == ShellExecutionMode.HostAllowed)
-                warnings.Add("Personal profile also enables host shell, which has a high blast radius.");
-        }
 
         CheckExplicitPersonalShellAuto(toolConfig, warnings);
+        CheckMissingToolOutputRead(toolConfig.AudienceProfiles, warnings);
+
+        CheckDefaultAllowedToolsCopies(root, warnings);
 
         // Advisory: approval mode configured but shell is off
         CheckApprovalMismatch(toolConfig, warnings);
@@ -149,7 +127,38 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         return Task.FromResult(DoctorCheckResult.Pass(
             "Tool Audience Profiles",
-            "Audience profiles are explicit and public/team restrictions remain scoped."));
+            "Public and Team tool restrictions remain scoped."));
+    }
+
+    // Advisory only, with no auto-fix: a narrow allowlist can be intentional. A large tool
+    // result spills to a file, and the inline notice tells the model to call tool_output_read.
+    // Without that tool, the model cannot read the rest of the output.
+    private static void CheckMissingToolOutputRead(ToolAudienceProfiles profiles, List<string> warnings)
+    {
+        foreach (var (audience, profile) in (ReadOnlySpan<(TrustAudience, ToolAudienceProfile)>)
+                 [(TrustAudience.Public, profiles.Public), (TrustAudience.Team, profiles.Team)])
+        {
+            if (profile.ToolsMode != ToolProfileMode.Allowlist
+                || profile.AllowedTools.Contains(ToolAudienceProfileToolCatalog.ToolOutputRead, StringComparer.Ordinal)
+                || ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, profile.AllowedTools))
+            {
+                continue;
+            }
+
+            warnings.Add(
+                $"Tools.AudienceProfiles.{audience}.AllowedTools does not include {ToolAudienceProfileToolCatalog.ToolOutputRead}. "
+                + "When a tool result is too large, Netclaw spills it to a file and tells the model to call "
+                + $"{ToolAudienceProfileToolCatalog.ToolOutputRead}. Add it to the list unless you want to block that.");
+        }
+    }
+
+    // A stored copy of a shipped default list does not follow later defaults. The daemon maps an
+    // exact older list to the current default and logs a warning. Doctor reports each copy, which
+    // includes a copy of the current default, because `netclaw doctor --fix` deletes it.
+    private static void CheckDefaultAllowedToolsCopies(JsonObject root, List<string> warnings)
+    {
+        foreach (var copy in DefaultAllowedToolsCopies.Find(root))
+            warnings.Add(ToolAudienceProfileDefaults.DescribeLegacyDefaultAllowedTools(copy.Audience, copy.AllowedTools));
     }
 
     private static void ValidateNonPersonalProfile(string profileName, ToolAudienceProfile profile, List<string> errors)
@@ -168,15 +177,6 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         if (profile.AttachFiles.Mode == ToolFilesystemMode.All)
             errors.Add($"{profileName} profile cannot set AttachFiles.Mode=All.");
-    }
-
-    private static bool IsUnrestrictedPersonalProfile(ToolAudienceProfile profile)
-    {
-        return profile.ToolsMode == ToolProfileMode.All
-            && profile.McpServersMode == ToolProfileMode.All
-            && profile.ReadFiles.Mode == ToolFilesystemMode.All
-            && profile.WriteFiles.Mode == ToolFilesystemMode.All
-            && profile.AttachFiles.Mode == ToolFilesystemMode.All;
     }
 
     /// <summary>
