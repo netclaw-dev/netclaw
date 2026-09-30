@@ -23,10 +23,6 @@ internal sealed class DaemonCrashMonitor : IDisposable
     private readonly Func<Exception, bool>[] _benignUnobservedFilters;
     private IServiceProvider? _services;
 
-    private const string BenignUnobservedMessage =
-        "Observed a known-benign unobserved task exception (for example, an MCP SDK background "
-        + "send to an unreachable MCP server); skipping crash report.";
-
     private DaemonCrashMonitor(
         string logsDirectory,
         TimeProvider? timeProvider,
@@ -81,12 +77,13 @@ internal sealed class DaemonCrashMonitor : IDisposable
         HandleCrash("daemon-unhandled", exception, args.IsTerminating, isUnobservedTask: false);
     }
 
-    // Internal so tests can drive the handler without GC or finalizer timing.
-    internal void HandleUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs args)
+    private void HandleUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs args)
     {
         if (IsBenignUnobservedException(args.Exception))
         {
-            TryLogMonitorFailure(BenignUnobservedMessage, args.Exception);
+            TryLogMonitorFailure(
+                "Observed a known-benign unobserved task exception; skipping crash report.",
+                args.Exception);
             args.SetObserved();
             return;
         }
