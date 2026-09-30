@@ -267,6 +267,35 @@ A list in `Tools` that has default items replaces its default list. It does not 
   `secrets.json` sets items for the same key; an attachment category that is not one defined
   name (for example `"Bogus"`, `"3"`, or `"Pdf, Document"`). Category names match without case.
 
+Older installs: `netclaw init` 0.8.0 to 0.25.4, and 0.26.0-beta.1 to beta.5, wrote the
+complete Public and Team default `AllowedTools` lists. Later releases changed those defaults;
+for example, 0.26.0 added `file_search` and `tool_output_read`. The old binder added the current
+defaults to the stored list, so those installs ran with the current defaults. The daemon keeps
+that result with these rules:
+
+- A Public or Team `AllowedTools` list in `Allowlist` mode that exactly matches an older
+  shipped default (same tools in any order, no extra, missing, or repeated tool, same case) maps
+  to the current default. The daemon logs a startup warning that names the audience, the tool
+  changes, and the fix. A 0.8.0 to 0.19.0 Public list maps to the current Public default, which
+  does not have `file_write`.
+- A list that differs in any way is applied as written, and the daemon never widens it. This
+  includes an edited older list, for example with Web Access turned off in the TUI, and the
+  17-tool list that the 0.24 TUI wrote when it changed a profile from `All` to `Allowlist`. Such
+  a list does not get `file_search` or `tool_output_read`.
+- A list that exactly matches the current default is applied as written, with no warning.
+- `netclaw doctor` reports each exact shipped list, which includes a copy of the current
+  default. A stored copy does not get the tools that later releases add to the default.
+- `netclaw doctor --fix` copies `netclaw.json` to `netclaw.json.legacy-tool-defaults.bak`, or to
+  the next free `netclaw.json.legacy-tool-defaults.N.bak`, then deletes each Public or Team
+  `AllowedTools` key in `Allowlist` mode that exactly matches a shipped list. The rest of the
+  profile stays. The audience then follows the default, so the daemon applies the same tools
+  before and after the fix. The fix never writes a default list. It never overwrites a backup,
+  and a failed copy stops the write. A list that differs by one tool, and `[]`, stay.
+- `ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools` and
+  `LegacyTeamDefaultAllowedTools` hold the shipped lists as policy data. The last row of each
+  table is the current default. A test fails when the current default is not equal to the last
+  row, so a change to a default must add a row.
+
 The daemon reads `netclaw.json`, then `secrets.json`, then `NETCLAW_*` variables. A later
 source wins for each key. `netclaw doctor` reads only `netclaw.json`.
 

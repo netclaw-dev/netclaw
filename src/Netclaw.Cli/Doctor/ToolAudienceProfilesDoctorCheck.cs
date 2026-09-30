@@ -104,6 +104,8 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         CheckExplicitPersonalShellAuto(toolConfig, warnings);
 
+        CheckDefaultAllowedToolsCopies(root, warnings);
+
         // Advisory: approval mode configured but shell is off
         CheckApprovalMismatch(toolConfig, warnings);
 
@@ -150,6 +152,15 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         return Task.FromResult(DoctorCheckResult.Pass(
             "Tool Audience Profiles",
             "Audience profiles are explicit and public/team restrictions remain scoped."));
+    }
+
+    // A stored copy of a shipped default list does not follow later defaults. The daemon maps an
+    // exact older list to the current default and logs a warning. Doctor reports each copy, which
+    // includes a copy of the current default, because `netclaw doctor --fix` deletes it.
+    private static void CheckDefaultAllowedToolsCopies(JsonObject root, List<string> warnings)
+    {
+        foreach (var copy in DefaultAllowedToolsCopies.Find(root))
+            warnings.Add(ToolAudienceProfileDefaults.DescribeLegacyDefaultAllowedTools(copy.Audience, copy.AllowedTools));
     }
 
     private static void ValidateNonPersonalProfile(string profileName, ToolAudienceProfile profile, List<string> errors)

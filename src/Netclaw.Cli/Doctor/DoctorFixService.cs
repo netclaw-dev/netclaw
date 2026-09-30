@@ -77,6 +77,9 @@ public sealed class DoctorFixService
 
         // --- Manual fixes (not derivable from schema alone) ---
 
+        if (TryDeleteDefaultAllowedToolsCopies(obj))
+            appliedFixes.Add(LegacyAllowedToolsFixName);
+
         if (obj["configVersion"] is null)
         {
             obj["configVersion"] = EmbeddedSchemaLoader.CurrentSchemaVersion;
@@ -151,6 +154,39 @@ public sealed class DoctorFixService
         }
 
         return Task.FromResult(new DoctorFixPlan(fixes));
+    }
+
+    private const string LegacyAllowedToolsFixName = "remove copied default audience tool lists";
+
+    /// <summary>
+    /// Deletes each Public or Team AllowedTools key that exactly matches a default list that a
+    /// release shipped, which includes the current default. The audience then follows the
+    /// default of each later release. The daemon already applies the current default for such a
+    /// list, so the bound tools do not change. A list that differs from every shipped default is
+    /// operator intent, so this fix keeps it. The fix never writes a default list.
+    /// </summary>
+    private static bool TryDeleteDefaultAllowedToolsCopies(JsonObject config)
+    {
+        var changed = false;
+        foreach (var copy in DefaultAllowedToolsCopies.Find(config))
+        {
+            copy.Profile.Remove(copy.AllowedToolsKey);
+            changed = true;
+        }
+
+        return changed;
+    }
+
+    // Returns netclaw.json.legacy-tool-defaults.bak, then .legacy-tool-defaults.2.bak, and so on:
+    // the first name that is not a file. A directory at a candidate name is not skipped, so the
+    // copy fails loudly instead of the fix writing without a backup.
+    internal static string NextLegacyAllowedToolsBackupPath(string configPath)
+    {
+        var candidate = configPath + ".legacy-tool-defaults.bak";
+        for (var number = 2; File.Exists(candidate); number++)
+            candidate = $"{configPath}.legacy-tool-defaults.{number}.bak";
+
+        return candidate;
     }
 
     private static void TryApplySchemaFixes(JsonObject config, List<string> appliedFixes)
@@ -287,12 +323,85 @@ public sealed class DoctorFixService
                     File.Copy(fix.FilePath, backupPath);
             }
 
+            // The audience tool list fix deletes security policy data, so the operator gets a
+            // copy of the original file. A failed copy throws before the write below. An older
+            // backup is never overwritten: each run that applies this fix writes a new file.
+            if (fix.Description.Contains(LegacyAllowedToolsFixName, StringComparison.Ordinal)
+                && File.Exists(fix.FilePath))
+            {
+                File.Copy(fix.FilePath, NextLegacyAllowedToolsBackupPath(fix.FilePath), overwrite: false);
+            }
+
             AtomicFile.WriteAllText(fix.FilePath, fix.UpdatedText);
         }
 
         return Task.CompletedTask;
     }
 
+}
+
+/// <summary>
+/// Finds the Public and Team <c>AllowedTools</c> keys in netclaw.json that exactly match a
+/// shipped default list. <c>netclaw doctor</c> reports them and <c>netclaw doctor --fix</c>
+/// deletes them. It reads the raw JSON because a bound profile cannot show whether the key is
+/// present: an absent key binds to the current default.
+/// </summary>
+internal static class DefaultAllowedToolsCopies
+{
+    internal sealed record Copy(TrustAudience Audience, JsonObject Profile, string AllowedToolsKey, IReadOnlyList<string> AllowedTools);
+
+    internal static IReadOnlyList<Copy> Find(JsonObject config)
+    {
+        if (Get(config, "Tools") is not JsonObject tools || Get(tools, "AudienceProfiles") is not JsonObject profiles)
+            return [];
+
+        var copies = new List<Copy>();
+        foreach (var audience in (TrustAudience[])[TrustAudience.Public, TrustAudience.Team])
+        {
+            if (Get(profiles, audience.ToString()) is not JsonObject profile
+                || FindKey(profile, "AllowedTools") is not { } allowedToolsKey
+                || profile[allowedToolsKey] is not JsonArray allowedTools
+                || !IsAllowlistMode(profile))
+            {
+                continue;
+            }
+
+            var stored = new List<string>();
+            foreach (var item in allowedTools)
+            {
+                if (item is not JsonValue value || !value.TryGetValue<string>(out var tool))
+                    break;
+                stored.Add(tool);
+            }
+
+            if (stored.Count == allowedTools.Count
+                && ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, stored))
+            {
+                copies.Add(new Copy(audience, profile, allowedToolsKey, stored));
+            }
+        }
+
+        return copies;
+    }
+
+    // AllowedTools applies only in Allowlist mode, which is the default when ToolsMode is absent.
+    // Any other value, which includes a number, is not a match, so the key stays.
+    private static bool IsAllowlistMode(JsonObject profile)
+        => Get(profile, "ToolsMode") switch
+        {
+            null => FindKey(profile, "ToolsMode") is null,
+            JsonValue value when value.TryGetValue<string>(out var mode)
+                => string.Equals(mode, nameof(ToolProfileMode.Allowlist), StringComparison.OrdinalIgnoreCase),
+            _ => false
+        };
+
+    // The daemon reads configuration keys without case, so this lookup does the same.
+    private static JsonNode? Get(JsonObject parent, string name)
+        => FindKey(parent, name) is { } key ? parent[key] : null;
+
+    private static string? FindKey(JsonObject parent, string name)
+        => parent.Select(property => property.Key)
+            .FirstOrDefault(key => string.Equals(key, name, StringComparison.OrdinalIgnoreCase));
 }
 
 public sealed record DoctorFixPlan(IReadOnlyList<DoctorFileFix> Fixes)
