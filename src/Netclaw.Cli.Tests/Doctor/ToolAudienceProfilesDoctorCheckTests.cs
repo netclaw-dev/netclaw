@@ -575,6 +575,86 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.Contains("approval default on Personal", result.Message);
     }
 
+    [Fact]
+    public async Task Legacy_default_allowlist_is_reported_with_the_fix_command()
+    {
+        WriteConfig(LegacyTeamConfig(
+            "\"file_read\", \"file_list\", \"file_write\", \"file_edit\", \"attach_file\", "
+            + "\"web_search\", \"web_fetch\", \"skill_manage\", \"set_reminder\", \"list_reminders\", "
+            + "\"cancel_reminder\", \"get_reminder_history\", \"set_working_directory\""));
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is an older Netclaw default list", result.Message, StringComparison.Ordinal);
+        Assert.Contains("adds file_search, tool_output_read", result.Message, StringComparison.Ordinal);
+        Assert.Contains("netclaw doctor --fix` to remove the key", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Copy_of_the_current_default_allowlist_is_reported()
+    {
+        WriteConfig(LegacyTeamConfig(string.Join(", ",
+            ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Team).Select(tool => $"\"{tool}\""))));
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is a copy of the current Netclaw default list", result.Message, StringComparison.Ordinal);
+        Assert.Contains("netclaw doctor --fix` to remove the key", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tools.AudienceProfiles.Public.AllowedTools", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Copy_is_reported_when_the_keys_use_other_case()
+    {
+        // The daemon reads configuration keys without case, so doctor does too.
+        WriteConfig(LegacyTeamConfig(string.Join(", ",
+                ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Team).Select(tool => $"\"{tool}\"")))
+            .Replace("\"Team\"", "\"team\"", StringComparison.Ordinal)
+            .Replace("\"AllowedTools\": [\"file_read\", \"file_list\"", "\"allowedTools\": [\"file_read\", \"file_list\"", StringComparison.Ordinal));
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is a copy of the current Netclaw default list", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Absent_allowlist_key_is_not_reported_as_a_copy()
+    {
+        // An absent key binds to the current default. It is not a stored copy.
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Public": { "ToolsMode": "Allowlist" },
+                  "Team": { "ToolsMode": "Allowlist" },
+                  "Personal": { "ToolsMode": "All", "McpServersMode": "All" }
+                }
+              }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("AllowedTools is", result.Message, StringComparison.Ordinal);
+    }
+
+    private static string LegacyTeamConfig(string teamTools)
+        => $$"""
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Public": { "ToolsMode": "Allowlist", "AllowedTools": ["file_read"] },
+                  "Team": { "ToolsMode": "Allowlist", "AllowedTools": [{{teamTools}}] },
+                  "Personal": { "ToolsMode": "All", "McpServersMode": "All" }
+                }
+              }
+            }
+            """;
+
     private void WriteConfig(object config)
     {
         File.WriteAllText(

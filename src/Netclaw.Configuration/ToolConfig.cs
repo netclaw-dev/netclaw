@@ -60,6 +60,8 @@ public sealed class ToolConfig
         var found = new List<string>();
         foreach (var list in DefaultedLists)
             list.ApplyConfiguredOrDefault(section, toolConfig, defaults, found);
+        MapLegacyDefaultAllowedTools(toolConfig.AudienceProfiles.Public, TrustAudience.Public, found);
+        MapLegacyDefaultAllowedTools(toolConfig.AudienceProfiles.Team, TrustAudience.Team, found);
         warnings = found;
 
         var attachmentErrors = toolConfig.AudienceProfiles.ValidateChannelAttachments();
@@ -71,6 +73,24 @@ public sealed class ToolConfig
         }
 
         return toolConfig;
+    }
+
+    // `netclaw init` wrote the complete default list, and the old binder added the current
+    // defaults to it. Replacement would silently remove tools that later releases added to the
+    // default, such as tool_output_read. Only an exact older default list maps to the current
+    // default. A list that differs in any way is operator intent and is never widened. A copy of
+    // the current default already gives the current tools, so it stays as written with no warning.
+    private static void MapLegacyDefaultAllowedTools(ToolAudienceProfile profile, TrustAudience audience, List<string> warnings)
+    {
+        if (profile.ToolsMode != ToolProfileMode.Allowlist
+            || ToolAudienceProfileDefaults.IsCurrentDefaultAllowedTools(audience, profile.AllowedTools)
+            || !ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, profile.AllowedTools))
+        {
+            return;
+        }
+
+        warnings.Add(ToolAudienceProfileDefaults.DescribeLegacyDefaultAllowedTools(audience, profile.AllowedTools));
+        profile.AllowedTools = [.. ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(audience)];
     }
 
     // Every list in ToolConfig that has default items. Each one is an allow list, so null and
