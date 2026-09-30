@@ -107,7 +107,7 @@ public sealed class ShellPolicyPathFactsTests
     }
 
     [Fact]
-    public void Intent_and_fallback_resolutions_remain_distinct()
+    public void Intent_and_real_resolutions_remain_distinct()
     {
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var occurrence = Assert.Single(
@@ -119,8 +119,7 @@ public sealed class ShellPolicyPathFactsTests
             "head") with
         {
             Role = ShellPolicyCandidateRole.CausalIntentConsumer,
-            IntentDirectory = "/tmp",
-            IntentFallbackDirectories = ["/work"]
+            IntentDirectory = "/tmp"
         };
 
         var facts = Assert.Single(ShellPolicyPathFacts.Create(
@@ -128,12 +127,12 @@ public sealed class ShellPolicyPathFactsTests
             ShellPathStyle.Posix));
 
         Assert.Equal("/tmp", facts.Intent?.ResolutionBase.Path?.Value);
-        Assert.Equal("/work", Assert.Single(facts.Fallbacks).ResolutionBase.Path?.Value);
+        Assert.Equal("/work", facts.Real.ResolutionBase.Path?.Value);
         Assert.Contains(
             Assert.IsType<ShellPolicyResolvedPathView>(facts.Intent).Facts,
             fact => fact.Paths.Any(path => path.Value == "/tmp/result.log"));
         Assert.Contains(
-            Assert.Single(facts.Fallbacks).Facts,
+            facts.Real.Facts,
             fact => fact.Paths.Any(path => path.Value == "/work/result.log"));
     }
 
@@ -411,11 +410,9 @@ public sealed class ShellPolicyPathFactsTests
 
         Assert.True(ShellPolicyProjection.TryCreate(
             environment,
-            new ShellApprovalMatcher(environment),
-            execution: null,
             approvalContext,
+            directoryScopes: null,
             context,
-            LinkRule.FromVolumeRoot,
             out var projection));
         return new ShellPolicyEvaluation(
             Assert.IsType<ShellPolicyProjection>(projection),

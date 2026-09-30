@@ -189,7 +189,7 @@ security_mutations+=("IToolApprovalMatcher.cs{$candidate_start..$candidate_end}"
 read -r messy_start messy_end < <(
   find_span \
     "$matcher_file" \
-    "private bool IsMessy(ShellCommandAnalysis analysis)" \
+    "private bool IsMessy(ShellCommandAnalysis analysis, LinkRule hostLinks)" \
     "if (!analysis.IsResolved" \
     "return true;"
 )

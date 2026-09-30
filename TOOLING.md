@@ -47,7 +47,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
-| Filesystem authority folder membership, repository identity, and repository persistence | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved | 15 killed | `./scripts/run-approval-directory-mutations.sh` |
+| Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
@@ -133,7 +133,7 @@ Run the approval directory gate:
 ```
 
 The script reuses the xUnit 2 harness.
-It selects eight security source regions and three approval actor conditions.
+It selects eight security source regions, three approval actor conditions, and the folder rule of the grant builder.
 Folder containment and link checks are in the filesystem authority
 (`src/Netclaw.Security/Authorization/Filesystem`). Bash and PowerShell grants use
 the same containment rule and the same link walker, so one containment target
@@ -152,8 +152,9 @@ replaces the two shell-specific targets.
 | Persistence candidate resolution | 1 killed: remove the logical negation |
 | Persistence common identity | 1 killed: remove the logical negation |
 | Persistence worktree root | 1 killed: remove the logical negation |
+| Folder of a new grant (`GrantBuilder`, `candidate.Directory ?? workingDirectory`) | 3 killed: swap the operands or keep only one side |
 
-The script requires these counts at their exact source locations and 15 tested mutants overall.
+The script requires these counts at their exact source locations and 18 tested mutants overall (12 Security, 6 Actors).
 It fails if a target is absent, survives, exceeds its time limit, or cannot compile.
 The source selector rejects an absent or duplicate boundary before Stryker starts.
 This protects the gate when the authorization code and diagnostic code contain similar conditions.
@@ -170,6 +171,7 @@ The Linux mutation job runs the shared link walker on POSIX links only; the ordi
 
 The matcher shares `EvaluateApprovalScope` with `ToolApprovalActor` and shell approval evidence validation.
 The three persistence targets are in `ToolApprovalActor.TryCreateEntry`. It reads the repository from `GrantScope.Repository` and the builder's worktree from `ToolApprovalGrant.RepositoryWorktree`.
+The grant builder target protects the directory proof of a `cd` list: each folder grant uses the directory of its own occurrence (for example `cd@/work/sub`), and a candidate without a directory uses the call directory, not "everywhere". `Folder_grant_uses_the_directory_where_each_occurrence_runs` kills all three mutants.
 These tests preserve PRD-002 SEC-003 and
 [TA-8 of the tool authorization contract](openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage).
 They prove folder-grant decisions. They do not prove native process containment or races between authorization and file access.
@@ -296,7 +298,9 @@ algorithm. The owner kept it (2026-09-30), and a parser screen now adds a
 hard-deny check of each Bash list element. Neither has a focused target:
 `HardDenyParityCorpusTests` pins the kept denials and the four stricter
 background-list cases. The gate re-run after the screen killed the same 81
-mutants. CI allows 30 minutes for
+mutants. The cd projection merge re-pointed the `IsMessy` marker to its new
+signature (it now takes the link rule); the same 72 Security and 9 Actors
+mutants die. CI allows 30 minutes for
 hosted-runner variance and report upload. The report directory is
 `artifacts/stryker/shell-command-analysis`.
 

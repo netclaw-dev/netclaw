@@ -119,11 +119,9 @@ internal sealed class ShellPolicyCoordinator(
         if (preflight is not ShellPolicyPreflightResult.Continue continuation
             || !ShellPolicyProjection.TryCreate(
                 continuation.Analysis.Environment,
-                policy.ShellApprovalMatcher,
-                continuation.Analysis,
                 continuation.ApprovalContext,
+                continuation.DirectoryScopes,
                 context,
-                LinkRule.FromVolumeRootExceptTemporaryAlias,
                 out var projection)
             || projection is null)
         {
@@ -199,7 +197,14 @@ internal sealed class ShellPolicyCoordinator(
 
         IReadOnlyList<ApprovalCandidate> candidates;
         bool isMessy;
-        if (preflight is ShellPolicyPreflightResult.Continue continuation)
+        if (preflight is ShellPolicyPreflightResult.Continue { DirectoryScopes.IsCausalList: true })
+        {
+            // A causal list received one-call advice before its candidates came from the
+            // directory proof. It keeps that advice, and it gets no project advice.
+            candidates = [];
+            isMessy = true;
+        }
+        else if (preflight is ShellPolicyPreflightResult.Continue continuation)
         {
             candidates = continuation.ApprovalContext.Candidates!;
             isMessy = continuation.ApprovalContext.IsMessy;
@@ -249,7 +254,7 @@ internal sealed class ShellPolicyCoordinator(
         var first = analysis.Commands[0];
         if (first.WorkingDirectoryEffect is not ShellWorkingDirectoryEffect.ChangesOnSuccess
             { Target: ShellValueDomain.Exact exact }
-            || !BashCausalApprovalIntent.TryGetListItem(first, 0, out var list)
+            || !BashDirectoryScopeProjection.TryGetListItem(first, 0, out var list)
             || list.Items.Count < 2
             || list.Items[0].Operator != CompoundOperator.None
             || list.Items[1].Operator != CompoundOperator.AndIf
@@ -312,19 +317,6 @@ internal sealed class ShellPolicyCoordinator(
         ValidateCandidateSyntax(projection);
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (HasProtectedIntentPath(evaluation))
-        {
-            return evaluation.Complete(
-                ToolAuthorizationDecision.Deny("shell_references_protected_path"));
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (HasIneligibleIntentDirectory(projection))
-        {
-            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-
         var grantCandidates = evaluation.GrantCandidates;
         var requestCandidates = grantCandidates
             .Select(state => new ShellGrantCandidate(
@@ -369,8 +361,8 @@ internal sealed class ShellPolicyCoordinator(
 
     private static bool RequiresExactApproval(ShellPolicyProjection projection)
     {
-        // Unresolved syntax needs an exact approval unless the causal projection supplies the missing intent.
-        if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent)
+        // Unresolved syntax needs an exact approval.
+        if (projection.ApprovalContext.IsMessy)
             return true;
 
         if (projection.Candidates.Count == 0)
@@ -411,38 +403,6 @@ internal sealed class ShellPolicyCoordinator(
         }
     }
 
-    private bool HasProtectedIntentPath(ShellPolicyEvaluation evaluation)
-    {
-        foreach (var state in evaluation.CandidateStates)
-        {
-            var candidate = state.Candidate;
-            if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
-                continue;
-
-            if (policy.CausalIntentReferencesProtectedPath(state.PathFacts))
-                return true;
-        }
-
-        return false;
-    }
-
-    private bool HasIneligibleIntentDirectory(ShellPolicyProjection projection)
-    {
-        foreach (var candidate in projection.Candidates)
-        {
-            if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
-                continue;
-
-            if (candidate.IntentDirectory is not { } directory)
-                continue;
-
-            if (!policy.AreCausalIntentDirectoriesEligible(directory, candidate.IntentFallbackDirectories))
-                return true;
-        }
-
-        return false;
-    }
-
     private static void ApplyReviewedSafeCoverage(
         ShellPolicyEvaluation evaluation,
         ToolAccessPolicy policy,
@@ -479,9 +439,8 @@ internal sealed class ShellPolicyCoordinator(
             if (evaluation.IsCovered(candidate.Id))
                 continue;
 
-            if (!HasCoveredIntentPrerequisites(candidate, evaluation))
-                continue;
-
+            // The directory change and its action stay candidates, so an allowed
+            // result still needs their own coverage.
             if (!policy.IsReviewedSafeIntentCandidate(
                     candidate,
                     state.PathFacts,
@@ -495,11 +454,6 @@ internal sealed class ShellPolicyCoordinator(
                 new Coverage.ReviewedSafe(ReviewedSafeRoot.Intent));
         }
     }
-
-    private static bool HasCoveredIntentPrerequisites(ShellPolicyCandidate candidate, ShellPolicyEvaluation evaluation)
-        => candidate.IntentDirectory is not null
-           && candidate.IntentPrerequisites.Count > 0
-           && candidate.IntentPrerequisites.All(evaluation.IsCovered);
 
     private static ToolAuthorizationDecision CompleteAfterCoverage(
         ShellPolicyEvaluation evaluation,

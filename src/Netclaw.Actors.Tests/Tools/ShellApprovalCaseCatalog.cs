@@ -1218,17 +1218,24 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["cd", "git status"])),
         // The rows use a directory that no test creates: a glob in the shared /tmp
         // reads entries that other processes change.
-        // A causal list (cd dir && action; diagnostic) and its negative controls.
+        // A causal list (cd dir && action; diagnostic) uses the directory proof.
+        // Each occurrence is a candidate in each directory where it can run.
         Case(
             "cd-causal-list-prompts-with-reusable-grants",
             Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log; wc -c result.log"),
             Approvals.None,
-            ExpectedApproval.Require([], isMessy: true)),
+            ExpectedApproval.Require(["cd", "gh api"])),
         Case(
             "cd-causal-list-diagnostic-reuses-stored-grant",
             Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),
             Approvals.PersistentAnywhere("cd", "inspect", "cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalMatches: ["persistent:cd", "persistent:inspect"])),
+            ExpectedApproval.Allow(
+                ApprovalAllowReason.StoredApproval,
+                1,
+                "persistent:cd",
+                "persistent:inspect",
+                "persistent:cat",
+                "persistent:cat")),
         Case(
             "cd-causal-list-reviewed-diagnostic-keeps-intent-coverage",
             Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; wc -c result.log; head -100 result.log"),
@@ -1242,7 +1249,7 @@ public static class ShellApprovalCases
             "cd-causal-list-folder-grant-outside-target-prompts",
             Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "cd", "inspect", "cat"),
-            ExpectedApproval.Require([], isMessy: true)),
+            ExpectedApproval.Require(["cd", "inspect", "cat"], approvalMatches: "persistent:cat")),
         Case(
             "cd-alternate-branch-prompts-for-the-other-branch",
             Bash("cd /netclaw-approval-external/cd-list && inspect || recover; cat *.md"),

@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Diagnostics;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -228,6 +229,40 @@ public sealed class ApprovalDirectoryMutationTests : IDisposable
             nestedScope.WorktreeRoot, grant.RepositoryWorktree));
         Assert.False(ToolApprovalActor.TryCreateEntries(
             new ToolName(ShellTool.ToolName), [grant], out _, out _));
+    }
+
+    [Fact]
+    public void Folder_grant_uses_the_directory_where_each_occurrence_runs()
+    {
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var policy = new ShellCommandPolicy(environment);
+        var analysis = policy.Analyze("cd /work/sub && inspect; cat *.md", "/work");
+        Assert.True(BashDirectoryScopeProjection.TryCreate(
+            analysis,
+            policy,
+            new ShellApprovalMatcher(environment),
+            out var projection));
+
+        var grants = GrantBuilder.Build(
+            projection.Candidates,
+            GrantScopeKind.Folder,
+            "/work",
+            "/session",
+            repositoryCommonDirectory: null);
+        // A candidate without its own directory uses the call directory, not everywhere.
+        var bare = Assert.Single(GrantBuilder.Build(
+            [CreateCandidate(ApprovalShell.Bash, directory: null)],
+            GrantScopeKind.Folder,
+            "/work",
+            "/session",
+            repositoryCommonDirectory: null));
+
+        // After cd, a folder grant never falls back to the session working directory.
+        Assert.Equal(
+            ["cd@/work/sub", "inspect@/work/sub", "cat@/work", "cat@/work/sub"],
+            grants.Select(static grant =>
+                $"{grant.Candidate.Verb}@{Assert.IsType<GrantScope.Folder>(grant.Scope).Directory}"));
+        Assert.Equal("/work", Assert.IsType<GrantScope.Folder>(bare.Scope).Directory);
     }
 
     public void Dispose() => Directory.Delete(_basePath, recursive: true);

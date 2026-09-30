@@ -767,22 +767,7 @@ public partial class DispatchingToolExecutorTests
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
     public async Task Authorization_evaluation_composes_grants_with_causal_intent_diagnostics()
     {
-        var approvalService = new FixedShellApprovalService(request =>
-        {
-            var results = request.Candidates.Select(candidate =>
-            {
-                var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
-                var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(
-                    candidate.Candidate.VerbTokens);
-                var entry = ApprovalEntry.CreateTokenPrefix(
-                    shell,
-                    tokens,
-                    directory: null,
-                    createdAt: null);
-                return ShellGrantCandidateResult.Persistent(candidate, entry);
-            }).ToArray();
-            return ShellApprovalMatchResult.Create(request.Candidates, null, results);
-        });
+        var approvalService = GrantShellVerbs(directory: null, "cd", "gh api");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(
@@ -806,22 +791,21 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
         Assert.Equal(ToolAllowReason.StoredApproval, decision.AllowReason);
-        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
-        Assert.All(request.Candidates, candidate =>
-            Assert.Contains(candidate.Candidate.Verb, new[] { "cd", "gh api" }));
-        Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "cd");
-        Assert.Contains(request.Candidates, candidate => candidate.Candidate.Verb == "gh api");
+        // Each diagnostic asks the store in each directory where it can run.
+        Assert.Equal(
+            ["cd@/work/intent", "gh api@/work/intent", "wc@/work", "wc@/work/intent", "head@/work", "head@/work/intent"],
+            DescribeRequest(approvalService));
         var intentRows = decision.ShellPolicyTrace.Rows
             .Where(row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot)
             .ToArray();
-        Assert.Equal(2, intentRows.Length);
+        Assert.Equal(4, intentRows.Length);
         Assert.All(intentRows, row =>
         {
             Assert.Equal(ShellPolicyTraceStage.ReviewedSafePolicy, row.Stage);
             Assert.Equal(ShellPolicyTraceReason.ReviewedSafePhrase, row.Reason);
         });
         Assert.Equal(
-            new[] { "head", "wc" },
+            new[] { "head", "head", "wc", "wc" },
             intentRows
                 .Select(row => Assert.IsType<string>(row.ExecutableBasename))
                 .Order(StringComparer.Ordinal)
@@ -835,23 +819,14 @@ public partial class DispatchingToolExecutorTests
     public async Task Causal_intent_accepts_session_or_real_folder_prerequisite_coverage(
         string prerequisiteCoverageName)
     {
-                var approvalService = new FixedShellApprovalService(request =>
-        {
-            var results = request.Candidates.Select(candidate =>
-            {
-                if (prerequisiteCoverageName == "Session")
-                    return ShellGrantCandidateResult.Session(candidate);
-
-                var grant = ApprovalEntry.CreateTokenPrefix(
-                    ApprovalShell.Bash,
-                    Assert.IsAssignableFrom<IReadOnlyList<string>>(
-                        candidate.Candidate.VerbTokens),
-                    "/work/intent",
-                    createdAt: null);
-                return ShellGrantCandidateResult.Persistent(candidate, grant);
-            }).ToArray();
-            return ShellApprovalMatchResult.Create(request.Candidates, null, results);
-        });
+        var approvalService = prerequisiteCoverageName == "Session"
+            ? new FixedShellApprovalService(request => ShellApprovalMatchResult.Create(
+                request.Candidates,
+                null,
+                request.Candidates.Select(static candidate => candidate.Candidate.Verb is "cd" or "inspect"
+                    ? ShellGrantCandidateResult.Session(candidate)
+                    : ShellGrantCandidateResult.Uncovered(candidate)).ToArray()))
+            : GrantShellVerbs("/work/intent", "cd", "inspect");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
@@ -870,11 +845,9 @@ public partial class DispatchingToolExecutorTests
             TestContext.Current.CancellationToken);
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, decision.Outcome);
-        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
-        Assert.Equal(["cd", "inspect"], request.Candidates
-            .Select(candidate => candidate.Candidate.Verb).ToArray());
-        Assert.All(request.Candidates, candidate =>
-            Assert.Equal("/work/intent", candidate.Candidate.Directory));
+        Assert.Equal(
+            ["cd@/work/intent", "inspect@/work/intent", "head@/work", "head@/work/intent"],
+            DescribeRequest(approvalService));
         Assert.Equal(
             2,
             decision.ShellPolicyTrace.Rows.Count(row =>
@@ -894,24 +867,7 @@ public partial class DispatchingToolExecutorTests
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
     public async Task Causal_intent_does_not_rebase_a_folder_grant_to_the_intent_scope()
     {
-        var approvalService = new FixedShellApprovalService(request =>
-            ShellApprovalMatchResult.Create(
-                request.Candidates,
-                null,
-                request.Candidates.Select(candidate =>
-                {
-                    var grant = ApprovalEntry.CreateTokenPrefix(
-                        ApprovalShell.Bash,
-                        Assert.IsAssignableFrom<IReadOnlyList<string>>(
-                            candidate.Candidate.VerbTokens),
-                        "/work",
-                        createdAt: null);
-                    return ShellGrantCandidateResult.Uncovered(
-                        candidate,
-                        new ShellApprovalNearMiss(
-                            grant,
-                            ShellApprovalNearMissReason.OutsideDirectory));
-                }).ToArray()));
+        var approvalService = GrantShellVerbs("/work", "cd", "inspect", "head");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(ApprovalShell.Bash, ["head"]));
@@ -929,35 +885,18 @@ public partial class DispatchingToolExecutorTests
             CreateInteractivePersonalContext("signalr/causal-intent-folder-near-miss"),
             TestContext.Current.CancellationToken);
 
+        // The /work grant covers only the head occurrence that runs in /work when cd fails.
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        var request = Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest);
-        Assert.All(request.Candidates, candidate =>
-            Assert.Equal("/tmp", candidate.Candidate.Directory));
-        Assert.DoesNotContain(
-            decision.ShellPolicyTrace.Rows,
-            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+        var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        Assert.Equal(["cd", "inspect"], approval.CandidateVerbs);
+        Assert.Equal(["/tmp", "/tmp"], approval.Candidates!.Select(static candidate => candidate.Directory));
     }
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
-    public async Task Causal_intent_requires_authority_for_each_prerequisite()
+    public async Task Causal_list_prompt_offers_reusable_grants_for_an_uncovered_prerequisite()
     {
-        var approvalService = new FixedShellApprovalService(request =>
-            ShellApprovalMatchResult.Create(
-                request.Candidates,
-                null,
-                request.Candidates.Select(candidate =>
-                {
-                    if (candidate.Candidate.Verb != "cd")
-                        return ShellGrantCandidateResult.Uncovered(candidate);
-
-                    var entry = ApprovalEntry.CreateTokenPrefix(
-                        ApprovalShell.Bash,
-                        ["cd"],
-                        directory: null,
-                        createdAt: null);
-                    return ShellGrantCandidateResult.Persistent(candidate, entry);
-                }).ToArray()));
+        var approvalService = GrantShellVerbs(directory: null, "cd");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(
@@ -978,20 +917,21 @@ public partial class DispatchingToolExecutorTests
             CreateInteractivePersonalContext("signalr/causal-intent-missing-prerequisite"),
             TestContext.Current.CancellationToken);
 
+        // Before the directory proof applied to causal lists, this prompt offered only Once.
+        // A safe-listed action still needs its own grant: safe policy alone cannot establish intent.
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-        Assert.True(approval.IsMessy);
-        Assert.Empty(approval.Candidates!);
+        Assert.False(approval.IsMessy);
+        Assert.Equal(["gh api"], approval.CandidateVerbs);
+        Assert.Equal("/tmp", Assert.Single(approval.Candidates!).Directory);
         Assert.Equal(
             [
                 Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveOnce,
+                Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveSession,
+                Netclaw.Actors.Protocol.ApprovalOptionKeys.ApproveEverywhere,
                 Netclaw.Actors.Protocol.ApprovalOptionKeys.Deny
             ],
             approval.Options.Select(option => option.Key.Value).ToArray());
-        Assert.Equal(
-            ["cd", "gh api"],
-            Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest)
-                .Candidates.Select(candidate => candidate.Candidate.Verb).ToArray());
     }
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
@@ -1025,6 +965,7 @@ public partial class DispatchingToolExecutorTests
             context,
             TestContext.Current.CancellationToken);
         var approval = Assert.IsType<ToolApprovalContext>(initial.ApprovalContext);
+        Assert.Equal(["cd", "inspect"], approval.CandidateVerbs);
         context.Approval.SeedOneTimeConsent(new OneTimeConsent(call.Name, OneTimeApprovalKeys.Create(approval)));
 
         var retry = await executor.EvaluateAuthorizationAsync(
@@ -1034,9 +975,6 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
         Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
-        Assert.DoesNotContain(
-            retry.ShellPolicyTrace.Rows,
-            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
     }
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
@@ -1046,7 +984,7 @@ public partial class DispatchingToolExecutorTests
     public async Task Parser_owned_directory_effect_allows_wrapped_transition(
         string command)
     {
-        var approvalService = GrantEveryShellCandidate();
+        var approvalService = GrantShellVerbs(directory: null, "command cd", "builtin cd", "inspect");
         var executor = CreateApprovalGatedShellExecutor(
             approvalService,
             safeVerbs: SafeVerbList.FromVerbs(
@@ -3998,6 +3936,33 @@ public partial class DispatchingToolExecutorTests
         };
         return config;
     }
+
+    // Grants the named verbs everywhere, or in one folder and below it, as the store matches them.
+    private static FixedShellApprovalService GrantShellVerbs(string? directory, params string[] verbs)
+        => new(request => ShellApprovalMatchResult.Create(
+            request.Candidates,
+            null,
+            request.Candidates.Select(candidate =>
+            {
+                var inFolder = directory is null
+                    || candidate.Candidate.Directory is { } candidateDirectory
+                    && (candidateDirectory == directory
+                        || candidateDirectory.StartsWith(directory + "/", StringComparison.Ordinal));
+                if (!verbs.Contains(candidate.Candidate.Verb) || !inFolder)
+                    return ShellGrantCandidateResult.Uncovered(candidate);
+
+                var entry = ApprovalEntry.CreateTokenPrefix(
+                    ApprovalShell.Bash,
+                    Assert.IsAssignableFrom<IReadOnlyList<string>>(candidate.Candidate.VerbTokens),
+                    directory,
+                    createdAt: null);
+                return ShellGrantCandidateResult.Persistent(candidate, entry);
+            }).ToArray()));
+
+    private static IReadOnlyList<string> DescribeRequest(FixedShellApprovalService approvalService)
+        => Assert.IsType<ShellApprovalMatchRequest>(approvalService.LastRequest).Candidates
+            .Select(static candidate => $"{candidate.Candidate.Verb}@{candidate.Candidate.Directory}")
+            .ToArray();
 
     private static FixedShellApprovalService GrantEveryShellCandidate()
         => new(request =>

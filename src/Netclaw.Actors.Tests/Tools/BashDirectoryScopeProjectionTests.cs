@@ -1,46 +1,56 @@
 // -----------------------------------------------------------------------
-// <copyright file="BashCausalApprovalIntentTests.cs" company="Petabridge, LLC">
+// <copyright file="BashDirectoryScopeProjectionTests.cs" company="Petabridge, LLC">
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Actors.Tools;
 using Netclaw.Security;
-using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public sealed class BashCausalApprovalIntentTests
+public sealed class BashDirectoryScopeProjectionTests
 {
     private static readonly ShellExecutionEnvironment BashEnvironment =
         ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
 
     [Fact]
-    public void Exact_diagnostic_chain_projects_prerequisites_and_intent_consumers()
+    public void Exact_diagnostic_chain_gives_each_occurrence_every_reachable_directory()
     {
-        var projected = Project(
+        var projection = Project(
             "cd /tmp && gh api repos/example/project/actions/jobs/123456/logs "
             + "> slopwatch.log 2>&1; wc -c slopwatch.log; head -100 slopwatch.log");
 
-        Assert.Collection(
-            projected,
-            candidate => AssertPrerequisite(candidate, "cd"),
-            candidate => AssertPrerequisite(candidate, "gh api"),
-            candidate => AssertConsumer(candidate, "wc", "/tmp", ["/work"], [0, 1]),
-            candidate => AssertConsumer(candidate, "head", "/tmp", ["/work"], [0, 1]));
+        // A diagnostic runs in /tmp after the change, or in /work when cd fails.
+        Assert.Equal(
+            [
+                "cd|/tmp|/work|",
+                "gh api|/tmp|/tmp|",
+                "wc|/tmp|/tmp|/tmp",
+                "wc|/work|/work|/tmp",
+                "head|/tmp|/tmp|/tmp",
+                "head|/work|/work|/tmp",
+            ],
+            Describe(projection));
     }
 
     [Fact]
-    public void Later_success_gated_transition_replaces_intent_and_prerequisites()
+    public void Later_success_gated_transition_replaces_intent()
     {
-        var projected = Project(
+        var projection = Project(
             "cd /tmp && inspect; head first.log; "
             + "cd /var/tmp && collect; wc second.log");
 
-        Assert.Equal(6, projected.Count);
-        AssertConsumer(projected[2], "head", "/tmp", ["/work"], [0, 1]);
-        AssertConsumer(projected[5], "wc", "/var/tmp", ["/work", "/tmp"], [3, 4]);
+        Assert.Equal(
+            [
+                "head|/tmp|/tmp|/tmp",
+                "head|/work|/work|/tmp",
+                "wc|/tmp|/tmp|/var/tmp",
+                "wc|/var/tmp|/var/tmp|/var/tmp",
+                "wc|/work|/work|/var/tmp",
+            ],
+            Describe(projection).Where(static row => !row.EndsWith('|')));
     }
 
     [Theory]
@@ -48,12 +58,10 @@ public sealed class BashCausalApprovalIntentTests
     [InlineData("builtin cd /tmp && inspect; head result.log")]
     public void Parser_owned_directory_effect_establishes_intent(string command)
     {
-        var projected = Project(command);
+        var projection = Project(command);
 
-        Assert.Equal(3, projected.Count);
-        Assert.IsType<ShellWorkingDirectoryEffect.ChangesOnSuccess>(
-            projected[0].SourceOccurrence.WorkingDirectoryEffect);
-        AssertConsumer(projected[2], "head", "/tmp", ["/work"], [0, 1]);
+        Assert.True(projection.IsCausalList);
+        Assert.Contains("head|/tmp|/tmp|/tmp", Describe(projection));
     }
 
     [Theory]
@@ -76,7 +84,9 @@ public sealed class BashCausalApprovalIntentTests
     [InlineData("cd /tmp && inspect")]
     public void Unsupported_or_ambiguous_flow_does_not_publish_intent(string command)
     {
-        Assert.False(TryProject(BashEnvironment, command, out _));
+        Assert.False(
+            TryProject(BashEnvironment, command, out var projection)
+            && projection.IsCausalList);
     }
 
     [Fact]
@@ -113,11 +123,14 @@ public sealed class BashCausalApprovalIntentTests
             Assert.True(TryProject(
                 BashEnvironment,
                 $"cd {target} && inspect > result.log 2>&1; head result.log",
-                out _));
-            Assert.False(TryProject(
-                BashEnvironment,
-                $"cd {alias} && inspect > result.log 2>&1; head result.log",
-                out _));
+                out var direct));
+            Assert.True(direct.IsCausalList);
+            Assert.False(
+                TryProject(
+                    BashEnvironment,
+                    $"cd {alias} && inspect > result.log 2>&1; head result.log",
+                    out var linked)
+                && linked.IsCausalList);
         }
         finally
         {
@@ -125,48 +138,29 @@ public sealed class BashCausalApprovalIntentTests
         }
     }
 
-    private static IReadOnlyList<BashCausalApprovalCandidate> Project(string command)
+    private static BashDirectoryScopeProjection Project(string command)
     {
-        Assert.True(TryProject(BashEnvironment, command, out var projected));
-        return projected;
+        Assert.True(TryProject(BashEnvironment, command, out var projection));
+        return projection;
     }
 
     private static bool TryProject(
         ShellExecutionEnvironment environment,
         string command,
-        out IReadOnlyList<BashCausalApprovalCandidate> projected)
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BashDirectoryScopeProjection? projection)
     {
-        var analysis = new ShellCommandAnalyzer(environment).Analyze(command, "/work");
-        return BashCausalApprovalIntent.TryProject(
-            environment,
-            analysis,
+        var policy = new ShellCommandPolicy(environment);
+        return BashDirectoryScopeProjection.TryCreate(
+            policy.Analyze(command, environment.PathStyle == ShellPathStyle.Posix ? "/work" : "C:\\work"),
+            policy,
             new ShellApprovalMatcher(environment),
-            LinkRule.FromVolumeRootExceptTemporaryAlias,
-            out projected);
+            out projection);
     }
 
-    private static void AssertPrerequisite(
-        BashCausalApprovalCandidate candidate,
-        string verb)
-    {
-        Assert.Equal(ShellPolicyCandidateRole.CausalPrerequisite, candidate.Role);
-        Assert.Equal(verb, candidate.Candidate.Verb);
-        Assert.Null(candidate.IntentDirectory);
-        Assert.Empty(candidate.PrerequisiteIndexes);
-    }
-
-    private static void AssertConsumer(
-        BashCausalApprovalCandidate candidate,
-        string verb,
-        string intentDirectory,
-        IReadOnlyList<string> fallbackDirectories,
-        IReadOnlyList<int> prerequisiteIndexes)
-    {
-        Assert.Equal(ShellPolicyCandidateRole.CausalIntentConsumer, candidate.Role);
-        Assert.Equal(verb, candidate.Candidate.Verb);
-        Assert.Null(candidate.Candidate.Directory);
-        Assert.Equal(intentDirectory, candidate.IntentDirectory);
-        Assert.Equal(fallbackDirectories, candidate.FallbackDirectories);
-        Assert.Equal(prerequisiteIndexes, candidate.PrerequisiteIndexes);
-    }
+    // verb|candidate directory|slice directory|intent directory
+    private static IReadOnlyList<string> Describe(BashDirectoryScopeProjection projection)
+        => projection.Slices
+            .SelectMany(static slice => slice.Approval.Candidates.Select(candidate =>
+                $"{candidate.Verb}|{candidate.Directory}|{slice.WorkingDirectory}|{slice.IntentDirectory}"))
+            .ToArray();
 }

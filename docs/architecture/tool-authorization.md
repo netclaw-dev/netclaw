@@ -197,7 +197,7 @@ Leaks today:
 | Item | Current state |
 | --- | --- |
 | Question | What does this command do, in general shell terms? |
-| Classes | ShellSyntaxTree through [`ShellCommandAnalysis`](../../src/Netclaw.Security/ShellCommandAnalysis.cs); candidate extraction in `ShellApprovalMatcher` ([`IToolApprovalMatcher.cs`](../../src/Netclaw.Security/IToolApprovalMatcher.cs)); [`ShellTokenizer`](../../src/Netclaw.Security/ShellTokenizer.cs) and [`ShellApprovalSemantics`](../../src/Netclaw.Security/ShellApprovalSemantics.cs) (legacy parser); [`BashCausalApprovalIntent`](../../src/Netclaw.Actors/Tools/BashCausalApprovalIntent.cs); [`BashStaticCompoundApprovalProjection`](../../src/Netclaw.Actors/Tools/BashStaticCompoundApprovalProjection.cs); [`ShellPolicyPathFacts`](../../src/Netclaw.Actors/Tools/ShellPolicyPathFacts.cs); [`ShellFileSystemTreeAccessPolicy`](../../src/Netclaw.Security/ShellFileSystemTreeAccessPolicy.cs) |
+| Classes | ShellSyntaxTree through [`ShellCommandAnalysis`](../../src/Netclaw.Security/ShellCommandAnalysis.cs); candidate extraction in `ShellApprovalMatcher` ([`IToolApprovalMatcher.cs`](../../src/Netclaw.Security/IToolApprovalMatcher.cs)); [`ShellTokenizer`](../../src/Netclaw.Security/ShellTokenizer.cs) and [`ShellApprovalSemantics`](../../src/Netclaw.Security/ShellApprovalSemantics.cs) (legacy parser); [`BashDirectoryScopeProjection`](../../src/Netclaw.Actors/Tools/BashDirectoryScopeProjection.cs) (the directory of each occurrence after a Bash `cd`); [`ShellPolicyPathFacts`](../../src/Netclaw.Actors/Tools/ShellPolicyPathFacts.cs); [`ShellFileSystemTreeAccessPolicy`](../../src/Netclaw.Security/ShellFileSystemTreeAccessPolicy.cs) |
 | Published contract | `ShellCommandPolicy.Analyze(...)` returns a `ShellCommandAnalysis`. `ShellApprovalMatcher.AnalyzeInvocation(...)` returns candidates and an "unresolved" flag (`IsMessy` in code). |
 | Must not know | Grants, audience, the private grammar of an executable. |
 | Data | Call-local. |
@@ -207,8 +207,13 @@ Leaks today:
 
 - Two parsers read one command: ShellSyntaxTree and the legacy tokenizer.
   Hard deny and the protected-path check use both.
-- Three projections produce candidates for one compound Bash command: the
-  matcher candidates, the static compound slices, and the causal intent.
+- Two projections produce candidates for one compound Bash command: the
+  matcher candidates of the full parse, and the directory proof for a list
+  with an exact `cd`. The directory proof also marks the diagnostics of a
+  causal list (`cd dir && action; diagnostic`) for the reviewed-safe intent
+  rule. That rule, the headless denial of a causal list, and its exclusion
+  from the side-effect exemption stay until the owner changes the outcomes
+  that they protect.
 - `ResolveAuthorizationScope` in `IToolApprovalMatcher.cs` names `find`, `cd`,
   `pushd`, and `Set-Location`. This conflicts with the Shell Approval
   Abstraction Rule in [`AGENTS.md`](../../AGENTS.md).

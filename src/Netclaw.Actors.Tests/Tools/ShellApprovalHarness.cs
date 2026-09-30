@@ -751,6 +751,13 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     public Task<ToolAuthorizationDecision> EvaluateDecisionAsync(CancellationToken ct)
         => _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
 
+    /// <summary>Evaluates another shell command and returns the full decision, including its prompt candidates.</summary>
+    public Task<ToolAuthorizationDecision> EvaluateShellDecisionAsync(string command, CancellationToken ct)
+        => _executor.EvaluateAuthorizationAsync(
+            CreateShellCall(_toolCall.CallId, command, workingDirectory: null),
+            _context,
+            ct);
+
     public async Task<string> ExecuteAsync(CancellationToken ct)
     {
         var arguments = new Dictionary<string, object?>(

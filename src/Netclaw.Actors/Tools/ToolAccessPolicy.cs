@@ -234,10 +234,11 @@ public sealed class ToolAccessPolicy
             throw new ArgumentException("Shell preflight requires the shell tool.", nameof(tool));
 
         ShellCommandAnalysis? analysis = null;
+        BashDirectoryScopeProjection? directoryScopes = null;
         var toolName = new ToolName(tool.Name);
         var decision = !_profileResolver.IsToolAllowed(toolName, context.Invocation)
             ? ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile")
-            : AuthorizeShellInvocation(toolName, context, arguments, out analysis);
+            : AuthorizeShellInvocation(toolName, context, arguments, out analysis, out directoryScopes);
 
         if (!decision.NeedsApproval)
         {
@@ -256,7 +257,8 @@ public sealed class ToolAccessPolicy
         return decision.ApprovalContext is { } approvalContext
             ? new ShellPolicyPreflightResult.Continue(
                 analysis,
-                approvalContext)
+                approvalContext,
+                directoryScopes)
             : new ShellPolicyPreflightResult.Complete(
                 ToolAuthorizationResult.Stop(
                     ToolAuthorizationDecision.Deny("internal_policy_failure")));
@@ -318,9 +320,11 @@ public sealed class ToolAccessPolicy
         ToolName toolName,
         ToolExecutionContext context,
         IDictionary<string, object?>? arguments,
-        out ShellCommandAnalysis? authorizedAnalysis)
+        out ShellCommandAnalysis? authorizedAnalysis,
+        out BashDirectoryScopeProjection? directoryScopes)
     {
         authorizedAnalysis = null;
+        directoryScopes = null;
 
         if (EvaluateShellCapability(context.Invocation) is { } capabilityDecision)
             return capabilityDecision;
@@ -355,27 +359,21 @@ public sealed class ToolAccessPolicy
                 analysisArguments,
                 shellAnalysis);
 
-        // Keep causal intent rules for lists that they already prove.
-        // A complete scope proof can clear the headless unresolved-input gate.
-        // A failed proof keeps that gate.
+        // A complete directory proof gives each occurrence its own directory and clears
+        // the unresolved-input gate. An unattended causal list keeps that gate, as it did
+        // before causal lists used this proof.
         if (shellAnalysis is not null
             && shellApproval is { IsMessy: true, Candidates.Count: 0 }
-            && !BashCausalApprovalIntent.TryProject(
-                ShellEnvironment,
-                shellAnalysis,
-                _shellApprovalMatcher,
-                LinkRule.FromVolumeRootExceptTemporaryAlias,
-                out _)
-            && BashStaticCompoundApprovalProjection.TryCreate(
+            && BashDirectoryScopeProjection.TryCreate(
                 shellAnalysis,
                 _shellCommandPolicy,
                 _shellApprovalMatcher,
-                out var staticProjection)
-            && staticProjection is not null
-            && staticProjection.Slices.All(slice =>
-                IsCausalIntentDirectoryEligible(slice.WorkingDirectory)))
+                out var projection)
+            && (!projection.IsCausalList
+                || context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available)
+            && projection.Slices.All(slice => IsDirectoryScopeEligible(slice.WorkingDirectory)))
         {
-            foreach (var slice in staticProjection.Slices)
+            foreach (var slice in projection.Slices)
             {
                 var scopedDeny = _shellCommandPolicy.Evaluate(slice.Analysis);
                 if (!scopedDeny.Allowed)
@@ -398,9 +396,10 @@ public sealed class ToolAccessPolicy
 
             shellApproval = shellApproval with
             {
-                Candidates = staticProjection.Candidates,
+                Candidates = projection.Candidates,
                 IsMessy = false
             };
+            directoryScopes = projection;
         }
 
         // Shell does not classify an executable as a reader or writer. Once
@@ -477,67 +476,15 @@ public sealed class ToolAccessPolicy
                pathFacts,
                context);
 
-    internal bool CausalIntentReferencesProtectedPath(
-        ShellPolicyCandidatePathFacts facts)
-    {
-        ArgumentNullException.ThrowIfNull(facts);
-        if (facts.Intent?.ResolutionBase is not { } intent
-            || string.IsNullOrWhiteSpace(intent.AuthoredValue)
-            || facts.Fallbacks.Count == 0)
-        {
-            return true;
-        }
-
-        if (ScopeReferencesProtectedPath(intent)
-            || facts.Fallbacks.Any(fallback =>
-                ScopeReferencesProtectedPath(fallback.ResolutionBase)))
-        {
-            return true;
-        }
-
-        if (facts.Intent is { } intentPaths
-            && ViewReferencesProtectedPath(intentPaths))
-        {
-            return true;
-        }
-
-        return facts.Fallbacks.Any(ViewReferencesProtectedPath);
-    }
-
-    private bool ScopeReferencesProtectedPath(ShellPolicyScopePathFact scope)
-        => scope is
-        {
-            State: ShellPolicyPathResolutionState.Known,
-            Path: { } path
-        }
-           && _toolPathPolicy.IsShellDeniedProjectedPath(path);
-
-    private bool ViewReferencesProtectedPath(ShellPolicyResolvedPathView view)
-        => view.Facts.Any(fact =>
-            fact.Source.Origin is ShellPolicyPathOrigin.EffectiveArgument
-                or ShellPolicyPathOrigin.AuthoredArgument
-                or ShellPolicyPathOrigin.Redirect
-            && fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
-            && (fact.State == ShellPolicyPathResolutionState.InvalidKnownValue
-                || fact.Paths.Any(path =>
-                    _toolPathPolicy.IsShellDeniedProjectedPath(path))));
-
     /// <summary>
-    /// Returns true when a canonical Bash intent directory has no link from the
+    /// Returns true when a canonical Bash scope directory has no link from the
     /// volume root, except the platform temporary alias (R7).
     /// </summary>
-    internal bool IsCausalIntentDirectoryEligible(string intentDirectory)
+    private bool IsDirectoryScopeEligible(string scopeDirectory)
         => ShellEnvironment.Grammar == ShellGrammar.Bash
-           && CanonicalPath.TryCreate(intentDirectory, relativeBase: null, ShellEnvironment.PathStyle, out var directory)
-           && string.Equals(directory.Value, intentDirectory, StringComparison.Ordinal)
+           && CanonicalPath.TryCreate(scopeDirectory, relativeBase: null, ShellEnvironment.PathStyle, out var directory)
+           && string.Equals(directory.Value, scopeDirectory, StringComparison.Ordinal)
            && FileSystemAuthority.IsLinkFreeFromVolumeRoot(directory, LinkRule.FromVolumeRootExceptTemporaryAlias);
-
-    internal bool AreCausalIntentDirectoriesEligible(
-        string intentDirectory,
-        IReadOnlyList<string> fallbackDirectories)
-        => fallbackDirectories.Count > 0
-           && IsCausalIntentDirectoryEligible(intentDirectory)
-           && fallbackDirectories.All(IsCausalIntentDirectoryEligible);
 
     internal ShellApprovalMatcher ShellApprovalMatcher => _shellApprovalMatcher;
 
@@ -586,7 +533,7 @@ public sealed class ToolAccessPolicy
     /// Applies conservative write protection to all paths in a shell policy projection.
     /// </summary>
     /// <remarks>
-    /// Causal Bash analysis can add intent and fallback views after shell preflight.
+    /// A causal list adds an intent view after shell preflight.
     /// The coordinator must call this method before it checks stored grants or reviewed-safe coverage.
     /// </remarks>
     internal ToolAuthorizationDecision? EnforceProjectedShellFileProtection(
@@ -623,12 +570,6 @@ public sealed class ToolAccessPolicy
         if (candidate.Intent is { } intent)
         {
             foreach (var path in EnumerateKnownShellPaths(intent))
-                yield return path;
-        }
-
-        foreach (var fallback in candidate.Fallbacks)
-        {
-            foreach (var path in EnumerateKnownShellPaths(fallback))
                 yield return path;
         }
     }

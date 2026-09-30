@@ -117,18 +117,23 @@ internal abstract record ShellPolicyPreflightResult
     {
         internal Continue(
             ShellCommandAnalysis analysis,
-            ToolApprovalContext approvalContext)
+            ToolApprovalContext approvalContext,
+            BashDirectoryScopeProjection? directoryScopes)
         {
             ArgumentNullException.ThrowIfNull(analysis);
             ArgumentNullException.ThrowIfNull(approvalContext);
 
             Analysis = analysis;
             ApprovalContext = approvalContext;
+            DirectoryScopes = directoryScopes;
         }
 
         internal ShellCommandAnalysis Analysis { get; }
 
         internal ToolApprovalContext ApprovalContext { get; }
+
+        /// <summary>The directory proof that supplied the candidates, or null when the main parse supplied them.</summary>
+        internal BashDirectoryScopeProjection? DirectoryScopes { get; }
     }
 }
 
@@ -235,13 +240,11 @@ internal sealed class ShellPolicyEvaluation
         if (uncovered.Count == 0)
             throw new InvalidOperationException("No uncovered shell candidates remain.");
 
-        return Projection.HasCausalIntent
-            ? Projection.ApprovalContext
-            : ToolAccessPolicy.NarrowShellApprovalContext(
-                Projection.ApprovalContext,
-                uncovered.Select(static candidate => candidate.Candidate).ToArray(),
-                sessionOwnedDirectories,
-                Projection.Environment.PathStyle);
+        return ToolAccessPolicy.NarrowShellApprovalContext(
+            Projection.ApprovalContext,
+            uncovered.Select(static candidate => candidate.Candidate).ToArray(),
+            sessionOwnedDirectories,
+            Projection.Environment.PathStyle);
     }
 
     internal bool IsCovered(ShellPolicyCandidateId candidateId)

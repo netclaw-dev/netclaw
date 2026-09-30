@@ -301,27 +301,34 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         if (hasCausalMetadata)
         {
             Assert.All(policyCase.Candidates, candidate => Assert.NotNull(candidate.Role));
-            var analysis = new ShellCommandAnalyzer(environment).Analyze(
+            var policy = new ShellCommandPolicy(environment);
+            var analysis = policy.Analyze(
                 policyCase.Command,
                 policyCase.InitialWorkingDirectory);
             AssertWorkingDirectoryEffects(policyCase, analysis);
-            Assert.True(BashCausalApprovalIntent.TryProject(
-                environment,
+            Assert.True(BashDirectoryScopeProjection.TryCreate(
                 analysis,
+                policy,
                 new ShellApprovalMatcher(environment),
-                LinkRule.FromVolumeRootExceptTemporaryAlias,
-                out var causalCandidates));
-            Assert.Equal(policyCase.Candidates.Count, causalCandidates.Count);
+                out var projection));
+            Assert.True(projection.IsCausalList);
+            var scoped = projection.Slices
+                .SelectMany(static slice => slice.Approval.Candidates.Select(candidate => (candidate, slice)))
+                .ToArray();
+            Assert.Equal(policyCase.Candidates.Count, scoped.Length);
             for (var index = 0; index < policyCase.Candidates.Count; index++)
             {
                 var expected = policyCase.Candidates[index];
-                var candidate = causalCandidates[index];
+                var (candidate, slice) = scoped[index];
                 Assert.Equal(index, expected.Id);
-                Assert.Equal(expected.Tokens, candidate.Candidate.VerbTokens);
-                Assert.Equal(expected.RealDirectory, candidate.Candidate.Directory);
-                Assert.Equal(expected.IntentDirectory, candidate.IntentDirectory);
-                Assert.Equal(expected.Role, candidate.Role.ToString());
-                Assert.Equal(expected.PrerequisiteIds ?? [], candidate.PrerequisiteIndexes);
+                Assert.Equal(expected.Tokens, candidate.VerbTokens);
+                Assert.Equal(expected.RealDirectory, candidate.Directory);
+                Assert.Equal(expected.IntentDirectory, slice.IntentDirectory);
+                Assert.Equal(
+                    expected.Role,
+                    slice.IntentDirectory is null
+                        ? nameof(ShellPolicyCandidateRole.CausalPrerequisite)
+                        : nameof(ShellPolicyCandidateRole.CausalIntentConsumer));
             }
 
             return;
