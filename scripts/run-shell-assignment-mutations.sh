@@ -136,8 +136,8 @@ security_patterns+=("ShellCommandAnalysis.cs{$span_start..$span_end}")
 read -r wrapper_start wrapper_end wrapper_start_line wrapper_start_column wrapper_end_line wrapper_end_column < <(
   find_span \
     "$analysis_file" \
-    "if (commands.Skip(innerCommandStart).Any" \
-    "if (commands.Skip(innerCommandStart).Any" \
+    "if (occurrence.Assignments.Count > 0" \
+    "if (occurrence.Assignments.Count > 0" \
     "return ShellAnalysisFailure.Unresolved;"
 )
 security_patterns+=("ShellCommandAnalysis.cs{$wrapper_start..$wrapper_end}")
@@ -233,10 +233,10 @@ security_patterns+=("ShellExecutionEnvironment.cs{$sanitizer_start..$sanitizer_e
 security_output="$output_path/security"
 run_group "stryker-shell-command-analysis.json" "$security_output" "${security_patterns[@]}"
 security_report="$security_output/reports/mutation-report.json"
-assert_report "$security_report" 54
+assert_report "$security_report" 56
 assert_target "$security_report" "digest-match" "$matching_file" "$matching_start_line" "$matching_start_column" "$matching_end_line" "$matching_end_column" 2
 assert_target "$security_report" "assignment-span" "$analysis_file" "$span_start_line" "$span_start_column" "$span_end_line" "$span_end_column" 1
-assert_target "$security_report" "fallback-wrapper-assignments" "$analysis_file" "$wrapper_start_line" "$wrapper_start_column" "$wrapper_end_line" "$wrapper_end_column" 4
+assert_target "$security_report" "fallback-wrapper-assignments" "$analysis_file" "$wrapper_start_line" "$wrapper_start_column" "$wrapper_end_line" "$wrapper_end_column" 6
 assert_target "$security_report" "wrapper-child-source" "$analysis_file" "$source_start_line" "$source_start_column" "$source_end_line" "$source_end_column" 9
 assert_target "$security_report" "hard-deny-screen" "$analysis_file" "$screen_start_line" "$screen_start_column" "$screen_end_line" "$screen_end_column" 2
 assert_target "$security_report" "hard-deny-screen-elements" "$analysis_file" "$screen_miss_start_line" "$screen_miss_start_column" "$screen_miss_end_line" "$screen_miss_end_column" 1

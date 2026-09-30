@@ -240,7 +240,14 @@ internal sealed class ShellCommandAnalyzer
             if (failure != ShellAnalysisFailure.None)
                 return failure;
 
-            if (commands.Skip(innerCommandStart).Any(static inner => inner.Assignments.Count > 0))
+            // SECURITY: an assignment prefix on the wrapper, for example
+            // GIT_SSH_COMMAND=... bash -lc "git push", reaches the child
+            // environment. The child candidates do not carry that assignment
+            // in their identity, so a plain grant for the child would cover
+            // the call. Keep the source unresolved. The check runs after the
+            // child analysis, so the hard-deny screen still sees the child.
+            if (occurrence.Assignments.Count > 0
+                || commands.Skip(innerCommandStart).Any(static inner => inner.Assignments.Count > 0))
                 return ShellAnalysisFailure.Unresolved;
         }
 

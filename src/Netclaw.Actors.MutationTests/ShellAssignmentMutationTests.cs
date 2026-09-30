@@ -136,6 +136,19 @@ public sealed class ShellAssignmentMutationTests
         Assert.False(policy.Evaluate(
             "bash -lc \"mode='fast'; netclaw daemon stop\"",
             "/work").Allowed);
+
+        // An assignment prefix on the wrapper itself reaches the child
+        // environment, so the child candidate must not stay resolved.
+        var wrapperPrefix = analyzer.Analyze(
+            "GIT_SSH_COMMAND=evil bash -lc \"git push\"",
+            "/work");
+        Assert.False(wrapperPrefix.IsResolved);
+        Assert.Contains(
+            wrapperPrefix.Commands,
+            static command => command.Clause.Verb.Tokens.SequenceEqual(["git", "push"]));
+        Assert.False(policy.Evaluate(
+            "GIT_SSH_COMMAND=evil bash -lc \"netclaw daemon stop\"",
+            "/work").Allowed);
     }
 
     [Fact]
