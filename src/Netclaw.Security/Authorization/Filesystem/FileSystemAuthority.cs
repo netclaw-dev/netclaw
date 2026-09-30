@@ -365,6 +365,69 @@ internal sealed class FileSystemAuthority
         return false;
     }
 
+    /// <summary>
+    /// Returns true when a <c>..</c> segment in the raw host path leaves a link, or
+    /// leaves a segment that the host cannot inspect. The OS follows a link before it
+    /// applies <c>..</c>, so the lexical form of such a path does not name the file
+    /// that the OS opens. A relative path resolves against <paramref name="baseDirectory"/>.
+    /// </summary>
+    /// <remarks>
+    /// A path without a <c>..</c> segment returns false and causes no I/O. The check
+    /// reads each character literally; the caller expands the text first. A missing
+    /// segment is not a link, as in <see cref="CrossesLink"/>.
+    /// </remarks>
+    internal static bool HasParentSegmentAfterLink(string path, string? baseDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(path);
+        if (!CanonicalPath.HasParentSegment(path))
+            return false;
+
+        try
+        {
+            string fullPath;
+            if (Path.IsPathFullyQualified(path))
+                fullPath = path;
+            else if (!Path.IsPathRooted(path)
+                     && !string.IsNullOrWhiteSpace(baseDirectory)
+                     && Path.IsPathFullyQualified(baseDirectory))
+                fullPath = Path.Join(baseDirectory, path);
+            else
+                return true;
+
+            char[] separators = OperatingSystem.IsWindows() ? ['/', '\\'] : ['/'];
+            var parent = Path.GetPathRoot(fullPath)!;
+            var parents = new Stack<string>();
+            foreach (var segment in fullPath[parent.Length..].Split(separators))
+            {
+                if (segment is "" or ".")
+                    continue;
+
+                if (segment != "..")
+                {
+                    parents.Push(parent);
+                    parent = Path.Combine(parent, segment);
+                    continue;
+                }
+
+                if (parents.Count == 0)
+                    continue;
+
+                // The ".." leaves the last segment of `parent`. The single walker
+                // checks exactly that segment.
+                if (CrossesLink(parents.Peek(), parent, includeAnchor: false))
+                    return true;
+
+                parent = parents.Pop();
+            }
+
+            return false;
+        }
+        catch (Exception ex) when (IsInspectionFailure(ex))
+        {
+            return true;
+        }
+    }
+
     internal static bool IsInspectionFailure(Exception ex)
         => ex is ArgumentException
             or IOException

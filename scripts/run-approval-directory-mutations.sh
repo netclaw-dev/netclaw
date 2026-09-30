@@ -51,6 +51,18 @@ targets = [
         "!PathUtility.AreEquivalentPaths(reverse, dotGit)",
         1,
     ),
+    # A ".." that leaves a link makes the shell scope unresolved.
+    (
+        "src/Netclaw.Security/IToolApprovalMatcher.cs",
+        "if (HasParentSegmentAfterLink(occurrence, clauseWorkingDirectory, pathStyle))\n"
+        "            return null;",
+        1,
+    ),
+    (
+        "src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs",
+        "CrossesLink(parents.Peek(), parent, includeAnchor: false)",
+        2,
+    ),
 ]
 
 for relative_path, marker, expected_count in targets:
@@ -100,9 +112,9 @@ while IFS=$'\t' read -r _source_name source_file _span_start _span_end line coun
 done <<< "$spans"
 
 # Each target above must die even if Stryker reports unrelated compiler errors.
-jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 9' \
+jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 12' \
   "$report" > /dev/null || {
-  echo "Expected exactly nine approval directory mutants." >&2
+  echo "Expected exactly 12 approval directory mutants." >&2
   exit 1
 }
 

@@ -362,6 +362,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
               ?? cwdAttribution?.Resolved
               ?? (cwdAttribution is null ? workingDirectory : null);
 
+        // The OS follows a link before it applies "..". Every scope below is
+        // lexical, so such an occurrence stays unresolved: exact consent only.
+        if (HasParentSegmentAfterLink(occurrence, clauseWorkingDirectory, pathStyle))
+            return null;
+
         // Each parser path is an authorization scope. A grant must cover all
         // scopes, or a later external path could hide behind an earlier local
         // path. The resolved value also handles native forms such as @file.
@@ -462,6 +467,101 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         return directories.Distinct(StringComparer.Ordinal).ToList();
     }
+
+    /// <summary>
+    /// Returns true when an authored word of the occurrence has a ".." segment
+    /// that leaves a link or an unverifiable segment. The check reads the
+    /// effective and authored argument values, which keep "..", and the decoded
+    /// text of every other element, such as a verb or a redirect target.
+    /// </summary>
+    private static bool HasParentSegmentAfterLink(
+        ShellSyntaxTree.CommandOccurrence occurrence,
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
+    {
+        // A path of another style names no file on this host.
+        if (!CanonicalPath.IsHostPathStyle(pathStyle))
+            return false;
+
+        var checkedElements = new HashSet<ShellSyntaxTree.ClauseElement>(ReferenceEqualityComparer.Instance);
+        foreach (var argument in occurrence.Arguments)
+        {
+            IReadOnlyList<string> values =
+                [.. BoundedValues(argument.Value), .. BoundedValues(argument.AuthoredValue)];
+            if (values.Count == 0)
+                continue;
+
+            checkedElements.Add(argument.Element);
+            if (values.Any(value => HasParentSegmentAfterLink(value, workingDirectory)))
+                return true;
+        }
+
+        foreach (var element in occurrence.Clause.Elements)
+        {
+            if (!checkedElements.Contains(element)
+                && HasParentSegmentAfterLink(element, workingDirectory))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Checks the decoded text of an element without a bounded value. Text
+    /// that the shell can still expand before a ".." hides the segment that
+    /// the ".." leaves, so that text cannot be verified.
+    /// </summary>
+    /// <remarks>
+    /// The parser classifies quoting for argument and redirect words. A
+    /// <see cref="ShellSyntaxTree.ArgKind.Literal"/> word holds no glob,
+    /// variable, or tilde expansion, so those characters are plain path text.
+    /// The parser does not model brace expansion in these words, and it does
+    /// not classify verb words. So "{" and all expansion text in a verb stay
+    /// unverifiable.
+    /// </remarks>
+    private static bool HasParentSegmentAfterLink(
+        ShellSyntaxTree.ClauseElement element,
+        string? workingDirectory)
+    {
+        var literal = element.Role != ShellSyntaxTree.ClauseElementRole.Verb
+                      && element.Kind == ShellSyntaxTree.ArgKind.Literal;
+        var text = literal ? element.Value : PathUtility.ExpandHome(element.Value);
+        return HasUnexpandedTextBeforeParentSegment(text, literal)
+               || HasParentSegmentAfterLink(text, workingDirectory);
+    }
+
+    private static bool HasUnexpandedTextBeforeParentSegment(string text, bool literal)
+    {
+        var segments = OperatingSystem.IsWindows() ? text.Split('/', '\\') : text.Split('/');
+        var lastParent = Array.LastIndexOf(segments, "..");
+        return lastParent > 0
+               && segments[..lastParent].Any(segment => literal
+                   ? segment.Contains('{', StringComparison.Ordinal)
+                   : segment.StartsWith('~') || segment.AsSpan().IndexOfAny("$`*?[{") >= 0);
+    }
+
+    // The @file and provider-qualified forms name the path after the prefix.
+    private static bool HasParentSegmentAfterLink(string value, string? workingDirectory)
+    {
+        const string fileSystemPrefix = "filesystem::";
+        var path = value.TrimStart('@');
+        if (path.StartsWith(fileSystemPrefix, StringComparison.OrdinalIgnoreCase))
+            path = path[fileSystemPrefix.Length..];
+
+        return FileSystemAuthority.HasParentSegmentAfterLink(value, workingDirectory)
+               || path.Length != value.Length
+               && FileSystemAuthority.HasParentSegmentAfterLink(path, workingDirectory);
+    }
+
+    private static IReadOnlyList<string> BoundedValues(ShellSyntaxTree.ShellValueDomain domain)
+        => domain switch
+        {
+            ShellSyntaxTree.ShellValueDomain.Exact exact => [exact.Value],
+            ShellSyntaxTree.ShellValueDomain.FiniteSet finite => finite.Values,
+            _ => []
+        };
 
     private static IReadOnlyList<string>? ResolveArgumentPaths(
         CommandOccurrence occurrence,

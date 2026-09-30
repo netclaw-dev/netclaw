@@ -133,6 +133,12 @@ The prompt offers fewer options when a broader grant is not safe:
 - Only `Once` and `Deny` appear when the shell parser cannot prove a reusable
   phrase for every command in the call, or when the call is a managed
   temporary directory retry.
+- Only `Once` and `Deny` appear when a shell path has a `..` segment that
+  leaves a symbolic link. The OS follows the link before it applies `..`. If
+  `lnk` points to `/data/deep`, then `cat lnk/../notes.txt` reads
+  `/data/notes.txt` and not `./notes.txt`. No grant or reviewed-safe phrase
+  covers such a call, and a headless call is denied. A `..` that leaves an
+  ordinary directory keeps its normal approval behavior.
 - `Always here` is absent for non-shell tools, for a shallow directory, and
   for a session-owned directory.
 - `This repository` appears only for a shell call whose commands all resolve

@@ -47,7 +47,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers must stay one-time, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 56 killed | `./scripts/run-shell-assignment-mutations.sh` |
-| Filesystem authority folder membership, repository identity, and repository persistence | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it | 12 killed | `./scripts/run-approval-directory-mutations.sh` |
+| Filesystem authority folder membership, repository identity, and repository persistence | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved | 15 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
@@ -133,7 +133,7 @@ Run the approval directory gate:
 ```
 
 The script reuses the xUnit 2 harness.
-It selects six security source regions and three approval actor conditions.
+It selects eight security source regions and three approval actor conditions.
 Folder containment and link checks are in the filesystem authority
 (`src/Netclaw.Security/Authorization/Filesystem`). Bash and PowerShell grants use
 the same containment rule and the same link walker, so one containment target
@@ -145,20 +145,23 @@ replaces the two shell-specific targets.
 | Folder link rule starts below the grant root (`LinkRule.BelowRoot`) | 1 killed: include the root in the link check |
 | Link rejection result | 2 killed: force either conditional outcome |
 | Candidate repository scope and identity | 3 killed: force a result or relax the identity check |
+| Parent segment after a link, matcher gate (`ShellApprovalMatcher`) | 1 killed: negate the condition |
+| Parent segment after a link, link test (`FileSystemAuthority`) | 2 killed: negate the test or include the anchor |
 | Common identity across candidates (`RepositoryIdentity`) | 1 killed: remove the logical negation |
 | Reciprocal worktree registration (`RepositoryIdentity`) | 1 killed: remove the logical negation |
 | Persistence candidate resolution | 1 killed: remove the logical negation |
 | Persistence common identity | 1 killed: remove the logical negation |
 | Persistence worktree root | 1 killed: remove the logical negation |
 
-The script requires these counts at their exact source locations and 12 tested mutants overall.
+The script requires these counts at their exact source locations and 15 tested mutants overall.
 It fails if a target is absent, survives, exceeds its time limit, or cannot compile.
 The source selector rejects an absent or duplicate boundary before Stryker starts.
 This protects the gate when the authorization code and diagnostic code contain similar conditions.
 
-Eighteen cases exercise the approval matcher and persistence gate with real directories and links.
+Twenty-two cases exercise the approval matcher and persistence gate with real directories and links.
 They cover the grant root, normal descendants, sibling prefixes, traversal, relative paths, and candidate scope that differs from cwd.
 One case proves that a grant root which is itself a link still covers its children (R3).
+One case proves that a `..` after a link voids the grant, and that a `..` after a real directory or below a root alias keeps it.
 The repository cases cover candidate resolution, mixed identities, reciprocal registration, and a nested registered worktree.
 The link cases prove that the link reaches the sibling directory before they require denial.
 Windows path cases cover case rules, drive boundaries, and traversal on every host.
