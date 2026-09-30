@@ -42,8 +42,8 @@ public sealed class KnownBenignExceptionsTests
     [Fact]
     public void Non_mcp_http_request_exception_with_real_stack_is_not_benign()
     {
-        var exception = CaptureThrown(() =>
-            throw new HttpRequestException("Response status code does not indicate success: 502 (Bad Gateway)."));
+        var exception = Assert.Throws<HttpRequestException>((Action)(() =>
+            throw new HttpRequestException("Response status code does not indicate success: 502 (Bad Gateway).")));
 
         Assert.NotNull(exception.StackTrace);
         Assert.False(KnownBenignExceptions.IsMcpSessionSendFailure(exception));
@@ -94,20 +94,6 @@ public sealed class KnownBenignExceptionsTests
         return await Assert.ThrowsAsync<HttpRequestException>(() => client.SendNotificationAsync(
             "notifications/netclaw-test",
             cancellationToken: TestContext.Current.CancellationToken));
-    }
-
-    private static Exception CaptureThrown(Action action)
-    {
-        try
-        {
-            action();
-        }
-        catch (Exception ex)
-        {
-            return ex;
-        }
-
-        throw new InvalidOperationException("Expected the action to throw.");
     }
 
     private sealed class FakeOperationCanceledException(string stackTrace) : OperationCanceledException
