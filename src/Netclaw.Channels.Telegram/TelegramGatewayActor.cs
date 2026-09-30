@@ -83,6 +83,7 @@ public sealed class TelegramGatewayActor : ChannelGatewayActor<TelegramChatId>
 public sealed record TelegramGatewayDependencies(
     ISessionPipeline Pipeline,
     SessionIngressGate? IngressGate,
+    TimeProvider TimeProvider,
     TelegramChannelOptions Options,
     TelegramTransport Transport,
     IContentScanner ContentScanner,

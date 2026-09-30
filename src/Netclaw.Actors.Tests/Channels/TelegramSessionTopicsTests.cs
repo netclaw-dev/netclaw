@@ -46,6 +46,7 @@ public sealed class TelegramSessionTopicsTests(ITestOutputHelper output) : TestK
         var dependencies = new TelegramGatewayDependencies(
             pipeline,
             IngressGate: null,
+            TimeProvider: TimeProvider.System,
             options,
             transport,
             ContentScanner: null!,

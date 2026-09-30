@@ -68,6 +68,7 @@ public sealed class TelegramGatewayContractTests(ITestOutputHelper output)
         var deps = new TelegramGatewayDependencies(
             Pipeline: new GatewaySignalPipeline(TestActor),
             IngressGate: null,
+            TimeProvider: TimeProvider.System,
             Options: telegramOptions,
             Transport: transport,
             ContentScanner: new NullContentScanner(),

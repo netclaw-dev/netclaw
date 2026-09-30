@@ -139,6 +139,7 @@ public sealed class TelegramChannel : IChannel
             TelegramGatewayActor.CreateProps(new TelegramGatewayDependencies(
                 _pipeline,
                 _ingressGate,
+                _timeProvider,
                 _options,
                 _transport,
                 _contentScanner,

@@ -31,6 +31,7 @@ public sealed class TelegramReminderRoutingTests(ITestOutputHelper output) : Tes
         var dependencies = new TelegramGatewayDependencies(
             null!,
             null,
+            TimeProvider.System,
             new TelegramChannelOptions(),
             null!,
             null!,

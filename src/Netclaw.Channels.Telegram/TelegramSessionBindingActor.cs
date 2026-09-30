@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Threading.Channels;
 using Akka.Actor;
 using Akka.Event;
@@ -24,16 +25,28 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
     private static readonly TimeSpan TypingRefreshInterval = TimeSpan.FromSeconds(4);
     private static readonly object TypingTimerKey = new();
 
+    // Same empty-turn fallback text the other channel bindings post; the
+    // shared session contract pins the wording.
+    internal const string EmptyTurnFallbackText =
+        ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
+
     private readonly SessionId _sessionId;
     private readonly TelegramChatId _chatId;
     private readonly int? _messageThreadId;
     private readonly TelegramGatewayDependencies _dependencies;
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
-    private readonly Dictionary<string, PendingApproval> _pendingApprovals = new(StringComparer.Ordinal);
-    private readonly Dictionary<ReminderId, IActorRef> _reminderDeliveryObservers = new();
+    private readonly SafeTransportCall _safeTransport;
+    private readonly ChannelOutputEngine<PendingApprovalRequest<int>, int> _outputEngine;
+
+    // Telegram-side approval prompt UI state: one callback token per rendered
+    // option and the prompt's message id. Resolution stays in this actor until
+    // the shared ApprovalResponseFlow migration; the engine tracks the pending
+    // requests themselves.
+    private readonly Dictionary<string, PendingCallbackApproval> _pendingApprovals = new(StringComparer.Ordinal);
+    private readonly List<PendingApprovalRequest<int>> _pendingApprovalRequests = [];
+
     private volatile bool _processingIndicatorActive;
-    private bool _deliveredThisTurn;
 
     public ITimerScheduler Timers { get; set; } = null!;
 
@@ -57,8 +70,38 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         _log = Context.GetLogger().WithContext("Adapter", "telegram");
         _handle = new SessionPipelineHandle(dependencies.Pipeline, _log, "telegram");
 
+        _safeTransport = new SafeTransportCall(
+            ChannelType.Telegram,
+            dependencies.TimeProvider,
+            NotifyDeliveryFailedAsync);
+
+        _outputEngine = new ChannelOutputEngine<PendingApprovalRequest<int>, int>(
+            channelType: ChannelType.Telegram,
+            channelName: "Telegram",
+            // Telegram sessions have no cursor semantics; the engine's cursor
+            // bookkeeping is inert without a cursor key supplier.
+            cursorComparer: StringComparer.Ordinal,
+            pendingRequests: _pendingApprovalRequests,
+            createPendingRequest: request => new PendingApprovalRequest<int>(request),
+            isApprovalRequest: request => string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase),
+            renderTextOutput: output => string.IsNullOrWhiteSpace(output.Text) ? null : output.Text,
+            renderErrorOutput: output => $"Sorry, NetClaw had a problem: {output.Message}",
+            postTextAsync: PostReplyAsync,
+            uploadFileAsync: SendFileOutputAsync,
+            postApprovalPromptAsync: SendApprovalPromptAsync,
+            readPromptIdValue: promptMessageId => promptMessageId.ToString(CultureInfo.InvariantCulture),
+            onApprovalPromptFailedAsync: request => SendApprovalDenyOnFailureAsync(request.CallId),
+            // The pending-prompt journal lands with the callback-identity
+            // migration; the binding is not persistent yet.
+            persistPromptTracked: _ => { },
+            handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
+            advanceCursor: _ => { },
+            postEmptyTurnFallbackAsync: () => PostReplyAsync(EmptyTurnFallbackText),
+            onEmptyTurnSuppressedAsync: _ => Task.CompletedTask,
+            readObservedAtMs: completed => completed.TimestampMs);
+
         ReceiveAsync<TelegramSessionInbound>(HandleInboundAsync);
-        ReceiveAsync<OutputReceived>(HandleOutputAsync);
+        ReceiveAsync<OutputReceived>(HandleOutputReceivedAsync);
         ReceiveAsync<TelegramCallbackQuery>(HandleCallbackAsync);
         ReceiveAsync<StartTelegramProactiveChat>(HandleProactiveChatAsync);
         ReceiveAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
@@ -110,6 +153,7 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             DefaultDeliveryTarget = new ChannelDeliveryTargetInfo(
                 "telegram", "destination", message.ChatId.ToString(), message.ChatId.ToString())
         });
+        _outputEngine.AdvancePendingCursorForEnqueuedTurn(null);
     }
 
     private async Task HandleProactiveChatAsync(StartTelegramProactiveChat message)
@@ -141,6 +185,11 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             return;
         }
 
+        if (message.Source.DeliveryObserver is { } observer
+            && message.Source.ReminderId is { } reminderKey
+            && !string.IsNullOrWhiteSpace(reminderKey.Value))
+            _outputEngine.TrackReminderDeliveryObserver(reminderKey, observer);
+
         var input = new ChannelInput
         {
             SenderId = message.Source.SenderId,
@@ -158,15 +207,11 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             AckTarget = ackTarget
         };
 
-        if (message.Source.DeliveryObserver is { } observer
-            && message.Source.ReminderId is { } reminderKey
-            && !string.IsNullOrWhiteSpace(reminderKey.Value))
-            _reminderDeliveryObservers[reminderKey] = observer;
-
         try
         {
             using var writeCts = new CancellationTokenSource(OperationTimeout);
             await writer.WriteAsync(input, writeCts.Token);
+            _outputEngine.AdvancePendingCursorForEnqueuedTurn(null);
         }
         catch (OperationCanceledException)
         {
@@ -257,57 +302,23 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
             contents.Add(new TextContent(string.Join('\n', acceptedLines)));
     }
 
-    private async Task HandleOutputAsync(OutputReceived message)
+    private async Task HandleOutputReceivedAsync(OutputReceived message)
     {
-        switch (message.Output)
+        // The binding is not persistent yet, so the returned prompt-cleared
+        // journal events have no store; they land with the callback-identity
+        // migration together with pending-prompt tracking.
+        await _outputEngine.HandleOutputAsync(message.Output);
+    }
+
+    /// <summary>
+    /// Handles the outputs the shared engine leaves to the channel. Telegram
+    /// renders a processing indicator and keeps a typing refresh timer alive
+    /// while the indicator is active.
+    /// </summary>
+    private async Task HandleChannelSpecificOutputAsync(SessionOutput output)
+    {
+        switch (output)
         {
-            case TextOutput output:
-            {
-                var text = output.Text;
-                if (!string.IsNullOrWhiteSpace(text))
-                {
-                    await _dependencies.Transport.SendTextAsync(
-                        _chatId.Value,
-                        text,
-                        messageThreadId: _messageThreadId);
-                    _deliveredThisTurn = true;
-                }
-                break;
-            }
-
-            case ErrorOutput output:
-                await _dependencies.Transport.SendTextAsync(
-                    _chatId.Value,
-                    $"Sorry, NetClaw had a problem: {output.Message}",
-                    messageThreadId: _messageThreadId);
-                _deliveredThisTurn = true;
-                break;
-
-            case FileOutput output:
-                if (await SendFileOutputAsync(output))
-                    _deliveredThisTurn = true;
-                break;
-
-            case TurnCompleted completed:
-                if (completed.SourceReminderId is { } reminderKey
-                    && _reminderDeliveryObservers.Remove(reminderKey, out var observer))
-                {
-                    observer.Tell(new ReminderDeliveryResult(
-                        reminderKey,
-                        ChannelType.Telegram,
-                        _deliveredThisTurn,
-                        _deliveredThisTurn ? null : "Telegram post did not succeed",
-                        completed.TimestampMs));
-                }
-
-                _deliveredThisTurn = false;
-                break;
-
-            case ToolInteractionRequest request
-                when string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase):
-                await SendApprovalPromptAsync(request);
-                break;
-
             case ProcessingStateOutput { IsProcessing: true } processing:
                 await RenderProcessingStateAsync(processing);
                 break;
@@ -319,9 +330,18 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         }
     }
 
-    private async Task SendApprovalPromptAsync(ToolInteractionRequest request)
+    private void PostReplyFailureLogAsync(Exception ex)
+        => _log.Warning(ex, "Failed to deliver Telegram reply to chat {ChatId}", _chatId.Value);
+
+    private Task<bool> PostReplyAsync(string text)
+        => _safeTransport.InvokeAsync(
+            () => _dependencies.Transport.SendTextAsync(
+                _chatId.Value, text, messageThreadId: _messageThreadId),
+            PostReplyFailureLogAsync);
+
+    private async Task<int?> SendApprovalPromptAsync(ToolInteractionRequest request)
     {
-        var pending = new PendingApproval(request);
+        var pending = new PendingCallbackApproval(request);
         var buttons = request.Options.Select((option, index) =>
         {
             var token = $"nc_{Guid.NewGuid():N}_{index}";
@@ -333,19 +353,23 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         try
         {
             using var cts = new CancellationTokenSource(OperationTimeout);
-            pending.MessageId = await _dependencies.Transport.SendApprovalPromptAsync(
+            var messageId = await _dependencies.Transport.SendApprovalPromptAsync(
                 _chatId.Value,
                 TelegramApprovalPromptBuilder.BuildPrompt(request),
                 buttons,
                 messageThreadId: _messageThreadId,
                 cancellationToken: cts.Token);
+            pending.MessageId = messageId;
             _log.Info("Posted Telegram approval prompt for call {CallId}", request.CallId);
+            return messageId;
         }
         catch (Exception ex)
         {
             RemovePendingApproval(pending);
             _log.Error(ex, "Failed to post Telegram approval prompt; denying call {CallId}", request.CallId);
-            await SendApprovalDenyOnFailureAsync(request.CallId);
+            // The engine routes this to the auto-deny hook so the blocked tool
+            // call unwinds instead of waiting forever.
+            return null;
         }
     }
 
@@ -448,10 +472,10 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         }
     }
 
-    private void RemovePendingApproval(PendingApproval pending)
+    private void RemovePendingApproval(PendingCallbackApproval pending)
     {
-        foreach (var token in pending.Selections.Keys)
-            _pendingApprovals.Remove(token);
+        foreach (var (key, _) in pending.Selections)
+            _pendingApprovals.Remove(key);
     }
 
     private async Task<bool> SendFileOutputAsync(FileOutput output)
@@ -559,11 +583,32 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         _chatId.Value.ToString(),
         _chatId.Value.ToString());
 
+    private async Task NotifyDeliveryFailedAsync(DeliveryFailureKind failureKind, string errorMessage)
+    {
+        try
+        {
+            await _dependencies.Pipeline.SendFeedbackAsync(new DeliveryFailed
+            {
+                SessionId = _sessionId,
+                TurnNumber = _outputEngine.LastCompletedTurnNumber,
+                ChannelType = ChannelType.Telegram,
+                FailureKind = failureKind,
+                ErrorMessage = errorMessage
+            });
+        }
+        catch (Exception ex)
+        {
+            // A dead feedback pipe means the session never learns the turn
+            // failed. Rethrow so supervision tears this actor down; the next
+            // inbound re-creates it with a fresh pipeline instead of leaving
+            // a zombie.
+            _log.Error(ex, "Failed to send delivery feedback to session; propagating to trigger pipeline reinit");
+            throw;
+        }
+    }
+
     protected override void PostStop()
     {
-        foreach (var (key, observer) in _reminderDeliveryObservers)
-            observer.Tell(new ReminderDeliveryResult(key, ChannelType.Telegram, false, "Telegram session stopped before delivery"));
-        _reminderDeliveryObservers.Clear();
         Timers.Cancel(TypingTimerKey);
         _handle.Dispose();
         base.PostStop();
@@ -578,7 +623,7 @@ internal sealed class TelegramSessionBindingActor : ReceiveActor, IWithTimers
         public static RefreshTyping Instance { get; } = new();
     }
 
-    private sealed class PendingApproval(ToolInteractionRequest request)
+    private sealed class PendingCallbackApproval(ToolInteractionRequest request)
     {
         public ToolInteractionRequest Request { get; } = request;
 
