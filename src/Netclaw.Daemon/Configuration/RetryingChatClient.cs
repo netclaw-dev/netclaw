@@ -67,7 +67,7 @@ public sealed class RetryingChatClient : DelegatingChatClient
 
         while (true)
         {
-            var yieldedChunk = false;
+            var gate = new StreamCommitGate();
             Exception? preFirstChunkFailure = null;
 
             // Initiation can throw before any enumerator is produced.
@@ -87,27 +87,29 @@ public sealed class RetryingChatClient : DelegatingChatClient
             await using var enumerator = stream.GetAsyncEnumerator(cancellationToken);
             while (true)
             {
-                ChatResponseUpdate update;
+                IReadOnlyList<ChatResponseUpdate> toEmit;
+                bool ended;
                 try
                 {
-                    if (!await enumerator.MoveNextAsync())
-                        break;
-
-                    update = enumerator.Current;
+                    ended = !await enumerator.MoveNextAsync();
+                    toEmit = ended ? gate.Complete() : gate.Accept(enumerator.Current);
                 }
                 catch (Exception ex) when (!cancellationToken.IsCancellationRequested
-                                           && !yieldedChunk
+                                           && !gate.Committed
                                            && _policy.ShouldRetry(ex, attempt))
                 {
-                    // Pre-first-chunk failure: safe to restart (nothing emitted yet).
+                    // Pre-first-chunk failure: safe to restart (no real output emitted yet).
                     preFirstChunkFailure = ex;
                     break;
                 }
 
-                // Past this point a chunk has been emitted; a later failure is NOT
-                // caught above (yieldedChunk is true) and propagates to the consumer.
-                yieldedChunk = true;
-                yield return update;
+                // Once the gate has committed, a later failure is NOT caught above and
+                // propagates to the consumer.
+                foreach (var update in toEmit)
+                    yield return update;
+
+                if (ended)
+                    break;
             }
 
             if (preFirstChunkFailure is null)

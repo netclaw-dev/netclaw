@@ -90,7 +90,7 @@ public sealed class RoutingChatClient : IChatClient
         for (var i = 0; i < candidates.Count; i++)
         {
             var isLast = i == candidates.Count - 1;
-            var yieldedChunk = false;
+            var gate = new StreamCommitGate();
             Exception? failure = null;
 
             // Initiation can throw before any enumerator is produced.
@@ -109,25 +109,27 @@ public sealed class RoutingChatClient : IChatClient
                 await using var enumerator = stream.GetAsyncEnumerator(cancellationToken);
                 while (true)
                 {
-                    ChatResponseUpdate update;
+                    IReadOnlyList<ChatResponseUpdate> toEmit;
+                    bool ended;
                     try
                     {
-                        if (!await enumerator.MoveNextAsync())
-                            break;
-
-                        update = enumerator.Current;
+                        ended = !await enumerator.MoveNextAsync();
+                        toEmit = ended ? gate.Complete() : gate.Accept(enumerator.Current);
                     }
-                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && !yieldedChunk)
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && !gate.Committed)
                     {
-                        // Pre-first-chunk failure: safe to fail over (nothing emitted yet).
+                        // Pre-first-chunk failure: safe to fail over (no real output emitted yet).
                         failure = ex;
                         break;
                     }
 
-                    // Past here a chunk has been emitted; a later failure is NOT caught
-                    // above (yieldedChunk is true) and propagates to the consumer.
-                    yieldedChunk = true;
-                    yield return update;
+                    // Once the gate has committed, a later failure is NOT caught above and
+                    // propagates to the consumer.
+                    foreach (var update in toEmit)
+                        yield return update;
+
+                    if (ended)
+                        break;
                 }
             }
 

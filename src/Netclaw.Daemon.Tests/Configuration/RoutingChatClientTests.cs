@@ -186,6 +186,41 @@ public sealed class RoutingChatClientTests
     }
 
     [Fact]
+    public async Task Streaming_FailsOver_WhenPrimaryFailsAfterOnlyLifecycleUpdates()
+    {
+        // The Responses adapter yields content-free lifecycle updates (response.created,
+        // in_progress) before any output. A failure after those is still pre-first-chunk.
+        var sink = new CapturingSink();
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) => LifecycleThenThrowAsync("resp-primary", ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) => LifecycleThenTextAsync("resp-fallback", "fallback", ct));
+
+        var updates = await CollectUpdates(Client(sink, primary, fallback));
+
+        Assert.Contains(sink.Alerts, a => a.Category == AlertType.ProviderFailover);
+        Assert.DoesNotContain(updates, u => u.ResponseId == "resp-primary");
+        var response = updates.ToChatResponse();
+        Assert.Equal("resp-fallback", response.ResponseId);
+        Assert.Equal("fallback", Assert.Single(response.Messages).Text);
+    }
+
+    [Fact]
+    public async Task Streaming_PassesRoleOnlyKeepalivesThrough()
+    {
+        // Self-hosted providers send role-only keepalives during prefill; the session
+        // watchdog relies on seeing them, so they must not be held.
+        var sink = new CapturingSink();
+        var keepalive = new ChatResponseUpdate { Role = ChatRole.Assistant };
+        var primary = new FakeChatClient(streamHandler: (_, _, ct) => KeepalivesThenTextAsync(keepalive, 3, ct));
+        var fallback = new FakeChatClient(streamHandler: (_, _, ct) => SingleTextUpdateAsync("fallback", ct));
+
+        var updates = await CollectUpdates(Client(sink, primary, fallback));
+
+        Assert.Equal(4, updates.Count);
+        Assert.All(updates.Take(3), u => Assert.Same(keepalive, u));
+        Assert.Equal("text", updates[3].Text);
+    }
+
+    [Fact]
     public async Task Streaming_DoesNotFailover_AfterPrimaryAlreadyYielded()
     {
         var sink = new CapturingSink();
@@ -273,6 +308,55 @@ public sealed class RoutingChatClientTests
         }
 
         return texts;
+    }
+
+    private static async Task<List<ChatResponseUpdate>> CollectUpdates(IChatClient client)
+    {
+        var updates = new List<ChatResponseUpdate>();
+        await foreach (var u in client.GetStreamingResponseAsync(
+            [new ChatMessage(ChatRole.User, "hi")], cancellationToken: TestContext.Current.CancellationToken))
+        {
+            updates.Add(u);
+        }
+
+        return updates;
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> LifecycleThenThrowAsync(
+        string responseId, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        yield return new ChatResponseUpdate { Role = ChatRole.Assistant, ResponseId = responseId, MessageId = responseId + "-msg" };
+        throw new HttpRequestException("primary stream failed after lifecycle updates");
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> LifecycleThenTextAsync(
+        string responseId, string text, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        cancellationToken.ThrowIfCancellationRequested();
+        yield return new ChatResponseUpdate { Role = ChatRole.Assistant, ResponseId = responseId, MessageId = responseId + "-msg" };
+        yield return new ChatResponseUpdate
+        {
+            Role = ChatRole.Assistant,
+            ResponseId = responseId,
+            MessageId = responseId + "-msg",
+            Contents = [new TextContent(text)],
+        };
+    }
+
+    private static async IAsyncEnumerable<ChatResponseUpdate> KeepalivesThenTextAsync(
+        ChatResponseUpdate keepalive, int count, [EnumeratorCancellation] CancellationToken cancellationToken)
+    {
+        await Task.Yield();
+        for (var i = 0; i < count; i++)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            yield return keepalive;
+        }
+
+        yield return new ChatResponseUpdate { Role = ChatRole.Assistant, Contents = [new TextContent("text")] };
     }
 
     private static async IAsyncEnumerable<ChatResponseUpdate> ThrowBeforeFirstChunkAsync(
