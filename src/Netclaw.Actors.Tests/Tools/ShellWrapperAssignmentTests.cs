@@ -50,6 +50,10 @@ public sealed class ShellWrapperAssignmentTests(ShellApprovalMatrixFixture fixtu
     [InlineData("GIT_SSH_COMMAND=evil sh -c \"git push\"", true)]
     [InlineData("X=1 GIT_SSH_COMMAND=evil bash -lc \"git push\"", false)]
     [InlineData("X=1 GIT_SSH_COMMAND=evil bash -lc \"git push\"", true)]
+    [InlineData("X=1 GIT_SSH_COMMAND=evil sh -lc \"git push\"", false)]
+    [InlineData("X=1 GIT_SSH_COMMAND=evil sh -lc \"git push\"", true)]
+    [InlineData("X=1 GIT_SSH_COMMAND=evil sh -c \"git push\"", false)]
+    [InlineData("X=1 GIT_SSH_COMMAND=evil sh -c \"git push\"", true)]
     public async Task Wrapper_assignment_prefix_does_not_match_a_plain_child_grant(
         string command,
         bool bash52)

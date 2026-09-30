@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -70,11 +71,11 @@ public sealed class ShellWrapperChildSourceTests(ShellApprovalMatrixFixture fixt
         Assert.Equal(SelfDestructive, unattended.DenyReason);
     }
 
-    // An assignment prefix keeps the analysis unresolved. With an unknown
+    // An assignment prefix can keep the analysis unresolved. With an unknown
     // Bash initial state the approval parser rejects the assignment word, and
-    // Bash 5.2 rejects an assignment inside a wrapper. In both hosts the
-    // denied command must still meet the hard-deny list, because a hard
-    // denial must hold even when an operator would approve the call.
+    // Bash 5.2 rejects an assignment inside a wrapper. The hard-deny screen
+    // must still see the denied command. A hard denial holds in every
+    // approval mode, so Auto mode must not run the command either.
     [Theory]
     [InlineData("bash -lc \"echo \\\"a b\\\"; X=1 netclaw daemon stop\"", false)]
     [InlineData("bash -lc \"echo \\\"a b\\\"; X=1 netclaw daemon stop\"", true)]
@@ -84,20 +85,29 @@ public sealed class ShellWrapperChildSourceTests(ShellApprovalMatrixFixture fixt
     [InlineData("bash -lc \"X=1 netclaw daemon stop\"", true)]
     [InlineData("X=1 netclaw daemon stop", false)]
     [InlineData("X=1 netclaw daemon stop", true)]
+    [InlineData("X=1 Y=2 netclaw daemon stop", false)]
+    [InlineData("X=1 Y=2 netclaw daemon stop", true)]
+    [InlineData("bash -lc \"X=1 Y=2 netclaw daemon stop\"", false)]
+    [InlineData("bash -lc \"X=1 Y=2 netclaw daemon stop\"", true)]
+    [InlineData("bash -lc \"echo \\\"a b\\\"; X=1 Y=2 netclaw daemon stop\"", false)]
+    [InlineData("bash -lc \"echo \\\"a b\\\"; X=1 Y=2 netclaw daemon stop\"", true)]
     public async Task Assignment_prefix_cannot_hide_a_denied_command(string command, bool bash52)
     {
         var host = bash52 ? ShellApprovalHost.Bash52 : ShellApprovalHost.Bash;
 
-        var interactive = await EvaluateAsync(command, interactive: true, host);
-        var unattended = await EvaluateAsync(command, interactive: false, host);
+        foreach (var mode in new[] { ToolApprovalMode.Approval, ToolApprovalMode.Auto })
+        {
+            foreach (var interactive in new[] { true, false })
+            {
+                var observed = await EvaluateAsync(command, interactive, host, mode);
 
-        Assert.Equal(ApprovalOutcome.Denied, interactive.Outcome);
-        Assert.Equal(SelfDestructive, interactive.DenyReason);
-        Assert.Equal(ApprovalOutcome.Denied, unattended.Outcome);
-        Assert.Equal(SelfDestructive, unattended.DenyReason);
+                Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+                Assert.Equal(SelfDestructive, observed.DenyReason);
+            }
+        }
     }
 
-    // ShellSyntaxTree 0.4.0-beta.5 cannot parse an ANSI-C quote. The input
+    // ShellSyntaxTree 0.4.0-beta.6 cannot parse an ANSI-C quote. The input
     // stays unresolved: an exact one-time prompt when interactive, and a
     // denial when unattended. It never becomes allowed or reusable.
     [Theory]
@@ -187,20 +197,28 @@ public sealed class ShellWrapperChildSourceTests(ShellApprovalMatrixFixture fixt
     private Task<ApprovalObservation> EvaluateAsync(string command, bool interactive)
         => EvaluateAsync(command, interactive, ShellApprovalHost.Bash);
 
-    private async Task<ApprovalObservation> EvaluateAsync(
+    private Task<ApprovalObservation> EvaluateAsync(
         string command,
         bool interactive,
         ShellApprovalHost host)
+        => EvaluateAsync(command, interactive, host, ToolApprovalMode.Approval);
+
+    private async Task<ApprovalObservation> EvaluateAsync(
+        string command,
+        bool interactive,
+        ShellApprovalHost host,
+        ToolApprovalMode mode)
     {
         await using var harness = await ShellApprovalHarness.CreateAsync(
             $"wrapper-child-source-{(interactive ? "interactive" : "unattended")}",
             new ShellApprovalInvocation(command, Interactive: interactive, Host: host),
             Approvals.None,
             fixture.ActorSystem,
-            Ct);
+            Ct,
+            shellApprovalMode: mode);
         var observed = await harness.EvaluateAsync(Ct);
         TestContext.Current.TestOutputHelper?.WriteLine(
-            $"{command} | {host} | interactive={interactive} | {observed.Outcome} | "
+            $"{command} | {host} | {mode} | interactive={interactive} | {observed.Outcome} | "
             + $"allow={observed.AllowReason} | deny={observed.DenyReason} | "
             + $"candidates={string.Join(",", observed.Prompt?.CandidateVerbs ?? [])} | "
             + $"messy={observed.Prompt?.IsMessy} | "
