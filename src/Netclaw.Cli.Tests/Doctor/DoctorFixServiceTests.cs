@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Daemon;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Doctor;
 using Microsoft.Extensions.Configuration;
@@ -432,27 +433,118 @@ public sealed class DoctorFixServiceTests
         }
         """;
 
-    [Fact]
-    public async Task Rewrites_legacy_default_allowlists_after_a_backup()
+    private const string FixName = "remove copied default audience tool lists";
+
+    public static TheoryData<TrustAudience, int> ShippedDefaultRows()
     {
+        var rows = new TheoryData<TrustAudience, int>();
+        for (var row = 0; row < ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools.Count; row++)
+            rows.Add(TrustAudience.Public, row);
+        for (var row = 0; row < ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools.Count; row++)
+            rows.Add(TrustAudience.Team, row);
+        return rows;
+    }
+
+    // Each shipped list, which includes the current default, is deleted. The daemon applies the
+    // same effective ToolConfig before and after the fix, and the rest of the profile stays.
+    [Theory]
+    [MemberData(nameof(ShippedDefaultRows))]
+    public async Task Deletes_each_shipped_default_allowlist_and_keeps_the_bound_result(TrustAudience audience, int row)
+    {
+        var table = audience == TrustAudience.Public
+            ? ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools
+            : ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools;
+        var original = ProfileConfig(audience, table[row]);
         var paths = NewPaths();
-        await File.WriteAllTextAsync(paths.NetclawConfigPath, Netclaw0254ToolsConfig, TestContext.Current.CancellationToken);
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, original, TestContext.Current.CancellationToken);
+        var before = SerializeBound(BindDaemonToolConfig(paths, out _));
 
         var service = ConfigOnlyService(paths);
         var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
         await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
 
-        Assert.Contains(plan.Fixes, fix => fix.Description.Contains("current default audience tool lists", StringComparison.Ordinal));
+        Assert.Contains(plan.Fixes, fix => fix.Description.Contains(FixName, StringComparison.Ordinal));
         Assert.Equal(
-            Netclaw0254ToolsConfig,
+            original,
             await File.ReadAllTextAsync(paths.NetclawConfigPath + ".legacy-tool-defaults.bak", TestContext.Current.CancellationToken));
 
-        // Round trip: the fixed file binds to the current defaults with no legacy warning.
-        var toolConfig = BindDaemonToolConfig(paths, out var warnings);
-        Assert.Equal(ToolAudienceProfileToolCatalog.PublicDefaultAllowedTools, toolConfig.AudienceProfiles.Public.AllowedTools);
-        Assert.Equal(ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools, toolConfig.AudienceProfiles.Team.AllowedTools);
+        var profile = ReadProfile(paths, audience);
+        Assert.Null(profile["AllowedTools"]);
+        Assert.Equal("Allowlist", profile["ToolsMode"]!.GetValue<string>());
+        Assert.Equal("/srv/kept", profile["ReadFiles"]!["Roots"]![0]!.GetValue<string>());
+
+        Assert.Equal(before, SerializeBound(BindDaemonToolConfig(paths, out var warnings)));
         Assert.Empty(warnings);
     }
+
+    public static TheoryData<TrustAudience, string[]> NotShippedAllowLists()
+    {
+        string[] team = [.. ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Team)];
+        string[] publicTools = [.. ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Public)];
+        return new()
+        {
+            // One tool less, one tool more, and an empty list are operator intent.
+            { TrustAudience.Team, [.. team.Where(tool => tool != ToolAudienceProfileToolCatalog.WebFetch)] },
+            { TrustAudience.Public, [.. publicTools, ToolAudienceProfileToolCatalog.FileWrite] },
+            { TrustAudience.Team, [.. ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools[1].Skip(1)] },
+            { TrustAudience.Team, [] },
+            { TrustAudience.Public, [] },
+        };
+    }
+
+    [Theory]
+    [MemberData(nameof(NotShippedAllowLists))]
+    public async Task Keeps_an_allowlist_that_is_not_a_shipped_default(TrustAudience audience, string[] tools)
+    {
+        var original = ProfileConfig(audience, tools);
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(paths.NetclawConfigPath, original, TestContext.Current.CancellationToken);
+
+        var service = ConfigOnlyService(paths);
+        var plan = await service.BuildPlanAsync(TestContext.Current.CancellationToken);
+        await service.ApplyAsync(plan, TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(plan.Fixes, fix => fix.Description.Contains(FixName, StringComparison.Ordinal));
+        Assert.Equal(tools, ReadProfile(paths, audience)["AllowedTools"]!.AsArray().Select(tool => tool!.GetValue<string>()).ToArray());
+        Assert.False(File.Exists(paths.NetclawConfigPath + ".legacy-tool-defaults.bak"));
+    }
+
+    [Fact]
+    public async Task Keeps_a_shipped_list_when_the_profile_is_not_in_allowlist_mode()
+    {
+        var paths = NewPaths();
+        await File.WriteAllTextAsync(
+            paths.NetclawConfigPath,
+            ProfileConfig(TrustAudience.Team, ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(TrustAudience.Team))
+                .Replace("\"Allowlist\"", "\"All\"", StringComparison.Ordinal),
+            TestContext.Current.CancellationToken);
+
+        var plan = await ConfigOnlyService(paths).BuildPlanAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain(plan.Fixes, fix => fix.Description.Contains(FixName, StringComparison.Ordinal));
+    }
+
+    private static string ProfileConfig(TrustAudience audience, IEnumerable<string> tools)
+        => $$"""
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "{{audience}}": {
+                    "ToolsMode": "Allowlist",
+                    "AllowedTools": [{{string.Join(", ", tools.Select(tool => $"\"{tool}\""))}}],
+                    "ReadFiles": { "Mode": "Roots", "Roots": ["/srv/kept"] }
+                  }
+                }
+              }
+            }
+            """;
+
+    private static JsonObject ReadProfile(NetclawPaths paths, TrustAudience audience)
+        => (JsonObject)JsonNode.Parse(File.ReadAllText(paths.NetclawConfigPath))!["Tools"]!["AudienceProfiles"]![audience.ToString()]!;
+
+    // The full bound object graph, not only AllowedTools.
+    private static string SerializeBound(ToolConfig toolConfig) => JsonSerializer.Serialize(toolConfig);
 
     [Fact]
     public async Task Existing_backup_is_kept_and_a_second_run_changes_nothing()
@@ -480,29 +572,7 @@ public sealed class DoctorFixServiceTests
     }
 
     [Fact]
-    public async Task Keeps_a_hand_edited_allowlist()
-    {
-        var paths = NewPaths();
-        await File.WriteAllTextAsync(paths.NetclawConfigPath,
-            """
-            {
-              "configVersion": 1,
-              "Tools": {
-                "AudienceProfiles": {
-                  "Team": { "ToolsMode": "Allowlist", "AllowedTools": ["file_read", "file_list", "attach_file", "web_fetch"] }
-                }
-              }
-            }
-            """, TestContext.Current.CancellationToken);
-
-        var plan = await ConfigOnlyService(paths).BuildPlanAsync(TestContext.Current.CancellationToken);
-
-        Assert.DoesNotContain(plan.Fixes, fix => fix.Description.Contains("current default audience tool lists", StringComparison.Ordinal));
-        Assert.False(File.Exists(paths.NetclawConfigPath + ".legacy-tool-defaults.bak"));
-    }
-
-    [Fact]
-    public async Task Failed_backup_blocks_the_legacy_allowlist_rewrite()
+    public async Task Failed_backup_blocks_the_allowlist_deletion()
     {
         // A directory at the backup path makes the copy fail. The config file must not change.
         var paths = NewPaths();

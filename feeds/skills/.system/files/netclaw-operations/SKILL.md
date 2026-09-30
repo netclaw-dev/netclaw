@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.76.3"
+  version: "2.76.4"
 ---
 
 # Netclaw Operations
@@ -656,9 +656,12 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
   category is not valid, or when an empty `NETCLAW_*` variable and a config file both set
   the same list. The error names the key.
 - A Public or Team `AllowedTools` list that exactly matches an older Netclaw default gets
-  today's default, with a startup warning. `netclaw doctor --fix` writes today's list after a
-  backup. Any other list is applied as written, which includes an edited older list. If such a
-  list lacks `file_search` or `tool_output_read`, add them by hand.
+  today's default, with a startup warning. Any other list is applied as written, which
+  includes an edited older list. If such a list lacks `file_search` or `tool_output_read`,
+  add them by hand.
+- `netclaw doctor` reports a list that exactly matches any Netclaw default, which includes
+  today's default. `netclaw doctor --fix` backs up `netclaw.json`, then deletes that
+  `AllowedTools` key, so the audience follows the default in later releases.
 - The daemon reads `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables.
   `netclaw doctor` reads only `netclaw.json`, so it can show a different list.
 

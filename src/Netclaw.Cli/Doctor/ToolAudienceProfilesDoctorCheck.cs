@@ -104,7 +104,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
 
         CheckExplicitPersonalShellAuto(toolConfig, warnings);
 
-        CheckLegacyDefaultAllowedTools(toolConfig.AudienceProfiles, warnings);
+        CheckDefaultAllowedToolsCopies(root, warnings);
 
         // Advisory: approval mode configured but shell is off
         CheckApprovalMismatch(toolConfig, warnings);
@@ -154,21 +154,13 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             "Audience profiles are explicit and public/team restrictions remain scoped."));
     }
 
-    // The daemon maps an exact older default list to the current default and logs a warning.
-    // Doctor reports the same lists so that the operator can write the current list.
-    private static void CheckLegacyDefaultAllowedTools(ToolAudienceProfiles profiles, List<string> warnings)
+    // A stored copy of a shipped default list does not follow later defaults. The daemon maps an
+    // exact older list to the current default and logs a warning. Doctor reports each copy, which
+    // includes a copy of the current default, because `netclaw doctor --fix` deletes it.
+    private static void CheckDefaultAllowedToolsCopies(JsonObject root, List<string> warnings)
     {
-        foreach (var (audience, profile) in (ReadOnlySpan<(TrustAudience, ToolAudienceProfile)>)
-                 [(TrustAudience.Public, profiles.Public), (TrustAudience.Team, profiles.Team)])
-        {
-            if (profile.ToolsMode != ToolProfileMode.Allowlist
-                || !ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, profile.AllowedTools))
-            {
-                continue;
-            }
-
-            warnings.Add(ToolAudienceProfileDefaults.DescribeLegacyDefaultAllowedTools(audience, profile.AllowedTools));
-        }
+        foreach (var copy in DefaultAllowedToolsCopies.Find(root))
+            warnings.Add(ToolAudienceProfileDefaults.DescribeLegacyDefaultAllowedTools(copy.Audience, copy.AllowedTools));
     }
 
     private static void ValidateNonPersonalProfile(string profileName, ToolAudienceProfile profile, List<string> errors)

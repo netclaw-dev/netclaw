@@ -135,6 +135,43 @@ public sealed class ToolConfigBindingTests : IDisposable
             Assert.Contains(added, warning, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData(TrustAudience.Public, false)]
+    [InlineData(TrustAudience.Public, true)]
+    [InlineData(TrustAudience.Team, false)]
+    [InlineData(TrustAudience.Team, true)]
+    public void A_copy_of_the_current_default_binds_as_written_with_no_warning(TrustAudience audience, bool reversed)
+    {
+        var current = ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(audience);
+        string[] tools = reversed ? [.. current.Reverse()] : [.. current];
+        var json = $"[{string.Join(", ", tools.Select(tool => $"\"{tool}\""))}]";
+
+        var toolConfig = Bind($"AudienceProfiles:{audience}:AllowedTools", json, "NETCLAW_TEST_UNUSED_", out var warnings);
+
+        Assert.Equal(tools, ToolAudienceProfileDefaults.GetResolvedProfile(toolConfig.AudienceProfiles, audience).AllowedTools);
+        Assert.Empty(warnings);
+        Assert.True(ToolAudienceProfileDefaults.IsLegacyDefaultAllowedTools(audience, tools));
+    }
+
+    // The legacy tables must record every default list that a release ships, because
+    // `netclaw doctor --fix` deletes only an exact shipped list, and the daemon maps only an exact
+    // older list. The newest row is a literal list, so a change to a default fails here until
+    // someone adds a row for the new list. Do not build the newest row from the default.
+    [Theory]
+    [InlineData(TrustAudience.Public)]
+    [InlineData(TrustAudience.Team)]
+    public void The_newest_legacy_row_is_the_current_default(TrustAudience audience)
+    {
+        var table = audience == TrustAudience.Public
+            ? ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools
+            : ToolAudienceProfileToolCatalog.LegacyTeamDefaultAllowedTools;
+
+        Assert.Equal(
+            ToolAudienceProfileDefaults.CurrentDefaultAllowedTools(audience).Order(StringComparer.Ordinal),
+            table[^1].Order(StringComparer.Ordinal));
+        Assert.Equal(table[^1].Count, table[^1].Distinct(StringComparer.Ordinal).Count());
+    }
+
     [Fact]
     public void Only_the_reviewed_allow_lists_have_default_items()
     {

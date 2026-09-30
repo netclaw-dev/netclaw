@@ -282,12 +282,19 @@ that result with these rules:
   includes an edited older list, for example with Web Access turned off in the TUI, and the
   17-tool list that the 0.24 TUI wrote when it changed a profile from `All` to `Allowlist`. Such
   a list does not get `file_search` or `tool_output_read`.
-- `netclaw doctor` reports each exact older list. `netclaw doctor --fix` copies `netclaw.json`
-  to `netclaw.json.legacy-tool-defaults.bak`, or to the next free
-  `netclaw.json.legacy-tool-defaults.N.bak`, then writes the current default list. It never
-  overwrites a backup, and a failed copy stops the write.
+- A list that exactly matches the current default is applied as written, with no warning.
+- `netclaw doctor` reports each exact shipped list, which includes a copy of the current
+  default. A stored copy does not get the tools that later releases add to the default.
+- `netclaw doctor --fix` copies `netclaw.json` to `netclaw.json.legacy-tool-defaults.bak`, or to
+  the next free `netclaw.json.legacy-tool-defaults.N.bak`, then deletes each Public or Team
+  `AllowedTools` key in `Allowlist` mode that exactly matches a shipped list. The rest of the
+  profile stays. The audience then follows the default, so the daemon applies the same tools
+  before and after the fix. The fix never writes a default list. It never overwrites a backup,
+  and a failed copy stops the write. A list that differs by one tool, and `[]`, stay.
 - `ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools` and
-  `LegacyTeamDefaultAllowedTools` hold the older lists as policy data.
+  `LegacyTeamDefaultAllowedTools` hold the shipped lists as policy data. The last row of each
+  table is the current default. A test fails when the current default is not equal to the last
+  row, so a change to a default must add a row.
 
 The daemon reads `netclaw.json`, then `secrets.json`, then `NETCLAW_*` variables. A later
 source wins for each key. `netclaw doctor` reads only `netclaw.json`.
