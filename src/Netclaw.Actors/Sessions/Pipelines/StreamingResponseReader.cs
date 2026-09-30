@@ -167,40 +167,9 @@ internal static class StreamingResponseReader
     /// </summary>
     internal static StreamUpdateClassification Classify(ChatResponseUpdate update, bool anySubstantiveSeen)
     {
-        var hasSubstantive = IsSubstantiveUpdate(update);
+        var hasSubstantive = StreamProgress.IsSubstantive(update);
         return new StreamUpdateClassification(
             HasSubstantiveContent: hasSubstantive,
             IsFirstSubstantive: hasSubstantive && !anySubstantiveSeen);
-    }
-
-    /// <summary>
-    /// True when an update represents real model progress. A finish reason, non-empty
-    /// text/thinking, a tool call, or any non-usage content all count. Only a
-    /// content-free heartbeat or a usage-only chunk (with no finish reason) is treated
-    /// as a non-substantive keepalive. This mirrors the pre-extraction predicate so a
-    /// provider that streams an error/refusal or other non-text content before the
-    /// first token is still recognized as progress, not silently treated as a hang.
-    /// </summary>
-    internal static bool IsSubstantiveUpdate(ChatResponseUpdate update)
-    {
-        if (update.FinishReason is not null)
-            return true;
-
-        foreach (var content in update.Contents)
-        {
-            switch (content)
-            {
-                case TextContent text when !string.IsNullOrEmpty(text.Text):
-                case TextReasoningContent reasoning when !string.IsNullOrEmpty(reasoning.Text):
-                case FunctionCallContent:
-                    return true;
-                case UsageContent:
-                    break;
-                default:
-                    return true;
-            }
-        }
-
-        return false;
     }
 }
