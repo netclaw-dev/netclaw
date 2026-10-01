@@ -154,13 +154,12 @@ The arrows show the order in the current shell path. A non-shell call skips
   runs each call, catches a consent request, and asks the operator.
 - [`DispatchingToolExecutor`](../../src/Netclaw.Actors/Tools/DispatchingToolExecutor.cs)
   runs the gate inside `ExecuteStreamAsync` through `GetAuthorizedToolAsync`
-  and `EvaluateAuthorizationResultAsync`, which asks `ToolAuthorizer` for every
-  call (consolidation PR 6b for shell calls, PR 6c for other tools).
-  `GetAuthorizedToolAsync` turns a decision into an exception, which the
-  pipeline catches.
+  and `EvaluateAuthorizationAsync`, which asks `ToolAuthorizer` for every call.
+  `GetAuthorizedToolAsync` turns a decision that is not an allow into an
+  exception, which the pipeline and the subagent loop catch. This exception is
+  the contract between an executor and its callers.
 - [`ShellPolicyCoordinator`](../../src/Netclaw.Actors/Tools/ShellPolicyCoordinator.cs)
-  supplies the shell advice and the coverage. Its old ordered gate
-  (`EvaluateAsync`) is now only the differential reference.
+  supplies the shell advice and the coverage.
 
 [`ToolAuthorizer`](../../src/Netclaw.Actors/Authorization/ToolAuthorizer.cs)
 (consolidation PR 6a) states the order as one list of rules: one line per
@@ -186,9 +185,8 @@ shell rules, in order:
 9. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
    policy), then the uncovered candidates.
 
-**Planned:** PR 6d deletes the old gate.
-By owner decision, PR 6e moves the covering grant ahead of the trusted-root
-check for unattended Approval mode.
+Consolidation PR 6d deleted the old gate. By owner decision, PR 6e moves the
+covering grant ahead of the trusted-root check for unattended Approval mode.
 
 Each context below lists its question, the classes that answer it today, its
 published contract today, what it must not know, and where its data lives.
@@ -200,8 +198,8 @@ know" rule. The leaks are the work list of the consolidation program.
 | Item | Current state |
 | --- | --- |
 | Question | May this audience use this tool, in this shell mode and this consent mode? |
-| Classes | [`ToolAccessPolicy`](../../src/Netclaw.Actors/Tools/ToolAccessPolicy.cs) (`AuthorizeInvocation`, `AuthorizeShellPreflight`, `AuthorizeMcpInvocation`, `IsToolExposed`, `EvaluateShellCapability`, `GetApprovalMode`), [`ToolAudienceProfileResolver`](../../src/Netclaw.Actors/Tools/ToolAudienceProfileResolver.cs), [`ToolAudienceProfiles`](../../src/Netclaw.Configuration/ToolAudienceProfiles.cs), [`ToolApprovalConfig`](../../src/Netclaw.Configuration/ToolApprovalConfig.cs), [`TrustContextPolicy`](../../src/Netclaw.Configuration/TrustContextPolicy.cs) |
-| Published contract | `ToolAccessPolicy.AuthorizeInvocation(...)` returns a `ToolAuthorizationDecision`. `IsToolExposed(...)` filters schemas. |
+| Classes | [`ToolAccessPolicy`](../../src/Netclaw.Actors/Tools/ToolAccessPolicy.cs) (`AdmitAudience`, `IsToolExposed`, `EvaluateShellCapability`, `GetApprovalMode`), [`ToolAudienceProfileResolver`](../../src/Netclaw.Actors/Tools/ToolAudienceProfileResolver.cs), [`ToolAudienceProfiles`](../../src/Netclaw.Configuration/ToolAudienceProfiles.cs), [`ToolApprovalConfig`](../../src/Netclaw.Configuration/ToolApprovalConfig.cs), [`TrustContextPolicy`](../../src/Netclaw.Configuration/TrustContextPolicy.cs) |
+| Published contract | `ToolAccessPolicy.AdmitAudience(...)` returns a denial or null. `ToolAuthorizer` returns the `AuthorizationDecision`. `IsToolExposed(...)` filters schemas. |
 | Must not know | Grants, paths, shell syntax. |
 | Data | Configuration. The result is call-local. |
 | Rules | [TA-1](../../openspec/specs/tool-authorization/spec.md#requirement-ta-1-trust-context-is-explicit-and-fails-loud), [TA-2](../../openspec/specs/tool-authorization/spec.md#requirement-ta-2-schema-exposure-grants-no-authority), [TA-3](../../openspec/specs/tool-authorization/spec.md#requirement-ta-3-audience-profiles-admit-tools), [TA-4](../../openspec/specs/tool-authorization/spec.md#requirement-ta-4-consent-mode-and-shell-mode-resolve-per-audience-and-tool) |
@@ -366,7 +364,7 @@ sequenceDiagram
     participant S as LlmSessionActor
     participant P as SessionToolExecutionPipeline
     participant X as DispatchingToolExecutor
-    participant G as ShellPolicyCoordinator + ToolAccessPolicy
+    participant G as ToolAuthorizer + ToolAccessPolicy
     participant T as ToolApprovalActor
     participant C as Channel
     actor O as Operator
@@ -437,9 +435,9 @@ Facts behind the diagram (current code):
   (`ChannelOutputEngine`, `SlackThreadBindingActor`). This is the only
   automatic denial of a consent request.
 
-A non-shell call follows the same path, with two differences. The executor
-runs `ToolAccessPolicy.AuthorizeInvocation` and its own inline grant check in
-place of the shell coordinator. The launch step does not exist.
+A non-shell call follows the same path, with two differences. `ToolAuthorizer`
+applies the rules for other tools and one `StoredGrantCheck` in place of the
+shell coverage. The launch step does not exist.
 
 ## 5. Language
 
@@ -708,7 +706,7 @@ and the approval tooling is in
 | Non-interactive runs cannot get new consent. | Evals Category 9 in `evals/run-evals.sh`; `evals/background_evals.py` |
 | `skill_manage` mutations refuse links and protected paths. | `SkillToolTests`; the skill_manage guard mutation gate ([TOOLING.md § Skill Manage Guard Gate](../../TOOLING.md#skill-manage-guard-gate)) |
 | A shell grant never authorizes `file_read`. | No test yet. Consolidation PR 1b adds it. |
-| `ToolAuthorizer` gives the same decision as the current gate. | `ToolAuthorizerDifferentialTests` ([TOOLING.md § Authorizer Differential](../../TOOLING.md#authorizer-differential)) |
+| `ToolAuthorizer` gives the same decision as the gate on `dev`. | The corpus differential ([TOOLING.md § Authorization Corpus Differential](../../TOOLING.md#authorization-corpus-differential)) |
 | No `ToolAuthorizer` rule can move ahead of an earlier rule. | The tool authorizer order mutation gate ([TOOLING.md § Tool Authorizer Order Gate](../../TOOLING.md#tool-authorizer-order-gate)) |
 
 Model guidance (which tool the model should choose, and how it should declare

@@ -43,8 +43,8 @@ coverage. They do not replace positive and negative behavior tests.
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
 | `PathAccessPolicy.AddSessionRoots` | Only a Personal context receives shared session roots | 2 killed | `./scripts/run-path-access-mutations.sh` |
-| `ToolAccessPolicy.AuthorizeMcpInvocation` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
-| `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
@@ -471,24 +471,11 @@ the check against the base of each pull request.
 
 ### Authorizer Differential
 
-`ToolAuthorizerDifferentialTests` runs each input through the old gate and
-through the production executor
-(`DispatchingToolExecutor.EvaluateAuthorizationResultAsync`), each with a new
-context. The executor asks `ToolAuthorizer` for every call since PR 6c. The old
-gate is `ShellPolicyCoordinator.EvaluateAsync` for a shell call and the old
-executor gate, kept in `ShellApprovalHarness`, for any other call. The two
-decisions must be identical:
-outcome, reason, advice, the consent request with its candidates and options,
-matched grants, the per-candidate coverage trace, store lookups, and the
-analysis that the process may execute. When the current gate asks for consent,
-the test also compares the retry with a "Once" answer.
-
-The inputs are every catalog case in four states (interactive or unattended,
-Approval or Auto), the hard-deny parity corpus, a shell corpus in twelve grant
-and mode states, and the other tool families (file, web, MCP, skill, reminder,
-webhook, and background job tools) for each audience and consent mode. The
-test is part of the normal `Netclaw.Actors.Tests` run. The test must pass until
-authorization PR 6d deletes the old gate.
+Authorization PRs 6a to 6c ran `ToolAuthorizerDifferentialTests` in CI. It
+compared the old gate with `ToolAuthorizer` on the catalog and on shell and
+tool corpora. PR 6d deleted the old gate, so the in-CI differential has no
+reference side. The corpus differential below compares the production path
+with `dev` and is the proof for each later slice.
 
 ### Authorization Corpus Differential
 
@@ -514,8 +501,9 @@ How it works:
 2. For each revision, the script makes a disposable `git worktree`, copies the
    probe (`probe/AuthorizationCorpusProbe.cs`) and one adapter into
    `Netclaw.Actors.Tests`, builds, and runs the probe. The `gate` adapter reads
-   `EvaluateAuthorizationResultAsync`. The `authorizer` adapter reads
-   `ToolAuthorizer`. `auto` picks the production path of the revision.
+   `EvaluateAuthorizationResultAsync` (revisions up to authorization PR 6c).
+   The `authorizer` adapter reads `ToolAuthorizer`. `auto` picks the
+   production path of the revision.
 3. The probe evaluates 16 shell states (Bash: 3 grant states, interactive or
    unattended, Approval or Auto; PowerShell 7: 2 grant states, Approval or Auto)
    and 24 tool states (3 audiences, interactive or unattended, 4 consent modes)

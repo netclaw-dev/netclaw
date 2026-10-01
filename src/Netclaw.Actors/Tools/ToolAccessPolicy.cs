@@ -191,40 +191,6 @@ public sealed class ToolAccessPolicy
         return true;
     }
 
-    /// <summary>Applies access and approval policy to a non-shell tool invocation.</summary>
-    /// <exception cref="InvalidOperationException">
-    /// <paramref name="tool"/> is <c>shell_execute</c>, which requires the asynchronous shell coordinator.
-    /// </exception>
-    public ToolAuthorizationDecision AuthorizeInvocation(INetclawTool tool, ToolExecutionContext context)
-        => AuthorizeInvocation(tool, context, arguments: null);
-
-    /// <summary>Applies access and approval policy to a non-shell tool invocation.</summary>
-    /// <exception cref="InvalidOperationException">
-    /// <paramref name="tool"/> is <c>shell_execute</c>, which requires the asynchronous shell coordinator.
-    /// </exception>
-    public ToolAuthorizationDecision AuthorizeInvocation(
-        INetclawTool tool,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments)
-    {
-        if (IsShellTool(tool))
-        {
-            throw new InvalidOperationException(
-                "Shell commands require the asynchronous shell policy coordinator.");
-        }
-
-        if (tool is McpToolAdapter mcp)
-            return AuthorizeMcpInvocation(mcp, context, arguments);
-
-        var toolName = new ToolName(tool.Name);
-        if (AdmitAudience(tool, context) is { } audienceDenial)
-            return audienceDenial;
-
-        return string.Equals(tool.Name, CheckBackgroundJobTool.ToolName, StringComparison.Ordinal)
-            ? AuthorizeBackgroundJobControl(context)
-            : AuthorizeStructuredInvocation(tool, toolName, context, arguments);
-    }
-
     /// <summary>
     /// Decides whether the caller's audience may use the tool. An MCP tool needs
     /// its server and the tool in the audience allow lists. Another tool needs its
@@ -239,23 +205,6 @@ public sealed class ToolAccessPolicy
         return _profileResolver.IsToolAllowed(new ToolName(tool.Name), context.Invocation)
             ? null
             : ToolAuthorizationDecision.Deny("tool_not_allowed_for_audience_profile");
-    }
-
-    /// <summary>Builds canonical shell analysis and applies synchronous access rules before approval evidence.</summary>
-    internal ShellPolicyPreflightResult AuthorizeShellPreflight(
-        INetclawTool tool,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments)
-    {
-        if (!IsShellTool(tool))
-            throw new ArgumentException("Shell preflight requires the shell tool.", nameof(tool));
-
-        ShellCommandAnalysis? analysis = null;
-        BashDirectoryScopeProjection? directoryScopes = null;
-        var toolName = new ToolName(tool.Name);
-        var decision = AdmitAudience(tool, context)
-            ?? AuthorizeShellInvocation(toolName, context, arguments, out analysis, out directoryScopes);
-        return CompleteShellPreflight(decision, analysis, directoryScopes);
     }
 
     /// <summary>
@@ -273,16 +222,12 @@ public sealed class ToolAccessPolicy
         if (!decision.NeedsApproval)
         {
             return new ShellPolicyPreflightResult.Complete(
-                ToolAuthorizationResult.CreateShell(
-                    decision,
-                    decision.Outcome == ToolAuthorizationOutcome.Allowed ? analysis : null));
+                decision,
+                decision.Outcome == ToolAuthorizationOutcome.Allowed ? analysis : null);
         }
 
         if (analysis is null)
-        {
-            return new ShellPolicyPreflightResult.Complete(
-                ToolAuthorizationResult.CreateShell(decision, authorizedAnalysis: null));
-        }
+            return new ShellPolicyPreflightResult.Complete(decision, authorizedAnalysis: null);
 
         return decision.ApprovalContext is { } approvalContext
             ? new ShellPolicyPreflightResult.Continue(
@@ -290,31 +235,8 @@ public sealed class ToolAccessPolicy
                 approvalContext,
                 directoryScopes)
             : new ShellPolicyPreflightResult.Complete(
-                ToolAuthorizationResult.Stop(
-                    ToolAuthorizationDecision.Deny("internal_policy_failure")));
-    }
-
-    private ToolAuthorizationDecision AuthorizeMcpInvocation(
-        McpToolAdapter tool,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments)
-    {
-        if (AdmitMcpAudience(tool, context) is { } audienceDenial)
-            return audienceDenial;
-
-        var toolName = new ToolName(tool.Name);
-        var approvalArguments = GetApprovalArguments(tool, arguments);
-        var approvalMode = GetApprovalMode(
-            toolName,
-            context,
-            approvalArguments,
-            McpApprovalMatcher.Instance);
-        return AuthorizeNonShellApproval(
-            toolName,
-            context,
-            approvalArguments,
-            McpApprovalMatcher.Instance,
-            approvalMode);
+                ToolAuthorizationDecision.Deny("internal_policy_failure"),
+                authorizedAnalysis: null);
     }
 
     private ToolAuthorizationDecision? AdmitMcpAudience(
@@ -358,96 +280,6 @@ public sealed class ToolAccessPolicy
         => tool is McpToolAdapter
             ? McpApprovalMatcher.Instance
             : SelectMatcherForTool(new ToolName(tool.Name));
-
-    private ToolAuthorizationDecision AuthorizeStructuredInvocation(
-        INetclawTool tool,
-        ToolName toolName,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments)
-    {
-        var pathDenial = PreflightStructuredPathAccess(tool, context.Invocation, arguments);
-        if (pathDenial is not null)
-            return pathDenial;
-
-        var matcher = SelectMatcherForTool(toolName);
-        var approvalMode = GetApprovalMode(toolName, context, arguments, matcher);
-        if (approvalMode == ToolApprovalMode.Deny)
-            return ToolAuthorizationDecision.Deny("tool_denied_by_approval_policy");
-
-        return AuthorizeNonShellApproval(toolName, context, arguments, matcher, approvalMode);
-    }
-
-    private ToolAuthorizationDecision AuthorizeShellInvocation(
-        ToolName toolName,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments,
-        out ShellCommandAnalysis? authorizedAnalysis,
-        out BashDirectoryScopeProjection? directoryScopes)
-    {
-        authorizedAnalysis = null;
-        directoryScopes = null;
-
-        if (EvaluateShellCapability(context.Invocation) is { } capabilityDecision)
-            return capabilityDecision;
-
-        var shellCommand = ExtractShellCommand(arguments);
-        var workingDirectory = ResolveShellWorkingDirectory(context, arguments);
-        ShellCommandAnalysis? shellAnalysis = null;
-        if (shellCommand is not null)
-        {
-            shellAnalysis = _shellCommandPolicy.Analyze(shellCommand, workingDirectory);
-            if (ScreenHardDeny(shellAnalysis) is { } hardDeny)
-                return hardDeny;
-
-            if (ScreenProtectedShellText(shellAnalysis) is { } protectedPath)
-                return protectedPath;
-        }
-
-        if (ScreenShellWorkingDirectory(workingDirectory) is { } invalidWorkingDirectory)
-            return invalidWorkingDirectory;
-
-        var shellApproval = shellAnalysis is null
-            ? null
-            : AnalyzeShellApproval(toolName, arguments, workingDirectory, shellAnalysis);
-
-        if (shellAnalysis is not null
-            && shellApproval is not null
-            && TryProveDirectoryScopes(shellAnalysis, shellApproval, context, out var projection))
-        {
-            if (ScreenDirectoryScopes(projection, context) is { } scopedDeny)
-                return scopedDeny;
-
-            shellApproval = WithDirectoryScopes(shellApproval, projection);
-            directoryScopes = projection;
-        }
-
-        // Shell does not classify an executable as a reader or writer. Once
-        // shell capability and command policy pass, every known path must pass
-        // the conservative Write file-protection layer.
-        if (shellCommand is not null)
-        {
-            var pathAccessDeny = EnforceShellFileProtection(
-                shellApproval!,
-                shellAnalysis!,
-                workingDirectory,
-                context);
-            if (pathAccessDeny is not null)
-                return pathAccessDeny;
-        }
-
-        var mode = GetShellApprovalMode(toolName, context, arguments, shellAnalysis);
-        if (ScreenApprovalModeDenial(mode) is { } approvalModeDenial)
-            return approvalModeDenial;
-
-        authorizedAnalysis = shellAnalysis;
-        return AuthorizeShellApproval(
-            toolName,
-            context,
-            arguments,
-            mode,
-            shellApproval,
-            workingDirectory);
-    }
 
     /// <summary>Returns the directory that ShellTool executes in, from the argument or the context.</summary>
     /// <remarks>
@@ -540,11 +372,8 @@ public sealed class ToolAccessPolicy
         {
             var sliceDeny = ScreenHardDeny(slice.Analysis)
                 ?? ScreenProtectedShellText(slice.Analysis)
-                ?? EnforceShellFileProtection(
-                    slice.Approval,
-                    slice.Analysis,
-                    slice.WorkingDirectory,
-                    context);
+                ?? ScreenUnresolvedShellInput(slice.Approval, context)
+                ?? ScreenShellTrustZone(slice.Analysis, slice.WorkingDirectory, context);
             if (sliceDeny is not null)
                 return sliceDeny;
         }
@@ -627,20 +456,6 @@ public sealed class ToolAccessPolicy
            && FileSystemAuthority.IsLinkFreeFromVolumeRoot(directory, LinkRule.FromVolumeRootExceptTemporaryAlias);
 
     internal ShellApprovalMatcher ShellApprovalMatcher => _shellApprovalMatcher;
-
-    /// <summary>
-    /// Applies the file-protection layer after shell capability and command
-    /// policy pass. Every known shell path uses conservative <see
-    /// cref="PathAccessPolicy.FileOperation.Write"/> authority because Netclaw
-    /// does not infer whether an arbitrary executable only reads a path.
-    /// </summary>
-    private ToolAuthorizationDecision? EnforceShellFileProtection(
-        ShellApprovalAnalysis approval,
-        ShellCommandAnalysis analysis,
-        string? workingDirectory,
-        ToolExecutionContext context)
-        => ScreenUnresolvedShellInput(approval, context)
-           ?? ScreenShellTrustZone(analysis, workingDirectory, context);
 
     /// <summary>Denies unresolved shell syntax when no operator can answer a prompt.</summary>
     /// <remarks>
@@ -796,7 +611,7 @@ public sealed class ToolAccessPolicy
         // shape LLM-generated tool calls arrive in) get string-converted
         // correctly. The direct `is string` pattern previously here
         // silently returned null for every real shell call, which disabled
-        // the hard-deny pre-check at AuthorizeInvocation. The matcher's
+        // the hard-deny screen. The matcher's
         // GetCommand uses ToolArgumentHelper.GetString — mirror it here
         // for consistency.
         if (arguments is null)
@@ -834,15 +649,6 @@ public sealed class ToolAccessPolicy
         analysisArguments["WorkingDirectory"] = resolvedWorkingDirectory;
         return analysisArguments;
     }
-
-    private ToolAuthorizationDecision AuthorizeNonShellApproval(
-        ToolName toolName,
-        ToolExecutionContext context,
-        IDictionary<string, object?>? arguments,
-        IToolApprovalMatcher matcher,
-        ToolApprovalMode mode)
-        => GetApprovalModeDecision(mode)
-           ?? BuildNonShellConsentRequest(toolName, context, arguments, matcher);
 
     /// <summary>
     /// Builds the consent request of a call that is not a shell call: its

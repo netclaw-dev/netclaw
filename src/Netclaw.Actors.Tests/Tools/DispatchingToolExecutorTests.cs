@@ -7,6 +7,7 @@ using Akka.Actor;
 using Akka.Hosting;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
@@ -607,7 +608,7 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         Assert.NotNull(decision.ApprovalContext);
-        Assert.Empty(decision.ApprovalContext.Candidates!);
+        Assert.Empty(decision.ApprovalContext!.Candidates!);
     }
 
     [Fact]
@@ -637,7 +638,7 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
         Assert.NotNull(decision.ApprovalContext);
-        Assert.Empty(decision.ApprovalContext.Candidates!);
+        Assert.Empty(decision.ApprovalContext!.Candidates!);
         Assert.False(File.Exists(markerPath));
     }
 
@@ -2376,7 +2377,7 @@ public partial class DispatchingToolExecutorTests
             TestContext.Current.CancellationToken);
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, initial.Outcome);
         Assert.NotNull(initial.ApprovalContext);
-        context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(initial.ApprovalContext)));
+        context.Approval.SeedOneTimeConsent(new OneTimeConsent(toolCall.Name, OneTimeApprovalKeys.Create(initial.ApprovalContext!)));
 
         var unavailableExecutor = CreateApprovalGatedShellExecutor(new FixedShellApprovalService(request =>
             ShellApprovalMatchResult.Create(
@@ -2978,16 +2979,12 @@ public partial class DispatchingToolExecutorTests
                 ShellTool.ToolName,
                 ToolInput.Create("Command", phrase, "WorkingDirectory", root));
             var registry = new ToolRegistry();
-            var coordinator = new ShellPolicyCoordinator(registry, policy, approvalService: null);
+            registry.Register(tool);
 
-            var authorization = await coordinator.EvaluateAsync(
-                tool,
-                call,
-                context,
-                TestContext.Current.CancellationToken);
+            var authorization = await AuthorizeShellAsync(registry, policy, approvalService: null, call, context);
 
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, authorization.Decision.Outcome);
-            var analysis = Assert.IsType<ToolAuthorizationResult.ShellExecution>(authorization).Analysis;
+            var analysis = Assert.IsType<ShellCommandAnalysis>(
+                Assert.IsType<AuthorizationDecision.Allowed>(authorization).Analysis);
             Assert.Equal(phrase, analysis.Source);
             Assert.Equal(root, analysis.WorkingDirectory);
         }
@@ -3511,22 +3508,13 @@ public partial class DispatchingToolExecutorTests
             "WorkingDirectory", Path.GetTempPath());
         var authoritativeContext = CreateInteractivePersonalContext("signalr/native-temporary-authoritative");
         var call = CreateToolCall("call-native-temporary-authoritative", ShellTool.ToolName, arguments);
-        var coordinator = new ShellPolicyCoordinator(registry, policy, approvalService);
-
-        var authorization = await coordinator.EvaluateAsync(
-            shellTool,
-            call,
-            authoritativeContext,
-            TestContext.Current.CancellationToken);
-
-        var decision = authorization.Decision;
+        var decision = await AuthorizeShellAsync(registry, policy, approvalService, call, authoritativeContext);
         Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
         var corrections = Assert.IsType<ToolCorrectionCollection>(decision.AgentCorrections);
         Assert.Collection(
             corrections.Items,
             correction => Assert.IsType<ToolCorrection.NativeToolSuggested>(correction),
             correction => Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(correction));
-        Assert.IsType<ToolAuthorizationResult.Stopped>(authorization);
         Assert.Equal(0, approvalService.RequestCount);
         Assert.Null(authoritativeContext.Receipt);
     }
@@ -3585,17 +3573,14 @@ public partial class DispatchingToolExecutorTests
                 Audience = TrustAudience.Personal,
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(interactive)
             });
-        var coordinator = new ShellPolicyCoordinator(registry, policy, approvalService: null);
         var call = CreateToolCall("project", ShellTool.ToolName,
             ToolInput.Create("Command", command, "WorkingDirectory", directory));
 
-        var result = await coordinator.EvaluateAsync(registry.GetByName(ShellTool.ToolName)!, call, context,
-            TestContext.Current.CancellationToken);
+        var result = await AuthorizeShellAsync(registry, policy, approvalService: null, call, context);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Decision.Outcome);
-        Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.Decision.AgentCorrection).Directory);
-        Assert.IsType<ToolAuthorizationResult.Stopped>(result);
-        Assert.Null(result.Decision.ApprovalContext);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Outcome);
+        Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.AgentCorrection).Directory);
+        Assert.Null(result.ApprovalContext);
         Assert.Null(context.Receipt);
     }
 
@@ -3611,20 +3596,18 @@ public partial class DispatchingToolExecutorTests
         var context = CreateInteractivePersonalContext("signalr/auto-temporary");
         var call = CreateToolCall("auto-temporary", ShellTool.ToolName,
             ToolInput.Create("Command", "git push", "WorkingDirectory", Path.GetTempPath()));
-        var result = await new ShellPolicyCoordinator(registry, policy, service).EvaluateAsync(
-            registry.GetByName(ShellTool.ToolName)!, call, context, TestContext.Current.CancellationToken);
+        var result = await AuthorizeShellAsync(registry, policy, service, call, context);
 
-        Assert.IsType<ToolAuthorizationResult.Stopped>(result);
         Assert.Equal(0, service.RequestCount);
         if (mode == ToolApprovalMode.Auto)
         {
-            Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Decision.Outcome);
-            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.Decision.AgentCorrection);
+            Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Outcome);
+            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.AgentCorrection);
         }
         else
         {
-            Assert.Equal(ToolAuthorizationOutcome.Denied, result.Decision.Outcome);
-            Assert.Null(result.Decision.AgentCorrections);
+            Assert.Equal(ToolAuthorizationOutcome.Denied, result.Outcome);
+            Assert.Null(result.AgentCorrections);
         }
     }
 
@@ -3650,22 +3633,19 @@ public partial class DispatchingToolExecutorTests
         var call = CreateToolCall("temp-diagnostic", ShellTool.ToolName,
             ToolInput.Create("Command", diagnostic + suffix, "WorkingDirectory", directory));
 
-        var result = await new ShellPolicyCoordinator(registry, policy, approvalService: null).EvaluateAsync(
-            registry.GetByName(ShellTool.ToolName)!, call, context, TestContext.Current.CancellationToken);
+        var result = await AuthorizeShellAsync(registry, policy, approvalService: null, call, context);
 
-        Assert.Equal(expected, result.Decision.Outcome.ToString());
+        Assert.Equal(expected, result.Outcome.ToString());
         Assert.Equal(directory, call.Arguments!["WorkingDirectory"]);
         Assert.Null(context.Receipt);
         if (expected == nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))
-            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.Decision.AgentCorrection);
+            Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(result.AgentCorrection);
         else
-            Assert.Null(result.Decision.AgentCorrections);
+            Assert.Null(result.AgentCorrections);
         if (expected == nameof(ToolAuthorizationOutcome.Allowed))
             Assert.Equal(
                 Path.GetFullPath(directory),
-                Assert.IsType<ToolAuthorizationResult.ShellExecution>(result).Analysis.WorkingDirectory);
-        else
-            Assert.IsType<ToolAuthorizationResult.Stopped>(result);
+                Assert.IsType<AuthorizationDecision.Allowed>(result).Analysis?.WorkingDirectory);
     }
 
     [Fact]
@@ -3883,6 +3863,16 @@ public partial class DispatchingToolExecutorTests
     // the constructor's null default — do not route them through
     // CreateApprovalGatedShellExecutor, which substitutes an
     // UnexpectedApprovalService for a null approvalService).
+    // Authorizes one shell call with the linear authorizer, as the executor does.
+    private static Task<AuthorizationDecision> AuthorizeShellAsync(
+        ToolRegistry registry,
+        ToolAccessPolicy policy,
+        IToolApprovalService? approvalService,
+        FunctionCallContent call,
+        ToolExecutionContext context)
+        => new ToolAuthorizer(registry, policy, approvalService, new ShellPolicyCoordinator(registry, policy, approvalService))
+            .AuthorizeAsync(call, context, TestContext.Current.CancellationToken);
+
     private static (ToolRegistry Registry, ToolAccessPolicy Policy) CreateApprovalGatedShellRegistryAndPolicy(
         ShellExecutionEnvironment environment,
         SafeVerbList? safeVerbs = null,

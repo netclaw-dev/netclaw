@@ -23,10 +23,11 @@ namespace Netclaw.Actors.Authorization;
 /// does not repeat that component's check.
 /// </para>
 /// <para>
-/// Every tool call uses this class (authorization PR 6c). The rule order
-/// reproduces the old gate exactly, including the rule that the trusted root
-/// check precedes a covering grant. The differential tests compare this class
-/// with the old gate on every catalog case and corpus input.
+/// Every tool call uses this class. It is the only gate: authorization PR 6d
+/// deleted the old one. The rule order reproduces the old gate exactly,
+/// including the rule that the trusted root check precedes a covering grant.
+/// The corpus differential (scripts/authorization-corpus) proves that the
+/// decisions match dev.
 /// </para>
 /// </remarks>
 internal sealed class ToolAuthorizer
@@ -196,14 +197,14 @@ internal sealed class ToolAuthorizer
     private static ToolAuthorizationDecision? AutomaticApprovalMode(ShellCall call)
     {
         if (call.Preflight is not ShellPolicyPreflightResult.Complete complete
-            || complete.Result.Decision.AllowReason != ToolAllowReason.PolicyAuto)
+            || complete.Decision.AllowReason != ToolAllowReason.PolicyAuto)
         {
             return null;
         }
 
         return call.Finish(call.Corrections is { } corrections
             ? ToolAuthorizationDecision.RequireAgentCorrection(corrections)
-            : complete.Result.Decision);
+            : complete.Decision);
     }
 
     // Unresolved input: a call without command text gets one exact retry, or a consent request.
@@ -212,7 +213,7 @@ internal sealed class ToolAuthorizer
         if (call.Preflight is not ShellPolicyPreflightResult.Complete complete)
             return null;
 
-        var decision = complete.Result.Decision;
+        var decision = complete.Decision;
         if (decision.NeedsApproval
             && decision.ApprovalContext is { } approvalContext
             && OneTimeApprovalKeys.Matches(call.Context.Approval.OneTimeConsent, call.Call.Name, approvalContext))
@@ -424,8 +425,7 @@ internal sealed class ToolAuthorizer
         // The analysis that the preflight carries forward, as the coordinator reads it.
         private ShellCommandAnalysis? PreflightAnalysis => Preflight switch
         {
-            ShellPolicyPreflightResult.Complete
-            { Result: ToolAuthorizationResult.ShellExecution execution } => execution.Analysis,
+            ShellPolicyPreflightResult.Complete { AuthorizedAnalysis: { } authorized } => authorized,
             ShellPolicyPreflightResult.Continue continuation => continuation.Analysis,
             _ => null,
         };

@@ -108,12 +108,11 @@ public sealed class ToolApprovalGateTests
             args);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        var execution = Assert.IsType<ToolAuthorizationResult.ShellExecution>(complete.Result);
-        var decision = execution.Decision;
+        var decision = complete.Decision;
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
-        Assert.Equal("git push", execution.Analysis.Source);
+        Assert.Equal("git push", Assert.IsType<ShellCommandAnalysis>(complete.AuthorizedAnalysis).Source);
     }
 
     [Fact]
@@ -128,19 +127,20 @@ public sealed class ToolApprovalGateTests
             args);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        var execution = Assert.IsType<ToolAuthorizationResult.ShellExecution>(complete.Result);
-        Assert.True(execution.Decision.Allowed);
-        Assert.False(execution.Decision.NeedsApproval);
-        Assert.Equal(ToolAllowReason.PolicyAuto, execution.Decision.AllowReason);
+        Assert.NotNull(complete.AuthorizedAnalysis);
+        Assert.True(complete.Decision.Allowed);
+        Assert.False(complete.Decision.NeedsApproval);
+        Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
     }
 
     [Fact]
-    public void Shell_preflight_rejects_direct_tool_execution()
+    public void Shell_preflight_rejects_analysis_for_a_stopped_decision()
     {
-        var direct = new ToolAuthorizationResult.DirectExecution(
-            ToolAuthorizationDecision.Allow(ToolAllowReason.PolicyAuto));
+        var analysis = new ShellCommandPolicy().Analyze("git status", workingDirectory: null);
 
-        Assert.Throws<ArgumentException>(() => new ShellPolicyPreflightResult.Complete(direct));
+        Assert.Throws<ArgumentException>(() => new ShellPolicyPreflightResult.Complete(
+            ToolAuthorizationDecision.Deny("hard_deny"),
+            analysis));
     }
 
     [Fact]
@@ -168,8 +168,8 @@ public sealed class ToolApprovalGateTests
             arguments);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        Assert.True(complete.Result.Decision.NeedsApproval);
-        Assert.IsType<ToolAuthorizationResult.Stopped>(complete.Result);
+        Assert.True(complete.Decision.NeedsApproval);
+        Assert.Null(complete.AuthorizedAnalysis);
     }
 
     [Theory]

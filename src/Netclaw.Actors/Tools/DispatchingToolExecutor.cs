@@ -203,23 +203,18 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         var sw = Stopwatch.StartNew();
         try
         {
-            var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
-            var tool = authorized.Tool;
-            var result = (tool, authorized.Authorization) switch
+            var (tool, allowed) = await GetAuthorizedToolAsync(toolCall, context, ct);
+            var result = (tool, allowed.Analysis) switch
             {
-                (ShellTool shellTool, ToolAuthorizationResult.ShellExecution shellAuthorization) =>
+                (ShellTool shellTool, { } analysis) =>
                     await shellTool.ExecuteAuthorizedAsync(
                         toolCall.Arguments,
                         context.Invocation,
-                        CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
+                        CreateShellLaunch(shellTool, toolCall.CallId, context, analysis),
                         ct),
-                (ShellTool shellTool, ToolAuthorizationResult.ShellValidation) =>
-                    shellTool.ValidateUnanalyzedArguments(toolCall.Arguments),
-                (ShellTool, _) => throw new InvalidOperationException(
-                    "Shell execution requires an authorized analysis or a validation result."),
-                (_, ToolAuthorizationResult.DirectExecution) =>
-                    await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct),
-                _ => throw new InvalidOperationException("Unsupported tool authorization result.")
+                (ShellTool shellTool, null) => shellTool.ValidateUnanalyzedArguments(toolCall.Arguments),
+                (_, null) => await tool.ExecuteAsync(toolCall.Arguments, context.Invocation, ct),
+                _ => throw new InvalidOperationException("Only a shell call can carry an analysis.")
             };
 
             context.Outputs.TryComplete(new ToolInvocationReceipt.Succeeded([], null));
@@ -322,7 +317,7 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
         toolCall = interpretation.Cleaned;
 
-        (INetclawTool Tool, ToolAuthorizationResult Authorization) authorized;
+        (INetclawTool Tool, AuthorizationDecision.Allowed Allowed) authorized;
         try
         {
             authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
@@ -334,21 +329,18 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         }
 
         var tool = authorized.Tool;
-        var updates = (tool, authorized.Authorization) switch
+        var updates = (tool, authorized.Allowed.Analysis) switch
         {
-            (ShellTool shellTool, ToolAuthorizationResult.ShellExecution shellAuthorization) =>
+            (ShellTool shellTool, { } analysis) =>
                 shellTool.ExecuteAuthorizedStreamAsync(
                     toolCall.Arguments,
                     context.Invocation,
-                    CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis),
+                    CreateShellLaunch(shellTool, toolCall.CallId, context, analysis),
                     ct),
-            (ShellTool shellTool, ToolAuthorizationResult.ShellValidation) =>
+            (ShellTool shellTool, null) =>
                 SingleCompletion(shellTool.ValidateUnanalyzedArguments(toolCall.Arguments)),
-            (ShellTool, _) => throw new InvalidOperationException(
-                "Shell execution requires an authorized analysis or a validation result."),
-            (_, ToolAuthorizationResult.DirectExecution) =>
-                tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct),
-            _ => throw new InvalidOperationException("Unsupported tool authorization result.")
+            (_, null) => tool.ExecuteStreamAsync(toolCall.Arguments, context.Invocation, ct),
+            _ => throw new InvalidOperationException("Only a shell call can carry an analysis.")
         };
         var sw = Stopwatch.StartNew();
         await foreach (var update in updates)
@@ -412,58 +404,19 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
     }
 
     /// <summary>
-    /// Evaluates the complete authorization gate before a tool runs or a user receives a prompt.
+    /// Asks the linear authorizer for one call and logs the decision. Every gate
+    /// run comes here: the first attempt, the retry after consent, the
+    /// background launch, and the shell re-check at process start.
     /// </summary>
-    /// <remarks>
-    /// This method returns expected authorization outcomes instead of exceptions.
-    /// Execution adapters translate the result into the existing pipeline exceptions.
-    /// </remarks>
-    internal async Task<ToolAuthorizationDecision> EvaluateAuthorizationAsync(
+    internal async Task<AuthorizationDecision> EvaluateAuthorizationAsync(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         CancellationToken ct)
-        => (await EvaluateAuthorizationResultAsync(toolCall, context, ct)).Decision;
-
-    internal async Task<ToolAuthorizationResult> EvaluateAuthorizationResultAsync(
-            FunctionCallContent toolCall,
-            ToolExecutionContext context,
-            CancellationToken ct)
     {
-        // Every caller comes here: the first attempt, the retry after consent,
-        // the background launch, and the shell re-check at process start. Each
-        // one asks the linear authorizer.
-        var isShell = string.Equals(toolCall.Name, ShellTool.ToolName, StringComparison.Ordinal);
-        var authorization = ToResult(isShell, await Authorizer.AuthorizeAsync(toolCall, context, ct));
-        LogAuthorizationDecision(toolCall, context, authorization.Decision);
-        return authorization;
+        var decision = await Authorizer.AuthorizeAsync(toolCall, context, ct);
+        LogAuthorizationDecision(toolCall, context, decision);
+        return decision;
     }
-
-    /// <summary>
-    /// Converts the authorizer's decision into the result that the execution
-    /// adapters read. An allowed shell decision with an analysis starts the
-    /// process. An allowed shell decision without one validates the arguments
-    /// only. An allowed decision for another tool runs that tool.
-    /// </summary>
-    internal static ToolAuthorizationResult ToResult(bool isShell, AuthorizationDecision decision)
-        => decision switch
-        {
-            AuthorizationDecision.Allowed allowed when isShell => ToolAuthorizationResult.CreateShell(
-                ToolAuthorizationDecision.Allow(allowed.Reason, allowed.Matches).WithShellPolicyTrace(allowed.Trace),
-                allowed.Analysis),
-            AuthorizationDecision.Allowed { Analysis: null } allowed => ToolAuthorizationResult.CreateDirect(
-                ToolAuthorizationDecision.Allow(allowed.Reason, allowed.Matches).WithShellPolicyTrace(allowed.Trace)),
-            AuthorizationDecision.Allowed => throw new InvalidOperationException(
-                "Only a shell call can carry a shell analysis."),
-            AuthorizationDecision.NeedsConsent consent => ToolAuthorizationResult.Stop(
-                ToolAuthorizationDecision.RequiresApproval(consent.Request, consent.Matches)
-                    .WithShellPolicyTrace(consent.Trace)),
-            AuthorizationDecision.CorrectionRequired correction => ToolAuthorizationResult.Stop(
-                ToolAuthorizationDecision.RequireAgentCorrection(correction.Corrections, correction.Matches)
-                    .WithShellPolicyTrace(correction.Trace)),
-            AuthorizationDecision.Denied denied => ToolAuthorizationResult.Stop(
-                ToolAuthorizationDecision.Deny(denied.Reason, denied.Message).WithShellPolicyTrace(denied.Trace)),
-            _ => throw new ArgumentOutOfRangeException(nameof(decision), decision, "Unknown authorization decision.")
-        };
 
     public async Task<ShellProcessLaunch> PrepareShellLaunchAsync(
         FunctionCallContent toolCall,
@@ -473,12 +426,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         if (context.RunScope.Session is not ToolSessionScope.Bound || context.Boundary is null)
             throw new InvalidOperationException("A background launch requires a bound session and a trust boundary.");
 
-        var authorized = await GetAuthorizedToolAsync(toolCall, context, ct);
-        if (authorized.Tool is not ShellTool shellTool
-            || authorized.Authorization is not ToolAuthorizationResult.ShellExecution shellAuthorization)
+        var (tool, allowed) = await GetAuthorizedToolAsync(toolCall, context, ct);
+        if (tool is not ShellTool shellTool || allowed.Analysis is not { } analysis)
             throw new InvalidOperationException("Background execution requires an authorized shell tool.");
 
-        return CreateShellLaunch(shellTool, toolCall.CallId, context, shellAuthorization.Analysis);
+        return CreateShellLaunch(shellTool, toolCall.CallId, context, analysis);
     }
 
     private ShellProcessLaunch CreateShellLaunch(
@@ -517,101 +469,75 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
     ApprovalShell IApprovalShellProvider.Shell => _policy.Shell;
 
-    private async Task<(INetclawTool Tool, ToolAuthorizationResult Authorization)>
-        GetAuthorizedToolAsync(
+    // The execution boundary: an executor signals consent, advice, and denial
+    // to the pipeline and the sub-agent loop with these exceptions.
+    private async Task<(INetclawTool Tool, AuthorizationDecision.Allowed Allowed)> GetAuthorizedToolAsync(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
         CancellationToken ct)
-    {
-        var authorization = await EvaluateAuthorizationResultAsync(toolCall, context, ct);
-        var decision = authorization.Decision;
-
-        if (decision.Outcome is ToolAuthorizationOutcome.RequiresApproval)
+        => await EvaluateAuthorizationAsync(toolCall, context, ct) switch
         {
-            throw new ToolApprovalRequiredException(
-                decision.ApprovalContext
-                ?? throw new InvalidOperationException("Approval decision missing approval context."));
-        }
-
-        if (decision.Outcome is ToolAuthorizationOutcome.RequiresAgentCorrection)
-        {
-            throw new ToolCorrectionRequiredException(
-                decision.AgentCorrections
-                ?? throw new InvalidOperationException("Agent correction decision missing correction facts."));
-        }
-
-        if (decision.Outcome is ToolAuthorizationOutcome.Denied)
-        {
-            throw new ToolAccessDeniedException(
-                decision.DenyReason
-                ?? throw new InvalidOperationException("Denied decision missing a deny reason."),
-                decision.DenyMessage);
-        }
-
-        var tool = _registry.GetByName(toolCall.Name)
-                   ?? throw new InvalidOperationException(
-                       "Allowed decision is missing its registered tool.");
-        return (tool, authorization);
-    }
+            AuthorizationDecision.Allowed allowed => (
+                _registry.GetByName(toolCall.Name)
+                ?? throw new InvalidOperationException("Allowed decision is missing its registered tool."),
+                allowed),
+            AuthorizationDecision.NeedsConsent consent => throw new ToolApprovalRequiredException(consent.Request),
+            AuthorizationDecision.CorrectionRequired correction =>
+                throw new ToolCorrectionRequiredException(correction.Corrections),
+            AuthorizationDecision.Denied denied => throw new ToolAccessDeniedException(denied.Reason, denied.Message),
+            var unknown => throw new ArgumentOutOfRangeException(nameof(toolCall), unknown, "Unknown authorization decision.")
+        };
 
     private void LogAuthorizationDecision(
         FunctionCallContent toolCall,
         ToolExecutionContext context,
-        ToolAuthorizationDecision decision)
+        AuthorizationDecision decision)
     {
-        switch (decision.Outcome)
+        // The outcome names stay those of ToolAuthorizationOutcome, so log
+        // queries keep working.
+        switch (decision)
         {
-            case ToolAuthorizationOutcome.Allowed:
-                var allowReason = decision.AllowReason
-                    ?? throw new InvalidOperationException("Allowed decision missing an allow reason.");
+            case AuthorizationDecision.Allowed allowed:
                 _logger.LogDebug(
                     "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} " +
                     "reason={AuthorizationReason} explanation={AuthorizationExplanation} " +
                     "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
                     toolCall.Name,
-                    decision.Outcome.ToString(),
-                    allowReason.ToString(),
-                    allowReason.GetDescription(),
+                    nameof(ToolAuthorizationOutcome.Allowed),
+                    allowed.Reason.ToString(),
+                    allowed.Reason.GetDescription(),
                     context.Approval.AuthorizationAttemptId.Value,
                     context.SessionId,
                     toolCall.CallId);
                 break;
-            case ToolAuthorizationOutcome.RequiresApproval:
+            case AuthorizationDecision.NeedsConsent or AuthorizationDecision.CorrectionRequired:
                 _logger.LogInformation(
                     "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} " +
                     "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
                     toolCall.Name,
-                    decision.Outcome.ToString(),
+                    decision is AuthorizationDecision.NeedsConsent
+                        ? nameof(ToolAuthorizationOutcome.RequiresApproval)
+                        : nameof(ToolAuthorizationOutcome.RequiresAgentCorrection),
                     context.Approval.AuthorizationAttemptId.Value,
                     context.SessionId,
                     toolCall.CallId);
                 break;
-            case ToolAuthorizationOutcome.RequiresAgentCorrection:
-                _logger.LogInformation(
-                    "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} " +
-                    "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
-                    toolCall.Name,
-                    decision.Outcome.ToString(),
-                    context.Approval.AuthorizationAttemptId.Value,
-                    context.SessionId,
-                    toolCall.CallId);
-                break;
-            case ToolAuthorizationOutcome.Denied:
+            case AuthorizationDecision.Denied denied:
                 _logger.LogWarning(
                     "Tool authorization evaluated: {ToolName} outcome={AuthorizationOutcome} reason={AuthorizationReason} " +
                     "authorizationAttemptId={AuthorizationAttemptId} sessionId={SessionId} callId={CallId}",
                     toolCall.Name,
-                    decision.Outcome.ToString(),
-                    decision.DenyReason,
+                    nameof(ToolAuthorizationOutcome.Denied),
+                    denied.Reason,
                     context.Approval.AuthorizationAttemptId.Value,
                     context.SessionId,
                     toolCall.CallId);
                 break;
             default:
-                throw new ArgumentOutOfRangeException(nameof(decision), decision.Outcome, "Unknown authorization outcome.");
+                throw new ArgumentOutOfRangeException(nameof(decision), decision, "Unknown authorization decision.");
         }
 
-        LogShellPolicyTrace(toolCall, context, decision.ShellPolicyTrace);
+        LogShellPolicyTrace(toolCall, context, decision.Trace);
     }
 
     internal void LogShellPolicyTrace(

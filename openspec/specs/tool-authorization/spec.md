@@ -50,7 +50,7 @@ coordinator. TA-9 states that order.
 |---|---|---|
 | Audience and requester of a turn | inbound adapter, `TrustContextDeriver`, `TurnContext` | Durable in the session journal |
 | Schema exposure | `ToolAccessPolicy.IsToolExposed`, progressive disclosure | Call-local |
-| Tool admission for an audience | `ToolAccessPolicy.AuthorizeInvocation` / `AuthorizeShellPreflight` / `AuthorizeMcpInvocation`, `ToolAudienceProfileResolver` | Call-local; profiles are configuration |
+| Tool admission for an audience | `ToolAuthorizer` (admission rules), `ToolAccessPolicy.AdmitAudience` / `EvaluateShellCapability`, `ToolAudienceProfileResolver` | Call-local; profiles are configuration |
 | Consent mode | `ToolAccessPolicy.GetApprovalMode`, `ToolApprovalConfig` | Call-local; configuration |
 | Shell mode and Personal-only shell | `ToolAccessPolicy.EvaluateShellCapability`, `TrustContextPolicy` | Call-local; configuration |
 | Hard deny | `ShellCommandPolicy`, `HardDenyRule`, `HardDenyOverridesLoader` | Process-local rules; call-local result |

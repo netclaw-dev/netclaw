@@ -10,83 +10,6 @@ using Netclaw.Security;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Represents the final tool authorization result before an execution adapter acts on it.
-/// </summary>
-/// <remarks>
-/// A shell result owns the exact analysis that the process can execute.
-/// A direct result lets the registered tool handle its invocation.
-/// A stopped result cannot carry a shell analysis.
-/// </remarks>
-internal abstract record ToolAuthorizationResult
-{
-    private protected ToolAuthorizationResult(
-        ToolAuthorizationDecision decision,
-        bool isAllowedResult)
-    {
-        ArgumentNullException.ThrowIfNull(decision);
-        if ((decision.Outcome == ToolAuthorizationOutcome.Allowed) != isAllowedResult)
-            throw new ArgumentException("The authorization result contradicts its decision.", nameof(decision));
-
-        Decision = decision;
-    }
-
-    internal ToolAuthorizationDecision Decision { get; }
-
-    internal sealed record ShellExecution : ToolAuthorizationResult
-    {
-        internal ShellExecution(
-            ToolAuthorizationDecision decision,
-            ShellCommandAnalysis analysis)
-            : base(decision, isAllowedResult: true)
-        {
-            ArgumentNullException.ThrowIfNull(analysis);
-            Analysis = analysis;
-        }
-
-        internal ShellCommandAnalysis Analysis { get; }
-    }
-
-    internal sealed record DirectExecution : ToolAuthorizationResult
-    {
-        internal DirectExecution(ToolAuthorizationDecision decision)
-            : base(decision, isAllowedResult: true) { }
-    }
-
-    internal sealed record ShellValidation : ToolAuthorizationResult
-    {
-        internal ShellValidation(ToolAuthorizationDecision decision)
-            : base(decision, isAllowedResult: true) { }
-    }
-
-    internal sealed record Stopped : ToolAuthorizationResult
-    {
-        internal Stopped(ToolAuthorizationDecision decision)
-            : base(decision, isAllowedResult: false) { }
-    }
-
-    internal static ToolAuthorizationResult CreateDirect(ToolAuthorizationDecision decision)
-        => decision.Outcome == ToolAuthorizationOutcome.Allowed
-            ? new DirectExecution(decision)
-            : new Stopped(decision);
-
-    internal static ToolAuthorizationResult CreateShell(
-        ToolAuthorizationDecision decision,
-        ShellCommandAnalysis? authorizedAnalysis)
-        => (decision.Outcome, authorizedAnalysis) switch
-        {
-            (ToolAuthorizationOutcome.Allowed, not null) => new ShellExecution(decision, authorizedAnalysis),
-            (ToolAuthorizationOutcome.Allowed, null) => new ShellValidation(decision),
-            (_, null) => new Stopped(decision),
-            _ => throw new ArgumentException(
-                "A stopped shell result cannot carry analysis.",
-                nameof(authorizedAnalysis)),
-        };
-
-    internal static Stopped Stop(ToolAuthorizationDecision decision)
-        => new(decision);
-}
-
-/// <summary>
 /// Represents the synchronous shell access phase before the coordinator checks approval evidence.
 /// </summary>
 /// <remarks>
@@ -96,21 +19,21 @@ internal abstract record ShellPolicyPreflightResult
 {
     internal sealed record Complete : ShellPolicyPreflightResult
     {
-        internal Complete(ToolAuthorizationResult result)
+        /// <param name="decision">The screen denial, the automatic allow, or a consent request without analysis.</param>
+        /// <param name="authorizedAnalysis">The analysis that the process may execute. Only an allowed decision carries one.</param>
+        internal Complete(ToolAuthorizationDecision decision, ShellCommandAnalysis? authorizedAnalysis)
         {
-            if (result is not (ToolAuthorizationResult.ShellExecution
-                or ToolAuthorizationResult.ShellValidation
-                or ToolAuthorizationResult.Stopped))
-            {
-                throw new ArgumentException(
-                    "A shell preflight cannot authorize direct execution.",
-                    nameof(result));
-            }
+            ArgumentNullException.ThrowIfNull(decision);
+            if (authorizedAnalysis is not null && decision.Outcome != ToolAuthorizationOutcome.Allowed)
+                throw new ArgumentException("Only an allowed shell decision can carry analysis.", nameof(authorizedAnalysis));
 
-            Result = result;
+            Decision = decision;
+            AuthorizedAnalysis = authorizedAnalysis;
         }
 
-        internal ToolAuthorizationResult Result { get; }
+        internal ToolAuthorizationDecision Decision { get; }
+
+        internal ShellCommandAnalysis? AuthorizedAnalysis { get; }
     }
 
     internal sealed record Continue : ShellPolicyPreflightResult
