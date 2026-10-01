@@ -523,6 +523,23 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
 
 - Follows: `git status` becomes a phrase from ShellSyntaxTree tokens. The
   reviewed-safe catalog lists that phrase as data.
+- Follows: a shell grant covers exactly its verb chain. The arguments are
+  free. `ApprovalPatternMatching.VerbChainEquals` compares the stored tokens
+  with the candidate's parser tokens, so a `gh` grant covers `gh --help` but
+  not `gh auth logout`, and a `gh pr view` grant does not cover `gh pr merge`.
+  The stored match kind keeps the name `TokenPrefix` so that the version-3
+  store does not change. A legacy phrase must also equal the whole chain.
+  Policy data gives some programs a one-token chain (`echo`, `which`, `jq`).
+  For these programs, a bare-program grant also covers a word that the parser
+  folds into the chain (`echo hi`).
+- Follows: the parser stops its verb walk at the first option. When the chain
+  is one token and a plain word follows an option (`gh -R o/r pr view 1`,
+  `git --no-pager log`), `ShellApprovalMatcher.HasOpenVerbChain` marks the
+  candidate `HasUnprovenVerbChain`. The rule uses general facts only: token
+  count, option and path flags, argument order and source positions, and
+  parser-proved operand values. No grant covers such a candidate, and the
+  prompt offers only `Once` and `Deny`. The approval actor also refuses to
+  save a grant for it. Reviewed-safe coverage still applies.
 - Breaks: `ResolveAuthorizationScope` treats the first operand of `find` and
   `cd` as a directory. That is private grammar of two executables.
 

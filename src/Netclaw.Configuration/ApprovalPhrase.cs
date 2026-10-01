@@ -23,9 +23,16 @@ public enum ApprovalShell
 /// </summary>
 public enum ApprovalMatchKind
 {
-    /// <summary>Match whole initial tokens.</summary>
+    /// <summary>
+    /// Match the exact verb chain. The candidate's verb tokens must equal the
+    /// stored tokens; the arguments are free. The name is historical: the store
+    /// writes it as <c>TokenPrefix</c>, but a grant never covers a longer chain.
+    /// </summary>
     TokenPrefix = 0,
 
-    /// <summary>Match the complete legacy phrase only.</summary>
+    /// <summary>
+    /// Match the complete legacy phrase. The phrase must equal the candidate's
+    /// whole verb chain; the arguments are free.
+    /// </summary>
     LegacyExact = 1,
 }

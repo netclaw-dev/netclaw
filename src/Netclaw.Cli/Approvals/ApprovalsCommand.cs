@@ -343,8 +343,10 @@ internal static class ApprovalsCommand
         {
             writer.WriteLine("Usage: netclaw approvals trust-verb <phrase> [--audience personal|team|public] [--tool <name>]");
             writer.WriteLine();
-            writer.WriteLine("Adds a global-wildcard approval. Shell phrases use typed canonical token prefixes;");
-            writer.WriteLine("other tools use exact phrases. Use it for unattended or scheduled tasks.");
+            writer.WriteLine("Adds a global-wildcard approval. A shell phrase covers exactly its command words,");
+            writer.WriteLine("with any arguments. It does not cover a longer subcommand chain: 'gh' does not");
+            writer.WriteLine("cover 'gh pr view'. Other tools use exact phrases. Use it for unattended or");
+            writer.WriteLine("scheduled tasks.");
             return null;
         }
 
@@ -421,7 +423,8 @@ internal static class ApprovalsCommand
         writer.WriteLine("                    Flags: --audience <personal|team|public>");
         writer.WriteLine("  trust-verb <phrase>");
         writer.WriteLine("                    Add one static canonical phrase as a global wildcard.");
-        writer.WriteLine("                    Shell phrases become typed token prefixes; other tools stay exact.");
+        writer.WriteLine("                    A shell phrase covers exactly its command words, with any");
+        writer.WriteLine("                    arguments. 'gh' does not cover 'gh pr view'. Other tools stay exact.");
         writer.WriteLine("                    Flags: --audience <personal|team|public> (default personal)");
         writer.WriteLine("                           --tool <name>                       (default shell_execute)");
         writer.WriteLine("                           --shell <bash|powershell>           (shell_execute only)");

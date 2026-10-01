@@ -97,10 +97,18 @@ internal static class ShellVerbPolicyData
 
         var firstSpace = parsedVerb.IndexOf(' ', StringComparison.Ordinal);
         var firstToken = firstSpace < 0 ? parsedVerb : parsedVerb[..firstSpace];
-        return PathAwareVerbs.Contains(firstToken)
-               || SingleTokenSideEffectVerbs.Contains(firstToken)
-               || SingleTokenCommandVerbs.Contains(firstToken)
+        return HasSingleTokenVerbChain(firstToken)
             ? firstToken
             : parsedVerb;
     }
+
+    /// <summary>
+    /// Returns true when policy data says that <paramref name="executable"/>
+    /// has a one-token verb chain: a path-aware verb, a side-effect verb, or a
+    /// single-token command. Words after such a verb are operands, not subcommands.
+    /// </summary>
+    internal static bool HasSingleTokenVerbChain(string executable)
+        => PathAwareVerbs.Contains(executable)
+           || SingleTokenSideEffectVerbs.Contains(executable)
+           || SingleTokenCommandVerbs.Contains(executable);
 }

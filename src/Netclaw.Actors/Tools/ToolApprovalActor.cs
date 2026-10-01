@@ -334,7 +334,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
             return true;
         }
 
+        // The prompt offers no reusable grant for an unproven verb chain. This
+        // last boundary before persistence refuses one as well.
         if (grant.Candidate.Shell is not { } shell ||
+            grant.Candidate.HasUnprovenVerbChain ||
             grant.Candidate.VerbTokens is not { } tokens)
         {
             return false;

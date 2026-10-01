@@ -20,7 +20,8 @@ public static class ShellApprovalGrantParser
     /// <summary>
     /// Parses one exact static grant phrase. This method does not accept all
     /// legal shell spellings or analyze a runtime command string. Extra source
-    /// text fails instead of broadening the stored token prefix.
+    /// text fails instead of changing the stored command words. The grant covers
+    /// a call only when the call's verb chain equals these words.
     /// </summary>
     public static bool TryCreateTokenPrefix(
         ApprovalShell shell,

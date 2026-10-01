@@ -1612,6 +1612,57 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             });
     }
 
+    // The parser stops its verb walk at the first option. A plain word after an
+    // option can be a subcommand, so the candidate has no verb chain.
+    [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("gh -R o/r pr view 123")]
+    [InlineData("gh --repo o/r pr list")]
+    [InlineData("git --no-pager log -1")]
+    [InlineData("gh --repo=o/r pr list")]
+    [InlineData("docker -H host ps")]
+    [InlineData("sort -o output input")]
+    public void ExtractCandidates_marks_the_verb_chain_unproven_when_a_word_follows_an_option(string command)
+    {
+        var candidate = Assert.Single(_matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/home/user/project")));
+
+        Assert.True(candidate.HasUnprovenVerbChain);
+        Assert.Equal([command.Split(' ')[0]], candidate.VerbTokens);
+    }
+
+    // Options only, an inline option value, a path or proved operand after an
+    // option, or a verb with a one-token chain in policy data: the chain is proved.
+    [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("gh --help", new[] { "gh" })]
+    [InlineData("gh --version", new[] { "gh" })]
+    [InlineData("ls -la", new[] { "ls" })]
+    [InlineData("cat -n file", new[] { "cat" })]
+    [InlineData("grep -rn needle .", new[] { "grep" })]
+    [InlineData("tr -d abc", new[] { "tr" })]
+    [InlineData("wc --files0-from=/tmp/list", new[] { "wc" })]
+    [InlineData("du --exclude-from=/tmp/patterns ./data", new[] { "du" })]
+    [InlineData("git -C /home/user/project status", new[] { "git", "status" })]
+    [InlineData("gh pr view 123 -R o/r", new[] { "gh", "pr", "view" })]
+    [InlineData("git push origin 1.5.1 --force", new[] { "git", "push", "origin" })]
+    public void ExtractCandidates_proves_the_verb_chain_without_a_word_after_an_option(
+        string command,
+        string[] expected)
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/home/user/project"));
+
+        Assert.NotEmpty(candidates);
+        Assert.All(candidates, candidate =>
+        {
+            Assert.False(candidate.HasUnprovenVerbChain);
+            Assert.Equal(expected, candidate.VerbTokens);
+        });
+    }
+
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_extracts_cd_target_as_directory()
     {

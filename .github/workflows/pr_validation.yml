@@ -151,7 +151,7 @@ jobs:
           - group: authorization
             gates: tool-authorization tool-authorizer-order path-access mcp-artifact-admission
           - group: approval-and-execution
-            gates: approval-directory skill-manage-guard reminder-execution
+            gates: approval-directory skill-manage-guard reminder-execution exact-verb-chain
 
     steps:
       - name: "Checkout"

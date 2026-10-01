@@ -36,8 +36,19 @@ public sealed record ApprovalCandidate(
             : null;
     }
 
-    /// <summary>The immutable parser-owned canonical verb tokens.</summary>
+    /// <summary>
+    /// The immutable parser-owned canonical verb tokens. A shell grant covers
+    /// the candidate only when its tokens equal these tokens.
+    /// </summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
+
+    /// <summary>
+    /// True when the parser cannot prove that <see cref="VerbTokens"/> is the
+    /// whole verb chain, for example <c>gh -R o/r pr view</c>. No shell grant
+    /// covers such a candidate, and no reusable grant is offered or saved for it.
+    /// Only one-time consent applies.
+    /// </summary>
+    public bool HasUnprovenVerbChain { get; init; }
 
     /// <summary>The native shell grammar that produced the candidate.</summary>
     public ApprovalShell? Shell { get; init; }
@@ -60,6 +71,7 @@ public sealed record ApprovalCandidate(
         Equals(other) &&
         AssignmentDigest == other.AssignmentDigest &&
         Shell == other.Shell &&
+        HasUnprovenVerbChain == other.HasUnprovenVerbChain &&
         HasSameVerbTokens(other.VerbTokens);
 
     private bool HasSameVerbTokens(IReadOnlyList<string>? other)
@@ -333,6 +345,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             {
                 AssignmentDigest = assignmentDigest,
                 VerbTokens = GetCanonicalVerbTokens(clause),
+                HasUnprovenVerbChain = HasOpenVerbChain(occurrence),
                 Shell = shell,
                 SourceOccurrence = occurrence,
             })
@@ -354,6 +367,61 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return Array.AsReadOnly(tokens);
+    }
+
+    /// <summary>
+    /// True when the parser verb chain stops at the program name and a plain
+    /// word follows an option, for example <c>gh -R o/r pr view 123</c> or
+    /// <c>git --no-pager log</c>. The parser stops its verb walk at the first
+    /// option, so the later word can be a subcommand. Only the executable's
+    /// private grammar can tell, and approval code must not parse that grammar.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: without this rule, an exact grant for the bare program
+    /// (<c>gh</c>, saved from <c>gh --help</c>) would cover
+    /// <c>gh -R o/r auth logout</c>. The rule uses general parser facts only:
+    /// the verb token count, option and path flags, argument order and source
+    /// positions, and parser-proved operand values. A word that the parser
+    /// classifies as a path or as a proved operand value cannot be a
+    /// subcommand. The value of an inline option (<c>--repo=o/r</c>) shares the
+    /// option's shell word, so it is not a later word. A verb with a one-token
+    /// chain in policy data (<c>ls</c>, <c>cat</c>, <c>grep</c>) has operands
+    /// only, so <c>ls -la</c> and <c>cat -n file</c> keep a proved chain.
+    /// </remarks>
+    internal static bool HasOpenVerbChain(ShellSyntaxTree.CommandOccurrence occurrence)
+    {
+        var verb = occurrence.Clause.Verb;
+        if (verb.Tokens.Count != 1
+            || ShellVerbPolicyData.HasSingleTokenVerbChain(verb.CanonicalVerb ?? verb.Tokens[0]))
+        {
+            return false;
+        }
+
+        int? optionWordStart = null;
+        var afterOption = false;
+        foreach (var argument in occurrence.Arguments)
+        {
+            var arg = argument.Argument;
+            if (arg.IsFlag)
+            {
+                afterOption = true;
+                optionWordStart = argument.Element.SourceStart;
+                continue;
+            }
+
+            var isInlineOptionValue = optionWordStart is not null
+                && argument.Element.SourceStart == optionWordStart;
+            if (afterOption
+                && !isInlineOptionValue
+                && !arg.IsPath
+                && argument.AuthoredFileSystemValue is ShellSyntaxTree.ShellValueDomain.Unknown
+                && argument.AuthoredNonFileSystemValue is ShellSyntaxTree.ShellValueDomain.Unknown)
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static IReadOnlyList<string?>? ResolveCommandDirectories(

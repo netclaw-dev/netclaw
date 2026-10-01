@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.76.9"
+  version: "2.77.0"
 ---
 
 # Netclaw Operations
@@ -410,7 +410,10 @@ because their approval matchers do not consume directory scope.
 Shell approvals store a typed phrase and a scope in `tool-approvals.json`:
 
 - **verb** — the command head plus subcommand chain only (e.g. `git push`,
-  `grep`, `freshdesk`). No flags, no path arguments.
+  `grep`, `freshdesk`). No flags, no path arguments. A grant covers
+  **exactly** this chain, with any arguments. It never covers a longer chain:
+  a `gh` grant covers `gh --help`, not `gh auth logout`; a `gh pr view` grant
+  covers `gh pr view 2 --web`, not `gh pr merge`.
 - **directory** — the path field for folder and global grants. Netclaw sets it from:
   - **Path argument** in the original command (`find /repo`, `ls /var/log`,
     `cat ~/.bashrc`). The path argument is the directory; for file targets
@@ -427,6 +430,14 @@ use. A folder grant keeps its path scope. An unapproved verb or a path outside
 the repository still needs approval.
 The scope supports an ordinary `.git` directory and registered linked worktrees.
 A main checkout with `--separate-git-dir` does not receive this choice.
+
+**Put options after the subcommand.** Write `gh pr view 123 -R o/r`, not
+`gh -R o/r pr view 123`. Leave out a global option that the program does not
+need: write `git log -1`, not `git --no-pager log -1` (git does not page
+without a terminal). When an option comes before the subcommand, Netclaw
+cannot prove the subcommand, so the prompt offers only `Once` and `Deny`, and
+no saved grant covers the call. The subcommand-first form gets the normal
+reusable choices.
 
 **Folder-scoped trust compounds.** An entry on `(find, /home/user/repo)`
 auto-allows `find /home/user/repo/.netclaw -name X` because the candidate's
@@ -562,9 +573,11 @@ netclaw approvals list --json
 netclaw approvals revoke "git remote in /home/user/repos/foo/"
 netclaw approvals revoke "freshdesk anywhere"
 
-# Pre-approve a verb as a global wildcard for unattended/scheduled tasks
+# Pre-approve a verb chain as a global wildcard for unattended/scheduled tasks.
+# The phrase covers exactly that chain: "gh pr view" does not cover "gh pr merge",
+# and "gh" covers only gh with options (gh --help), not its subcommands.
 netclaw approvals trust-verb freshdesk
-netclaw approvals trust-verb gh --audience team
+netclaw approvals trust-verb "gh pr view" --audience team
 
 # Clear every entry for a tool (optionally scoped to one audience)
 netclaw approvals revoke --tool shell_execute --all
@@ -580,7 +593,10 @@ existing entry exits zero with "no changes."
 Reminders and webhooks fire without a human present and cannot answer prompts.
 When you (the agent) are helping the user set up an unattended task that needs
 shell commands, **identify the verbs the task will need and proactively suggest
-pre-approving them as global wildcards** before the schedule fires.
+pre-approving them as global wildcards** before the schedule fires. Trust each
+full subcommand chain the task runs (`gh pr list`, `gh pr view`), because a
+shorter phrase does not cover a longer chain. Write the task's commands with
+options after the subcommand, so that a grant can cover them.
 
 Example dialogue when the user asks you to schedule a daily Freshdesk report:
 

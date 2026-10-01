@@ -152,6 +152,7 @@ message ToolApprovalRequestedProto {
     optional int32 shell = 4;
     optional int32 assignment_constraint_kind = 5;
     optional string assignment_digest = 6;
+    optional bool has_unproven_verb_chain = 7;
   }
 
   message TurnContextRecordProto {

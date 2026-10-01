@@ -463,6 +463,8 @@ internal static class NetclawProtoMapper
             proto.Shell = (int)c.Shell.Value;
         if (c.AssignmentDigest is { } digest)
             proto.AssignmentDigest = digest.Value;
+        if (c.HasUnprovenVerbChain)
+            proto.HasUnprovenVerbChain = true;
         return proto;
     }
 
@@ -477,6 +479,7 @@ internal static class NetclawProtoMapper
             Shell = proto.HasShell && Enum.IsDefined(typeof(ApprovalShell), proto.Shell)
                 ? (ApprovalShell)proto.Shell
                 : null,
+            HasUnprovenVerbChain = proto.HasUnprovenVerbChain,
         };
 
     private static ApprovalAssignmentDigest? FromApprovalAssignmentDigestProto(
