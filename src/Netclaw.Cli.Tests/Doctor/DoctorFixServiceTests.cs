@@ -594,7 +594,9 @@ public sealed class DoctorFixServiceTests
         var configuration = new ConfigurationBuilder()
             .AddNetclawDaemonSources(paths)
             .Build();
-        return ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), out warnings);
+        var bound = PolicyConfiguration.Bind(configuration);
+        warnings = bound.ToolWarnings;
+        return bound.Tools;
     }
 
     private static NetclawPaths NewPaths()

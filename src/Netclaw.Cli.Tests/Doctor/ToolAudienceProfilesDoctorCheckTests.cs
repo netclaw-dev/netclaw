@@ -115,32 +115,54 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.DoesNotContain("explicitly sets shell_execute to Auto", result.Message);
     }
 
-    [Fact]
-    public async Task UnrestrictedPersonalProfile_Implicit_Warns()
+    [Theory]
+    [InlineData("Personal", "HostAllowed")]
+    [InlineData("Team", "Off")]
+    [InlineData("Public", "Off")]
+    public async Task Init_output_without_profiles_is_not_reported(string posture, string shellMode)
     {
-        // When Personal profile is NOT in config (fallback defaults), unrestricted
-        // access should warn. AudienceProfiles must exist but Personal must be absent.
+        // `netclaw init` writes only the posture and the shell mode. An absent profile is the
+        // posture default, as in the daemon, so doctor does not ask for explicit profiles.
+        WriteConfig(
+            $$"""
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "{{posture}}", "ShellExecutionMode": "{{shellMode}}", "StrictDefaults": true },
+              "Tools": { "ShellMode": "{{shellMode}}" }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.NotEqual(DoctorSeverity.Error, result.Severity);
+        Assert.DoesNotContain("Missing explicit profiles", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("AudienceProfiles is missing", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Personal profile allows all tools", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("shell_execute", result.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Partial_personal_profile_binds_on_the_posture_default()
+    {
+        // The Personal posture default allows all tools. A profile that sets only the approval
+        // policy keeps that default, so an explicit Auto for shell is reported.
         WriteConfig(
             """
             {
               "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal", "ShellExecutionMode": "HostAllowed", "StrictDefaults": true },
               "Tools": {
                 "ShellMode": "HostAllowed",
                 "AudienceProfiles": {
-                  "Public": {
-                    "ToolsMode": "AllowList"
-                  }
+                  "Personal": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "Auto" } } }
                 }
               }
             }
             """);
 
-        var check = new ToolAudienceProfilesDoctorCheck(_paths);
-        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
 
-        // Should warn about missing profiles and unrestricted fallback
-        Assert.Contains("Missing explicit profiles for", result.Message);
-        Assert.Contains("Personal profile allows all tools", result.Message);
+        Assert.Contains("Personal profile explicitly sets shell_execute to Auto", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -589,6 +611,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is an older Netclaw default list", result.Message, StringComparison.Ordinal);
         Assert.Contains("adds file_search, tool_output_read", result.Message, StringComparison.Ordinal);
         Assert.Contains("netclaw doctor --fix` to remove the key", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tools.AudienceProfiles.Team.AllowedTools does not include", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -601,7 +624,7 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
 
         Assert.Contains("Tools.AudienceProfiles.Team.AllowedTools is a copy of the current Netclaw default list", result.Message, StringComparison.Ordinal);
         Assert.Contains("netclaw doctor --fix` to remove the key", result.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("Tools.AudienceProfiles.Public.AllowedTools", result.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("Tools.AudienceProfiles.Public.AllowedTools is", result.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -639,6 +662,32 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
 
         Assert.DoesNotContain("AllowedTools is", result.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("\"file_read\"", true)]
+    [InlineData("\"file_read\", \"tool_output_read\"", false)]
+    public async Task Allowlist_without_tool_output_read_is_an_advisory_warning(string publicTools, bool warns)
+    {
+        WriteConfig(
+            $$"""
+            {
+              "configVersion": 1,
+              "Tools": {
+                "AudienceProfiles": {
+                  "Public": { "ToolsMode": "Allowlist", "AllowedTools": [{{publicTools}}] },
+                  "Team": { "ToolsMode": "Allowlist", "AllowedTools": ["file_read", "tool_output_read"] },
+                  "Personal": { "ToolsMode": "All", "McpServersMode": "All" }
+                }
+              }
+            }
+            """);
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(warns, result.Message.Contains(
+            "Tools.AudienceProfiles.Public.AllowedTools does not include tool_output_read", StringComparison.Ordinal));
+        Assert.DoesNotContain("Tools.AudienceProfiles.Team.AllowedTools does not include", result.Message, StringComparison.Ordinal);
     }
 
     private static string LegacyTeamConfig(string teamTools)

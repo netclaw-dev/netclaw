@@ -7,6 +7,7 @@ using System.Text.Json;
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Sessions;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -102,7 +103,7 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
 
         await SeedApprovalAsync(permitted, call, context, mode);
         var allowed = await permitted.EvaluateAuthorizationAsync(call, context, CancellationToken.None);
-        Assert.Equal(ToolAuthorizationOutcome.Allowed, allowed.Outcome);
+        Assert.IsType<AuthorizationDecision.Allowed>(allowed);
 
         var restricted = CreateExecutor(tool, config, new ShellCommandPolicy(["echo mutation-probe"]));
         var deniedContext = CreateContext(TrustAudience.Personal);
@@ -218,11 +219,10 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
         if (mode != ToolApprovalMode.Approval)
             return;
 
-        var decision = await executor.EvaluateAuthorizationAsync(call, context, CancellationToken.None);
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.NotNull(decision.ApprovalContext);
+        var consent = Assert.IsType<AuthorizationDecision.NeedsConsent>(
+            await executor.EvaluateAuthorizationAsync(call, context, CancellationToken.None));
         context.Approval.SeedOneTimeConsent(
-            OneTimeApprovalKeys.CreateConsent(decision.ApprovalContext.ToolName, decision.ApprovalContext));
+            OneTimeApprovalKeys.CreateConsent(consent.Request.ToolName, consent.Request));
     }
 
     // The real dispatcher and shell policy use this probe. No mutant can start a host process.
@@ -247,7 +247,7 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
 
     private sealed class UnexpectedApprovalBridge : IParentConsentBridge
     {
-        public Task<ConsentAnswer> RequestConsentAsync(ParentApprovalRequest request, CancellationToken ct) =>
+        public Task<ConsentStep> RequestConsentAsync(ParentApprovalRequest request, CancellationToken ct) =>
             throw new InvalidOperationException("The dispatcher must not request user approval through the bridge.");
     }
 }

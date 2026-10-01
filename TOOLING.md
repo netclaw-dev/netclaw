@@ -29,8 +29,10 @@
 
 ## Focused Mutation Tests
 
-The path-access, tool authorization, approval directory, reminder execution, skill_manage guard, shell analysis, and shell assignment mutation jobs run on each pull request, merge group, and `dev` push.
-Each Linux job runs in parallel with the normal test matrix.
+All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request, merge group, and `dev` push.
+The job has three Linux matrix groups that run in parallel with the normal test matrix.
+Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
+To add a gate, add its script name (`scripts/run-<name>-mutations.sh`) to the lightest group. Do not add a new job.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
 change at a security or authority boundary. They do not measure general code
@@ -41,13 +43,14 @@ coverage. They do not replace positive and negative behavior tests.
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
 | `PathAccessPolicy.AddSessionRoots` | Only a Personal context receives shared session roots | 2 killed | `./scripts/run-path-access-mutations.sh` |
-| `ToolAccessPolicy.AuthorizeMcpInvocation` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
-| `ToolAccessPolicy.AuthorizeShellInvocation` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
+| `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
 | Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
-| Filesystem authority folder membership, repository identity, and repository persistence | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved | 15 killed | `./scripts/run-approval-directory-mutations.sh` |
+| Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
@@ -124,6 +127,41 @@ The authorization PR 4 re-run killed the same 3 + 2 mutants in about 5 minutes.
 The separate CI job retains a 10-minute timeout and uploads `tool-authorization-mutation-report`.
 Its report directory is `artifacts/stryker/tool-authorization`.
 
+### Tool Authorizer Order Gate
+
+Run the rule-order gate of the linear authorizer:
+
+```bash
+./scripts/run-tool-authorizer-order-mutations.sh
+```
+
+`ToolAuthorizer` (authorization PR 6a) states its rule order as one
+`decision ??= Rule(call);` line per rule (`decision ??= await RuleAsync(call, ct);`
+for a rule that reads the grant store). The script selects three lines of the
+shell rule list: hard deny, the trusted-root check, and the covering grant.
+Stryker turns `??=` into `=` on each line. The rule then runs after an earlier
+decision and replaces it, so the rule moves ahead of every earlier rule. The
+script requires one killed mutant on each line and three tested mutants overall.
+A missing or duplicated rule line fails before Stryker starts.
+
+`ToolAuthorizerOrderMutationTests` kills the mutants. A covering grant exists in
+every case:
+
+- A hard-denied phrase stays denied. A control with a granted phrase is allowed.
+- A Team audience stays denied. No later rule can clear an admission denial.
+
+Since authorization PR 6e, the same class also pins the grant-first rule for an
+unattended call in Approval mode. A stored grant decides for a path or a working
+directory outside every trusted root. The negative controls stay denied: a call
+without a grant (the denial names the missing grant), Auto mode, and a protected
+path with a grant.
+
+The tests pick the host shell and a temporary root without links, so they also
+pass in the normal Windows and macOS test jobs. The local run took about
+2 minutes after package restore. CI runs it in the `authorization` group of the
+`mutation-gates` job. Its report directory is
+`artifacts/stryker/tool-authorizer-order`.
+
 ### Approval Directory Gate
 
 Run the approval directory gate:
@@ -133,7 +171,7 @@ Run the approval directory gate:
 ```
 
 The script reuses the xUnit 2 harness.
-It selects eight security source regions and three approval actor conditions.
+It selects eight security source regions, three approval actor conditions, and the folder rule of the grant builder.
 Folder containment and link checks are in the filesystem authority
 (`src/Netclaw.Security/Authorization/Filesystem`). Bash and PowerShell grants use
 the same containment rule and the same link walker, so one containment target
@@ -152,8 +190,9 @@ replaces the two shell-specific targets.
 | Persistence candidate resolution | 1 killed: remove the logical negation |
 | Persistence common identity | 1 killed: remove the logical negation |
 | Persistence worktree root | 1 killed: remove the logical negation |
+| Folder of a new grant (`GrantBuilder`, `candidate.Directory ?? workingDirectory`) | 3 killed: swap the operands or keep only one side |
 
-The script requires these counts at their exact source locations and 15 tested mutants overall.
+The script requires these counts at their exact source locations and 18 tested mutants overall (12 Security, 6 Actors).
 It fails if a target is absent, survives, exceeds its time limit, or cannot compile.
 The source selector rejects an absent or duplicate boundary before Stryker starts.
 This protects the gate when the authorization code and diagnostic code contain similar conditions.
@@ -170,6 +209,7 @@ The Linux mutation job runs the shared link walker on POSIX links only; the ordi
 
 The matcher shares `EvaluateApprovalScope` with `ToolApprovalActor` and shell approval evidence validation.
 The three persistence targets are in `ToolApprovalActor.TryCreateEntry`. It reads the repository from `GrantScope.Repository` and the builder's worktree from `ToolApprovalGrant.RepositoryWorktree`.
+The grant builder target protects the directory proof of a `cd` list: each folder grant uses the directory of its own occurrence (for example `cd@/work/sub`), and a candidate without a directory uses the call directory, not "everywhere". `Folder_grant_uses_the_directory_where_each_occurrence_runs` kills all three mutants.
 These tests preserve PRD-002 SEC-003 and
 [TA-8 of the tool authorization contract](openspec/specs/tool-authorization/spec.md#requirement-ta-8-every-candidate-needs-coverage).
 They prove folder-grant decisions. They do not prove native process containment or races between authorization and file access.
@@ -296,7 +336,9 @@ algorithm. The owner kept it (2026-09-30), and a parser screen now adds a
 hard-deny check of each Bash list element. Neither has a focused target:
 `HardDenyParityCorpusTests` pins the kept denials and the four stricter
 background-list cases. The gate re-run after the screen killed the same 81
-mutants. CI allows 30 minutes for
+mutants. The cd projection merge re-pointed the `IsMessy` marker to its new
+signature (it now takes the link rule); the same 72 Security and 9 Actors
+mutants die. CI allows 30 minutes for
 hosted-runner variance and report upload. The report directory is
 `artifacts/stryker/shell-command-analysis`.
 
@@ -333,7 +375,7 @@ Add one focused target when all these conditions apply:
 - Deterministic tests reject that mutation.
 - A narrow source span contains the relevant decision.
 - Stryker produces stable, meaningful mutants for that span.
-- The total mutation job stays below its configured CI timeout.
+- Its matrix group stays below the job timeout and finishes before the Windows test job.
 
 Use this procedure:
 
@@ -427,6 +469,74 @@ python3 -m unittest discover -s scripts/tests -p 'test_*.py' -v          # self-
 Exit status 0 means pass, 1 means a rule violation, and 2 means bad input. The
 `Approval Outcome Direction` job in `pr_validation.yml` runs the self-tests and
 the check against the base of each pull request.
+
+### Authorizer Differential
+
+Authorization PRs 6a to 6c ran `ToolAuthorizerDifferentialTests` in CI. It
+compared the old gate with `ToolAuthorizer` on the catalog and on shell and
+tool corpora. PR 6d deleted the old gate, so the in-CI differential has no
+reference side. The corpus differential below compares the production path
+with `dev` and is the proof for each later slice.
+
+### Authorization Corpus Differential
+
+`scripts/authorization-corpus/run.py` runs a large corpus of tool calls through
+the production authorization path of two revisions and compares each decision.
+Use it for each slice that moves authorization code. Zero differences against
+`dev` is the proof that a refactor keeps every decision.
+
+```bash
+python3 scripts/authorization-corpus/run.py --base upstream/dev                 # HEAD against dev
+python3 scripts/authorization-corpus/run.py --base upstream/dev --quick         # 3 states, a few minutes
+python3 scripts/authorization-corpus/run.py --base upstream/dev --head-adapter authorizer
+```
+
+How it works:
+
+1. The script builds the corpus from every string literal in
+   `src/Netclaw.Actors.Tests` and `src/Netclaw.Security.Tests` at a fixed
+   revision (`--corpus-revision`, default `4244eaed5`), plus
+   `extra-commands.txt`. Each literal also runs after four compound prefixes
+   (`cd` lists, an external directory, and the temporary root). The default
+   corpus has 54,909 shell inputs.
+2. For each revision, the script makes a disposable `git worktree`, copies the
+   probe (`probe/AuthorizationCorpusProbe.cs`) and one adapter into
+   `Netclaw.Actors.Tests`, builds, and runs the probe. The `gate` adapter reads
+   `EvaluateAuthorizationResultAsync` (revisions up to authorization PR 6c).
+   The `authorizer` adapter reads `ToolAuthorizer`. `auto` picks the
+   production path of the revision.
+3. The probe evaluates 16 shell states (Bash: 3 grant states, interactive or
+   unattended, Approval or Auto; PowerShell 7: 2 grant states, Approval or Auto)
+   and 24 tool states (3 audiences, interactive or unattended, 4 consent modes)
+   with the 62 tool inputs of the differential test. After a consent request,
+   it also evaluates the retry with a "Once" answer. After a tool consent
+   request, it records a chat grant and evaluates the call again.
+4. The script compares the two outputs and writes a report with the outcome
+   transitions and the first differences.
+
+Each line holds the outcome, reason, advice, consent request, matched grants,
+coverage trace, store lookups, and the analysis that the process may execute.
+The probe replaces run-specific paths with placeholders (`{P}`, `{S}`, `{X}`,
+`{R}`, `{T}`, `{REPOSITORY}`, and the GUID of the fake Windows root). The
+compare step also replaces the parent of the private temporary root, which a
+`..` path can reach. Grant timestamps compare by presence only.
+
+Caution: the probe runs with a private temporary root (`TMPDIR`, `TMP`, and
+`TEMP` point into the work directory). The corpus replaces the literal `/tmp`
+with that root (`{T}`). A decision therefore never reads the shared `/tmp`,
+which other processes change during a run.
+
+Notes:
+
+- The script tests committed revisions only. Commit the work before a run.
+- The work directory is `artifacts/authorization-corpus` (`--out` changes it).
+  The script reuses an output when the `src/` tree, adapter, probe, corpus,
+  and states are the same. A full output is about 600 MB.
+- Bash states need POSIX filesystem semantics. On Windows, the probe runs the
+  PowerShell and tool states only.
+- Exit status 0 means no difference. Exit status 1 means at least one
+  difference. A slice with an intended change (for example PR 6e) lists each
+  transition from the report.
 
 ### Authorization Metrics
 

@@ -134,10 +134,24 @@ jobs:
         env:
           NETCLAW_CLI: ./install-test/netclaw
 
-  path-access-mutation:
-    name: Path Access Mutation Tests
+  mutation-gates:
+    # One job definition for every focused Stryker gate. Each matrix group shares
+    # one checkout, SDK install, and tool restore. To add a gate, add its script
+    # name (scripts/run-<name>-mutations.sh) to the lightest group. The groups
+    # are balanced so each one finishes before the Windows test job.
+    name: Mutation Gates (${{ matrix.group }})
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - group: shell
+            gates: shell-command-analysis shell-assignment
+          - group: authorization
+            gates: tool-authorization tool-authorizer-order path-access mcp-artifact-admission
+          - group: approval-and-execution
+            gates: approval-directory skill-manage-guard reminder-execution
 
     steps:
       - name: "Checkout"
@@ -153,232 +167,34 @@ jobs:
       - name: "Restore .NET tools"
         run: dotnet tool restore
 
-      - name: "Test path-access mutants"
-        run: ./scripts/run-path-access-mutations.sh
+      # Run every gate in the group, even after a failure, so one run reports
+      # all failed gates. The step fails if any gate fails.
+      - name: "Run mutation gates"
+        env:
+          GATES: ${{ matrix.gates }}
+        run: |
+          failed=()
+          for gate in $GATES; do
+            echo "::group::$gate"
+            if "./scripts/run-${gate}-mutations.sh"; then
+              echo "- \`$gate\`: passed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "- \`$gate\`: FAILED" >> "$GITHUB_STEP_SUMMARY"
+              failed+=("$gate")
+            fi
+            echo "::endgroup::"
+          done
+          if (( ${#failed[@]} > 0 )); then
+            echo "::error::Mutation gates failed: ${failed[*]}"
+            exit 1
+          fi
 
-      - name: "Upload mutation report"
+      - name: "Upload mutation reports"
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: path-access-mutation-report
-          path: ./artifacts/stryker/path-access-policy
-          if-no-files-found: ignore
-          retention-days: 14
-
-  tool-authorization-mutation:
-    name: Tool Authorization Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test tool authorization mutants"
-        run: ./scripts/run-tool-authorization-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: tool-authorization-mutation-report
-          path: ./artifacts/stryker/tool-authorization
-          if-no-files-found: ignore
-          retention-days: 14
-
-  mcp-artifact-admission-mutation:
-    name: MCP Artifact Admission Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test MCP artifact admission mutants"
-        run: ./scripts/run-mcp-artifact-admission-mutations.sh
-
-      - name: "Upload MCP artifact admission mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: mcp-artifact-admission-mutation-report
-          path: ./artifacts/stryker/mcp-artifact-admission
-          if-no-files-found: ignore
-          retention-days: 14
-
-  shell-analysis-mutation:
-    name: Shell Analysis Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test shell-analysis mutants"
-        run: ./scripts/run-shell-command-analysis-mutations.sh
-
-      - name: "Upload shell-analysis mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shell-command-analysis-mutation-report
-          path: ./artifacts/stryker/shell-command-analysis
-          if-no-files-found: ignore
-          retention-days: 14
-
-  shell-assignment-mutation:
-    name: Shell Assignment Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test shell-assignment mutants"
-        run: ./scripts/run-shell-assignment-mutations.sh
-
-      - name: "Upload shell-assignment mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: shell-assignment-mutation-report
-          path: ./artifacts/stryker/shell-assignment
-          if-no-files-found: ignore
-          retention-days: 14
-
-  approval-directory-mutation:
-    name: Approval Directory Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test approval directory mutants"
-        run: ./scripts/run-approval-directory-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: approval-directory-mutation-report
-          path: ./artifacts/stryker/approval-directory
-          if-no-files-found: ignore
-          retention-days: 14
-
-  reminder-execution-mutation:
-    name: Reminder Execution Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test reminder execution mutants"
-        run: ./scripts/run-reminder-execution-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: reminder-execution-mutation-report
-          path: ./artifacts/stryker/reminder-execution
-          if-no-files-found: ignore
-          retention-days: 14
-
-  skill-manage-guard-mutation:
-    name: Skill Manage Guard Mutation Tests
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-        with:
-          fetch-depth: 1
-
-      - name: "Install .NET SDK"
-        uses: actions/setup-dotnet@v6
-        with:
-          global-json-file: "./global.json"
-
-      - name: "Restore .NET tools"
-        run: dotnet tool restore
-
-      - name: "Test skill_manage guard mutants"
-        run: ./scripts/run-skill-manage-guard-mutations.sh
-
-      - name: "Upload mutation report"
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: skill-manage-guard-mutation-report
-          path: ./artifacts/stryker/skill-manage-guard
+          name: mutation-reports-${{ matrix.group }}
+          path: ./artifacts/stryker
           if-no-files-found: ignore
           retention-days: 14
 

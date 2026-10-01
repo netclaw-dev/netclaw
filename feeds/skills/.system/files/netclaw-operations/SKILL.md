@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.76.5"
+  version: "2.76.9"
 ---
 
 # Netclaw Operations
@@ -593,6 +593,14 @@ Example dialogue when the user asks you to schedule a daily Freshdesk report:
 On confirmation, run the trust-verb command via `shell_execute`, then create
 the reminder. The grant persists across daemon restarts.
 
+An unattended task can also work in a folder outside its trusted roots, but
+only when a stored grant covers every command of the call. If such a call is
+denied with `shell_path_outside_trust_zone` or
+`shell_working_directory_outside_trust_zone`, the denial names each missing
+grant: its verb, its folder, and the scopes that can cover it. Suggest that
+grant to the user. A grant never opens a protected path (the config directory,
+secrets, or keys), and Auto mode does not use grants.
+
 ### Last-resort recovery
 
 If the approval file gets corrupted (the daemon will quarantine it to
@@ -662,8 +670,18 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
 - `netclaw doctor` reports a list that exactly matches any Netclaw default, which includes
   today's default. `netclaw doctor --fix` backs up `netclaw.json`, then deletes that
   `AllowedTools` key, so the audience follows the default in later releases.
+- `netclaw doctor` warns when a Public or Team allowlist does not include
+  `tool_output_read`. A spilled tool result tells the model to call that tool. The warning
+  has no auto-fix, because a narrow list can be intentional.
 - The daemon reads `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables.
   `netclaw doctor` reads only `netclaw.json`, so it can show a different list.
+- `netclaw init` writes only the posture (`Security.DeploymentPosture`,
+  `Security.ShellExecutionMode`, `Security.StrictDefaults`) and `Tools.ShellMode`. It does
+  not write `Tools.AudienceProfiles`. The daemon computes the profiles from the posture. An
+  absent profile is normal and gets the posture default. For the Personal posture, that
+  default requires approval for `shell_execute` on Personal.
+- Do not write a default list into `netclaw.json` to "make it visible". Write only the key
+  that you change.
 
 ## Diagnostics, Kill Switches & Self-Maintenance
 

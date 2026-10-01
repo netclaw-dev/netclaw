@@ -2477,7 +2477,7 @@ internal sealed class DelayingParentApprovalBridge : IParentConsentBridge
     /// </summary>
     public Task EnteredApprovalWait => _enteredSignal.Task;
 
-    public Task<ConsentAnswer> RequestConsentAsync(
+    public async Task<ConsentStep> RequestConsentAsync(
         ParentApprovalRequest request,
         CancellationToken ct)
     {
@@ -2486,7 +2486,8 @@ internal sealed class DelayingParentApprovalBridge : IParentConsentBridge
         // Task.WaitAsync(CancellationToken) throws OperationCanceledException on
         // cancel and observes faults on the underlying task — replaces a
         // hand-rolled WhenAny+Register+TCS dance.
-        return _decisionFactory().WaitAsync(ct);
+        var answer = await _decisionFactory().WaitAsync(ct);
+        return ConsentStep.From(answer, request.CallName, request.Approval);
     }
 }
 
@@ -2501,7 +2502,7 @@ internal sealed class RecordingParentApprovalBridge(ConsentAnswer decisionToRetu
     public IReadOnlyList<ApprovalCandidate> RequestedCandidates { get; private set; } = [];
     public IReadOnlyList<RecordedApprovalOption> RequestedOptions { get; private set; } = [];
 
-    public Task<ConsentAnswer> RequestConsentAsync(
+    public Task<ConsentStep> RequestConsentAsync(
         ParentApprovalRequest request,
         CancellationToken ct)
     {
@@ -2513,7 +2514,7 @@ internal sealed class RecordingParentApprovalBridge(ConsentAnswer decisionToRetu
         RequestedOptions = request.Approval.Options
             .Select(static option => new RecordedApprovalOption(option.Key.Value, option.Label))
             .ToList();
-        return Task.FromResult(decisionToReturn);
+        return Task.FromResult(ConsentStep.From(decisionToReturn, request.CallName, request.Approval));
     }
 }
 

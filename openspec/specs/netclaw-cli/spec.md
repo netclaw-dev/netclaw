@@ -35,19 +35,35 @@ the operator to `netclaw init` and exit non-zero without launching Termina.
 - **AND** the command exits non-zero
 - **AND** no partial TUI starts
 
-### Requirement: Personal shell approval defaults are explicit
+### Requirement: Personal posture requires shell approval by default
 
-When bootstrap selects `Personal` posture, the written config SHALL make the
-recommended shell approval default explicit by writing
-`Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute = "approval"`
-rather than relying on runtime-only implicit defaults.
+`netclaw init` SHALL write the posture (`Security.DeploymentPosture`,
+`Security.ShellExecutionMode`, `Security.StrictDefaults`) and `Tools.ShellMode`. It
+SHALL NOT write `Tools.AudienceProfiles`. The daemon SHALL bind the `Tools` section
+on top of the defaults for the resolved posture. For the `Personal` posture, these
+defaults set `Personal.ApprovalPolicy.ToolOverrides.shell_execute = Approval`. An
+explicit value in `netclaw.json` SHALL replace the posture default.
 
-#### Scenario: Personal bootstrap writes explicit shell approval default
+#### Scenario: Personal bootstrap writes the posture only
 
 - **GIVEN** the operator completes `netclaw init` with `Personal` posture
 - **WHEN** the wizard writes the config
-- **THEN** `netclaw.json` includes
-  `Tools.AudienceProfiles.Personal.ApprovalPolicy.ToolOverrides.shell_execute = "approval"`
+- **THEN** `netclaw.json` has `Security.DeploymentPosture = "Personal"`
+- **AND** `netclaw.json` has no `Tools.AudienceProfiles` key
+
+#### Scenario: The daemon applies the Personal posture shell rule
+
+- **GIVEN** the resolved posture is `Personal`
+- **AND** `netclaw.json` has no `ApprovalPolicy` for the Personal audience
+- **WHEN** the daemon binds the `Tools` section
+- **THEN** `shell_execute` requires approval for the Personal audience
+
+#### Scenario: An explicit shell override replaces the posture default
+
+- **GIVEN** the resolved posture is `Personal`
+- **AND** `netclaw.json` sets `Personal.ApprovalPolicy.ToolOverrides.shell_execute = "Auto"`
+- **WHEN** the daemon binds the `Tools` section
+- **THEN** the Personal `shell_execute` mode is `Auto`
 
 ### Requirement: Doctor checks for approval configuration
 

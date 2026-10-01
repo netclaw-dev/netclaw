@@ -585,14 +585,15 @@ static IReadOnlyList<string> ConfigureDaemonServices(
     var sessionConfig = SessionConfig.BindFromConfiguration(configuration.GetSection("Session"));
     services.AddSingleton(sessionConfig);
 
-    var toolConfig = ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), out var toolConfigWarnings);
-    services.AddSingleton(toolConfig);
-
-    var securityPolicyConfig = configuration.GetSection("Security")
-        .Get<SecurityPolicyConfig>() ?? new SecurityPolicyConfig();
+    // The Tools defaults depend on the resolved posture, so Security and Tools bind together.
+    var policyConfiguration = PolicyConfiguration.Bind(configuration);
+    var securityPolicyConfig = policyConfiguration.Security;
     services.AddSingleton(securityPolicyConfig);
-    var effectivePolicyDefaults = SecurityPolicyDefaults.Resolve(securityPolicyConfig);
+    var effectivePolicyDefaults = policyConfiguration.Defaults;
     services.AddSingleton(effectivePolicyDefaults);
+    var toolConfig = policyConfiguration.Tools;
+    var toolConfigWarnings = policyConfiguration.ToolWarnings;
+    services.AddSingleton(toolConfig);
     services.AddSingleton<TrustContextDeriver>();
 
     // Reminder limits stay private. Netclaw sets the library acknowledgement

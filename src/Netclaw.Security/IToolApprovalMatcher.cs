@@ -185,6 +185,17 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ToolName toolName,
         IDictionary<string, object?>? arguments,
         ShellCommandAnalysis? analysis = null)
+        => AnalyzeInvocation(toolName, arguments, analysis, LinkRule.FromVolumeRoot);
+
+    /// <summary>
+    /// Analyzes an invocation with an explicit link rule for filesystem path values.
+    /// A causal <c>cd</c> list accepts the platform temporary alias (R7); every other call uses the volume root rule.
+    /// </summary>
+    internal ShellApprovalAnalysis AnalyzeInvocation(
+        ToolName toolName,
+        IDictionary<string, object?>? arguments,
+        ShellCommandAnalysis? analysis,
+        LinkRule hostLinks)
     {
         var command = GetCommand(arguments);
         if (string.IsNullOrWhiteSpace(command))
@@ -203,9 +214,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         return new ShellApprovalAnalysis(
             patterns.ToList(),
-            ExtractCandidatesViaAnalysis(analysis),
+            ExtractCandidatesViaAnalysis(analysis, hostLinks),
             FormatForDisplay(command, analysis),
-            IsMessy(analysis));
+            IsMessy(analysis, hostLinks));
     }
 
     public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
@@ -239,7 +250,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     private IReadOnlyList<ApprovalCandidate> ExtractCandidatesViaAnalysis(
-        ShellCommandAnalysis result)
+        ShellCommandAnalysis result,
+        LinkRule hostLinks)
     {
         if (!result.IsResolved
             || result.HasDynamicSyntax
@@ -259,7 +271,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 occurrence,
                 workingDirectory,
                 resolveUnknownPathsFromEffectiveValues: false,
-                LinkRule.FromVolumeRoot);
+                hostLinks);
             if (occurrenceCandidates is null)
                 return [];
 
@@ -1300,7 +1312,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     public bool IsMessy(ToolName toolName, IDictionary<string, object?>? arguments)
         => AnalyzeInvocation(toolName, arguments).IsMessy;
 
-    private bool IsMessy(ShellCommandAnalysis analysis)
+    private bool IsMessy(ShellCommandAnalysis analysis, LinkRule hostLinks)
     {
         if (!analysis.IsResolved
             || analysis.HasDynamicSyntax
@@ -1341,7 +1353,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     workingDirectory,
                     Environment.PathStyle,
                     resolveUnknownPathsFromEffectiveValues: false,
-                    LinkRule.FromVolumeRoot) is null))
+                    hostLinks) is null))
         {
             return true;
         }

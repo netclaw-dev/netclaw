@@ -102,13 +102,14 @@ public sealed class ShellProcessLaunch
         if (_context.ProjectDirectory is { } projectDirectory)
             paths.Add(projectDirectory);
         AddPaths(analysis);
-        if (BashStaticCompoundApprovalProjection.TryCreate(
+        // The same directory proof that authorized each occurrence names the paths to recheck (#2122, #1828).
+        if (BashDirectoryScopeProjection.TryCreate(
                 analysis,
                 _commandPolicy,
                 new ShellApprovalMatcher(Environment),
                 out var projection))
         {
-            foreach (var slice in projection!.Slices)
+            foreach (var slice in projection.Slices)
                 AddPaths(slice.Analysis);
         }
 

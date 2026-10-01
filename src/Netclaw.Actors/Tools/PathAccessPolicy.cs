@@ -83,6 +83,13 @@ internal sealed class PathAccessPolicy
             public PathAccessFailure Failure { get; } = failure;
             /// <summary>The rejected path, or null if resolution failed. It is not safe for unrestricted display.</summary>
             public string? DiagnosticPath { get; } = diagnosticPath;
+
+            /// <summary>
+            /// True only when an unattended run denies an inspected path that is
+            /// outside every trusted root. A protected path, a link, and a path
+            /// that the host cannot inspect are never only outside.
+            /// </summary>
+            public bool OutsideTrustedRoots { get; init; }
         }
 
         /// <summary>Records permission after the caller completes the required policy checks.</summary>
@@ -708,7 +715,10 @@ internal sealed class PathAccessPolicy
                 $"Error: {label} trust context may only access files inside the current session directory.",
             _ => $"Error: {label} trust context may only access files inside the current session directory or configured roots: {string.Join(", ", roots)}."
         };
-        return PathAccessDecision.Deny(error, PathAccessFailure.AccessDenied, fullPath);
+        return new PathAccessDecision.Denied(error, PathAccessFailure.AccessDenied, string.IsNullOrEmpty(fullPath) ? null : fullPath)
+        {
+            OutsideTrustedRoots = confined && decision is PathDecision.Outside
+        };
     }
 
     private static PathAccessDecision DenyUnverifiedReviewedPath(string canonicalPath)

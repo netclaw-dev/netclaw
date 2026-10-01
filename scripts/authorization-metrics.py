@@ -71,7 +71,8 @@ GROUPS: tuple[Group, ...] = (
     Group("3. Shell policy coordination/projection/coverage", (
         f"{A}/ShellPolicyCoordinator.cs", f"{A}/ShellPolicyProjection.cs", f"{A}/ShellPolicyPathFacts.cs",
         f"{A}/ShellPolicyDecisionTrace.cs", f"{A}/ShellApprovalEvidence.cs", f"{A}/BashCausalApprovalIntent.cs",
-        f"{A}/BashStaticCompoundApprovalProjection.cs", f"{A}/ReviewedSafeShellPolicy.cs",
+        f"{A}/BashStaticCompoundApprovalProjection.cs", f"{A}/BashDirectoryScopeProjection.cs",
+        f"{A}/ReviewedSafeShellPolicy.cs",
         f"{A}/ShellRedirectPolicyFacts.cs", f"{A}/OneTimeApprovalKeys.cs", f"{C}/SafeVerbList.cs",
     ), (f"{AUTH}/ShellCoverage/**/*.cs",)),
     Group("4. Corrections (temp/project/native)", (

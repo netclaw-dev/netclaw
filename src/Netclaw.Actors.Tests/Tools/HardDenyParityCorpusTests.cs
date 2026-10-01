@@ -285,9 +285,13 @@ public sealed class HardDenyParityCorpusTests(ShellApprovalMatrixFixture fixture
         => Rows.Where(static row => row.Host is ShellApprovalHost.PowerShell7 or ShellApprovalHost.WindowsPowerShell51)
             .Select(static row => new TheoryDataRow<string>(row.Id));
 
+    // Content denials only. A trusted-root denial depends on the working directory
+    // of its row, which this corpus replaces with the project directory.
     public static IEnumerable<TheoryDataRow<string>> CatalogDeniedRows
         => ShellApprovalCases.All
             .Where(static testCase => testCase.Expected.Outcome == ApprovalOutcome.Denied)
+            .Where(static testCase => testCase.Expected.DenyReason
+                is not ("shell_working_directory_outside_trust_zone" or "shell_path_outside_trust_zone"))
             .Where(static testCase => IsPosix || testCase.Invocation.Host is not (ShellApprovalHost.Bash or ShellApprovalHost.Bash52))
             .Select(static testCase => new TheoryDataRow<string>(testCase.Id));
 

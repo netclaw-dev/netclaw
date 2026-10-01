@@ -154,15 +154,41 @@ The arrows show the order in the current shell path. A non-shell call skips
   runs each call, catches a consent request, and asks the operator.
 - [`DispatchingToolExecutor`](../../src/Netclaw.Actors/Tools/DispatchingToolExecutor.cs)
   runs the gate inside `ExecuteStreamAsync` through `GetAuthorizedToolAsync`
-  and `EvaluateAuthorizationResultAsync`. It selects the shell gate or the
-  non-shell gate. The non-shell grant check is inline in this class.
-  `GetAuthorizedToolAsync` turns a decision into an exception, which the
-  pipeline catches.
+  and `EvaluateAuthorizationAsync`, which asks `ToolAuthorizer` for every call.
+  `GetAuthorizedToolAsync` turns a decision that is not an allow into an
+  exception, which the pipeline and the subagent loop catch. This exception is
+  the contract between an executor and its callers.
 - [`ShellPolicyCoordinator`](../../src/Netclaw.Actors/Tools/ShellPolicyCoordinator.cs)
-  orders the shell checks, the advice, and the coverage.
+  supplies the shell advice and the coverage.
 
-**Planned:** one `ToolAuthorizer` owns the order for every tool (consolidation
-PR 6).
+[`ToolAuthorizer`](../../src/Netclaw.Actors/Authorization/ToolAuthorizer.cs)
+(consolidation PR 6a) states the order as one list of rules: one line per
+rule, and the first rule that decides wins. It returns a closed
+[`AuthorizationDecision`](../../src/Netclaw.Actors/Authorization/AuthorizationDecision.cs)
+(Allowed, NeedsConsent, CorrectionRequired, or Denied) and throws no exception
+for an outcome. Each rule calls the component that owns its question. A
+differential test proves that it gives the same decision as the old gate. Its
+shell rules, in order:
+
+1. Admission: audience, then shell capability.
+2. Prohibition: hard deny, then protected shell text.
+3. Filesystem authority: a `..` in the working directory, then each slice of a
+   `cd` directory proof.
+4. Unresolved input when no operator can answer.
+5. Filesystem authority: the working directory and the known paths must be in
+   a trusted root. For an unattended call in Approval mode, a stored grant for
+   every candidate replaces a denial of a path that is only outside the trusted
+   roots (consolidation PR 6e). A protected path stays denied.
+6. Admission: a Deny consent mode.
+7. Advice: a native tool, then Auto mode with its directory advice.
+8. A call without command text, the projected trusted-root check, and unresolved
+   input: one-time consent or a Once-only request.
+9. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
+   policy), then the uncovered candidates.
+
+Consolidation PR 6d deleted the old gate. By owner decision, PR 6e lets a
+stored grant decide ahead of both trusted-root checks for unattended Approval
+mode. A denial that stays names each missing grant.
 
 Each context below lists its question, the classes that answer it today, its
 published contract today, what it must not know, and where its data lives.
@@ -174,8 +200,8 @@ know" rule. The leaks are the work list of the consolidation program.
 | Item | Current state |
 | --- | --- |
 | Question | May this audience use this tool, in this shell mode and this consent mode? |
-| Classes | [`ToolAccessPolicy`](../../src/Netclaw.Actors/Tools/ToolAccessPolicy.cs) (`AuthorizeInvocation`, `AuthorizeShellPreflight`, `AuthorizeMcpInvocation`, `IsToolExposed`, `EvaluateShellCapability`, `GetApprovalMode`), [`ToolAudienceProfileResolver`](../../src/Netclaw.Actors/Tools/ToolAudienceProfileResolver.cs), [`ToolAudienceProfiles`](../../src/Netclaw.Configuration/ToolAudienceProfiles.cs), [`ToolApprovalConfig`](../../src/Netclaw.Configuration/ToolApprovalConfig.cs), [`TrustContextPolicy`](../../src/Netclaw.Configuration/TrustContextPolicy.cs) |
-| Published contract | `ToolAccessPolicy.AuthorizeInvocation(...)` returns a `ToolAuthorizationDecision`. `IsToolExposed(...)` filters schemas. |
+| Classes | [`ToolAccessPolicy`](../../src/Netclaw.Actors/Tools/ToolAccessPolicy.cs) (`AdmitAudience`, `IsToolExposed`, `EvaluateShellCapability`, `GetApprovalMode`), [`ToolAudienceProfileResolver`](../../src/Netclaw.Actors/Tools/ToolAudienceProfileResolver.cs), [`ToolAudienceProfiles`](../../src/Netclaw.Configuration/ToolAudienceProfiles.cs), [`ToolApprovalConfig`](../../src/Netclaw.Configuration/ToolApprovalConfig.cs), [`TrustContextPolicy`](../../src/Netclaw.Configuration/TrustContextPolicy.cs) |
+| Published contract | `ToolAccessPolicy.AdmitAudience(...)` returns a denial or null. `ToolAuthorizer` returns the `AuthorizationDecision`. `IsToolExposed(...)` filters schemas. |
 | Must not know | Grants, paths, shell syntax. |
 | Data | Configuration. The result is call-local. |
 | Rules | [TA-1](../../openspec/specs/tool-authorization/spec.md#requirement-ta-1-trust-context-is-explicit-and-fails-loud), [TA-2](../../openspec/specs/tool-authorization/spec.md#requirement-ta-2-schema-exposure-grants-no-authority), [TA-3](../../openspec/specs/tool-authorization/spec.md#requirement-ta-3-audience-profiles-admit-tools), [TA-4](../../openspec/specs/tool-authorization/spec.md#requirement-ta-4-consent-mode-and-shell-mode-resolve-per-audience-and-tool) |
@@ -197,7 +223,7 @@ Leaks today:
 | Item | Current state |
 | --- | --- |
 | Question | What does this command do, in general shell terms? |
-| Classes | ShellSyntaxTree through [`ShellCommandAnalysis`](../../src/Netclaw.Security/ShellCommandAnalysis.cs); candidate extraction in `ShellApprovalMatcher` ([`IToolApprovalMatcher.cs`](../../src/Netclaw.Security/IToolApprovalMatcher.cs)); [`ShellTokenizer`](../../src/Netclaw.Security/ShellTokenizer.cs) and [`ShellApprovalSemantics`](../../src/Netclaw.Security/ShellApprovalSemantics.cs) (legacy parser); [`BashCausalApprovalIntent`](../../src/Netclaw.Actors/Tools/BashCausalApprovalIntent.cs); [`BashStaticCompoundApprovalProjection`](../../src/Netclaw.Actors/Tools/BashStaticCompoundApprovalProjection.cs); [`ShellPolicyPathFacts`](../../src/Netclaw.Actors/Tools/ShellPolicyPathFacts.cs); [`ShellFileSystemTreeAccessPolicy`](../../src/Netclaw.Security/ShellFileSystemTreeAccessPolicy.cs) |
+| Classes | ShellSyntaxTree through [`ShellCommandAnalysis`](../../src/Netclaw.Security/ShellCommandAnalysis.cs); candidate extraction in `ShellApprovalMatcher` ([`IToolApprovalMatcher.cs`](../../src/Netclaw.Security/IToolApprovalMatcher.cs)); [`ShellTokenizer`](../../src/Netclaw.Security/ShellTokenizer.cs) and [`ShellApprovalSemantics`](../../src/Netclaw.Security/ShellApprovalSemantics.cs) (legacy parser); [`BashDirectoryScopeProjection`](../../src/Netclaw.Actors/Tools/BashDirectoryScopeProjection.cs) (the directory of each occurrence after a Bash `cd`); [`ShellPolicyPathFacts`](../../src/Netclaw.Actors/Tools/ShellPolicyPathFacts.cs); [`ShellFileSystemTreeAccessPolicy`](../../src/Netclaw.Security/ShellFileSystemTreeAccessPolicy.cs) |
 | Published contract | `ShellCommandPolicy.Analyze(...)` returns a `ShellCommandAnalysis`. `ShellApprovalMatcher.AnalyzeInvocation(...)` returns candidates and an "unresolved" flag (`IsMessy` in code). |
 | Must not know | Grants, audience, the private grammar of an executable. |
 | Data | Call-local. |
@@ -207,8 +233,13 @@ Leaks today:
 
 - Two parsers read one command: ShellSyntaxTree and the legacy tokenizer.
   Hard deny and the protected-path check use both.
-- Three projections produce candidates for one compound Bash command: the
-  matcher candidates, the static compound slices, and the causal intent.
+- Two projections produce candidates for one compound Bash command: the
+  matcher candidates of the full parse, and the directory proof for a list
+  with an exact `cd`. The directory proof also marks the diagnostics of a
+  causal list (`cd dir && action; diagnostic`) for the reviewed-safe intent
+  rule. That rule, the headless denial of a causal list, and its exclusion
+  from the side-effect exemption stay until the owner changes the outcomes
+  that they protect.
 - `ResolveAuthorizationScope` in `IToolApprovalMatcher.cs` names `find`, `cd`,
   `pushd`, and `Set-Location`. This conflicts with the Shell Approval
   Abstraction Rule in [`AGENTS.md`](../../AGENTS.md).
@@ -294,8 +325,6 @@ Leaks today:
 
 Leaks today:
 
-- The subagent has its own consent loop and mirror types (`ParentApprovalDecision`,
-  `ParentApprovalCandidate`, `ParentApprovalOption`).
 - Two layers check that the person who answers is the requester: the channel
   (`PendingApprovalLookup`) and the session actor.
 
@@ -337,7 +366,7 @@ sequenceDiagram
     participant S as LlmSessionActor
     participant P as SessionToolExecutionPipeline
     participant X as DispatchingToolExecutor
-    participant G as ShellPolicyCoordinator + ToolAccessPolicy
+    participant G as ToolAuthorizer + ToolAccessPolicy
     participant T as ToolApprovalActor
     participant C as Channel
     actor O as Operator
@@ -395,9 +424,11 @@ Facts behind the diagram (current code):
 - An unanswered request does not keep the session in memory. An answer
   rehydrates the session and re-drives the parked batch
   (`HandleToolInteractionResponseWhenIdle`, `RedriveToolBatchForApproval`).
-- No timer denies an unanswered request. The session and the parent bridge
-  wait with an infinite timeout. The request waits until the operator answers,
-  the run is cancelled, or a new user message abandons the parked batch.
+- No timer denies an unanswered request. The session and its subagents ask
+  through one prompt, `ParentSessionApprovalBridge`, which waits with the
+  session's approval timeout. The daemon sets that timeout to infinite. The
+  request waits until the operator answers, the run is cancelled, or a new user
+  message abandons the parked batch.
 - A subagent request goes to the parent through `ParentSessionApprovalBridge`.
   It is live-only. After a restart, Netclaw rejects the old prompt as expired.
   A subagent without a parent bridge cannot ask. Its whole run fails with
@@ -406,9 +437,9 @@ Facts behind the diagram (current code):
   (`ChannelOutputEngine`, `SlackThreadBindingActor`). This is the only
   automatic denial of a consent request.
 
-A non-shell call follows the same path, with two differences. The executor
-runs `ToolAccessPolicy.AuthorizeInvocation` and its own inline grant check in
-place of the shell coordinator. The launch step does not exist.
+A non-shell call follows the same path, with two differences. `ToolAuthorizer`
+applies the rules for other tools and one `StoredGrantCheck` in place of the
+shell coverage. The launch step does not exist.
 
 ## 5. Language
 
@@ -677,6 +708,8 @@ and the approval tooling is in
 | Non-interactive runs cannot get new consent. | Evals Category 9 in `evals/run-evals.sh`; `evals/background_evals.py` |
 | `skill_manage` mutations refuse links and protected paths. | `SkillToolTests`; the skill_manage guard mutation gate ([TOOLING.md § Skill Manage Guard Gate](../../TOOLING.md#skill-manage-guard-gate)) |
 | A shell grant never authorizes `file_read`. | No test yet. Consolidation PR 1b adds it. |
+| `ToolAuthorizer` gives the same decision as the gate on `dev`. | The corpus differential ([TOOLING.md § Authorization Corpus Differential](../../TOOLING.md#authorization-corpus-differential)) |
+| No `ToolAuthorizer` rule can move ahead of an earlier rule. | The tool authorizer order mutation gate ([TOOLING.md § Tool Authorizer Order Gate](../../TOOLING.md#tool-authorizer-order-gate)) |
 
 Model guidance (which tool the model should choose, and how it should declare
 a project directory) is not an authorization rule, and no spec owns it. The

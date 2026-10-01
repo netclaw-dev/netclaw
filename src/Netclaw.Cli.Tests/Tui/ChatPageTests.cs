@@ -497,18 +497,21 @@ public sealed class ChatPageTests
                 InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
             },
             ToolExecutionTimeout.Default);
-        var decision = policy.AuthorizeInvocation(
-            tool,
-            executionContext,
-            new Dictionary<string, object?>
+        var registry = new ToolRegistry();
+        registry.Register(tool);
+        var executor = new DispatchingToolExecutor(registry, policy);
+        var consent = await Assert.ThrowsAsync<ToolApprovalRequiredException>(() => executor.ExecuteAsync(
+            new FunctionCallContent("call-upload", tool.Name, new Dictionary<string, object?>
             {
                 ["contents"] = content,
                 ["source_path"] = "/home/operator/reports/2026/Q3/quarterly-results-final.pdf",
                 ["destination_directory"] = "/Finance/Board Pack/2026/Q3",
                 ["access_token"] = "must-never-render",
                 ["_rationale"] = "Upload the requested board report"
-            });
-        var approvalContext = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+            }),
+            executionContext,
+            TestContext.Current.CancellationToken));
+        var approvalContext = consent.ApprovalContext;
         var approval = BuildApproval(approvalContext.DisplayText, approvalContext.ToolName) with
         {
             Patterns = approvalContext.Patterns,

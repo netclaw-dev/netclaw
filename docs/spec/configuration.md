@@ -185,9 +185,32 @@ Tuning parameters for LLM session behavior.
 
 Configuration for first-party tool execution.
 
-`netclaw init` now scaffolds recommended audience profiles here, and `netclaw doctor`
-validates unsafe profile combinations such as unrestricted `public` or `team`
-settings.
+`netclaw init` writes only the posture: `Security.DeploymentPosture`,
+`Security.ShellExecutionMode`, `Security.StrictDefaults`, and `Tools.ShellMode`. It does not
+write `Tools.AudienceProfiles` or any other default list. A second `netclaw init` replaces the
+`Tools` section, so it deletes stored profiles; it does not write the defaults again.
+
+The daemon computes each value in `Tools` in this order (`PolicyConfiguration.Bind`, at
+startup; the result is process-wide):
+
+1. It resolves the posture from `Security` (`SecurityPolicyDefaults.Resolve`).
+2. It starts from the posture defaults (`ToolAudienceProfileDefaults.CreateProfilesForPosture`).
+   For the Personal posture, the defaults include
+   `Personal.ApprovalPolicy.ToolOverrides.shell_execute = Approval`.
+3. It binds the `Tools` section on top. An absent key keeps the posture default. A present key
+   is the operator's choice.
+
+Examples:
+
+- Positive: a Personal-posture file with no `ApprovalPolicy` gives `shell_execute = Approval`
+  for Personal. A file where `netclaw mcp` wrote only `McpServerDefaults` for Personal keeps
+  that rule.
+- Negative: a file that sets `"shell_execute": "Auto"` for Personal gets `Auto`. The posture
+  default does not override an explicit value.
+
+`netclaw doctor` binds `netclaw.json` the same way. It does not report an absent profile,
+because an absent profile is the posture default. It validates unsafe profile combinations
+such as unrestricted `public` or `team` settings.
 
 Audience profiles are independent from `Daemon.ExposureMode`: audience controls
 who can interact with the bot in chat channels, while exposure mode controls
@@ -196,6 +219,10 @@ how the daemon is reachable over the network.
 Use `netclaw doctor` when you want to inspect the effective audience-profile
 shape, confirm that strict-default fallback is active, or verify that
 `SandboxOnly` shell mode is still blocked until a sandbox backend is configured.
+
+The example below shows the default profiles written out in full. Do not copy it into
+`netclaw.json`: a stored copy of a default list does not get the tools that later releases add.
+Write only the keys that you change.
 
 ```json
 {
@@ -267,6 +294,10 @@ A list in `Tools` that has default items replaces its default list. It does not 
   `secrets.json` sets items for the same key; an attachment category that is not one defined
   name (for example `"Bogus"`, `"3"`, or `"Pdf, Document"`). Category names match without case.
 
+`netclaw doctor` warns, with no auto-fix, when a Public or Team allowlist does not include
+`tool_output_read`. A large tool result spills to a file, and the notice tells the model to
+call that tool.
+
 Older installs: `netclaw init` 0.8.0 to 0.25.4, and 0.26.0-beta.1 to beta.5, wrote the
 complete Public and Team default `AllowedTools` lists. Later releases changed those defaults;
 for example, 0.26.0 added `file_search` and `tool_output_read`. The old binder added the current
@@ -293,8 +324,9 @@ that result with these rules:
   and a failed copy stops the write. A list that differs by one tool, and `[]`, stay.
 - `ToolAudienceProfileToolCatalog.LegacyPublicDefaultAllowedTools` and
   `LegacyTeamDefaultAllowedTools` hold the shipped lists as policy data. The last row of each
-  table is the current default. A test fails when the current default is not equal to the last
-  row, so a change to a default must add a row.
+  table is the current default, which `netclaw init` wrote from 0.26.0 to 0.27.1-beta.1. A test
+  fails when the current default is not equal to the last row. The tables are closed: from the
+  next 0.27.1 build, `netclaw init` writes no lists.
 
 The daemon reads `netclaw.json`, then `secrets.json`, then `NETCLAW_*` variables. A later
 source wins for each key. `netclaw doctor` reads only `netclaw.json`.

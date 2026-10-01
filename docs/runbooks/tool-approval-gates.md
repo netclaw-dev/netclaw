@@ -173,6 +173,17 @@ covered:
 For a compound command (`&&`, `||`, `;`, `|`), each command needs its own
 coverage. The prompt asks only for the commands that remain uncovered.
 
+A Bash `cd` with an exact target changes the directory of the commands after
+it. Netclaw checks each command in each directory where it can run. For
+`cd /tmp && gh api ... > log; wc -c log`, `wc` can run in `/tmp`, or in the
+original directory when `cd` fails, so it needs coverage in both. The prompt
+offers reusable grants, and an `Always here` grant uses that directory, not
+the session directory. A reviewed diagnostic after `cd dir && action;` is
+covered inside `dir` in an interactive session. A dynamic target (`cd "$X"`),
+`cd -`, `pushd`, a `cd` in a subshell, function, or pipeline, and a linked
+target directory still offer only `Once` and `Deny`. An unattended run denies
+the `cd dir && action; diagnostic` shape as unresolved input.
+
 ## Manage saved grants
 
 Netclaw stores saved grants in `~/.netclaw/config/tool-approvals.json`

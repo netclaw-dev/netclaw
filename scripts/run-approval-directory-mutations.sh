@@ -118,44 +118,55 @@ jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "Compile
   exit 1
 }
 
-# The approval actor is the final authority boundary before persistence.
-actor_source="$repo_root/src/Netclaw.Actors/Tools/ToolApprovalActor.cs"
+# The approval actor is the final authority boundary before persistence. The
+# grant builder decides the folder of each stored grant: the directory where
+# the occurrence runs, never the session directory after a cd.
+actor_root="$repo_root/src/Netclaw.Actors"
 actor_output="$output_path/actor"
 actor_spans="$(
-  python3 - "$actor_source" <<'PY'
+  python3 - "$actor_root" <<'PY'
 from pathlib import Path
 import sys
 
-source = Path(sys.argv[1])
-text = source.read_text(encoding="utf-8")
+root = Path(sys.argv[1])
 targets = [
     (
+        "Tools/ToolApprovalActor.cs",
         "!candidateResolved",
         1,
     ),
     (
+        "Tools/ToolApprovalActor.cs",
         "!ToolApprovalEntryComparer.Equals(scope!.CommonDirectory, repository.CommonDirectory)",
         1,
     ),
     (
+        "Tools/ToolApprovalActor.cs",
         "!PathUtility.AreEquivalentPaths(\n"
         "                scope.WorktreeRoot, grant.RepositoryWorktree)",
         1,
     ),
+    (
+        "Authorization/Consent/GrantBuilder.cs",
+        "candidate.Directory ?? workingDirectory",
+        3,
+    ),
 ]
 
-for marker, expected_count in targets:
+for relative_path, marker, expected_count in targets:
+    source = root / relative_path
+    text = source.read_text(encoding="utf-8")
     start = text.find(marker)
     if start < 0 or text.find(marker, start + 1) >= 0:
         raise SystemExit("An approval persistence boundary is missing or duplicated.")
     line = text.count("\n", 0, start) + 1
-    print(start, start + len(marker), line, expected_count, sep="\t")
+    print(relative_path, source, start, start + len(marker), line, expected_count, sep="\t")
 PY
 )"
 
 actor_mutate_args=()
-while IFS=$'\t' read -r span_start span_end _line _count; do
-  actor_mutate_args+=(--mutate "Tools/ToolApprovalActor.cs{$span_start..$span_end}")
+while IFS=$'\t' read -r source_name _source_file span_start span_end _line _count; do
+  actor_mutate_args+=(--mutate "$source_name{$span_start..$span_end}")
 done <<< "$actor_spans"
 
 (
@@ -169,11 +180,11 @@ done <<< "$actor_spans"
 )
 
 actor_report="$actor_output/reports/mutation-report.json"
-while IFS=$'\t' read -r _span_start _span_end line count; do
+while IFS=$'\t' read -r _source_name source_file _span_start _span_end line count; do
   # A whole-condition negation that Stryker cannot compile shares the first
   # target line. It is not a tested mutant; the count still requires each
   # selected negation to compile and die.
-  jq -e --arg source "$actor_source" --argjson line "$line" --argjson count "$count" '
+  jq -e --arg source "$source_file" --argjson line "$line" --argjson count "$count" '
     [.files[$source].mutants[] | select(.status != "Ignored" and .status != "CompileError")
       | select(.location.start.line == $line)] as $mutants
     | ($mutants | length) == $count and all($mutants[]; .status == "Killed")
@@ -183,8 +194,8 @@ while IFS=$'\t' read -r _span_start _span_end line count; do
   }
 done <<< "$actor_spans"
 
-jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 3' \
+jq -e '[.files[].mutants[] | select(.status != "Ignored" and .status != "CompileError")] | length == 6' \
   "$actor_report" > /dev/null || {
-  echo "Expected exactly three approval persistence mutants." >&2
+  echo "Expected exactly six approval persistence mutants." >&2
   exit 1
 }

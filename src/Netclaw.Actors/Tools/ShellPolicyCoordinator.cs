@@ -14,150 +14,17 @@ using ShellSyntaxTree;
 namespace Netclaw.Actors.Tools;
 
 /// <summary>
-/// Coordinates shell preflight, correction selection, one approval-store check, and final policy.
+/// Supplies the shell facts that <see cref="Netclaw.Actors.Authorization.ToolAuthorizer"/>
+/// asks for after the screens: the applicable advice, the coverage of each
+/// candidate (one batched stored-grant lookup, the side-effect exemption, and
+/// the reviewed-safe policy), and the completed decision. The authorizer owns
+/// the order.
 /// </summary>
 internal sealed class ShellPolicyCoordinator(
     ToolRegistry registry,
     ToolAccessPolicy policy,
     IToolApprovalService? approvalService)
 {
-
-    /// <summary>Evaluates one shell request from access checks through its final authorization result.</summary>
-    /// <remarks>
-    /// The access policy creates one canonical command analysis and applies hard denials first.
-    /// The coordinator then collects corrections before it accepts automatic policy approval or checks stored approval evidence.
-    /// It returns the analysis only when the caller can start the authorized command.
-    /// </remarks>
-    internal async Task<ToolAuthorizationResult> EvaluateAsync(
-        INetclawTool tool,
-        FunctionCallContent toolCall,
-        ToolExecutionContext context,
-        CancellationToken cancellationToken)
-    {
-        var trace = new ShellPolicyDecisionTraceBuilder();
-        try
-        {
-            var preflight = policy.AuthorizeShellPreflight(
-                tool,
-                context,
-                toolCall.Arguments);
-            return await EvaluateCoreAsync(
-                tool,
-                toolCall,
-                context,
-                preflight,
-                trace,
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (Exception)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return ToolAuthorizationResult.Stop(
-                CompleteWithTrace(
-                    ToolAuthorizationDecision.Deny("internal_policy_failure"),
-                    trace));
-        }
-    }
-
-    private async Task<ToolAuthorizationResult> EvaluateCoreAsync(
-        INetclawTool tool,
-        FunctionCallContent toolCall,
-        ToolExecutionContext context,
-        ShellPolicyPreflightResult preflight,
-        ShellPolicyDecisionTraceBuilder trace,
-        CancellationToken cancellationToken)
-    {
-        var analysis = preflight switch
-        {
-            ShellPolicyPreflightResult.Complete
-            { Result: ToolAuthorizationResult.ShellExecution execution } => execution.Analysis,
-            ShellPolicyPreflightResult.Continue preflightContinuation => preflightContinuation.Analysis,
-            _ => null,
-        };
-        cancellationToken.ThrowIfCancellationRequested();
-        var corrections = analysis is null
-            ? null
-            : CollectApplicableCorrections(analysis, toolCall, context, preflight);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        // A native tool needs a separate call. Shell approval cannot authorize that replacement.
-        if (corrections?.Items.Any(static correction => correction is ToolCorrection.NativeToolSuggested) == true)
-        {
-            return ToolAuthorizationResult.Stop(
-                Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace));
-        }
-
-        if (preflight is ShellPolicyPreflightResult.Complete complete)
-        {
-            var preflightDecision = complete.Result.Decision;
-            // Auto permits execution, but the agent must first receive any applicable directory advice.
-            if (preflightDecision.AllowReason == ToolAllowReason.PolicyAuto && corrections is not null)
-            {
-                return ToolAuthorizationResult.Stop(
-                    Complete(ToolAuthorizationDecision.RequireAgentCorrection(corrections), [], trace));
-            }
-
-            if (preflightDecision.NeedsApproval
-                && preflightDecision.ApprovalContext is { } approvalContext
-                && OneTimeApprovalKeys.Matches(
-                    context.Approval.OneTimeConsent,
-                    toolCall.Name,
-                    approvalContext))
-            {
-                preflightDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
-            }
-
-            return ToolAuthorizationResult.CreateShell(
-                Complete(preflightDecision, [], trace),
-                analysis);
-        }
-
-        if (preflight is not ShellPolicyPreflightResult.Continue continuation
-            || !ShellPolicyProjection.TryCreate(
-                continuation.Analysis.Environment,
-                policy.ShellApprovalMatcher,
-                continuation.Analysis,
-                continuation.ApprovalContext,
-                context,
-                LinkRule.FromVolumeRootExceptTemporaryAlias,
-                out var projection)
-            || projection is null)
-        {
-            return ToolAuthorizationResult.Stop(
-                CompleteWithTrace(
-                    ToolAuthorizationDecision.Deny("internal_policy_failure"),
-                    trace));
-        }
-
-        var evaluation = new ShellPolicyEvaluation(projection, trace);
-        var projectedPathDecision = policy.EnforceProjectedShellFileProtection(
-            evaluation.CandidateStates.Select(static state => state.PathFacts).ToArray(),
-            context.Invocation);
-        if (projectedPathDecision is not null)
-        {
-            return ToolAuthorizationResult.Stop(
-                CompleteWithTrace(projectedPathDecision, trace));
-        }
-
-        var decision = await EvaluatePolicyAsync(
-            tool,
-            toolCall,
-            context,
-            evaluation,
-            corrections,
-            cancellationToken);
-
-        return ToolAuthorizationResult.CreateShell(
-            decision,
-            decision.Outcome == ToolAuthorizationOutcome.Allowed
-                ? continuation.Analysis
-                : null);
-    }
-
     /// <summary>Collects compatible advice from the same invocation and its existing policies.</summary>
     internal ToolCorrectionCollection? CollectApplicableCorrections(
         ShellCommandAnalysis analysis,
@@ -167,7 +34,7 @@ internal sealed class ShellPolicyCoordinator(
     {
         // Denial and approval without command analysis cannot become advice to submit a different call.
         if (preflight is ShellPolicyPreflightResult.Complete
-            { Result.Decision.Outcome: not ToolAuthorizationOutcome.Allowed })
+            { Decision.Outcome: not ToolAuthorizationOutcome.Allowed })
             return null;
 
         var native = NativeToolShellCorrectionDetector.Detect(analysis, registry, policy, context.Invocation);
@@ -199,7 +66,14 @@ internal sealed class ShellPolicyCoordinator(
 
         IReadOnlyList<ApprovalCandidate> candidates;
         bool isMessy;
-        if (preflight is ShellPolicyPreflightResult.Continue continuation)
+        if (preflight is ShellPolicyPreflightResult.Continue { DirectoryScopes.IsCausalList: true })
+        {
+            // A causal list received one-call advice before its candidates came from the
+            // directory proof. It keeps that advice, and it gets no project advice.
+            candidates = [];
+            isMessy = true;
+        }
+        else if (preflight is ShellPolicyPreflightResult.Continue continuation)
         {
             candidates = continuation.ApprovalContext.Candidates!;
             isMessy = continuation.ApprovalContext.IsMessy;
@@ -249,7 +123,7 @@ internal sealed class ShellPolicyCoordinator(
         var first = analysis.Commands[0];
         if (first.WorkingDirectoryEffect is not ShellWorkingDirectoryEffect.ChangesOnSuccess
             { Target: ShellValueDomain.Exact exact }
-            || !BashCausalApprovalIntent.TryGetListItem(first, 0, out var list)
+            || !BashDirectoryScopeProjection.TryGetListItem(first, 0, out var list)
             || list.Items.Count < 2
             || list.Items[0].Operator != CompoundOperator.None
             || list.Items[1].Operator != CompoundOperator.AndIf
@@ -294,35 +168,19 @@ internal sealed class ShellPolicyCoordinator(
         return project;
     }
 
-    private async Task<ToolAuthorizationDecision> EvaluatePolicyAsync(
+    /// <summary>
+    /// Covers the candidates of a resolved shell call: one batched stored-grant
+    /// lookup, then the side-effect exemption, then (interactive only) the
+    /// reviewed-safe policy.
+    /// </summary>
+    internal async Task CoverAsync(
         INetclawTool tool,
-        FunctionCallContent toolCall,
         ToolExecutionContext context,
         ShellPolicyEvaluation evaluation,
-        ToolCorrectionCollection? corrections,
         CancellationToken cancellationToken)
     {
         var projection = evaluation.Projection;
-        cancellationToken.ThrowIfCancellationRequested();
-        if (RequiresExactApproval(projection))
-        {
-            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
-        }
-
         ValidateCandidateSyntax(projection);
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (HasProtectedIntentPath(evaluation))
-        {
-            return evaluation.Complete(
-                ToolAuthorizationDecision.Deny("shell_references_protected_path"));
-        }
-        cancellationToken.ThrowIfCancellationRequested();
-
-        if (HasIneligibleIntentDirectory(projection))
-        {
-            return CompleteOneTimeOrPrompt(evaluation, toolCall.Name, corrections);
-        }
         cancellationToken.ThrowIfCancellationRequested();
 
         var grantCandidates = evaluation.GrantCandidates;
@@ -358,19 +216,12 @@ internal sealed class ShellPolicyCoordinator(
             ApplyReviewedSafeCoverage(evaluation, policy, context.Invocation);
         }
         cancellationToken.ThrowIfCancellationRequested();
-
-        return CompleteAfterCoverage(
-            evaluation,
-            context,
-            toolCall.Name,
-            corrections,
-            cancellationToken);
     }
 
-    private static bool RequiresExactApproval(ShellPolicyProjection projection)
+    internal static bool RequiresExactApproval(ShellPolicyProjection projection)
     {
-        // Unresolved syntax needs an exact approval unless the causal projection supplies the missing intent.
-        if (projection.ApprovalContext.IsMessy && !projection.HasCausalIntent)
+        // Unresolved syntax needs an exact approval.
+        if (projection.ApprovalContext.IsMessy)
             return true;
 
         if (projection.Candidates.Count == 0)
@@ -390,57 +241,31 @@ internal sealed class ShellPolicyCoordinator(
 
     private static void ValidateCandidateSyntax(ShellPolicyProjection projection)
     {
+        if (!HasValidCandidateSyntax(projection))
+            throw new InvalidOperationException("Invalid shell policy projection.");
+    }
+
+    /// <summary>
+    /// True when every candidate has the shell of the projection and nonempty
+    /// verb tokens without whitespace. A grant lookup needs these facts.
+    /// </summary>
+    internal static bool HasValidCandidateSyntax(ShellPolicyProjection projection)
+    {
         var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
             ? ApprovalShell.Bash
             : ApprovalShell.PowerShell;
         foreach (var candidate in projection.Candidates)
         {
             if (candidate.Candidate.Shell != expectedShell)
-                throw new InvalidOperationException("Invalid shell policy projection.");
+                return false;
 
             // RequiresExactApproval handles missing facts before this validation of supplied facts.
             var tokens = candidate.Candidate.VerbTokens!;
-            if (tokens.Count == 0)
-                throw new InvalidOperationException("Invalid shell policy projection.");
-
-            foreach (var token in tokens)
-            {
-                if (token.Length == 0 || token.Any(char.IsWhiteSpace))
-                    throw new InvalidOperationException("Invalid shell policy projection.");
-            }
-        }
-    }
-
-    private bool HasProtectedIntentPath(ShellPolicyEvaluation evaluation)
-    {
-        foreach (var state in evaluation.CandidateStates)
-        {
-            var candidate = state.Candidate;
-            if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
-                continue;
-
-            if (policy.CausalIntentReferencesProtectedPath(state.PathFacts))
-                return true;
+            if (tokens.Count == 0 || tokens.Any(static token => token.Length == 0 || token.Any(char.IsWhiteSpace)))
+                return false;
         }
 
-        return false;
-    }
-
-    private bool HasIneligibleIntentDirectory(ShellPolicyProjection projection)
-    {
-        foreach (var candidate in projection.Candidates)
-        {
-            if (candidate.Role != ShellPolicyCandidateRole.CausalIntentConsumer)
-                continue;
-
-            if (candidate.IntentDirectory is not { } directory)
-                continue;
-
-            if (!policy.AreCausalIntentDirectoriesEligible(directory, candidate.IntentFallbackDirectories))
-                return true;
-        }
-
-        return false;
+        return true;
     }
 
     private static void ApplyReviewedSafeCoverage(
@@ -479,9 +304,8 @@ internal sealed class ShellPolicyCoordinator(
             if (evaluation.IsCovered(candidate.Id))
                 continue;
 
-            if (!HasCoveredIntentPrerequisites(candidate, evaluation))
-                continue;
-
+            // The directory change and its action stay candidates, so an allowed
+            // result still needs their own coverage.
             if (!policy.IsReviewedSafeIntentCandidate(
                     candidate,
                     state.PathFacts,
@@ -496,12 +320,11 @@ internal sealed class ShellPolicyCoordinator(
         }
     }
 
-    private static bool HasCoveredIntentPrerequisites(ShellPolicyCandidate candidate, ShellPolicyEvaluation evaluation)
-        => candidate.IntentDirectory is not null
-           && candidate.IntentPrerequisites.Count > 0
-           && candidate.IntentPrerequisites.All(evaluation.IsCovered);
-
-    private static ToolAuthorizationDecision CompleteAfterCoverage(
+    /// <summary>
+    /// Completes a shell call with uncovered candidates: a one-time answer, a
+    /// store failure, advice, or a consent request for the uncovered candidates only.
+    /// </summary>
+    internal static ToolAuthorizationDecision CompleteUncovered(
         ShellPolicyEvaluation evaluation,
         ToolExecutionContext context,
         string toolName,
@@ -511,41 +334,45 @@ internal sealed class ShellPolicyCoordinator(
         var projection = evaluation.Projection;
         var approvalMatches = evaluation.ApprovalMatches;
         var remaining = evaluation.UncoveredCandidates;
-        if (remaining.Count > 0)
+        var approvalContext = evaluation.GetUncoveredApprovalContext(
+            ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context));
+        var hasExactOneTimeApproval = projection.HasExactOneTimeApproval(
+            toolName,
+            approvalContext);
+        cancellationToken.ThrowIfCancellationRequested();
+        if (hasExactOneTimeApproval)
         {
-            var approvalContext = evaluation.GetUncoveredApprovalContext(
-                ToolAccessPolicy.GetSessionOwnedApprovalDirectories(context));
-            var hasExactOneTimeApproval = projection.HasExactOneTimeApproval(
-                toolName,
-                approvalContext);
-            cancellationToken.ThrowIfCancellationRequested();
-            if (hasExactOneTimeApproval)
-            {
-                foreach (var candidate in remaining)
-                    evaluation.Cover(candidate, Coverage.OneTime.Instance);
-
-                cancellationToken.ThrowIfCancellationRequested();
-                return evaluation.Complete(
-                    ToolAuthorizationDecision.Allow(
-                        ToolAllowReason.OneTimeApproval,
-                        approvalMatches));
-            }
+            foreach (var candidate in remaining)
+                evaluation.Cover(candidate, Coverage.OneTime.Instance);
 
             cancellationToken.ThrowIfCancellationRequested();
-            if (evaluation.PersistentStoreFailure is not null)
-            {
-                return evaluation.Complete(
-                    ToolAuthorizationDecision.Deny("approval_store_unavailable"));
-            }
-
-            cancellationToken.ThrowIfCancellationRequested();
-            return CompleteApprovalOrCorrection(
-                evaluation,
-                approvalContext,
-                approvalMatches,
-                corrections);
+            return evaluation.Complete(
+                ToolAuthorizationDecision.Allow(
+                    ToolAllowReason.OneTimeApproval,
+                    approvalMatches));
         }
 
+        cancellationToken.ThrowIfCancellationRequested();
+        if (evaluation.PersistentStoreFailure is not null)
+        {
+            return evaluation.Complete(
+                ToolAuthorizationDecision.Deny("approval_store_unavailable"));
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        return CompleteApprovalOrCorrection(
+            evaluation,
+            approvalContext,
+            approvalMatches,
+            corrections);
+    }
+
+    /// <summary>Completes a shell call whose every candidate has coverage.</summary>
+    internal static ToolAuthorizationDecision CompleteCovered(
+        ShellPolicyEvaluation evaluation,
+        CancellationToken cancellationToken)
+    {
+        var approvalMatches = evaluation.ApprovalMatches;
         cancellationToken.ThrowIfCancellationRequested();
         var grantCandidateCount = evaluation.GrantCandidates.Count();
         if (approvalMatches.Count > 0)
@@ -563,7 +390,7 @@ internal sealed class ShellPolicyCoordinator(
                     : ToolAllowReason.ReviewedSafePolicy));
     }
 
-    private static ToolAuthorizationDecision CompleteOneTimeOrPrompt(
+    internal static ToolAuthorizationDecision CompleteOneTimeOrPrompt(
         ShellPolicyEvaluation evaluation,
         string toolName,
         ToolCorrectionCollection? corrections)
@@ -592,7 +419,7 @@ internal sealed class ShellPolicyCoordinator(
         return evaluation.Complete(decision);
     }
 
-    private static ToolAuthorizationDecision Complete(
+    internal static ToolAuthorizationDecision Complete(
         ToolAuthorizationDecision decision,
         IReadOnlyList<ToolApprovalMatch> approvalMatches,
         ShellPolicyDecisionTraceBuilder trace)

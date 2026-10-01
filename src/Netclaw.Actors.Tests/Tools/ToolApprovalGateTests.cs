@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -107,12 +108,11 @@ public sealed class ToolApprovalGateTests
             args);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        var execution = Assert.IsType<ToolAuthorizationResult.ShellExecution>(complete.Result);
-        var decision = execution.Decision;
+        var decision = complete.Decision;
         Assert.True(decision.Allowed);
         Assert.False(decision.NeedsApproval);
         Assert.Equal(ToolAllowReason.PolicyAuto, decision.AllowReason);
-        Assert.Equal("git push", execution.Analysis.Source);
+        Assert.Equal("git push", Assert.IsType<ShellCommandAnalysis>(complete.AuthorizedAnalysis).Source);
     }
 
     [Fact]
@@ -127,19 +127,20 @@ public sealed class ToolApprovalGateTests
             args);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        var execution = Assert.IsType<ToolAuthorizationResult.ShellExecution>(complete.Result);
-        Assert.True(execution.Decision.Allowed);
-        Assert.False(execution.Decision.NeedsApproval);
-        Assert.Equal(ToolAllowReason.PolicyAuto, execution.Decision.AllowReason);
+        Assert.NotNull(complete.AuthorizedAnalysis);
+        Assert.True(complete.Decision.Allowed);
+        Assert.False(complete.Decision.NeedsApproval);
+        Assert.Equal(ToolAllowReason.PolicyAuto, complete.Decision.AllowReason);
     }
 
     [Fact]
-    public void Shell_preflight_rejects_direct_tool_execution()
+    public void Shell_preflight_rejects_analysis_for_a_stopped_decision()
     {
-        var direct = new ToolAuthorizationResult.DirectExecution(
-            ToolAuthorizationDecision.Allow(ToolAllowReason.PolicyAuto));
+        var analysis = new ShellCommandPolicy().Analyze("git status", workingDirectory: null);
 
-        Assert.Throws<ArgumentException>(() => new ShellPolicyPreflightResult.Complete(direct));
+        Assert.Throws<ArgumentException>(() => new ShellPolicyPreflightResult.Complete(
+            ToolAuthorizationDecision.Deny("hard_deny"),
+            analysis));
     }
 
     [Fact]
@@ -167,8 +168,8 @@ public sealed class ToolApprovalGateTests
             arguments);
 
         var complete = Assert.IsType<ShellPolicyPreflightResult.Complete>(preflight);
-        Assert.True(complete.Result.Decision.NeedsApproval);
-        Assert.IsType<ToolAuthorizationResult.Stopped>(complete.Result);
+        Assert.True(complete.Decision.NeedsApproval);
+        Assert.Null(complete.AuthorizedAnalysis);
     }
 
     [Theory]
@@ -245,6 +246,43 @@ public sealed class ToolApprovalGateTests
         Assert.False(decision.Allowed);
         Assert.Equal("internal_policy_failure", decision.DenyReason);
         Assert.Null(context.Cwd);
+    }
+
+    // `netclaw init` writes only the posture and no audience profiles. The daemon adds the
+    // Personal posture rule, so shell needs approval on Personal unless another gate permits the
+    // command. An explicit operator choice in netclaw.json still wins.
+    [Theory]
+    [InlineData(null, true)]
+    [InlineData("Auto", false)]
+    public void Personal_posture_config_without_profiles_requires_shell_approval(string? shellOverride, bool needsApproval)
+    {
+        var profiles = shellOverride is null
+            ? string.Empty
+            : $$""", "AudienceProfiles": { "Personal": { "ApprovalPolicy": { "ToolOverrides": { "shell_execute": "{{shellOverride}}" } } } }""";
+        var json = $$"""
+            {
+              "Security": { "DeploymentPosture": "Personal", "ShellExecutionMode": "HostAllowed", "StrictDefaults": true },
+              "Tools": { "ShellMode": "HostAllowed"{{profiles}} }
+            }
+            """;
+        var configuration = new ConfigurationBuilder()
+            .AddJsonStream(new MemoryStream(System.Text.Encoding.UTF8.GetBytes(json)))
+            .Build();
+        var bound = PolicyConfiguration.Bind(configuration);
+        var policy = new ToolAccessPolicy(
+            new NetclawPaths(),
+            bound.Tools,
+            bound.Defaults,
+            new ShellCommandPolicy(),
+            new ToolPathPolicy([]));
+
+        var decision = policy.GetShellPreflightDecision(
+            ShellTool(),
+            PersonalContext(),
+            ToolInput.Create("Command", "git push"));
+
+        Assert.True(decision.Allowed || decision.NeedsApproval);
+        Assert.Equal(needsApproval, decision.NeedsApproval);
     }
 
     [Fact]

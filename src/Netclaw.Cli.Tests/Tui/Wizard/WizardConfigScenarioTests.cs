@@ -176,24 +176,6 @@ public sealed class WizardConfigScenarioTests : WizardStepTestBase
         Assert.Equal("Team", GetSection(config, "Security")["DeploymentPosture"]);
     }
 
-    [Fact]
-    public void WriteConfig_PersonalPosture_PersistsShellApprovalGateInAudienceProfiles()
-    {
-        // Security-critical winning path: SecurityPosture emits the Tools section through two
-        // paths (typed ContributeConfig + the section BuildContribution that is applied last and
-        // wins). This pins the MERGED on-disk result — the persisted Tools.AudienceProfiles must
-        // gate shell_execute behind Approval for Personal posture, so any future dedup that drops
-        // the default-deny override fails here.
-        var steps = BuildCoreSteps();
-        EnterAndConfigurePosture(steps, DeploymentPosture.Personal);
-
-        var config = AssembleConfig(steps);
-
-        var profiles = GetSection(GetSection(config, "Tools"), "AudienceProfiles");
-        var overrides = GetSection(GetSection(GetSection(profiles, "Personal"), "ApprovalPolicy"), "ToolOverrides");
-        Assert.Equal("Approval", overrides["shell_execute"]);
-    }
-
     // ── Helpers ──
 
     private static List<IWizardStepViewModel> BuildCoreSteps()

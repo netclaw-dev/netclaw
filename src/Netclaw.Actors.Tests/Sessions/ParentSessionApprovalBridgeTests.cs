@@ -9,6 +9,7 @@ using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Tools;
 using Xunit;
 using static Netclaw.Actors.Sessions.SessionProtocol;
@@ -17,6 +18,8 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 public sealed class ParentSessionApprovalBridgeTests
 {
+    private static readonly ToolExecutionTimeout ApprovalTimeout = new(TimeSpan.FromMinutes(5));
+
     [Fact]
     public async Task Bridge_preserves_requester_identity_and_adopted_context()
     {
@@ -31,6 +34,7 @@ public sealed class ParentSessionApprovalBridgeTests
                 persistApprovalState = dispatch.PersistApprovalState;
                 channel.Complete(dispatch.Request.CallId, ConsentAnswer.Once.Instance);
             },
+            ApprovalTimeout,
             new SessionId("signalr/thread-1"),
             approvalScopeId: "spawn-call-1",
             requesterSenderId: new SenderId("user-123"),
@@ -45,6 +49,7 @@ public sealed class ParentSessionApprovalBridgeTests
             new ParentApprovalRequest(
                 authorizationAttemptId,
                 new ToolCallId("call-1"),
+                "shell_execute",
                 new ToolApprovalContext(
                     "shell_execute",
                     "grep timeout logs/app.log | wc -l",
@@ -71,7 +76,7 @@ public sealed class ParentSessionApprovalBridgeTests
                     ])),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ConsentAnswer.Once.Instance, decision);
+        Assert.Equal(ConsentAnswer.Once.Instance, decision.Answer);
         Assert.NotNull(emitted);
         Assert.Equal(authorizationAttemptId.Value, emitted!.AuthorizationAttemptId);
         Assert.Equal("user-123", emitted.RequesterSenderId?.Value);
@@ -108,6 +113,7 @@ public sealed class ParentSessionApprovalBridgeTests
                 emitted = dispatch.Request;
                 channel.Complete(dispatch.Request.CallId, ConsentAnswer.Once.Instance);
             },
+            ApprovalTimeout,
             new SessionId("signalr/thread-2"),
             approvalScopeId: "spawn-call-2",
             requesterSenderId: new SenderId("user-123"),
@@ -120,7 +126,7 @@ public sealed class ParentSessionApprovalBridgeTests
             ShellRequest(new ToolCallId("call-2"), "cat logs/app.log", null, null),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ConsentAnswer.Once.Instance, decision);
+        Assert.Equal(ConsentAnswer.Once.Instance, decision.Answer);
         Assert.NotNull(emitted);
         Assert.True(emitted!.HasAdoptedContext);
         Assert.False(emitted.HasThirdPartyAdoptedContext);
@@ -136,6 +142,7 @@ public sealed class ParentSessionApprovalBridgeTests
         var bridge = new ParentSessionApprovalBridge(
             channel,
             _ => emitted = true,
+            ApprovalTimeout,
             new SessionId("signalr/thread-missing-sender"),
             approvalScopeId: "spawn-call-missing-sender",
             requesterSenderId: null,
@@ -161,6 +168,7 @@ public sealed class ParentSessionApprovalBridgeTests
         var bridge = new ParentSessionApprovalBridge(
             channel,
             _ => emitted = true,
+            ApprovalTimeout,
             new SessionId("signalr/thread-missing-principal"),
             approvalScopeId: "spawn-call-missing-principal",
             requesterSenderId: new SenderId("user-123"),
@@ -189,6 +197,7 @@ public sealed class ParentSessionApprovalBridgeTests
                 emitted = dispatch.Request;
                 channel.Complete(dispatch.Request.CallId, ConsentAnswer.Once.Instance);
             },
+            ApprovalTimeout,
             new SessionId("reminder/thread-automation"),
             approvalScopeId: "spawn-call-automation",
             requesterSenderId: null,
@@ -201,7 +210,7 @@ public sealed class ParentSessionApprovalBridgeTests
             ShellRequest(new ToolCallId("call-automation"), "git push origin main", "/home/user/repos/foo", "/home/user/repos/foo"),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(ConsentAnswer.Once.Instance, decision);
+        Assert.Equal(ConsentAnswer.Once.Instance, decision.Answer);
         Assert.NotNull(emitted);
         Assert.Null(emitted!.RequesterSenderId);
         Assert.Equal(PrincipalClassification.VerifiedAutomation, emitted.RequesterPrincipal);
@@ -228,6 +237,7 @@ public sealed class ParentSessionApprovalBridgeTests
                     }
                 }
             },
+            ApprovalTimeout,
             new SessionId("signalr/thread-duplicates"),
             approvalScopeId: "spawn-call-duplicates",
             requesterSenderId: new SenderId("user-123"),
@@ -243,7 +253,9 @@ public sealed class ParentSessionApprovalBridgeTests
             TimeSpan.FromSeconds(3),
             TestContext.Current.CancellationToken);
 
-        Assert.Equal([ConsentAnswer.Once.Instance, ConsentAnswer.Denied], decisions);
+        Assert.Equal([ConsentAnswer.Once.Instance, ConsentAnswer.Denied], decisions.Select(decision => decision.Answer));
+        Assert.NotNull(decisions[0].RetryConsent);
+        Assert.Null(decisions[1].RetryConsent);
         Assert.Equal(2, emitted.Count);
         Assert.NotEqual(emitted[0].Request.CallId, emitted[1].Request.CallId);
         Assert.All(emitted, dispatch =>
@@ -266,6 +278,7 @@ public sealed class ParentSessionApprovalBridgeTests
         var bridge = new ParentSessionApprovalBridge(
             channel,
             dispatch => emitted = dispatch.Request,
+            ApprovalTimeout,
             new SessionId("signalr/thread-late"),
             approvalScopeId: "spawn-call-late",
             requesterSenderId: new SenderId("user-123"),
@@ -290,7 +303,71 @@ public sealed class ParentSessionApprovalBridgeTests
         Assert.Equal(ConsentAnswer.TimedOut, lateWaitResult);
     }
 
-    private static Task<ConsentAnswer> RequestShellApprovalAsync(
+    // A sub-agent consent wait uses the session's approval timeout, as a session
+    // consent wait does. The daemon gives an infinite timeout to both.
+    [Fact]
+    public async Task Sub_agent_wait_ends_at_the_session_approval_timeout()
+    {
+        var channel = new ApprovalChannel();
+        ToolInteractionRequest? emitted = null;
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            dispatch => emitted = dispatch.Request,
+            new ToolExecutionTimeout(TimeSpan.FromMilliseconds(50)),
+            new SessionId("signalr/thread-timeout"),
+            approvalScopeId: "spawn-call-timeout",
+            requesterSenderId: new SenderId("user-123"),
+            requesterPrincipal: PrincipalClassification.Operator,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+
+        var step = await bridge.RequestConsentAsync(
+            ShellRequest(new ToolCallId("call-timeout"), "git push origin main", "/home/user/repos/foo", "/home/user/repos/foo"),
+            TestContext.Current.CancellationToken);
+
+        Assert.Equal(ConsentAnswer.TimedOut, step.Answer);
+        Assert.Null(step.RetryConsent);
+        Assert.False(channel.Complete(emitted!.CallId, ConsentAnswer.Once.Instance));
+    }
+
+    [Fact]
+    public async Task Session_call_prompt_uses_the_call_id_and_journals_the_wait()
+    {
+        var channel = new ApprovalChannel();
+        ToolInteractionRequestDispatch? emitted = null;
+        var bridge = new ParentSessionApprovalBridge(
+            channel,
+            dispatch =>
+            {
+                emitted = dispatch;
+                channel.Complete(dispatch.Request.CallId, new ConsentAnswer.Grant(GrantScopeKind.Session));
+            },
+            ApprovalTimeout,
+            new SessionId("signalr/thread-session-call"),
+            approvalScopeId: "call-session",
+            requesterSenderId: new SenderId("user-123"),
+            requesterPrincipal: PrincipalClassification.Operator,
+            hasAdoptedContext: false,
+            hasThirdPartyAdoptedContext: false,
+            adoptedSpeakerIds: []);
+        var request = ShellRequest(new ToolCallId("call-session"), "git push origin main", "/home/user/repos/foo", "/home/user/repos/foo");
+        request = request with
+        {
+            Approval = request.Approval with { IsManagedTemporaryRetry = true, ManagedTemporaryDirectory = "/home/user/.netclaw/tmp" }
+        };
+
+        var step = await bridge.RequestSessionConsentAsync(request, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(emitted);
+        Assert.True(emitted!.PersistApprovalState);
+        Assert.Equal("call-session", emitted.Request.CallId.Value);
+        Assert.Equal("/home/user/.netclaw/tmp", emitted.ManagedTemporaryDirectory);
+        // A session grant still seeds the exact one-time consent for the retry.
+        Assert.Equal(OneTimeApprovalKeys.CreateConsent("shell_execute", request.Approval), step.RetryConsent);
+    }
+
+    private static Task<ConsentStep> RequestShellApprovalAsync(
         ParentSessionApprovalBridge bridge,
         ToolCallId callId)
         => bridge.RequestConsentAsync(
@@ -305,6 +382,7 @@ public sealed class ParentSessionApprovalBridgeTests
         => new(
             AuthorizationAttemptId.New(),
             callId,
+            "shell_execute",
             new ToolApprovalContext(
                 "shell_execute",
                 command,

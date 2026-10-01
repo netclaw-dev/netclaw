@@ -172,6 +172,71 @@ public sealed class ToolConfigBindingTests : IDisposable
         Assert.Equal(table[^1].Count, table[^1].Distinct(StringComparer.Ordinal).Count());
     }
 
+    // netclaw init writes only the posture. The daemon applies the posture defaults, so the
+    // Personal posture rule applies when netclaw.json has no ApprovalPolicy for Personal.
+    public static TheoryData<string, ToolApprovalMode?> PersonalShellApprovalCases() => new()
+    {
+        // Security section, Personal.ApprovalPolicy JSON (empty = absent), expected shell_execute mode
+        { """{ "DeploymentPosture": "Personal", "StrictDefaults": true }""", ToolApprovalMode.Approval },
+        { """{ "StrictDefaults": false }""", ToolApprovalMode.Approval },
+        { """{ "DeploymentPosture": "Team", "StrictDefaults": true }""", null },
+        { """{ "DeploymentPosture": "Public", "StrictDefaults": true }""", null },
+        { """{ "StrictDefaults": true }""", null },
+    };
+
+    [Theory]
+    [MemberData(nameof(PersonalShellApprovalCases))]
+    public void The_posture_sets_the_personal_shell_approval_default(string security, ToolApprovalMode? expected)
+    {
+        var tools = BindPolicy($$"""{ "Security": {{security}}, "Tools": { "ShellMode": "HostAllowed" } }""").Tools;
+
+        var personal = tools.AudienceProfiles.Personal;
+        if (expected is null)
+        {
+            Assert.Null(personal.ApprovalPolicy);
+            return;
+        }
+
+        Assert.True(personal.ApprovalPolicy!.TryGetExplicitMode(ToolAudienceProfileToolCatalog.ShellExecute, out var mode));
+        Assert.Equal(expected, mode);
+    }
+
+    public static TheoryData<string, ToolApprovalMode> PersonalApprovalPolicyShapes() => new()
+    {
+        // `netclaw mcp` writes only the MCP keys. The posture rule stays.
+        { """{ "McpServerDefaults": { "memorizer": "Auto" } }""", ToolApprovalMode.Approval },
+        { "null", ToolApprovalMode.Approval },
+        { "{}", ToolApprovalMode.Approval },
+        // An explicit operator choice replaces the posture default.
+        { """{ "ToolOverrides": { "shell_execute": "Auto" } }""", ToolApprovalMode.Auto },
+        { """{ "ToolOverrides": { "shell_execute": "Deny" } }""", ToolApprovalMode.Deny },
+    };
+
+    [Theory]
+    [MemberData(nameof(PersonalApprovalPolicyShapes))]
+    public void A_configured_personal_approval_policy_binds_on_the_posture_default(string approvalPolicy, ToolApprovalMode expected)
+    {
+        var tools = BindPolicy(
+            $$"""
+            {
+              "Security": { "DeploymentPosture": "Personal", "StrictDefaults": true },
+              "Tools": { "AudienceProfiles": { "Personal": { "ApprovalPolicy": {{approvalPolicy}} } } }
+            }
+            """).Tools;
+
+        Assert.True(tools.AudienceProfiles.Personal.ApprovalPolicy!.TryGetExplicitMode(ToolAudienceProfileToolCatalog.ShellExecute, out var mode));
+        Assert.Equal(expected, mode);
+    }
+
+    [Fact]
+    public void An_undefined_posture_stops_binding()
+    {
+        var configuration = new ConfigurationBuilder().Build();
+
+        Assert.Throws<ArgumentOutOfRangeException>(
+            () => ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), (DeploymentPosture)42, out _));
+    }
+
     [Fact]
     public void Only_the_reviewed_allow_lists_have_default_items()
     {
@@ -196,6 +261,16 @@ public sealed class ToolConfigBindingTests : IDisposable
         Assert.Empty(withDefaults);
     }
 
+    private PolicyConfiguration BindPolicy(string json)
+    {
+        var configPath = Path.Combine(_dir.Path, "netclaw.json");
+        File.WriteAllText(configPath, json);
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(configPath, optional: false, reloadOnChange: false)
+            .Build();
+        return PolicyConfiguration.Bind(configuration);
+    }
+
     private ToolConfig Bind(string key, string? jsonValue, string environmentPrefix, out IReadOnlyList<string> warnings)
     {
         // Wrap the value in the nested objects that the key names.
@@ -214,7 +289,9 @@ public sealed class ToolConfigBindingTests : IDisposable
             .AddEnvironmentVariables(environmentPrefix)
             .Build();
 
-        return ToolConfig.BindFromConfiguration(configuration.GetSection("Tools"), out warnings);
+        var bound = PolicyConfiguration.Bind(configuration);
+        warnings = bound.ToolWarnings;
+        return bound.Tools;
     }
 
     private static string[] ReadList(ToolConfig config, string key)

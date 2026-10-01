@@ -62,8 +62,7 @@ internal sealed record ShellPolicyResolvedPathView(
 internal sealed record ShellPolicyCandidatePathFacts(
     ShellPolicyScopePathFact RealScope,
     ShellPolicyResolvedPathView Real,
-    ShellPolicyResolvedPathView? Intent,
-    IReadOnlyList<ShellPolicyResolvedPathView> Fallbacks);
+    ShellPolicyResolvedPathView? Intent);
 
 internal static class ShellPolicyPathFacts
 {
@@ -147,18 +146,10 @@ internal static class ShellPolicyPathFacts
                     pathStyle,
                     candidate.Candidate.Shell)
                 : null;
-            var fallbacks = candidate.IntentFallbackDirectories
-                .Select(path => sourceFacts.Resolve(
-                    ResolveScope(path, pathStyle),
-                    pathStyle,
-                    candidate.Candidate.Shell))
-                .ToArray();
-
             projected[index] = new ShellPolicyCandidatePathFacts(
                 realScope,
                 real,
-                intent,
-                Array.AsReadOnly(fallbacks));
+                intent);
         }
 
         return Array.AsReadOnly(projected);
@@ -373,7 +364,7 @@ internal sealed class ShellPolicyOccurrencePathFacts
         // ShellSyntaxTree's compatibility projection can prove one effective
         // path after it applies consumer semantics that raw shell path rules do
         // not own. Use that proof only as a fallback: relative source values
-        // must still rebase for causal intent and fallback views.
+        // must still rebase for the causal intent view.
         if (values is not { Count: > 1 }
             && !string.IsNullOrWhiteSpace(fact.ParserResolvedPath)
             && CanonicalPath.TryCreate(

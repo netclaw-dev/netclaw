@@ -50,7 +50,7 @@ coordinator. TA-9 states that order.
 |---|---|---|
 | Audience and requester of a turn | inbound adapter, `TrustContextDeriver`, `TurnContext` | Durable in the session journal |
 | Schema exposure | `ToolAccessPolicy.IsToolExposed`, progressive disclosure | Call-local |
-| Tool admission for an audience | `ToolAccessPolicy.AuthorizeInvocation` / `AuthorizeShellPreflight` / `AuthorizeMcpInvocation`, `ToolAudienceProfileResolver` | Call-local; profiles are configuration |
+| Tool admission for an audience | `ToolAuthorizer` (admission rules), `ToolAccessPolicy.AdmitAudience` / `EvaluateShellCapability`, `ToolAudienceProfileResolver` | Call-local; profiles are configuration |
 | Consent mode | `ToolAccessPolicy.GetApprovalMode`, `ToolApprovalConfig` | Call-local; configuration |
 | Shell mode and Personal-only shell | `ToolAccessPolicy.EvaluateShellCapability`, `TrustContextPolicy` | Call-local; configuration |
 | Hard deny | `ShellCommandPolicy`, `HardDenyRule`, `HardDenyOverridesLoader` | Process-local rules; call-local result |
@@ -363,7 +363,14 @@ the link check, then protection.
 - Allow checks SHALL compare paths with ordinal case except on Windows. Deny
   checks SHALL ignore case.
 - A path access denial SHALL be terminal and SHALL NOT reveal root paths to a
-  Public session.
+  Public session. One exception applies to an unattended `shell_execute` call
+  in Approval mode: a stored grant for every candidate SHALL replace a denial
+  of a working directory or a path that is only outside the trusted roots.
+  A protected path, a path through a link, and a path that the host cannot
+  inspect SHALL stay denied. Auto mode SHALL NOT use this exception.
+- When an unattended shell call stays denied outside the trusted roots, the
+  denial SHALL name each candidate without a stored grant: its verb, its
+  folder, and the scopes that can cover it.
 - Tool capability and shell command policy SHALL run before file protection.
   File authority SHALL NOT enable shell. Netclaw SHALL derive the known real
   paths of a shell call from the command analysis, independent of approval
@@ -378,6 +385,26 @@ the link check, then protection.
 - **WHEN** the model calls `file_read` on `netclaw.json`
 - **THEN** the path access decision allows the read
 - **AND** a `shell_execute` call with `cat <config dir>/netclaw.json` is denied with `shell_references_protected_path`
+
+#### Scenario: A stored grant decides outside the trusted roots in an unattended run
+
+- **GIVEN** an unattended Personal run in Approval mode
+- **AND** a folder grant for `git ls-tree` in an external directory
+- **WHEN** the model calls `shell_execute` with `git ls-tree feature` in that directory
+- **THEN** the call is allowed by the stored grant
+
+#### Scenario: An unattended run without a grant stays denied
+
+- **GIVEN** an unattended Personal run in Approval mode and no grant
+- **WHEN** the model calls `shell_execute` with `git ls-tree feature` in an external directory
+- **THEN** the call is denied with `shell_working_directory_outside_trust_zone`
+- **AND** the denial names `git ls-tree` and the scopes that can cover it
+
+#### Scenario: A grant never opens a protected path
+
+- **GIVEN** an unattended Personal run in Approval mode and a grant for `cat`
+- **WHEN** the model calls `shell_execute` with `cat <config dir>/netclaw.json`
+- **THEN** the call is denied
 
 #### Scenario: Team does not get the shared sessions root
 

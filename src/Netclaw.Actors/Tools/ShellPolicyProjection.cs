@@ -5,7 +5,6 @@
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
 using Netclaw.Security;
-using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using Netclaw.Tools.Authorization.Consent;
 
@@ -22,6 +21,11 @@ internal readonly record struct ShellPolicyCandidateId
     internal int Value { get; }
 }
 
+/// <summary>
+/// Selects the coverage rules of a candidate. A causal list keeps the rules that it had before
+/// its candidates came from the directory proof: no reviewed-safe policy of the real directory and
+/// no side-effect exemption. Only its diagnostics can use the intent rule.
+/// </summary>
 internal enum ShellPolicyCandidateRole
 {
     Ordinary = 0,
@@ -36,15 +40,10 @@ internal sealed record ShellPolicyCandidate(
 {
     internal ShellPolicyCandidateRole Role { get; init; }
 
+    /// <summary>The directory that a causal list changed to before this diagnostic, or null.</summary>
     internal string? IntentDirectory { get; init; }
 
-    internal IReadOnlyList<string> IntentFallbackDirectories { get; init; } = [];
-
-    internal IReadOnlyList<ShellPolicyCandidateId> IntentPrerequisites { get; init; } = [];
-
-    internal bool CanRequestStoredGrant =>
-        Role != ShellPolicyCandidateRole.CausalIntentConsumer
-        && !ApprovalPatternMatching.IsPureSideEffect(Candidate);
+    internal bool CanRequestStoredGrant => !ApprovalPatternMatching.IsPureSideEffect(Candidate);
 
     internal bool CanUseRealReviewedSafePolicy =>
         Role == ShellPolicyCandidateRole.Ordinary
@@ -81,9 +80,6 @@ internal sealed record ShellPolicyProjection
     /// <summary>The "Once" answer that this attempt carries, or null.</summary>
     internal OneTimeConsent? OneTimeConsent { get; }
 
-    internal bool HasCausalIntent => Candidates.Any(static candidate =>
-        candidate.Role != ShellPolicyCandidateRole.Ordinary);
-
     internal bool HasExactOneTimeApproval(
         string toolName,
         ToolApprovalContext approvalContext)
@@ -91,15 +87,12 @@ internal sealed record ShellPolicyProjection
 
     internal static bool TryCreate(
         ShellExecutionEnvironment environment,
-        ShellApprovalMatcher matcher,
-        ShellCommandAnalysis? execution,
         ToolApprovalContext approvalContext,
+        BashDirectoryScopeProjection? directoryScopes,
         ToolExecutionContext context,
-        LinkRule hostLinks,
         out ShellPolicyProjection? projection)
     {
         ArgumentNullException.ThrowIfNull(environment);
-        ArgumentNullException.ThrowIfNull(matcher);
         ArgumentNullException.ThrowIfNull(approvalContext);
         ArgumentNullException.ThrowIfNull(context);
 
@@ -107,24 +100,7 @@ internal sealed record ShellPolicyProjection
         if (approvalContext.Candidates is null)
             return false;
 
-        if (approvalContext.IsMessy
-            && approvalContext.Candidates.Count == 0
-            && execution is not null
-            && BashCausalApprovalIntent.TryProject(
-                environment,
-                execution,
-                matcher,
-                hostLinks,
-                out var causalCandidates))
-        {
-            return TryCreateCausal(
-                environment,
-                approvalContext,
-                context,
-                causalCandidates,
-                out projection);
-        }
-
+        var isCausalList = directoryScopes?.IsCausalList == true;
         var candidates = new ShellPolicyCandidate[approvalContext.Candidates.Count];
         var candidateCopies = new ApprovalCandidate[approvalContext.Candidates.Count];
         for (var index = 0; index < approvalContext.Candidates.Count; index++)
@@ -132,6 +108,20 @@ internal sealed record ShellPolicyProjection
             var source = approvalContext.Candidates[index];
             if (source is null)
                 return false;
+
+            var role = ShellPolicyCandidateRole.Ordinary;
+            string? intentDirectory = null;
+            if (isCausalList)
+            {
+                // Every causal candidate comes from one slice of the directory proof.
+                if (directoryScopes!.FindSlice(source.SourceOccurrence) is not { } slice)
+                    return false;
+
+                intentDirectory = slice.IntentDirectory;
+                role = intentDirectory is null
+                    ? ShellPolicyCandidateRole.CausalPrerequisite
+                    : ShellPolicyCandidateRole.CausalIntentConsumer;
+            }
 
             var copy = source with
             {
@@ -144,7 +134,11 @@ internal sealed record ShellPolicyProjection
             candidates[index] = new ShellPolicyCandidate(
                 new ShellPolicyCandidateId(index),
                 copy,
-                source.SourceOccurrence);
+                source.SourceOccurrence)
+            {
+                Role = role,
+                IntentDirectory = intentDirectory
+            };
         }
 
         projection = Create(
@@ -153,54 +147,6 @@ internal sealed record ShellPolicyProjection
             context,
             candidates,
             candidateCopies);
-        return true;
-    }
-
-    private static bool TryCreateCausal(
-        ShellExecutionEnvironment environment,
-        ToolApprovalContext approvalContext,
-        ToolExecutionContext context,
-        IReadOnlyList<BashCausalApprovalCandidate> causalCandidates,
-        out ShellPolicyProjection? projection)
-    {
-        projection = null;
-        var candidates = new ShellPolicyCandidate[causalCandidates.Count];
-        for (var index = 0; index < causalCandidates.Count; index++)
-        {
-            var source = causalCandidates[index];
-            if (source.PrerequisiteIndexes.Any(prerequisite =>
-                    prerequisite < 0 || prerequisite >= causalCandidates.Count))
-            {
-                return false;
-            }
-
-            var candidateCopy = source.Candidate with
-            {
-                VerbTokens = source.Candidate.VerbTokens is null
-                    ? null
-                    : Array.AsReadOnly(source.Candidate.VerbTokens.ToArray()),
-                SourceOccurrence = null
-            };
-            candidates[index] = new ShellPolicyCandidate(
-                new ShellPolicyCandidateId(index),
-                candidateCopy,
-                source.SourceOccurrence)
-            {
-                Role = source.Role,
-                IntentDirectory = source.IntentDirectory,
-                IntentFallbackDirectories = Array.AsReadOnly(source.FallbackDirectories.ToArray()),
-                IntentPrerequisites = Array.AsReadOnly(source.PrerequisiteIndexes
-                    .Select(static prerequisite => new ShellPolicyCandidateId(prerequisite))
-                    .ToArray())
-            };
-        }
-
-        projection = Create(
-            environment,
-            approvalContext,
-            context,
-            candidates,
-            approvalContext.Candidates!);
         return true;
     }
 

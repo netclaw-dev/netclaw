@@ -9,6 +9,8 @@ using Akka.Pattern;
 using System.Globalization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
+using Netclaw.Actors.Authorization;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
@@ -212,6 +214,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         _executor = executor;
         _registry = registry;
         ApprovalService = approvalService;
+
     }
 
     public CountingApprovalService ApprovalService { get; }
@@ -358,17 +361,22 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ProjectDirectory = policy?.Sessionless == true ? null : approvalProjectDirectory,
             InteractiveApproval = TestToolExecutionContext.InteractiveApproval(invocation.Interactive)
         };
-        var context = policy?.Sessionless == true
-            ? TestToolExecutionContext.CreateUnbound(contextOptions)
-            : TestToolExecutionContext.CreateBound(
-                scope?.InvocationSessionId ?? InvocationSessionId,
-                approvalSessionDirectory,
-                contextOptions);
-        if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
+        ToolExecutionContext CreateContext()
         {
-            context.Approval.SeedOneTimeConsent(new OneTimeConsent(
-                ShellTool.ToolName,
-                oneTimeApprovalKeys));
+            var context = policy?.Sessionless == true
+                ? TestToolExecutionContext.CreateUnbound(contextOptions)
+                : TestToolExecutionContext.CreateBound(
+                    scope?.InvocationSessionId ?? InvocationSessionId,
+                    approvalSessionDirectory,
+                    contextOptions);
+            if (scope?.OneTimeApprovalKeys is { Count: > 0 } oneTimeApprovalKeys)
+            {
+                context.Approval.SeedOneTimeConsent(new OneTimeConsent(
+                    ShellTool.ToolName,
+                    oneTimeApprovalKeys));
+            }
+
+            return context;
         }
 
         return new ShellApprovalHarness(
@@ -381,7 +389,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             provider,
             approvalActor,
             toolCall,
-            context,
+            CreateContext(),
             executor,
             provider.GetRequiredService<ToolRegistry>(),
             approvalService);
@@ -644,7 +652,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         => RunToolAsync(ShellTool.ToolName, ToolInput.Create("Command", command), ct);
 
     private static ApprovalObservation Observe(
-        ToolAuthorizationDecision decision,
+        AuthorizationDecision decision,
         int approvalChecks)
     {
         var approvalContext = decision.ApprovalContext;
@@ -699,7 +707,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         };
 
     internal static ApprovalOutcome ObserveOutcome(
-        ToolAuthorizationDecision decision)
+        AuthorizationDecision decision)
         => MapOutcome(decision.Outcome);
 
     private static ApprovalOutcome MapOutcome(ToolAuthorizationOutcome outcome)
@@ -748,8 +756,15 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             row.ScopeRelation,
             row.GrantTimestamp?.ToString("O", CultureInfo.InvariantCulture) ?? string.Empty);
 
-    public Task<ToolAuthorizationDecision> EvaluateDecisionAsync(CancellationToken ct)
+    public Task<AuthorizationDecision> EvaluateDecisionAsync(CancellationToken ct)
         => _executor.EvaluateAuthorizationAsync(_toolCall, _context, ct);
+
+    /// <summary>Evaluates another shell command and returns the full decision, including its prompt candidates.</summary>
+    public Task<AuthorizationDecision> EvaluateShellDecisionAsync(string command, CancellationToken ct)
+        => _executor.EvaluateAuthorizationAsync(
+            CreateShellCall(_toolCall.CallId, command, workingDirectory: null),
+            _context,
+            ct);
 
     public async Task<string> ExecuteAsync(CancellationToken ct)
     {
