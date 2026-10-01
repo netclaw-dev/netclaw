@@ -29,8 +29,10 @@
 
 ## Focused Mutation Tests
 
-The path-access, tool authorization, approval directory, reminder execution, skill_manage guard, shell analysis, and shell assignment mutation jobs run on each pull request, merge group, and `dev` push.
-Each Linux job runs in parallel with the normal test matrix.
+All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request, merge group, and `dev` push.
+The job has three Linux matrix groups that run in parallel with the normal test matrix.
+Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
+To add a gate, add its script name (`scripts/run-<name>-mutations.sh`) to the lightest group. Do not add a new job.
 
 Focused mutation tests prove that deterministic tests reject a specific unsafe
 change at a security or authority boundary. They do not measure general code
@@ -337,7 +339,7 @@ Add one focused target when all these conditions apply:
 - Deterministic tests reject that mutation.
 - A narrow source span contains the relevant decision.
 - Stryker produces stable, meaningful mutants for that span.
-- The total mutation job stays below its configured CI timeout.
+- Its matrix group stays below the job timeout and finishes before the Windows test job.
 
 Use this procedure:
 
