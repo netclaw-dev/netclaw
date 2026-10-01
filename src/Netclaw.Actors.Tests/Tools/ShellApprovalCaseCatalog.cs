@@ -309,6 +309,33 @@ public static class ShellApprovalCases
             Bash("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?", interactive: false),
             Approvals.None,
             ExpectedApproval.Deny("shell_path_outside_trust_zone")),
+        // The directory proof of a ";" or "||" list screens each slice. A stored grant
+        // decides there too, after hard deny and protected text (PR 6e).
+        Case(
+            "unattended-cd-semicolon-grant-allows",
+            Bash("cd /netclaw-approval-external/cd-list; make", interactive: false),
+            Approvals.PersistentAnywhere("cd", "make"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:make", "persistent:make")),
+        Case(
+            "unattended-cd-or-exit-grant-allows",
+            Bash("cd /netclaw-approval-external/cd-list || exit 1; make", interactive: false),
+            Approvals.PersistentAnywhere("cd", "exit", "make"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:exit", "persistent:make", "persistent:make")),
+        Case(
+            "unattended-cd-semicolon-without-grant-denies",
+            Bash("cd /netclaw-approval-external/cd-list; make", interactive: false),
+            Approvals.None,
+            ExpectedApproval.Deny("shell_path_outside_trust_zone", approvalChecks: 1)),
+        Case(
+            "unattended-cd-or-exit-without-grant-denies",
+            Bash("cd /netclaw-approval-external/cd-list || exit 1; make", interactive: false),
+            Approvals.None,
+            ExpectedApproval.Deny("shell_path_outside_trust_zone", approvalChecks: 1)),
+        Case(
+            "unattended-cd-semicolon-protected-slice-denies",
+            Bash("cd /netclaw-approval-external/cd-list; cat ~/.netclaw/config/secrets.json", interactive: false),
+            Approvals.PersistentAnywhere("cd", "cat"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
         // An approval-exempt command has no grant, so the call stays denied.
         Case(
             "unattended-external-grant-with-exempt-command-denies",

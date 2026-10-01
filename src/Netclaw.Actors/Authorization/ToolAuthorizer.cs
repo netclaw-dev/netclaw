@@ -105,8 +105,9 @@ internal sealed class ToolAuthorizer
     // that returns a decision wins, and "??=" skips every later rule. A later
     // rule can assume that every earlier rule returned null.
     //
-    // The two trusted-root rules precede the covering grant. For an unattended
-    // call in Approval mode, a stored grant for every candidate replaces their
+    // The trusted-root rules (the directory-proof slices, the analysis, and the
+    // projected candidates) precede the covering grant. For an unattended call
+    // in Approval mode, a stored grant for every candidate replaces their
     // denial of a path that is only outside the trusted roots (PR 6e).
     // ---------------------------------------------------------------------
     private async Task<ToolAuthorizationDecision> DecideShellAsync(ShellCall call, CancellationToken ct)
@@ -116,7 +117,7 @@ internal sealed class ToolAuthorizer
         decision ??= HardDeny(call);
         decision ??= ProtectedPath(call);
         decision ??= WorkingDirectoryParentSegment(call);
-        decision ??= DirectoryProofScreen(call);
+        decision ??= await DirectoryProofScreenAsync(call, ct);
         decision ??= UnresolvedInputWhenUnattended(call);
         decision ??= await TrustedRootAsync(call, ct);
         decision ??= ApprovalModeDenial(call);
@@ -168,8 +169,18 @@ internal sealed class ToolAuthorizer
         => call.Finish(ToolAccessPolicy.ScreenShellWorkingDirectory(call.WorkingDirectory));
 
     // Prohibition and filesystem authority for each slice of a cd directory proof.
-    private ToolAuthorizationDecision? DirectoryProofScreen(ShellCall call)
-        => call.DirectoryProof is { } proof ? call.Finish(_policy.ScreenDirectoryScopes(proof, call.Context)) : null;
+    // A grant can replace a slice denial only when every slice denial is a path outside the trusted roots (PR 6e).
+    private async Task<ToolAuthorizationDecision?> DirectoryProofScreenAsync(ShellCall call, CancellationToken ct)
+    {
+        if (call.DirectoryProof is not { } proof)
+            return null;
+
+        if (!call.GrantCanReplaceTrustedRoot)
+            return call.Finish(_policy.ScreenDirectoryScopes(proof, call.Context));
+
+        var denial = _policy.ScreenDirectoryScopes(proof, call.Context, out var outsideOnly);
+        return call.Finish(denial is not null && outsideOnly ? await RequireStoredGrantsAsync(call, denial, ct) : denial);
+    }
 
     // Unresolved input: an unattended run cannot ask about syntax that the parser cannot resolve.
     private static ToolAuthorizationDecision? UnresolvedInputWhenUnattended(ShellCall call)

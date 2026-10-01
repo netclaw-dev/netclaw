@@ -367,18 +367,48 @@ public sealed class ToolAccessPolicy
     internal ToolAuthorizationDecision? ScreenDirectoryScopes(
         BashDirectoryScopeProjection proof,
         ToolExecutionContext context)
+        => ScreenDirectoryScopes(proof, context, out _);
+
+    /// <inheritdoc cref="ScreenDirectoryScopes(BashDirectoryScopeProjection, ToolExecutionContext)"/>
+    /// <param name="outsideOnly">
+    /// True when every slice denial is a path that is only outside the trusted
+    /// roots of an unattended run (PR 6e). A hard deny, protected text,
+    /// unresolved input, or a protected, link, or uninspectable path in any
+    /// slice makes it false. Every slice is screened, so a later slice can
+    /// still keep the call from a stored grant.
+    /// </param>
+    internal ToolAuthorizationDecision? ScreenDirectoryScopes(
+        BashDirectoryScopeProjection proof,
+        ToolExecutionContext context,
+        out bool outsideOnly)
     {
+        ToolAuthorizationDecision? firstDenial = null;
+        outsideOnly = true;
         foreach (var slice in proof.Slices)
         {
-            var sliceDeny = ScreenHardDeny(slice.Analysis)
+            var hardDenial = ScreenHardDeny(slice.Analysis)
                 ?? ScreenProtectedShellText(slice.Analysis)
-                ?? ScreenUnresolvedShellInput(slice.Approval, context)
-                ?? ScreenShellTrustZone(slice.Analysis, slice.WorkingDirectory, context);
-            if (sliceDeny is not null)
-                return sliceDeny;
+                ?? ScreenUnresolvedShellInput(slice.Approval, context);
+            if (hardDenial is not null)
+            {
+                outsideOnly = false;
+                return firstDenial ?? hardDenial;
+            }
+
+            var trustDenial = ScreenShellTrustZone(
+                slice.Analysis,
+                slice.WorkingDirectory,
+                context,
+                out var sliceOutsideOnly);
+            if (trustDenial is null)
+                continue;
+
+            firstDenial ??= trustDenial;
+            outsideOnly &= sliceOutsideOnly;
         }
 
-        return null;
+        outsideOnly &= firstDenial is not null;
+        return firstDenial;
     }
 
     /// <summary>Replaces the unresolved candidates with the candidates of a screened directory proof.</summary>
