@@ -225,8 +225,12 @@ public static class ApprovalPatternMatching
     {
         // SECURITY: the parser cannot prove this candidate's verb chain
         // (gh -R o/r auth logout), so no grant covers it, not even "gh".
-        if (candidate.HasUnprovenVerbChain
-            || candidate.AssignmentDigest != entry.AssignmentDigest)
+        if (candidate.HasUnprovenVerbChain)
+        {
+            return false;
+        }
+
+        if (candidate.AssignmentDigest != entry.AssignmentDigest)
         {
             return false;
         }
