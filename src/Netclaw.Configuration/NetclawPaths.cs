@@ -205,6 +205,17 @@ public sealed class NetclawPaths
         yield return WorkspacesDirectory;
         yield return ModelsDirectory;
     }
+
+    /// <summary>
+    /// Whether <c>netclaw init</c> has completed at least once. Wizard-owned identity
+    /// files, legacy personality files, and <see cref="SecretsPath"/> indicate a prior
+    /// setup, whereas a channel-seed <c>netclaw.json</c> from <c>install.sh --channel</c>
+    /// is not.
+    /// </summary>
+    public bool HasCompletedSetup() =>
+        File.Exists(SoulPath)
+        || File.Exists(SecretsPath)
+        || File.Exists(PersonalityPath);
 }
 
 public sealed class NetclawDirectoryInitializationException : IOException

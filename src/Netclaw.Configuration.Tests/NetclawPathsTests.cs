@@ -193,6 +193,81 @@ public sealed class NetclawPathsTests : IDisposable
             File.Delete(basePath);
         }
     }
+
+    [Fact]
+    public void HasCompletedSetup_false_for_channel_seed_config_only()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-seed-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = new NetclawPaths(basePath);
+            Directory.CreateDirectory(paths.ConfigDirectory);
+            File.WriteAllText(
+                paths.NetclawConfigPath,
+                """{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}""");
+
+            Assert.False(paths.HasCompletedSetup());
+        }
+        finally
+        {
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HasCompletedSetup_true_when_identity_or_secrets_exist()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-setup-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = new NetclawPaths(basePath);
+            paths.EnsureDirectoriesExist();
+            File.WriteAllText(
+                paths.NetclawConfigPath,
+                """{"configVersion":1,"Daemon":{"UpdateChannel":"beta"}}""");
+
+            Assert.False(paths.HasCompletedSetup());
+
+            Directory.CreateDirectory(paths.IdentityDirectory);
+            File.WriteAllText(paths.SoulPath, "# soul");
+            Assert.True(paths.HasCompletedSetup());
+
+            File.Delete(paths.SoulPath);
+            File.WriteAllText(paths.SecretsPath, """{"DeviceToken":"test"}""");
+            Assert.True(paths.HasCompletedSetup());
+        }
+        finally
+        {
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void HasCompletedSetup_true_for_legacy_personality_file_only()
+    {
+        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-legacy-" + Guid.NewGuid().ToString("N"));
+        try
+        {
+            var paths = new NetclawPaths(basePath);
+            Directory.CreateDirectory(paths.ConfigDirectory);
+            Directory.CreateDirectory(paths.SoulDirectory);
+            File.WriteAllText(
+                paths.NetclawConfigPath,
+                """{"configVersion":1,"Daemon":{"ExposureMode":"local"}}""");
+
+            Assert.False(paths.HasCompletedSetup());
+
+            File.WriteAllText(paths.PersonalityPath, "# personality");
+            Assert.True(paths.HasCompletedSetup());
+        }
+        finally
+        {
+            if (Directory.Exists(basePath))
+                Directory.Delete(basePath, recursive: true);
+        }
+    }
 }
 
 /// <summary>
