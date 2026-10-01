@@ -766,6 +766,10 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             _context,
             ct);
 
+    /// <summary>Reads the persistent shell grants that the approval actor saved.</summary>
+    public IReadOnlyList<ApprovalEntry> GetStoredShellEntries(TrustAudience audience)
+        => _services.GetRequiredService<ToolApprovalStore>().GetApprovedEntries(audience, ShellTool.ToolName);
+
     public async Task<string> ExecuteAsync(CancellationToken ct)
     {
         var arguments = new Dictionary<string, object?>(
