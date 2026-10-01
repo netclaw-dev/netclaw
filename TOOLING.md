@@ -136,7 +136,8 @@ Run the rule-order gate of the linear authorizer:
 ```
 
 `ToolAuthorizer` (authorization PR 6a) states its rule order as one
-`decision ??= Rule(call);` line per rule. The script selects three lines of the
+`decision ??= Rule(call);` line per rule (`decision ??= await RuleAsync(call, ct);`
+for a rule that reads the grant store). The script selects three lines of the
 shell rule list: hard deny, the trusted-root check, and the covering grant.
 Stryker turns `??=` into `=` on each line. The rule then runs after an earlier
 decision and replaces it, so the rule moves ahead of every earlier rule. The
@@ -148,12 +149,12 @@ every case:
 
 - A hard-denied phrase stays denied. A control with a granted phrase is allowed.
 - A Team audience stays denied. No later rule can clear an admission denial.
-- An unattended call with a path or a working directory outside every trusted
-  root stays denied. The interactive control with the same grant is allowed.
 
-The last case pins today's order, in which the trusted-root check precedes the
-covering grant. Authorization PR 6e changes that order for unattended Approval
-mode by owner decision. That PR changes this case and this section.
+Since authorization PR 6e, the same class also pins the grant-first rule for an
+unattended call in Approval mode. A stored grant decides for a path or a working
+directory outside every trusted root. The negative controls stay denied: a call
+without a grant (the denial names the missing grant), Auto mode, and a protected
+path with a grant.
 
 The tests pick the host shell and a temporary root without links, so they also
 pass in the normal Windows and macOS test jobs. The local run took about

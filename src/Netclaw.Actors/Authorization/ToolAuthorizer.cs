@@ -105,8 +105,9 @@ internal sealed class ToolAuthorizer
     // that returns a decision wins, and "??=" skips every later rule. A later
     // rule can assume that every earlier rule returned null.
     //
-    // This order reproduces the current gate. The trusted-root rule precedes
-    // the covering grant, also for an unattended call in Approval mode.
+    // The two trusted-root rules precede the covering grant. For an unattended
+    // call in Approval mode, a stored grant for every candidate replaces their
+    // denial of a path that is only outside the trusted roots (PR 6e).
     // ---------------------------------------------------------------------
     private async Task<ToolAuthorizationDecision> DecideShellAsync(ShellCall call, CancellationToken ct)
     {
@@ -117,13 +118,13 @@ internal sealed class ToolAuthorizer
         decision ??= WorkingDirectoryParentSegment(call);
         decision ??= DirectoryProofScreen(call);
         decision ??= UnresolvedInputWhenUnattended(call);
-        decision ??= TrustedRoot(call);
+        decision ??= await TrustedRootAsync(call, ct);
         decision ??= ApprovalModeDenial(call);
         decision ??= NativeToolAdvice(call);
         decision ??= AutomaticApprovalMode(call);
         decision ??= CallWithoutCommandText(call);
         decision ??= MissingProjection(call);
-        decision ??= ProjectedTrustedRoot(call);
+        decision ??= await ProjectedTrustedRootAsync(call, ct);
         decision ??= UnresolvedInput(call);
         decision ??= await CoveringGrantAsync(call, ct);
         return decision ?? UncoveredCandidates(call, ct);
@@ -177,11 +178,18 @@ internal sealed class ToolAuthorizer
             : null;
 
     // Filesystem authority: the working directory and every known path must be inside a trusted root.
-    // Today this precedes the covering grant, also for an unattended run in Approval mode.
-    private ToolAuthorizationDecision? TrustedRoot(ShellCall call)
-        => call.Analysis is { } analysis
-            ? call.Finish(_policy.ScreenShellTrustZone(analysis, call.WorkingDirectory, call.Context))
-            : null;
+    // A grant can replace only the denial of an unattended call in Approval mode (PR 6e).
+    private async Task<ToolAuthorizationDecision?> TrustedRootAsync(ShellCall call, CancellationToken ct)
+    {
+        if (call.Analysis is not { } analysis)
+            return null;
+
+        if (!call.GrantCanReplaceTrustedRoot)
+            return call.Finish(_policy.ScreenShellTrustZone(analysis, call.WorkingDirectory, call.Context));
+
+        var denial = _policy.ScreenShellTrustZone(analysis, call.WorkingDirectory, call.Context, out var outsideOnly);
+        return call.Finish(denial is not null && outsideOnly ? await RequireStoredGrantsAsync(call, denial, ct) : denial);
+    }
 
     // Admission: a Deny consent mode.
     private static ToolAuthorizationDecision? ApprovalModeDenial(ShellCall call)
@@ -231,10 +239,52 @@ internal sealed class ToolAuthorizer
             : null;
 
     // Filesystem authority: every candidate path again, including the intent view of a causal list.
-    private ToolAuthorizationDecision? ProjectedTrustedRoot(ShellCall call)
-        => call.Finish(_policy.EnforceProjectedShellFileProtection(
-            call.Evaluation.CandidateStates.Select(static state => state.PathFacts).ToArray(),
-            call.Context.Invocation));
+    private async Task<ToolAuthorizationDecision?> ProjectedTrustedRootAsync(ShellCall call, CancellationToken ct)
+    {
+        var pathFacts = call.Evaluation.CandidateStates.Select(static state => state.PathFacts).ToArray();
+        if (!call.GrantCanReplaceTrustedRoot)
+            return call.Finish(_policy.EnforceProjectedShellFileProtection(pathFacts, call.Context.Invocation));
+
+        var denial = _policy.EnforceProjectedShellFileProtection(pathFacts, call.Context.Invocation, out var outsideOnly);
+        return call.Finish(denial is not null && outsideOnly ? await RequireStoredGrantsAsync(call, denial, ct) : denial);
+    }
+
+    // Consent, for an unattended call in Approval mode with a path outside the trusted roots:
+    // a stored grant for every candidate replaces the denial. An approval-exempt or
+    // reviewed-safe candidate has no grant, so the denial stays. The denial names
+    // each candidate without a stored grant.
+    private async Task<ToolAuthorizationDecision?> RequireStoredGrantsAsync(
+        ShellCall call,
+        ToolAuthorizationDecision denial,
+        CancellationToken ct)
+    {
+        // An exact-approval call, or a candidate without valid verb facts, cannot carry a grant.
+        if (call.Projection is not { } projection
+            || ShellPolicyCoordinator.RequiresExactApproval(projection)
+            || !ShellPolicyCoordinator.HasValidCandidateSyntax(projection))
+        {
+            return denial;
+        }
+
+        await CoverOnceAsync(call, ct);
+        var states = call.Evaluation.CandidateStates;
+        var missing = states.Where(static state => state.Coverage is not Coverage.Stored).ToArray();
+        return missing.Length == 0
+            ? null
+            : ToolAuthorizationDecision.Deny(
+                denial.DenyReason ?? InternalPolicyFailure,
+                MissingGrantMessage(denial.DenyReason, missing));
+    }
+
+    private static string MissingGrantMessage(
+        string? reason,
+        IReadOnlyList<ShellPolicyEvaluation.CandidateState> missing)
+        => $"Tool access denied: {reason}. An unattended run can use a path outside the trusted roots "
+           + "only when a stored grant covers every command. Missing grants: "
+           + string.Join("; ", missing.Select(static state => state.Candidate.CanRequestStoredGrant
+               ? $"\"{state.Candidate.Candidate.Verb}\" in {state.Candidate.Candidate.Directory ?? "the working directory"} (scope: this chat, this folder, or everywhere)"
+               : $"\"{state.Candidate.Candidate.Verb}\" (no grant can cover it; run it inside a trusted root)"))
+           + ".";
 
     // Unresolved input: syntax without reusable candidates gets one exact retry, advice, or a Once-only prompt.
     private static ToolAuthorizationDecision? UnresolvedInput(ShellCall call)
@@ -245,11 +295,21 @@ internal sealed class ToolAuthorizer
     // Consent: a stored grant, the side-effect exemption, or the reviewed-safe policy covers every candidate.
     private async Task<ToolAuthorizationDecision?> CoveringGrantAsync(ShellCall call, CancellationToken ct)
     {
-        ct.ThrowIfCancellationRequested();
-        await _shell.CoverAsync(call.Tool, call.Context, call.Evaluation, ct);
+        await CoverOnceAsync(call, ct);
         return call.Evaluation.AllCovered
             ? ShellPolicyCoordinator.CompleteCovered(call.Evaluation, ct)
             : null;
+    }
+
+    // One batched stored-grant lookup for each call, also when a trusted-root rule needs the coverage first.
+    private async Task CoverOnceAsync(ShellCall call, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        if (call.Covered)
+            return;
+
+        await _shell.CoverAsync(call.Tool, call.Context, call.Evaluation, ct);
+        call.Covered = true;
     }
 
     // Consent: a one-time answer, a store failure, advice, or a prompt for the uncovered candidates.
@@ -379,6 +439,18 @@ internal sealed class ToolAuthorizer
 
         internal ToolApprovalMode Mode => (_mode ??= new(() =>
             authorizer._policy.GetShellApprovalMode(_toolName, context, call.Arguments, Analysis))).Value;
+
+        /// <summary>
+        /// True for an unattended call in Approval mode. Only then can a stored
+        /// grant replace a trusted-root denial (PR 6e). An interactive call can
+        /// ask instead, and Auto mode never reads grants.
+        /// </summary>
+        internal bool GrantCanReplaceTrustedRoot
+            => context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Unavailable
+               && Mode == ToolApprovalMode.Approval;
+
+        /// <summary>True after the one stored-grant lookup of this call.</summary>
+        internal bool Covered { get; set; }
 
         /// <summary>
         /// The result after every screen passed: an automatic allow, a consent

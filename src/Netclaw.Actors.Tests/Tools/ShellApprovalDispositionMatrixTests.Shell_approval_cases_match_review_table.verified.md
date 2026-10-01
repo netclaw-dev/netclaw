@@ -16,6 +16,10 @@
 | safe-git-ls-tree-ref-allows | Bash | Personal | Project | Interactive | git ls-tree feature | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-git-ls-tree-external-prompts-with-canonical-verb | Bash | Personal | External | Interactive | git ls-tree feature | none | RequiresApproval | approval required | git ls-tree feature | No |
 | safe-git-ls-tree-external-reuses-canonical-grant | Bash | Personal | External | Interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | StoredApproval | none | Not applicable |
+| unattended-external-grant-allows | Bash | Personal | External | Non-interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | StoredApproval | none | Not applicable |
+| unattended-external-without-grant-denies | Bash | Personal | External | Non-interactive | git ls-tree feature | none | Denied | shell_working_directory_outside_trust_zone | none | Not applicable |
+| unattended-prose-outside-path-denies-without-lookup | Bash | Personal | Project | Non-interactive | I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me? | none | Denied | shell_path_outside_trust_zone | none | Not applicable |
+| unattended-external-grant-with-exempt-command-denies | Bash | Personal | External | Non-interactive | git ls-tree feature; echo done | persistent[external]:git ls-tree | Denied | shell_working_directory_outside_trust_zone | none | Not applicable |
 | safe-verb-context-project-fallback-allows | Bash | Personal | None | Interactive | cat src/readme.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-verb-context-project-traversal-prompts | Bash | Personal | None | Interactive | cat ../secret.txt | none | RequiresApproval | approval required | cat | No |
 | safe-verb-session-allows | Bash | Personal | Session | Interactive | git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |

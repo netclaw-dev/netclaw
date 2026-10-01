@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.76.8"
+  version: "2.76.9"
 ---
 
 # Netclaw Operations
@@ -592,6 +592,14 @@ Example dialogue when the user asks you to schedule a daily Freshdesk report:
 
 On confirmation, run the trust-verb command via `shell_execute`, then create
 the reminder. The grant persists across daemon restarts.
+
+An unattended task can also work in a folder outside its trusted roots, but
+only when a stored grant covers every command of the call. If such a call is
+denied with `shell_path_outside_trust_zone` or
+`shell_working_directory_outside_trust_zone`, the denial names each missing
+grant: its verb, its folder, and the scopes that can cover it. Suggest that
+grant to the user. A grant never opens a protected path (the config directory,
+secrets, or keys), and Auto mode does not use grants.
 
 ### Last-resort recovery
 

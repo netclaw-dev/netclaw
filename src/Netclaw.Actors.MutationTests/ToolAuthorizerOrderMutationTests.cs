@@ -69,39 +69,73 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         Assert.Equal("tool_not_allowed_for_audience_profile", denied.Reason);
     }
 
-    // Today the trusted-root check precedes the covering grant. An unattended
-    // call outside every trusted root stays denied, although a grant covers it.
-    // The interactive control proves that the same grant covers the same call.
+    // PR 6e: a stored grant decides for an unattended call in Approval mode,
+    // also outside every trusted root. The interactive control uses the same grant.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Trusted_root_precedes_a_covering_grant(bool interactive)
+    public async Task A_stored_grant_decides_outside_the_trusted_roots(bool interactive)
     {
-        var command = OperatingSystem.IsWindows()
-            ? $"Get-Content '{Path.Combine(_outsideDirectory, "secret.txt")}'"
-            : $"cat '{Path.Combine(_outsideDirectory, "secret.txt")}'";
+        var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
         var authorizer = CreateAuthorizer(await PromptVerbsAsync(command), hardDenyPatterns: []);
 
         var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive);
 
-        if (interactive)
-        {
-            var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
-            Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
-        }
-        else
-        {
-            var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
-            Assert.Equal("shell_path_outside_trust_zone", denied.Reason);
-        }
+        var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
+        Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
     }
 
-    // The same order for the working directory. The later projected path check
-    // covers path operands, so only this case separates the trusted-root rule.
+    // Negative control: without a grant the unattended call stays denied, and
+    // the denial names the missing grant.
+    [Fact]
+    public async Task An_unattended_call_without_a_grant_stays_denied_and_names_the_grant()
+    {
+        var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
+        var verbs = await PromptVerbsAsync(command);
+        var authorizer = CreateAuthorizer([], hardDenyPatterns: []);
+
+        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
+
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
+        Assert.Equal("shell_path_outside_trust_zone", denied.Reason);
+        Assert.Contains($"\"{verbs[0]}\"", denied.Message, StringComparison.Ordinal);
+        Assert.Contains("scope: this chat, this folder, or everywhere", denied.Message, StringComparison.Ordinal);
+    }
+
+    // Negative control: Auto mode never reads grants, so the trusted-root rule still decides.
+    [Fact]
+    public async Task Auto_mode_keeps_the_trusted_root_denial()
+    {
+        var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
+        var authorizer = CreateAuthorizer(await PromptVerbsAsync(command), hardDenyPatterns: [], ToolApprovalMode.Auto);
+
+        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
+
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
+        Assert.Equal("shell_path_outside_trust_zone", denied.Reason);
+        Assert.Null(denied.Message);
+    }
+
+    // Negative control: a grant never opens a protected path. The control plane stays closed.
+    [Fact]
+    public async Task A_stored_grant_never_opens_a_protected_path()
+    {
+        // The grant names the same verb. The read verb takes its phrase from an unprotected file.
+        var grants = await PromptVerbsAsync(ReadCommand(Path.Combine(_outsideDirectory, "secret.txt")));
+        var command = ReadCommand(Path.Combine(_paths.ConfigDirectory, "netclaw.json"));
+        var authorizer = CreateAuthorizer(grants, hardDenyPatterns: []);
+
+        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
+
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
+        Assert.Null(denied.Message);
+    }
+
+    // The same rule for the working directory: a folder grant decides.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task Trusted_root_of_the_working_directory_precedes_a_covering_grant(bool interactive)
+    public async Task A_stored_grant_decides_for_a_working_directory_outside_the_trusted_roots(bool interactive)
     {
         var authorizer = CreateAuthorizer(
             await PromptVerbsAsync("git status", _outsideDirectory),
@@ -109,17 +143,12 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
 
         var decision = await AuthorizeAsync(authorizer, "git status", TrustAudience.Personal, interactive, _outsideDirectory);
 
-        if (interactive)
-        {
-            var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
-            Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
-        }
-        else
-        {
-            var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
-            Assert.Equal("shell_working_directory_outside_trust_zone", denied.Reason);
-        }
+        var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
+        Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
     }
+
+    private static string ReadCommand(string path)
+        => OperatingSystem.IsWindows() ? $"Get-Content '{path}'" : $"cat '{path}'";
 
     public void Dispose() => Directory.Delete(_paths.BasePath, recursive: true);
 
@@ -138,7 +167,10 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         return consent.Request.CandidateVerbs;
     }
 
-    private ToolAuthorizer CreateAuthorizer(IReadOnlyList<string> grantedVerbs, IReadOnlyList<string> hardDenyPatterns)
+    private ToolAuthorizer CreateAuthorizer(
+        IReadOnlyList<string> grantedVerbs,
+        IReadOnlyList<string> hardDenyPatterns,
+        ToolApprovalMode shellMode = ToolApprovalMode.Approval)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         foreach (var profile in new[]
@@ -147,7 +179,7 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             profile.ApprovalPolicy = new ToolApprovalConfig
             {
                 DefaultMode = ToolApprovalMode.Approval,
-                ToolOverrides = new() { [ShellTool.ToolName] = ToolApprovalMode.Approval }
+                ToolOverrides = new() { [ShellTool.ToolName] = shellMode }
             };
         }
 
@@ -157,7 +189,8 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
             new ShellCommandPolicy(NativeEnvironment, [.. hardDenyPatterns]),
-            new ToolPathPolicy(NativeEnvironment, []));
+            // The control plane is protected, as in the daemon.
+            new ToolPathPolicy(NativeEnvironment, [_paths.ConfigDirectory]));
         var registry = new ToolRegistry();
         registry.Register(new ShellProbeTool());
         var executor = new DispatchingToolExecutor(registry, policy, new VerbGrantService(grantedVerbs));

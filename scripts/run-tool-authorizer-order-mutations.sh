@@ -17,7 +17,7 @@ fi
 # Each marker is one rule line. A missing or duplicated line fails before Stryker starts.
 markers=(
   "decision ??= HardDeny(call);"
-  "decision ??= TrustedRoot(call);"
+  "decision ??= await TrustedRootAsync(call, ct);"
   "decision ??= await CoveringGrantAsync(call, ct);"
 )
 expected_per_line=1

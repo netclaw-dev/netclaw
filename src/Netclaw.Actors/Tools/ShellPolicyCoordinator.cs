@@ -241,25 +241,31 @@ internal sealed class ShellPolicyCoordinator(
 
     private static void ValidateCandidateSyntax(ShellPolicyProjection projection)
     {
+        if (!HasValidCandidateSyntax(projection))
+            throw new InvalidOperationException("Invalid shell policy projection.");
+    }
+
+    /// <summary>
+    /// True when every candidate has the shell of the projection and nonempty
+    /// verb tokens without whitespace. A grant lookup needs these facts.
+    /// </summary>
+    internal static bool HasValidCandidateSyntax(ShellPolicyProjection projection)
+    {
         var expectedShell = projection.Environment.Grammar == ShellGrammar.Bash
             ? ApprovalShell.Bash
             : ApprovalShell.PowerShell;
         foreach (var candidate in projection.Candidates)
         {
             if (candidate.Candidate.Shell != expectedShell)
-                throw new InvalidOperationException("Invalid shell policy projection.");
+                return false;
 
             // RequiresExactApproval handles missing facts before this validation of supplied facts.
             var tokens = candidate.Candidate.VerbTokens!;
-            if (tokens.Count == 0)
-                throw new InvalidOperationException("Invalid shell policy projection.");
-
-            foreach (var token in tokens)
-            {
-                if (token.Length == 0 || token.Any(char.IsWhiteSpace))
-                    throw new InvalidOperationException("Invalid shell policy projection.");
-            }
+            if (tokens.Count == 0 || tokens.Any(static token => token.Length == 0 || token.Any(char.IsWhiteSpace)))
+                return false;
         }
+
+        return true;
     }
 
     private static void ApplyReviewedSafeCoverage(

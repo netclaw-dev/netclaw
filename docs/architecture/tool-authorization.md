@@ -176,8 +176,9 @@ shell rules, in order:
    `cd` directory proof.
 4. Unresolved input when no operator can answer.
 5. Filesystem authority: the working directory and the known paths must be in
-   a trusted root. Today this rule precedes the covering grant, also for an
-   unattended call in Approval mode.
+   a trusted root. For an unattended call in Approval mode, a stored grant for
+   every candidate replaces a denial of a path that is only outside the trusted
+   roots (consolidation PR 6e). A protected path stays denied.
 6. Admission: a Deny consent mode.
 7. Advice: a native tool, then Auto mode with its directory advice.
 8. A call without command text, the projected trusted-root check, and unresolved
@@ -185,8 +186,9 @@ shell rules, in order:
 9. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
    policy), then the uncovered candidates.
 
-Consolidation PR 6d deleted the old gate. By owner decision, PR 6e moves the
-covering grant ahead of the trusted-root check for unattended Approval mode.
+Consolidation PR 6d deleted the old gate. By owner decision, PR 6e lets a
+stored grant decide ahead of both trusted-root checks for unattended Approval
+mode. A denial that stays names each missing grant.
 
 Each context below lists its question, the classes that answer it today, its
 published contract today, what it must not know, and where its data lives.
