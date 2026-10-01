@@ -11,6 +11,7 @@ using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
+using ShellSyntaxTree;
 using Xunit;
 
 namespace Netclaw.Actors.MutationTests;
@@ -155,8 +156,8 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             config,
             new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
-            new ShellCommandPolicy([.. hardDenyPatterns]),
-            new ToolPathPolicy([]));
+            new ShellCommandPolicy(NativeEnvironment, [.. hardDenyPatterns]),
+            new ToolPathPolicy(NativeEnvironment, []));
         var registry = new ToolRegistry();
         registry.Register(new ShellProbeTool());
         var executor = new DispatchingToolExecutor(registry, policy, new VerbGrantService(grantedVerbs));
@@ -238,6 +239,13 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             IDictionary<string, object?>? arguments, ToolInvocationContext context, CancellationToken ct)
             => throw new InvalidOperationException("The authorizer must not run the tool.");
     }
+
+    // The host shell, as the daemon resolves it: PowerShell on Windows, Bash elsewhere.
+    // The parameterless policy constructors always use Linux Bash. On Windows that
+    // parses a Windows path as a relative POSIX path, which no trusted root can judge.
+    private static readonly ShellExecutionEnvironment NativeEnvironment = OperatingSystem.IsWindows()
+        ? ShellExecutionEnvironment.CreatePowerShell(@"C:\Program Files\PowerShell\7\pwsh.exe", PwshDialect.PowerShell7)
+        : ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
 
     private static string CanonicalTemporaryDirectory()
     {
