@@ -26,14 +26,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
     private readonly ToolRegistry _registry;
     private readonly ToolAccessPolicy _policy;
     private readonly IToolApprovalService? _approvalService;
-    private readonly ShellPolicyCoordinator _shellPolicyCoordinator;
     private readonly ILogger _logger;
 
     /// <summary>
-    /// The linear authorizer that later slices of authorization PR 6 switch this
-    /// executor to. It uses the same registry, policy, approval service, and
-    /// shell coordinator as the gate below. No production path calls it yet;
-    /// the differential tests prove that it gives the same decision.
+    /// The linear authorizer. Every shell call uses it (authorization PR 6b).
+    /// Other tools still use the gate below until PR 6c switches them.
     /// </summary>
     internal ToolAuthorizer Authorizer { get; }
 
@@ -52,8 +49,11 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         _registry = registry;
         _policy = policy;
         _approvalService = approvalService;
-        _shellPolicyCoordinator = new ShellPolicyCoordinator(registry, policy, approvalService);
-        Authorizer = new ToolAuthorizer(registry, policy, approvalService, _shellPolicyCoordinator);
+        Authorizer = new ToolAuthorizer(
+            registry,
+            policy,
+            approvalService,
+            new ShellPolicyCoordinator(registry, policy, approvalService));
         _logger = logger;
     }
 
@@ -444,12 +444,10 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 
         if (string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal))
         {
-            var shellAuthorization = await _shellPolicyCoordinator.EvaluateAsync(
-                tool,
-                toolCall,
-                context,
-                ct);
-
+            // Every shell caller comes here: the pre-check, the foreground and
+            // streaming execution, the background launch, and the re-check at
+            // process start. Each one asks the linear authorizer.
+            var shellAuthorization = ToShellResult(await Authorizer.AuthorizeAsync(toolCall, context, ct));
             LogAuthorizationDecision(toolCall, context, shellAuthorization.Decision);
             return shellAuthorization;
         }
@@ -501,6 +499,28 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
         LogAuthorizationDecision(toolCall, context, authorizationDecision);
         return ToolAuthorizationResult.CreateDirect(authorizationDecision);
     }
+
+    /// <summary>
+    /// Converts the authorizer's decision into the result that the execution
+    /// adapters read. An allowed decision with an analysis starts the process.
+    /// An allowed decision without one validates the arguments only.
+    /// </summary>
+    internal static ToolAuthorizationResult ToShellResult(AuthorizationDecision decision)
+        => decision switch
+        {
+            AuthorizationDecision.Allowed allowed => ToolAuthorizationResult.CreateShell(
+                ToolAuthorizationDecision.Allow(allowed.Reason, allowed.Matches).WithShellPolicyTrace(allowed.Trace),
+                allowed.Analysis),
+            AuthorizationDecision.NeedsConsent consent => ToolAuthorizationResult.Stop(
+                ToolAuthorizationDecision.RequiresApproval(consent.Request, consent.Matches)
+                    .WithShellPolicyTrace(consent.Trace)),
+            AuthorizationDecision.CorrectionRequired correction => ToolAuthorizationResult.Stop(
+                ToolAuthorizationDecision.RequireAgentCorrection(correction.Corrections, correction.Matches)
+                    .WithShellPolicyTrace(correction.Trace)),
+            AuthorizationDecision.Denied denied => ToolAuthorizationResult.Stop(
+                ToolAuthorizationDecision.Deny(denied.Reason, denied.Message).WithShellPolicyTrace(denied.Trace)),
+            _ => throw new ArgumentOutOfRangeException(nameof(decision), decision, "Unknown authorization decision.")
+        };
 
     public async Task<ShellProcessLaunch> PrepareShellLaunchAsync(
         FunctionCallContent toolCall,

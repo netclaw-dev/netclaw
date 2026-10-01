@@ -23,12 +23,11 @@ namespace Netclaw.Actors.Authorization;
 /// does not repeat that component's check.
 /// </para>
 /// <para>
-/// Authorization PR 6a: no production path calls this class yet. The rule order
-/// reproduces the current gate exactly, including the rule that today's trusted
-/// root check precedes a covering grant. The differential tests compare the two
-/// paths on every catalog case and corpus input. Later slices switch the callers,
-/// delete the old gate, and then move the covering grant ahead of the trusted
-/// root check for unattended Approval mode.
+/// Authorization PR 6b: every shell call uses this class. Other tools still use
+/// the executor's gate. The rule order reproduces the old gate exactly,
+/// including the rule that the trusted root check precedes a covering grant.
+/// The differential tests compare this class with the old shell gate on every
+/// catalog case and corpus input.
 /// </para>
 /// </remarks>
 internal sealed class ToolAuthorizer

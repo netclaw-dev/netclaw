@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Akka.Actor;
 using Microsoft.Extensions.Logging.Abstractions;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Jobs;
 using Netclaw.Actors.Skills;
 using Netclaw.Actors.Tools;
@@ -19,11 +20,13 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Tools;
 
 /// <summary>
-/// The differential proof for authorization PR 6a. Each input goes through the
-/// current gate and through <c>ToolAuthorizer</c>, each with a new context, and
-/// the two decisions must be identical: outcome, reason, advice, consent request
+/// The differential proof for authorization PR 6. Each input goes through the
+/// old gate and through the authorizer path, each with a new context, and the
+/// two decisions must be identical: outcome, reason, advice, consent request
 /// with its candidates and options, matched grants, per-candidate coverage,
-/// store lookups, and the analysis that the process may execute.
+/// store lookups, and the analysis that the process may execute. For a shell
+/// call, the old gate is <c>ShellPolicyCoordinator.EvaluateAsync</c> and the
+/// authorizer path is the production executor.
 /// </summary>
 /// <remarks>
 /// The inputs are every catalog case in four states (interactive and unattended,
@@ -149,6 +152,35 @@ public sealed class ToolAuthorizerDifferentialTests(ShellApprovalMatrixFixture f
 
         Report($"tools | {audience} interactive={interactive} mode={mode}", inputs.Count, outcomes);
         AssertNoDifferences(differences, inputs.Count);
+    }
+
+    // The one decision shape that the union refuses: a consent request that also
+    // carries advice. The policy builds that pair for a file write to the platform
+    // temporary directory. Both paths must turn it into advice, and the union must
+    // fail loudly if the pair ever reaches it unchanged.
+    [Fact]
+    public async Task Consent_request_with_advice_becomes_advice_on_both_paths()
+    {
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            "differential-advice",
+            new ShellApprovalInvocation("true", Host: NativeHost),
+            Approvals.None,
+            fixture.ActorSystem,
+            Ct,
+            policy: new ShellApprovalHarnessPolicy { ConfigureTools = config => Configure(config, "Approval") });
+        var arguments = ToolInput.Create(
+            "Path", Path.Combine(Path.GetTempPath(), "netclaw-differential-out.txt"),
+            "Content", "x");
+
+        var pair = harness.BuildNonShellConsentRequest(FileWriteTool.ToolName, arguments);
+        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, pair.Outcome);
+        Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(pair.AgentCorrection);
+        Assert.Throws<InvalidOperationException>(() => AuthorizationDecision.From(pair, analysis: null));
+
+        var comparison = await harness.CompareToolAsync(FileWriteTool.ToolName, arguments, Ct);
+        Assert.True(comparison.IsIdentical, Describe(FileWriteTool.ToolName, comparison));
+        Assert.Equal("outcome=RequiresAgentCorrection", comparison.Outcome);
+        Assert.Contains("corrections=temporary:", comparison.Current, StringComparison.Ordinal);
     }
 
     private static ShellApprovalHost NativeHost

@@ -471,9 +471,12 @@ the check against the base of each pull request.
 
 ### Authorizer Differential
 
-`ToolAuthorizerDifferentialTests` runs each input through the current gate
-(`DispatchingToolExecutor.EvaluateAuthorizationResultAsync`) and through
-`ToolAuthorizer`, each with a new context. The two decisions must be identical:
+`ToolAuthorizerDifferentialTests` runs each input through the old gate and
+through the authorizer path, each with a new context. For a shell call, the old
+gate is `ShellPolicyCoordinator.EvaluateAsync`, and the authorizer path is the
+production executor (`DispatchingToolExecutor.EvaluateAuthorizationResultAsync`),
+which asks `ToolAuthorizer` since PR 6b. For other tools, the old gate is the
+executor and the authorizer path is `ToolAuthorizer`. The two decisions must be identical:
 outcome, reason, advice, the consent request with its candidates and options,
 matched grants, the per-candidate coverage trace, store lookups, and the
 analysis that the process may execute. When the current gate asks for consent,
@@ -484,7 +487,66 @@ Approval or Auto), the hard-deny parity corpus, a shell corpus in twelve grant
 and mode states, and the other tool families (file, web, MCP, skill, reminder,
 webhook, and background job tools) for each audience and consent mode. The
 test is part of the normal `Netclaw.Actors.Tests` run. The test must pass until
-authorization PR 6d deletes the current gate.
+authorization PR 6d deletes the old gate.
+
+### Authorization Corpus Differential
+
+`scripts/authorization-corpus/run.py` runs a large corpus of tool calls through
+the production authorization path of two revisions and compares each decision.
+Use it for each slice that moves authorization code. Zero differences against
+`dev` is the proof that a refactor keeps every decision.
+
+```bash
+python3 scripts/authorization-corpus/run.py --base upstream/dev                 # HEAD against dev
+python3 scripts/authorization-corpus/run.py --base upstream/dev --quick         # 3 states, a few minutes
+python3 scripts/authorization-corpus/run.py --base upstream/dev --head-adapter authorizer
+```
+
+How it works:
+
+1. The script builds the corpus from every string literal in
+   `src/Netclaw.Actors.Tests` and `src/Netclaw.Security.Tests` at a fixed
+   revision (`--corpus-revision`, default `4244eaed5`), plus
+   `extra-commands.txt`. Each literal also runs after four compound prefixes
+   (`cd` lists, an external directory, and the temporary root). The default
+   corpus has 54,909 shell inputs.
+2. For each revision, the script makes a disposable `git worktree`, copies the
+   probe (`probe/AuthorizationCorpusProbe.cs`) and one adapter into
+   `Netclaw.Actors.Tests`, builds, and runs the probe. The `gate` adapter reads
+   `EvaluateAuthorizationResultAsync`. The `authorizer` adapter reads
+   `ToolAuthorizer`. `auto` picks the production path of the revision.
+3. The probe evaluates 16 shell states (Bash: 3 grant states, interactive or
+   unattended, Approval or Auto; PowerShell 7: 2 grant states, Approval or Auto)
+   and 24 tool states (3 audiences, interactive or unattended, 4 consent modes)
+   with the 62 tool inputs of the differential test. After a consent request,
+   it also evaluates the retry with a "Once" answer. After a tool consent
+   request, it records a chat grant and evaluates the call again.
+4. The script compares the two outputs and writes a report with the outcome
+   transitions and the first differences.
+
+Each line holds the outcome, reason, advice, consent request, matched grants,
+coverage trace, store lookups, and the analysis that the process may execute.
+The probe replaces run-specific paths with placeholders (`{P}`, `{S}`, `{X}`,
+`{R}`, `{T}`, `{REPOSITORY}`, and the GUID of the fake Windows root). The
+compare step also replaces the parent of the private temporary root, which a
+`..` path can reach. Grant timestamps compare by presence only.
+
+Caution: the probe runs with a private temporary root (`TMPDIR`, `TMP`, and
+`TEMP` point into the work directory). The corpus replaces the literal `/tmp`
+with that root (`{T}`). A decision therefore never reads the shared `/tmp`,
+which other processes change during a run.
+
+Notes:
+
+- The script tests committed revisions only. Commit the work before a run.
+- The work directory is `artifacts/authorization-corpus` (`--out` changes it).
+  The script reuses an output when the `src/` tree, adapter, probe, corpus,
+  and states are the same. A full output is about 600 MB.
+- Bash states need POSIX filesystem semantics. On Windows, the probe runs the
+  PowerShell and tool states only.
+- Exit status 0 means no difference. Exit status 1 means at least one
+  difference. A slice with an intended change (for example PR 6e) lists each
+  transition from the report.
 
 ### Authorization Metrics
 

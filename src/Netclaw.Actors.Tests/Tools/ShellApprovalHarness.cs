@@ -184,6 +184,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     private readonly Func<ToolExecutionContext> _createContext;
     private readonly ToolExecutionContext _context;
     private readonly DispatchingToolExecutor _executor;
+    private readonly ShellPolicyCoordinator _referenceShellGate;
     private readonly ToolRegistry _registry;
 
     private ShellApprovalHarness(
@@ -215,6 +216,11 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         _executor = executor;
         _registry = registry;
         ApprovalService = approvalService;
+        // The old shell gate, kept only as the differential reference until PR 6d deletes it.
+        _referenceShellGate = new ShellPolicyCoordinator(
+            registry,
+            services.GetRequiredService<ToolAccessPolicy>(),
+            approvalService);
     }
 
     public CountingApprovalService ApprovalService { get; }
@@ -606,8 +612,8 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     }
 
     /// <summary>
-    /// Evaluates the case's own call through the current gate and through
-    /// <see cref="ToolAuthorizer"/>. Each path gets a new context.
+    /// Evaluates the case's own call through the old gate and through the
+    /// authorizer path. Each path gets a new context.
     /// </summary>
     public Task<AuthorizationComparison> CompareAsync(CancellationToken ct)
         => CompareAsync(_toolCall, ct);
@@ -660,6 +666,21 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ct);
     }
 
+    /// <summary>The consent request that the policy builds for a call that is not a shell call, before any grant lookup.</summary>
+    internal ToolAuthorizationDecision BuildNonShellConsentRequest(
+        string toolName,
+        IDictionary<string, object?> arguments)
+    {
+        var policy = _services.GetRequiredService<ToolAccessPolicy>();
+        var tool = _registry.GetByName(toolName)
+            ?? throw new InvalidOperationException($"The tool '{toolName}' is not registered.");
+        return policy.BuildNonShellConsentRequest(
+            new ToolName(toolName),
+            _createContext(),
+            arguments,
+            policy.SelectApprovalMatcher(tool));
+    }
+
     /// <summary>Adds tools to the live registry with the daemon registration helpers.</summary>
     public void RegisterTools(Action<ToolRegistry, ToolAccessPolicy> register)
         => register(_registry, _services.GetRequiredService<ToolAccessPolicy>());
@@ -677,14 +698,27 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             authorizerContext.Approval.SeedOneTimeConsent(oneTimeConsent);
         }
 
+        // A shell call: the reference is the old shell gate, and the candidate
+        // is the production executor, which asks the authorizer (PR 6b). Any
+        // other call: the reference is the executor's gate, and the candidate
+        // is the authorizer, until PR 6c switches those tools too.
+        var isShell = string.Equals(call.Name, ShellTool.ToolName, StringComparison.Ordinal);
         var before = ApprovalService.CheckCount;
-        var current = await _executor.EvaluateAuthorizationResultAsync(call, currentContext, ct);
+        var current = isShell && _registry.GetByName(call.Name) is { } shellTool
+            ? await _referenceShellGate.EvaluateAsync(shellTool, call, currentContext, ct)
+            : await _executor.EvaluateAuthorizationResultAsync(call, currentContext, ct);
         var middle = ApprovalService.CheckCount;
-        var authorized = await _executor.Authorizer.AuthorizeAsync(call, authorizerContext, ct);
-        var after = ApprovalService.CheckCount;
+        var candidate = isShell
+            ? AuthorizationFingerprint.Of(
+                await _executor.EvaluateAuthorizationResultAsync(call, authorizerContext, ct),
+                ApprovalService.CheckCount - middle)
+            : AuthorizationFingerprint.Of(
+                call.Name,
+                await _executor.Authorizer.AuthorizeAsync(call, authorizerContext, ct),
+                ApprovalService.CheckCount - middle);
         return new AuthorizationComparison(
             AuthorizationFingerprint.Of(current, middle - before),
-            AuthorizationFingerprint.Of(call.Name, authorized, after - middle))
+            candidate)
         {
             Request = current.Decision.ApprovalContext
         };
