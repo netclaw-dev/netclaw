@@ -25,13 +25,9 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
 {
     private readonly ToolRegistry _registry;
     private readonly ToolAccessPolicy _policy;
-    private readonly IToolApprovalService? _approvalService;
     private readonly ILogger _logger;
 
-    /// <summary>
-    /// The linear authorizer. Every shell call uses it (authorization PR 6b).
-    /// Other tools still use the gate below until PR 6c switches them.
-    /// </summary>
+    /// <summary>The linear authorizer. Every tool call uses it.</summary>
     internal ToolAuthorizer Authorizer { get; }
 
     public DispatchingToolExecutor(ToolRegistry registry, ToolAccessPolicy policy,
@@ -48,7 +44,6 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
     {
         _registry = registry;
         _policy = policy;
-        _approvalService = approvalService;
         Authorizer = new ToolAuthorizer(
             registry,
             policy,
@@ -434,83 +429,31 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
             ToolExecutionContext context,
             CancellationToken ct)
     {
-        var tool = _registry.GetByName(toolCall.Name);
-        if (tool is null)
-        {
-            var missingToolDecision = ToolAuthorizationDecision.Deny("tool_not_found");
-            LogAuthorizationDecision(toolCall, context, missingToolDecision);
-            return ToolAuthorizationResult.Stop(missingToolDecision);
-        }
-
-        if (string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal))
-        {
-            // Every shell caller comes here: the pre-check, the foreground and
-            // streaming execution, the background launch, and the re-check at
-            // process start. Each one asks the linear authorizer.
-            var shellAuthorization = ToShellResult(await Authorizer.AuthorizeAsync(toolCall, context, ct));
-            LogAuthorizationDecision(toolCall, context, shellAuthorization.Decision);
-            return shellAuthorization;
-        }
-
-        var accessDecision = _policy.AuthorizeInvocation(tool, context, toolCall.Arguments);
-        IReadOnlyList<ToolApprovalMatch> approvalMatches = [];
-
-        if (accessDecision.NeedsApproval && _approvalService is not null)
-        {
-            var approvalContext = accessDecision.ApprovalContext
-                ?? throw new InvalidOperationException("Approval decision missing approval context.");
-            var grantCheck = await StoredGrantCheck.RunAsync(
-                _approvalService,
-                new ToolName(tool.Name),
-                approvalContext,
-                context,
-                ct);
-            approvalMatches = grantCheck.Matches;
-            if (grantCheck.StoreUnavailableForMiss)
-            {
-                accessDecision = IsOneTimeApprovalSatisfied(context, toolCall, approvalContext)
-                    ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
-                    : ToolAuthorizationDecision.Deny("approval_store_unavailable");
-            }
-            else if (grantCheck.AllCovered)
-            {
-                accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval);
-            }
-        }
-
-        if (accessDecision.NeedsApproval
-            && IsOneTimeApprovalSatisfied(context, toolCall, accessDecision.ApprovalContext))
-        {
-            accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
-        }
-
-        if (accessDecision is
-            {
-                Outcome: ToolAuthorizationOutcome.RequiresApproval,
-                AgentCorrection: ToolCorrection.ManagedTemporaryDirectorySuggested temporaryCorrection
-            })
-        {
-            accessDecision = ToolAuthorizationDecision.RequireAgentCorrection(
-                temporaryCorrection,
-                approvalMatches);
-        }
-
-        var authorizationDecision = accessDecision.WithApprovalMatches(approvalMatches);
-        LogAuthorizationDecision(toolCall, context, authorizationDecision);
-        return ToolAuthorizationResult.CreateDirect(authorizationDecision);
+        // Every caller comes here: the first attempt, the retry after consent,
+        // the background launch, and the shell re-check at process start. Each
+        // one asks the linear authorizer.
+        var isShell = string.Equals(toolCall.Name, ShellTool.ToolName, StringComparison.Ordinal);
+        var authorization = ToResult(isShell, await Authorizer.AuthorizeAsync(toolCall, context, ct));
+        LogAuthorizationDecision(toolCall, context, authorization.Decision);
+        return authorization;
     }
 
     /// <summary>
     /// Converts the authorizer's decision into the result that the execution
-    /// adapters read. An allowed decision with an analysis starts the process.
-    /// An allowed decision without one validates the arguments only.
+    /// adapters read. An allowed shell decision with an analysis starts the
+    /// process. An allowed shell decision without one validates the arguments
+    /// only. An allowed decision for another tool runs that tool.
     /// </summary>
-    internal static ToolAuthorizationResult ToShellResult(AuthorizationDecision decision)
+    internal static ToolAuthorizationResult ToResult(bool isShell, AuthorizationDecision decision)
         => decision switch
         {
-            AuthorizationDecision.Allowed allowed => ToolAuthorizationResult.CreateShell(
+            AuthorizationDecision.Allowed allowed when isShell => ToolAuthorizationResult.CreateShell(
                 ToolAuthorizationDecision.Allow(allowed.Reason, allowed.Matches).WithShellPolicyTrace(allowed.Trace),
                 allowed.Analysis),
+            AuthorizationDecision.Allowed { Analysis: null } allowed => ToolAuthorizationResult.CreateDirect(
+                ToolAuthorizationDecision.Allow(allowed.Reason, allowed.Matches).WithShellPolicyTrace(allowed.Trace)),
+            AuthorizationDecision.Allowed => throw new InvalidOperationException(
+                "Only a shell call can carry a shell analysis."),
             AuthorizationDecision.NeedsConsent consent => ToolAuthorizationResult.Stop(
                 ToolAuthorizationDecision.RequiresApproval(consent.Request, consent.Matches)
                     .WithShellPolicyTrace(consent.Trace)),
@@ -695,25 +638,5 @@ public sealed class DispatchingToolExecutor : IToolExecutor, IApprovalShellProvi
                 context.SessionId,
                 toolCall.CallId);
         }
-    }
-
-    private static bool IsOneTimeApprovalSatisfied(
-        ToolExecutionContext context,
-        FunctionCallContent toolCall,
-        ToolApprovalContext? approvalContext)
-    {
-        if (approvalContext is null)
-            return false;
-
-        // Patterns bind the authored approval units. Candidate keys bind the
-        // filtered verb and effective-directory set that the user approved.
-        // Exact equality forces a new prompt when a formerly safe candidate
-        // becomes unsafe before the retry, for example after a symlink swap.
-        // An unchanged messy command has an empty key set on both attempts,
-        // while a clean-to-messy transition cannot match its original keys.
-        return OneTimeApprovalKeys.Matches(
-            context.Approval.OneTimeConsent,
-            toolCall.Name,
-            approvalContext);
     }
 }

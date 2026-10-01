@@ -535,6 +535,7 @@ internal sealed class SessionToolExecutionPipeline
             ? new ParentSessionApprovalBridge(
                 batch.ApprovalRequests.Channel,
                 batch.ApprovalRequests.EmitRequest,
+                batch.ApprovalRequests.Timeout,
                 batch.SessionId,
                 tc.CallId,
                 batch.TurnContext.RequesterSenderId,
@@ -676,7 +677,7 @@ internal sealed class SessionToolExecutionPipeline
         }
         catch (ToolApprovalRequiredException approvalEx)
         {
-            if (!CanRequestInteractiveApproval(batch.TurnContext))
+            if (approvalBridge is null)
             {
                 sw.Stop();
                 resultText = $"Tool requires approval but no interactive approval requester is available: {approvalEx.ApprovalContext.ToolName}";
@@ -692,44 +693,12 @@ internal sealed class SessionToolExecutionPipeline
                     Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
             }
 
-            // Mid-turn approval pause: emit request to channel, block on TCS
+            // Mid-turn approval pause: the session's consent prompt emits the
+            // request and waits for the answer.
             var ctx = approvalEx.ApprovalContext;
-            var waitTask = batch.ApprovalRequests.Channel.WaitForApprovalAsync(
-                new ToolCallId(tc.CallId),
-                batch.ApprovalRequests.Timeout.Value,
+            var step = await approvalBridge.RequestSessionConsentAsync(
+                new ParentApprovalRequest(authorizationAttemptId, new ToolCallId(tc.CallId), tc.Name, ctx),
                 batch.CancellationToken);
-
-            batch.ApprovalRequests.EmitRequest(new ToolInteractionRequestDispatch(new ToolInteractionRequest
-            {
-                SessionId = batch.SessionId,
-                Kind = "approval",
-                CallId = new ToolCallId(tc.CallId),
-                ToolName = new ToolName(ctx.ToolName),
-                DisplayText = ctx.DisplayText,
-                RequesterSenderId = batch.TurnContext.RequesterSenderId,
-                RequesterPrincipal = batch.TurnContext.RequesterPrincipal,
-                HasAdoptedContext = batch.TurnContext.HasAdoptedContext,
-                HasThirdPartyAdoptedContext = batch.TurnContext.HasThirdPartyAdoptedContext,
-                AdoptedSpeakerIds = batch.TurnContext.AdoptedSpeakerIds,
-                PersistedAdoptedContext = batch.TurnContext.HasAdoptedContext,
-                Patterns = ctx.Patterns,
-                CandidateVerbs = ctx.CandidateVerbs,
-                Candidates = ctx.Candidates ?? [],
-                Cwd = ctx.Cwd,
-                RepositoryCommonDirectory = ctx.RepositoryCommonDirectory,
-                IsMessy = ctx.IsMessy,
-                AuthorizationAttemptId = authorizationAttemptId.Value,
-                Options = ctx.Options
-                    .Select(o => new ToolInteractionOption(o.Key, o.Label))
-                    .ToList()
-            }, PersistApprovalState: true)
-            {
-                ManagedTemporaryDirectory = ctx.IsManagedTemporaryRetry
-                    ? ctx.ManagedTemporaryDirectory
-                    : null
-            });
-
-            var answer = await waitTask;
 
             _logger.Info(
                 "Tool authorization attempt retry decision authorizationAttemptId={AuthorizationAttemptId} " +
@@ -737,26 +706,15 @@ internal sealed class SessionToolExecutionPipeline
                 authorizationAttemptId.Value,
                 batch.SessionId.Value,
                 tc.CallId,
-                ConsentAnswerCodec.ToJournalText(answer));
+                ConsentAnswerCodec.ToJournalText(step.Answer));
 
             sw.Stop();
 
-            if (answer is not ConsentAnswer.Refused refusal)
+            if (step.RetryConsent is { } retryConsent)
             {
-                // Retry execution now that approval is granted. Seed the one-time
-                // bypass for the just-approved call regardless of scope
-                // (https://github.com/netclaw-dev/netclaw/issues/1802). Broader
-                // scopes (session/always) DO get a durable grant recorded by the
-                // session actor, but that grant can legitimately not cover every
-                // candidate: a piped command's standalone verbs (base64, head) have
-                // no path argument and so are never persisted directory-scoped
-                // (by design). Without the transient bypass, the immediate retry
-                // re-hits the gate and fails a call the user just approved. This
-                // matches the sub-agent loop (SubAgentActor), which seeds for every
-                // approved scope. The bypass is per-call and bound to the exact
-                // prompted candidate set. It is cleared after the attempt, so it
-                // cannot leak to another call.
-                context.Approval.SeedOneTimeConsent(OneTimeApprovalKeys.CreateConsent(tc.Name, ctx));
+                // Retry once with the exact consent. ExecuteToolAttemptAsync
+                // clears it after the attempt, so it cannot reach another call.
+                context.Approval.SeedOneTimeConsent(retryConsent);
 
                 sw = Stopwatch.StartNew();
                 if (meta is { Background: true }
@@ -788,6 +746,7 @@ internal sealed class SessionToolExecutionPipeline
             }
             else
             {
+                var refusal = (ConsentAnswer.Refused)step.Answer;
                 var reason = refusal.Kind == RefusalKind.TimedOut
                     ? "Tool access denied: approval_timed_out"
                     : $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)";

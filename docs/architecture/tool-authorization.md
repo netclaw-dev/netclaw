@@ -154,21 +154,22 @@ The arrows show the order in the current shell path. A non-shell call skips
   runs each call, catches a consent request, and asks the operator.
 - [`DispatchingToolExecutor`](../../src/Netclaw.Actors/Tools/DispatchingToolExecutor.cs)
   runs the gate inside `ExecuteStreamAsync` through `GetAuthorizedToolAsync`
-  and `EvaluateAuthorizationResultAsync`. It selects the shell gate or the
-  non-shell gate. The non-shell grant check is inline in this class.
+  and `EvaluateAuthorizationResultAsync`, which asks `ToolAuthorizer` for every
+  call (consolidation PR 6b for shell calls, PR 6c for other tools).
   `GetAuthorizedToolAsync` turns a decision into an exception, which the
   pipeline catches.
 - [`ShellPolicyCoordinator`](../../src/Netclaw.Actors/Tools/ShellPolicyCoordinator.cs)
-  orders the shell checks, the advice, and the coverage.
+  supplies the shell advice and the coverage. Its old ordered gate
+  (`EvaluateAsync`) is now only the differential reference.
 
 [`ToolAuthorizer`](../../src/Netclaw.Actors/Authorization/ToolAuthorizer.cs)
-(consolidation PR 6a) states the same order as one list of rules: one line per
+(consolidation PR 6a) states the order as one list of rules: one line per
 rule, and the first rule that decides wins. It returns a closed
 [`AuthorizationDecision`](../../src/Netclaw.Actors/Authorization/AuthorizationDecision.cs)
 (Allowed, NeedsConsent, CorrectionRequired, or Denied) and throws no exception
-for an outcome. Each rule calls the component that owns its question. No
-production path calls `ToolAuthorizer` yet. A differential test proves that it
-gives the same decision as the three classes above. Its shell rules, in order:
+for an outcome. Each rule calls the component that owns its question. A
+differential test proves that it gives the same decision as the old gate. Its
+shell rules, in order:
 
 1. Admission: audience, then shell capability.
 2. Prohibition: hard deny, then protected shell text.
@@ -185,7 +186,7 @@ gives the same decision as the three classes above. Its shell rules, in order:
 9. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
    policy), then the uncovered candidates.
 
-**Planned:** PR 6b and 6c switch the callers, and PR 6d deletes the old gate.
+**Planned:** PR 6d deletes the old gate.
 By owner decision, PR 6e moves the covering grant ahead of the trusted-root
 check for unattended Approval mode.
 
@@ -324,8 +325,6 @@ Leaks today:
 
 Leaks today:
 
-- The subagent has its own consent loop and mirror types (`ParentApprovalDecision`,
-  `ParentApprovalCandidate`, `ParentApprovalOption`).
 - Two layers check that the person who answers is the requester: the channel
   (`PendingApprovalLookup`) and the session actor.
 
@@ -425,9 +424,11 @@ Facts behind the diagram (current code):
 - An unanswered request does not keep the session in memory. An answer
   rehydrates the session and re-drives the parked batch
   (`HandleToolInteractionResponseWhenIdle`, `RedriveToolBatchForApproval`).
-- No timer denies an unanswered request. The session and the parent bridge
-  wait with an infinite timeout. The request waits until the operator answers,
-  the run is cancelled, or a new user message abandons the parked batch.
+- No timer denies an unanswered request. The session and its subagents ask
+  through one prompt, `ParentSessionApprovalBridge`, which waits with the
+  session's approval timeout. The daemon sets that timeout to infinite. The
+  request waits until the operator answers, the run is cancelled, or a new user
+  message abandons the parked batch.
 - A subagent request goes to the parent through `ParentSessionApprovalBridge`.
   It is live-only. After a restart, Netclaw rejects the old prompt as expired.
   A subagent without a parent bridge cannot ask. Its whole run fails with

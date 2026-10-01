@@ -472,11 +472,12 @@ the check against the base of each pull request.
 ### Authorizer Differential
 
 `ToolAuthorizerDifferentialTests` runs each input through the old gate and
-through the authorizer path, each with a new context. For a shell call, the old
-gate is `ShellPolicyCoordinator.EvaluateAsync`, and the authorizer path is the
-production executor (`DispatchingToolExecutor.EvaluateAuthorizationResultAsync`),
-which asks `ToolAuthorizer` since PR 6b. For other tools, the old gate is the
-executor and the authorizer path is `ToolAuthorizer`. The two decisions must be identical:
+through the production executor
+(`DispatchingToolExecutor.EvaluateAuthorizationResultAsync`), each with a new
+context. The executor asks `ToolAuthorizer` for every call since PR 6c. The old
+gate is `ShellPolicyCoordinator.EvaluateAsync` for a shell call and the old
+executor gate, kept in `ShellApprovalHarness`, for any other call. The two
+decisions must be identical:
 outcome, reason, advice, the consent request with its candidates and options,
 matched grants, the per-candidate coverage trace, store lookups, and the
 analysis that the process may execute. When the current gate asks for consent,

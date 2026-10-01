@@ -10,6 +10,7 @@ using System.Globalization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using Netclaw.Actors.Authorization;
+using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
@@ -613,7 +614,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
     /// <summary>
     /// Evaluates the case's own call through the old gate and through the
-    /// authorizer path. Each path gets a new context.
+    /// production executor. Each path gets a new context.
     /// </summary>
     public Task<AuthorizationComparison> CompareAsync(CancellationToken ct)
         => CompareAsync(_toolCall, ct);
@@ -698,30 +699,77 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             authorizerContext.Approval.SeedOneTimeConsent(oneTimeConsent);
         }
 
-        // A shell call: the reference is the old shell gate, and the candidate
-        // is the production executor, which asks the authorizer (PR 6b). Any
-        // other call: the reference is the executor's gate, and the candidate
-        // is the authorizer, until PR 6c switches those tools too.
-        var isShell = string.Equals(call.Name, ShellTool.ToolName, StringComparison.Ordinal);
+        // The reference is the old gate: ShellPolicyCoordinator for a shell call
+        // and the old executor gate for any other call. The candidate is the
+        // production executor, which asks ToolAuthorizer for every call.
         var before = ApprovalService.CheckCount;
-        var current = isShell && _registry.GetByName(call.Name) is { } shellTool
+        var current = string.Equals(call.Name, ShellTool.ToolName, StringComparison.Ordinal)
+                      && _registry.GetByName(call.Name) is { } shellTool
             ? await _referenceShellGate.EvaluateAsync(shellTool, call, currentContext, ct)
-            : await _executor.EvaluateAuthorizationResultAsync(call, currentContext, ct);
+            : await EvaluateReferenceOtherGateAsync(call, currentContext, ct);
         var middle = ApprovalService.CheckCount;
-        var candidate = isShell
-            ? AuthorizationFingerprint.Of(
-                await _executor.EvaluateAuthorizationResultAsync(call, authorizerContext, ct),
-                ApprovalService.CheckCount - middle)
-            : AuthorizationFingerprint.Of(
-                call.Name,
-                await _executor.Authorizer.AuthorizeAsync(call, authorizerContext, ct),
-                ApprovalService.CheckCount - middle);
+        var candidate = await _executor.EvaluateAuthorizationResultAsync(call, authorizerContext, ct);
         return new AuthorizationComparison(
             AuthorizationFingerprint.Of(current, middle - before),
-            candidate)
+            AuthorizationFingerprint.Of(candidate, ApprovalService.CheckCount - middle))
         {
             Request = current.Decision.ApprovalContext
         };
+    }
+
+    // The executor gate for a call that is not a shell call, as it was before
+    // authorization PR 6c. It stays here only as the differential reference.
+    // PR 6d deletes it with the differential.
+    private async Task<ToolAuthorizationResult> EvaluateReferenceOtherGateAsync(
+        FunctionCallContent toolCall,
+        ToolExecutionContext context,
+        CancellationToken ct)
+    {
+        if (_registry.GetByName(toolCall.Name) is not { } tool)
+            return ToolAuthorizationResult.Stop(ToolAuthorizationDecision.Deny("tool_not_found"));
+
+        var accessDecision = _services.GetRequiredService<ToolAccessPolicy>()
+            .AuthorizeInvocation(tool, context, toolCall.Arguments);
+        IReadOnlyList<ToolApprovalMatch> approvalMatches = [];
+        if (accessDecision.NeedsApproval)
+        {
+            var approvalContext = accessDecision.ApprovalContext
+                ?? throw new InvalidOperationException("Approval decision missing approval context.");
+            var grantCheck = await StoredGrantCheck.RunAsync(
+                ApprovalService,
+                new ToolName(tool.Name),
+                approvalContext,
+                context,
+                ct);
+            approvalMatches = grantCheck.Matches;
+            if (grantCheck.StoreUnavailableForMiss)
+            {
+                accessDecision = OneTimeApprovalKeys.Matches(context.Approval.OneTimeConsent, toolCall.Name, approvalContext)
+                    ? ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval)
+                    : ToolAuthorizationDecision.Deny("approval_store_unavailable");
+            }
+            else if (grantCheck.AllCovered)
+            {
+                accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval);
+            }
+        }
+
+        if (accessDecision is { NeedsApproval: true, ApprovalContext: { } request }
+            && OneTimeApprovalKeys.Matches(context.Approval.OneTimeConsent, toolCall.Name, request))
+        {
+            accessDecision = ToolAuthorizationDecision.Allow(ToolAllowReason.OneTimeApproval);
+        }
+
+        if (accessDecision is
+            {
+                Outcome: ToolAuthorizationOutcome.RequiresApproval,
+                AgentCorrection: ToolCorrection.ManagedTemporaryDirectorySuggested temporaryCorrection
+            })
+        {
+            accessDecision = ToolAuthorizationDecision.RequireAgentCorrection(temporaryCorrection, approvalMatches);
+        }
+
+        return ToolAuthorizationResult.CreateDirect(accessDecision.WithApprovalMatches(approvalMatches));
     }
 
     private static string InvocationSessionIdOf(ToolExecutionContext context)
@@ -1094,65 +1142,6 @@ internal static class AuthorizationFingerprint
             decision.ShellPolicyTrace,
             approvalChecks,
             execution);
-    }
-
-    public static string Of(string toolName, AuthorizationDecision decision, int approvalChecks)
-    {
-        var isShell = string.Equals(toolName, ShellTool.ToolName, StringComparison.Ordinal);
-        return decision switch
-        {
-            AuthorizationDecision.Allowed allowed => Render(
-                nameof(ToolAuthorizationOutcome.Allowed),
-                allowed.Reason.ToString(),
-                null,
-                null,
-                null,
-                null,
-                allowed.Matches,
-                allowed.Trace,
-                approvalChecks,
-                (isShell, allowed.Analysis) switch
-                {
-                    (true, { } analysis) => $"shell-execution:{Describe(analysis)}",
-                    (true, null) => "shell-validation",
-                    (false, null) => "direct",
-                    (false, not null) => throw new InvalidOperationException("Only a shell call can carry an analysis.")
-                }),
-            AuthorizationDecision.NeedsConsent consent => Render(
-                nameof(ToolAuthorizationOutcome.RequiresApproval),
-                null,
-                null,
-                null,
-                null,
-                consent.Request,
-                consent.Matches,
-                consent.Trace,
-                approvalChecks,
-                "stopped"),
-            AuthorizationDecision.CorrectionRequired correction => Render(
-                nameof(ToolAuthorizationOutcome.RequiresAgentCorrection),
-                null,
-                null,
-                null,
-                correction.Corrections.Items,
-                null,
-                correction.Matches,
-                correction.Trace,
-                approvalChecks,
-                "stopped"),
-            AuthorizationDecision.Denied denied => Render(
-                nameof(ToolAuthorizationOutcome.Denied),
-                null,
-                denied.Reason,
-                denied.Message,
-                null,
-                null,
-                denied.Matches,
-                denied.Trace,
-                approvalChecks,
-                "stopped"),
-            _ => throw new ArgumentOutOfRangeException(nameof(decision), decision, "Unknown authorization decision.")
-        };
     }
 
     private static string Render(

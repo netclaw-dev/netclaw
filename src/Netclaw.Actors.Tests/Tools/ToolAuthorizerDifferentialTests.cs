@@ -24,9 +24,10 @@ namespace Netclaw.Actors.Tests.Tools;
 /// old gate and through the authorizer path, each with a new context, and the
 /// two decisions must be identical: outcome, reason, advice, consent request
 /// with its candidates and options, matched grants, per-candidate coverage,
-/// store lookups, and the analysis that the process may execute. For a shell
-/// call, the old gate is <c>ShellPolicyCoordinator.EvaluateAsync</c> and the
-/// authorizer path is the production executor.
+/// store lookups, and the analysis that the process may execute. The old gate
+/// is <c>ShellPolicyCoordinator.EvaluateAsync</c> for a shell call and the old
+/// executor gate (kept in the harness) for any other call. The authorizer path
+/// is the production executor.
 /// </summary>
 /// <remarks>
 /// The inputs are every catalog case in four states (interactive and unattended,

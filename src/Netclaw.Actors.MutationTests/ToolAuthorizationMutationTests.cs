@@ -247,7 +247,7 @@ public sealed class ToolAuthorizationMutationTests : IDisposable
 
     private sealed class UnexpectedApprovalBridge : IParentConsentBridge
     {
-        public Task<ConsentAnswer> RequestConsentAsync(ParentApprovalRequest request, CancellationToken ct) =>
+        public Task<ConsentStep> RequestConsentAsync(ParentApprovalRequest request, CancellationToken ct) =>
             throw new InvalidOperationException("The dispatcher must not request user approval through the bridge.");
     }
 }

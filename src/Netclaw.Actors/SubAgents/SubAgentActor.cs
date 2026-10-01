@@ -1549,19 +1549,20 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
 
                     // Signal the actor that an approval wait is starting BEFORE
                     // the await so the inactivity watchdog cannot cancel the
-                    // wait. The bridge call uses externalCt — only explicit
-                    // external cancellation (parent passivation, daemon
-                    // restart, user cancel) aborts the wait; the internal
-                    // watchdog cannot.
+                    // wait. The wait ends with an answer, the session's approval
+                    // timeout, or explicit external cancellation (parent
+                    // passivation, daemon restart, user cancel). The internal
+                    // watchdog cannot cancel it.
                     self.Tell(SubAgentApprovalWaitStarted.Instance);
 
-                    ConsentAnswer answer;
+                    ConsentStep step;
                     try
                     {
-                        answer = await consentBridge.RequestConsentAsync(
+                        step = await consentBridge.RequestConsentAsync(
                             new ParentApprovalRequest(
                                 toolContext.Approval.AuthorizationAttemptId,
                                 new ToolCallId(tc.CallId),
+                                tc.Name,
                                 ctx),
                             externalCt);
                     }
@@ -1570,16 +1571,14 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         self.Tell(SubAgentApprovalWaitCompleted.Instance);
                     }
 
-                    if (answer is not ConsentAnswer.Refused refusal)
+                    if (step.RetryConsent is { } retryConsent)
                     {
-                        // The immediate retry needs a transient grant even for session/always
-                        // approvals because the sub-agent's scope ID differs from the parent
-                        // session's scope. Keep that retry-local so approve-once cannot bleed
-                        // across parallel tool calls or later iterations.
+                        // The retry gets its own context, so the one-time consent
+                        // cannot reach a parallel tool call or a later iteration.
                         var retryContext = CreatePerToolExecutionContext(executionContext, meta);
                         retryContext.Approval.RestoreAuthorizationAttemptId(
                             toolContext.Approval.AuthorizationAttemptId);
-                        retryContext.Approval.SeedOneTimeConsent(OneTimeApprovalKeys.CreateConsent(tc.Name, ctx));
+                        retryContext.Approval.SeedOneTimeConsent(retryConsent);
                         var result = await executor.ExecuteAsync(tc, retryContext, ct);
                         return BuildToolResult(
                             cleanedTc,
@@ -1591,6 +1590,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                                 : null);
                     }
 
+                    var refusal = (ConsentAnswer.Refused)step.Answer;
                     var reason = refusal.Kind == RefusalKind.TimedOut
                         ? "Tool access denied: approval_timed_out"
                         : "Tool access denied: approval_denied_by_user";
