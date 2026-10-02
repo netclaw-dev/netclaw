@@ -37,16 +37,19 @@ public sealed record ApprovalCandidate(
     }
 
     /// <summary>
-    /// The immutable parser-owned canonical verb tokens. A shell grant covers
-    /// the candidate only when its tokens equal these tokens.
+    /// The immutable canonical tokens that a shell grant must equal. For an
+    /// ordinary candidate these are the parser verb tokens, up to the first
+    /// word with a digit. For a candidate with <see cref="HasUnprovenVerbChain"/>
+    /// these are every static word of the command, options included. Null
+    /// means that no reusable grant can apply.
     /// </summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
 
     /// <summary>
-    /// True when the parser cannot prove that <see cref="VerbTokens"/> is the
-    /// whole verb chain, for example <c>gh -R o/r pr view</c>. No shell grant
-    /// covers such a candidate, and no reusable grant is offered or saved for it.
-    /// Only one-time consent applies.
+    /// True when the parser cannot prove the verb chain, for example
+    /// <c>gh -R o/r pr view</c>. Then <see cref="VerbTokens"/> holds the exact
+    /// command words, and only an exact-command grant for the identical words
+    /// covers the candidate. A bare-program grant never covers it.
     /// </summary>
     public bool HasUnprovenVerbChain { get; init; }
 
@@ -340,30 +343,57 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return null;
         }
 
+        // PowerShell cmdlets bind named parameters (Start-Sleep -Seconds 300),
+        // so the unproven-chain rule applies to the Bash grammar only.
+        var hasUnprovenVerbChain = shell == ApprovalShell.Bash && HasOpenVerbChain(occurrence);
+        var verbTokens = hasUnprovenVerbChain
+            ? GetExactCommandTokens(clause)
+            : CanonicalVerbTokens(clause.Verb.Tokens, clause.Verb.CanonicalVerb);
         return directories
             .Select(directory => new ApprovalCandidate(verb, directory)
             {
                 AssignmentDigest = assignmentDigest,
-                VerbTokens = GetCanonicalVerbTokens(clause),
-                // PowerShell cmdlets bind named parameters (Start-Sleep -Seconds 300),
-                // so the rule applies to the Bash grammar only.
-                HasUnprovenVerbChain = shell == ApprovalShell.Bash && HasOpenVerbChain(occurrence),
+                VerbTokens = verbTokens,
+                HasUnprovenVerbChain = hasUnprovenVerbChain,
                 Shell = shell,
                 SourceOccurrence = occurrence,
             })
             .ToArray();
     }
 
-    private static IReadOnlyList<string>? GetCanonicalVerbTokens(
-        ShellSyntaxTree.Clause clause)
+    /// <summary>
+    /// Returns the verb chain that a grant must equal: the parser verb tokens up
+    /// to the first token after the program that contains a digit. Returns null
+    /// when the parser gives no verb token.
+    /// </summary>
+    /// <remarks>
+    /// A subcommand almost never contains a digit. A commit hash, a tag, a
+    /// version, or a pull request number does. The parser's greedy verb walk
+    /// folds such words into the chain (<c>git show b42bf5a</c>,
+    /// <c>git push origin v0.4.0</c>), so the chain ends there and the word and
+    /// the rest are arguments. One grant then covers every value. The cost: a
+    /// subcommand or a branch name with a digit (<c>release-2.0</c>) is an
+    /// argument, so a grant cannot control it per branch. The program token
+    /// itself (<c>python3</c>) always stays. The trust-verb CLI uses the same
+    /// rule, so a saved phrase and a call always agree.
+    /// </remarks>
+    internal static IReadOnlyList<string>? CanonicalVerbTokens(
+        IReadOnlyList<string> parserTokens,
+        string? canonicalVerb)
     {
-        var tokens = clause.Verb.Tokens.ToArray();
-        if (tokens.Length == 0)
+        if (parserTokens.Count == 0)
         {
             return null;
         }
 
-        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
+        // Focused mutation gate: run-exact-verb-chain-mutations.sh (digit rule).
+        var count = parserTokens.Count;
+        var length = 1;
+        while (length < count && !parserTokens[length].Any(char.IsAsciiDigit))
+            length++;
+
+        var tokens = parserTokens.Take(length).ToArray();
+        if (canonicalVerb is { Length: > 0 })
         {
             tokens[0] = canonicalVerb;
         }
@@ -372,11 +402,54 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
+    /// Returns every static word of the command, options included, for an
+    /// unproven verb chain (<c>df -h .</c> or <c>gh -R o/r pr view 123</c>).
+    /// A grant for these words covers only the identical command. Returns null
+    /// when a word is not static or cannot be stored, so only one-time consent
+    /// applies.
+    /// </summary>
+    /// <remarks>
+    /// The words always include an option, and a parser verb chain never does.
+    /// So an exact-command grant never covers an ordinary verb chain, and an
+    /// older binary that reads it as a token-prefix entry never matches it.
+    /// </remarks>
+    private static IReadOnlyList<string>? GetExactCommandTokens(ShellSyntaxTree.Clause clause)
+    {
+        var words = new List<string>(clause.Elements.Count);
+        foreach (var element in clause.Elements)
+        {
+            if (element.Role == ShellSyntaxTree.ClauseElementRole.Redirect)
+                continue;
+
+            if (element.Kind is not (ShellSyntaxTree.ArgKind.Literal
+                    or ShellSyntaxTree.ArgKind.Glob
+                    or ShellSyntaxTree.ArgKind.Tilde)
+                || element.Value.Length == 0
+                || element.Value.Any(static character => char.IsWhiteSpace(character) || char.IsControl(character)))
+            {
+                return null;
+            }
+
+            words.Add(element.Value);
+        }
+
+        if (words.Count == 0 || words.All(static word => word.Length == 0 || word[0] != '-'))
+            return null;
+
+        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
+            words[0] = canonicalVerb;
+
+        return Array.AsReadOnly(words.ToArray());
+    }
+
+    /// <summary>
     /// True when the parser verb chain stops at the program name and a plain
     /// word follows an option, for example <c>gh -R o/r pr view 123</c> or
     /// <c>git --no-pager log</c>. The parser stops its verb walk at the first
     /// option, so the later word can be a subcommand. Only the executable's
     /// private grammar can tell, and approval code must not parse that grammar.
+    /// Such a candidate gets an exact-command grant instead: it covers only the
+    /// identical words (<see cref="GetExactCommandTokens"/>).
     /// </summary>
     /// <remarks>
     /// SECURITY: without this rule, an exact grant for the bare program

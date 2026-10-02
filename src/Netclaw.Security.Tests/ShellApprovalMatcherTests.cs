@@ -1628,8 +1628,32 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             new ToolName("shell_execute"),
             Args(command, "/home/user/project")));
 
+        // The candidate carries every word, so a grant covers only the identical command.
         Assert.True(candidate.HasUnprovenVerbChain);
-        Assert.Equal([command.Split(' ')[0]], candidate.VerbTokens);
+        Assert.Equal(command.Split(' '), candidate.VerbTokens);
+    }
+
+    // Rollback safety: an exact-command grant is stored as a token entry that
+    // always holds an option word. An ordinary verb chain never holds one, so
+    // an older binary (prefix matching on verb chains) can never match it.
+    [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("gh -R o/r pr view 123")]
+    [InlineData("du -sh *")]
+    [InlineData("git -C /home/user/project --no-pager log -1")]
+    [InlineData("gh pr view 123 -R o/r")]
+    [InlineData("git push origin v0.4.0 --force")]
+    [InlineData("ls -la")]
+    public void Only_an_exact_command_candidate_holds_an_option_word(string command)
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/home/user/project"));
+
+        Assert.NotEmpty(candidates);
+        Assert.All(candidates, candidate => Assert.Equal(
+            candidate.HasUnprovenVerbChain,
+            candidate.VerbTokens!.Any(static token => token.StartsWith('-'))));
     }
 
     // Rule 2 uses the shell kind: a PowerShell cmdlet binds named parameters.
@@ -1670,6 +1694,10 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     [InlineData("git -C /home/user/project status", new[] { "git", "status" })]
     [InlineData("gh pr view 123 -R o/r", new[] { "gh", "pr", "view" })]
     [InlineData("git push origin 1.5.1 --force", new[] { "git", "push", "origin" })]
+    [InlineData("git push origin v0.4.0", new[] { "git", "push", "origin" })]
+    [InlineData("git show b42bf5a", new[] { "git", "show" })]
+    [InlineData("git cherry-pick c5a4090", new[] { "git", "cherry-pick" })]
+    [InlineData("python3 -m pytest", new[] { "python3" })]
     public void ExtractCandidates_proves_the_verb_chain_without_a_word_after_an_option(
         string command,
         string[] expected)

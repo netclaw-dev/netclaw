@@ -223,13 +223,6 @@ public static class ApprovalPatternMatching
 
     private static bool PhraseMatches(ApprovalCandidate candidate, ApprovalEntry entry)
     {
-        // SECURITY: the parser cannot prove this candidate's verb chain
-        // (gh -R o/r auth logout), so no grant covers it, not even "gh".
-        if (candidate.HasUnprovenVerbChain)
-        {
-            return false;
-        }
-
         if (candidate.AssignmentDigest != entry.AssignmentDigest)
         {
             return false;
@@ -237,7 +230,8 @@ public static class ApprovalPatternMatching
 
         if (entry.Match is null)
         {
-            return ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
+            return !candidate.HasUnprovenVerbChain
+                   && ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
         }
 
         if (entry.Shell is not { } entryShell
@@ -249,19 +243,37 @@ public static class ApprovalPatternMatching
             return false;
         }
 
-        IReadOnlyList<string>? grantTokens = entry.Match switch
+        // SECURITY: the parser cannot prove this candidate's verb chain
+        // (gh -R o/r auth logout). Only an exact-command grant for the identical
+        // words covers it. A bare-program grant ("gh") never does.
+        if (candidate.HasUnprovenVerbChain)
         {
-            // The legacy phrase is the space-joined verb chain. It also must
-            // equal the whole chain, so "git push origin" does not cover
-            // "git push origin v1.5.1".
-            ApprovalMatchKind.LegacyExact => entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries),
-            ApprovalMatchKind.TokenPrefix => entry.VerbTokens,
-            _ => null,
+            return entry.Match == ApprovalMatchKind.TokenPrefix
+                   && entry.VerbTokens is { } exactTokens
+                   && VerbChainEquals(exactTokens, candidate.VerbTokens, entryShell);
+        }
+
+        return entry.Match switch
+        {
+            // The legacy phrase is the space-joined verb chain, and it must equal
+            // the whole chain: "git push origin" does not cover "git push origin main".
+            // It also must equal the display verb, as before, so the digit rule
+            // of the chain never widens a legacy phrase.
+            ApprovalMatchKind.LegacyExact =>
+                ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb, entryShell)
+                && MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidate.VerbTokens, entryShell),
+            ApprovalMatchKind.TokenPrefix when entry.VerbTokens is { } grantTokens =>
+                MatchesChain(grantTokens, candidate.VerbTokens, entryShell),
+            _ => false,
         };
-        return grantTokens is not null
-               && (VerbChainEquals(grantTokens, candidate.VerbTokens, entryShell)
-                   || IsSingleTokenProgramGrant(grantTokens, candidate.VerbTokens, entryShell));
     }
+
+    private static bool MatchesChain(
+        IReadOnlyList<string> grantTokens,
+        IReadOnlyList<string> candidateTokens,
+        ApprovalShell shell)
+        => VerbChainEquals(grantTokens, candidateTokens, shell)
+           || IsSingleTokenProgramGrant(grantTokens, candidateTokens, shell);
 
     /// <summary>
     /// True when a bare-program grant names a program that policy data gives a

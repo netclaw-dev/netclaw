@@ -46,6 +46,17 @@ public sealed class ExactVerbChainMutationTests
         Assert.False(Matches(legacy, "git", "push", "origin", "v1.5.1"));
     }
 
+    [Fact]
+    public void A_word_with_a_digit_ends_the_verb_chain()
+    {
+        Assert.Equal(["git", "show"], ShellApprovalMatcher.CanonicalVerbTokens(["git", "show", "b42bf5a"], null));
+        Assert.Equal(["git", "push", "origin"], ShellApprovalMatcher.CanonicalVerbTokens(["git", "push", "origin", "v0.4.0"], null));
+        Assert.Equal(["git", "push", "origin"], ShellApprovalMatcher.CanonicalVerbTokens(["git", "push", "origin"], null));
+        Assert.Equal(["gh", "pr", "view"], ShellApprovalMatcher.CanonicalVerbTokens(["gh", "pr", "view"], null));
+        Assert.Equal(["python3", "tool"], ShellApprovalMatcher.CanonicalVerbTokens(["python3", "tool"], null));
+        Assert.Equal(["git"], ShellApprovalMatcher.CanonicalVerbTokens(["git", "2fa"], null));
+    }
+
     private static ApprovalEntry Grant(params string[] tokens)
         => ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, tokens);
 

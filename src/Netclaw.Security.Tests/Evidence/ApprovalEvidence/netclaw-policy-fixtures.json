@@ -824,7 +824,7 @@
         "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
         "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
         "useBundledSafeCatalog": true,
-        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["ssh"], "isMessy": false, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 1 }
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["ssh", "head"], "isMessy": false, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 0 }
       }
     },
     {
@@ -1062,7 +1062,7 @@
       "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
-      "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["sort"], "isMessy": false, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 1 }
+      "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["sort"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
     },
     {
       "id": "A12",

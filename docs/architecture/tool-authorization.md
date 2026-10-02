@@ -525,23 +525,33 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   reviewed-safe catalog lists that phrase as data.
 - Follows: a shell grant covers exactly its verb chain. The arguments are
   free. `ApprovalPatternMatching.VerbChainEquals` compares the stored tokens
-  with the candidate's parser tokens, so a `gh` grant covers `gh --help` but
-  not `gh auth logout`, and a `gh pr view` grant does not cover `gh pr merge`.
+  with the candidate's tokens, so a `gh` grant covers `gh --help` but not
+  `gh auth logout`, and a `gh pr view` grant does not cover `gh pr merge`.
   The stored match kind keeps the name `TokenPrefix` so that the version-3
   store does not change. A legacy phrase must also equal the whole chain.
   Policy data gives some programs a one-token chain (`echo`, `which`, `jq`).
   For these programs, a bare-program grant also covers a word that the parser
   folds into the chain (`echo hi`).
-- Follows: the parser stops its verb walk at the first option. When the chain
-  is one token and a plain word follows an option (`gh -R o/r pr view 1`,
-  `git --no-pager log`), `ShellApprovalMatcher.HasOpenVerbChain` marks the
-  candidate `HasUnprovenVerbChain`. The rule uses general facts only: token
-  count, option and path flags, argument order and source positions, and
-  parser-proved operand values. No grant covers such a candidate, and the
-  prompt offers only `Once` and `Deny`. The approval actor also refuses to
-  save a grant for it. Reviewed-safe coverage still applies. The rule uses the
-  shell kind and applies to Bash only: a PowerShell cmdlet binds named
-  parameters (`Start-Sleep -Seconds 300`), so a word after an option is a value.
+- Follows: a word with a digit ends the verb chain
+  (`ShellApprovalMatcher.CanonicalVerbTokens`). A subcommand almost never
+  contains a digit; a hash, a tag, or a version does. So `git show b42bf5a`
+  has the chain `git show`, and one grant covers every hash. The cost: a
+  branch name with a digit (`release-2.0`) is an argument. The trust-verb CLI
+  uses the same rule.
+- Follows: the parser stops its verb walk at the first option. In the Bash
+  grammar, when the chain is one token and a plain word follows an option
+  (`gh -R o/r pr view 1`, `df -h .`), `ShellApprovalMatcher.HasOpenVerbChain`
+  marks the candidate `HasUnprovenVerbChain`. The rule uses general facts
+  only: token count, option and path flags, argument order and source
+  positions, and parser-proved operand values. The candidate's tokens are then
+  every static word of the command, options included. The prompt offers the
+  normal choices, and the saved grant covers only the identical command. It
+  never covers the bare program. A command with a word that is not static or
+  that holds a space gets one-time consent only. Reviewed-safe coverage still
+  applies. PowerShell cmdlets bind named parameters, so the rule is Bash only.
+- Follows: rollback. An exact-command grant is a version-3 token entry that
+  always holds an option word. A parser verb chain never holds one, so an older
+  binary loads the entry and never matches it.
 - Breaks: `ResolveAuthorizationScope` treats the first operand of `find` and
   `cd` as a directory. That is private grammar of two executables.
 

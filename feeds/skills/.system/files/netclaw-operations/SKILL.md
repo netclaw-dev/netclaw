@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.77.0"
+  version: "2.78.0"
 ---
 
 # Netclaw Operations
@@ -413,7 +413,8 @@ Shell approvals store a typed phrase and a scope in `tool-approvals.json`:
   `grep`, `freshdesk`). No flags, no path arguments. A grant covers
   **exactly** this chain, with any arguments. It never covers a longer chain:
   a `gh` grant covers `gh --help`, not `gh auth logout`; a `gh pr view` grant
-  covers `gh pr view 2 --web`, not `gh pr merge`.
+  covers `gh pr view 2 --web`, not `gh pr merge`. A word with a digit ends the
+  chain, so a `git show` grant covers `git show b42bf5a` and every other hash.
 - **directory** — the path field for folder and global grants. Netclaw sets it from:
   - **Path argument** in the original command (`find /repo`, `ls /var/log`,
     `cat ~/.bashrc`). The path argument is the directory; for file targets
@@ -435,9 +436,10 @@ A main checkout with `--separate-git-dir` does not receive this choice.
 `gh -R o/r pr view 123`. Leave out a global option that the program does not
 need: write `git log -1`, not `git --no-pager log -1` (git does not page
 without a terminal). When an option comes before the subcommand, Netclaw
-cannot prove the subcommand, so the prompt offers only `Once` and `Deny`, and
-no saved grant covers the call. The subcommand-first form gets the normal
-reusable choices.
+cannot prove the subcommand. The saved grant then covers only the identical
+command, every word included (`gh -R o/r pr view 123`, `df -h .`), so the next
+call with another value prompts again. The subcommand-first form gets a grant
+for the subcommand that covers every value.
 
 **Folder-scoped trust compounds.** An entry on `(find, /home/user/repo)`
 auto-allows `find /home/user/repo/.netclaw -name X` because the candidate's

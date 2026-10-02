@@ -1165,10 +1165,10 @@ public sealed class ToolAccessPolicy
         return repositories![0].CommonDirectory;
     }
 
-    // A candidate whose verb chain the parser cannot prove gets one-time consent only.
+    // A candidate with an unproven verb chain carries its exact command words,
+    // so its reusable grant covers only the identical command.
     private static bool HasReusableShellPhrase(ApprovalCandidate candidate) =>
         candidate.Shell is not null &&
-        !candidate.HasUnprovenVerbChain &&
         candidate.VerbTokens is { Count: > 0 } tokens &&
         tokens.All(static token =>
             token.Length > 0 && !token.Any(char.IsWhiteSpace));

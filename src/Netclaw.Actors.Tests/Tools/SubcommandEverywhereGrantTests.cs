@@ -17,8 +17,9 @@ namespace Netclaw.Actors.Tests.Tools;
 /// <summary>
 /// A saved shell grant covers exactly its verb chain, with any arguments. It
 /// never covers a longer chain: a <c>gh</c> grant covers <c>gh --help</c>, not
-/// <c>gh auth logout</c>. When an option comes before the subcommand, the
-/// parser cannot prove the verb chain, so the prompt offers one-time consent only.
+/// <c>gh auth logout</c>. A word with a digit ends the chain. When an option
+/// comes before the subcommand, the parser cannot prove the verb chain, so the
+/// saved grant covers only the identical command.
 /// </summary>
 [Collection(ShellApprovalMatrixCollection.Name)]
 public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fixture)
@@ -79,31 +80,25 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [MemberData(nameof(OptionFirstCommands))]
-    public async Task Option_before_the_subcommand_offers_once_only(string command)
+    public async Task Option_before_the_subcommand_saves_an_exact_command_grant(string command)
     {
         await using var harness = await CreateHarnessAsync(Approvals.None);
         var executable = command.Split(' ')[0];
 
-        var prompt = await harness.EvaluateShellDecisionAsync(command, Ct);
+        var stored = await ApproveEverywhereAsync(harness, command);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, prompt.Outcome);
-        var approval = Assert.IsType<ToolApprovalContext>(prompt.ApprovalContext);
-        Assert.Equal(
-            [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
-            approval.Options.Select(option => option.Key.Value));
+        // The grant holds every word of the command, options included. It is never the bare program.
+        var entry = Assert.Single(stored);
+        Assert.Equal(command.Split(' '), entry.VerbTokens!);
 
-        // A forged "Always anywhere" answer cannot save a grant: the candidate has no verb chain.
-        var grants = GrantBuilder.Build(
-            approval.Candidates!,
-            GrantScopeKind.Everywhere,
-            approval.Cwd,
-            harness.SessionDirectory,
-            approval.RepositoryCommonDirectory);
-        await Assert.ThrowsAsync<InvalidOperationException>(() => RecordAsync(harness, grants));
-        Assert.Empty(harness.GetStoredShellEntries(TrustAudience.Personal));
+        // Positive control: the identical command is covered.
+        await AssertAllowedByStoredGrantAsync(harness, command);
 
+        // Negative controls: another value, the bare program, and an unrelated subcommand still prompt.
+        await AssertNeedsApprovalAsync(harness, command + " --web", stored);
+        await AssertNeedsApprovalAsync(harness, executable + " --version", stored);
         foreach (var unrelated in executable == "gh" ? GhUnrelated : GitUnrelated)
-            await AssertNeedsApprovalAsync(harness, unrelated, []);
+            await AssertNeedsApprovalAsync(harness, unrelated, stored);
     }
 
     // The owner's case: approving "gh --help" must not trust every gh subcommand.
@@ -135,8 +130,8 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
         await AssertAllowedByStoredGrantAsync(harness, "gh pr view 2 --web");
     }
 
-    // A legacy phrase also must equal the whole parser verb chain. The parser
-    // keeps v1.5.1 in the chain, but it ends the chain at 1.5.1 and --force.
+    // A legacy phrase also must equal the whole verb chain. A word with a digit
+    // ends the chain, so v1.5.1 and 1.5.1 are arguments; "main" is not.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     public async Task Legacy_exact_grant_does_not_cover_a_longer_verb_chain()
@@ -147,9 +142,30 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
             ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "git push origin"));
         var stored = harness.GetStoredShellEntries(TrustAudience.Personal);
 
-        await AssertNeedsApprovalAsync(harness, "git push origin v1.5.1 --force", stored);
         await AssertNeedsApprovalAsync(harness, "git push origin main --force", stored);
+        await AssertAllowedByStoredGrantAsync(harness, "git push origin v1.5.1 --force");
         await AssertAllowedByStoredGrantAsync(harness, "git push origin 1.5.1 --force");
+    }
+
+    // A word with a digit ends the chain, so one grant covers every hash, tag, or version.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData("git show b42bf5a", new[] { "git", "show" }, "git show c5a4090", "git show main")]
+    [InlineData("git push origin v0.4.0", new[] { "git", "push", "origin" }, "git push origin v0.5.0", "git push origin main")]
+    [InlineData("git cherry-pick c5a4090", new[] { "git", "cherry-pick" }, "git cherry-pick b42bf5a", "git cherry-pick main")]
+    public async Task A_word_with_a_digit_ends_the_verb_chain(
+        string command,
+        string[] expectedChain,
+        string otherValue,
+        string longerChain)
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.None);
+
+        var stored = await ApproveEverywhereAsync(harness, command);
+
+        Assert.Equal(expectedChain, Assert.Single(stored).VerbTokens!);
+        await AssertAllowedByStoredGrantAsync(harness, otherValue);
+        await AssertNeedsApprovalAsync(harness, longerChain, stored);
     }
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]

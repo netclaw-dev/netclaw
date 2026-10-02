@@ -164,28 +164,37 @@ public sealed class ApprovalPatternV3Tests
     }
 
     // gh -R o/r auth logout: the parser chain stops at "gh", so it is unproven.
+    // Only an exact-command grant for the identical words covers it.
     [Fact]
-    public void Shell_grant_does_not_match_an_unproven_verb_chain()
+    public void Unproven_verb_chain_matches_only_the_identical_exact_command()
     {
+        var words = new[] { "gh", "-R", "o/r", "auth", "logout" };
         var bareGh = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["gh"]);
         var legacyGh = ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "gh");
+        var exact = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, words);
+        var otherExact = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["gh", "-R", "o/r", "auth", "status"]);
         var candidate = new ApprovalCandidate("gh", Directory: null)
         {
-            VerbTokens = Array.AsReadOnly(["gh"]),
+            VerbTokens = Array.AsReadOnly(words),
             Shell = ApprovalShell.Bash,
             HasUnprovenVerbChain = true,
         };
 
         Assert.False(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [bareGh]));
         Assert.False(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [legacyGh]));
-        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
-            candidate with { HasUnprovenVerbChain = false },
-            cwd: null,
-            [bareGh]));
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [otherExact]));
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [exact]));
+
+        // An exact-command grant never covers a proved chain of the bare program.
+        var bareCall = new ApprovalCandidate("gh", Directory: null)
+        {
+            VerbTokens = Array.AsReadOnly(["gh"]),
+            Shell = ApprovalShell.Bash,
+        };
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(bareCall, cwd: null, [exact]));
     }
 
-    // A legacy phrase also needs the whole parser chain. The display verb drops
-    // the digit-bearing word v1.5.1, but the parser chain keeps it.
+    // A legacy phrase also needs the whole chain of the candidate tokens.
     [Theory]
     [InlineData(new[] { "git", "push", "origin" }, true)]
     [InlineData(new[] { "git", "push", "origin", "v1.5.1" }, false)]

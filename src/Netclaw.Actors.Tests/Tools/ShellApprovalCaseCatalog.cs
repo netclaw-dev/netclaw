@@ -1120,7 +1120,9 @@ public static class ShellApprovalCases
             "timeout-nested-shell-prompts",
             Bash("timeout 5 bash -lc \"git push\""),
             Approvals.None,
-            ExpectedApproval.Require(["timeout", "git push"])),
+            // The timeout words hold "git push" with a space, so no exact-command
+            // grant can store them (#2306): one-time consent, no grant lookup.
+            ExpectedApproval.Require(["timeout", "git push"], approvalChecks: 0)),
         Case(
             "subshell-prompts",
             Bash("(git status && git push)"),

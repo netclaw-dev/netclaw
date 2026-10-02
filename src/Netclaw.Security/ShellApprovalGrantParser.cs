@@ -161,11 +161,8 @@ public static class ShellApprovalGrantParser
             return false;
         }
 
-        var tokens = clause.Verb.Tokens.ToArray();
-        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
-        {
-            tokens[0] = canonicalVerb;
-        }
+        // The same chain rule as a call: the chain ends at the first word with a digit.
+        var tokens = ShellApprovalMatcher.CanonicalVerbTokens(clause.Verb.Tokens, clause.Verb.CanonicalVerb)!.ToArray();
 
         var canonicalSource = string.Join(" ", tokens);
         if (!string.Equals(source, canonicalSource, StringComparison.Ordinal))
