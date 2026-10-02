@@ -235,7 +235,7 @@ internal sealed class ShellPolicyCoordinator(
             // A candidate with no parser verb (a redirect-only clause) has no
             // command identity at all, as before: exact approval only.
             if (candidate.Candidate.VerbTokens is null
-                && candidate.SourceOccurrence?.Clause.Verb.Tokens is not { Count: > 0 })
+                && candidate.SourceOccurrence is { Clause.Verb.Tokens.Count: 0 })
             {
                 return true;
             }
