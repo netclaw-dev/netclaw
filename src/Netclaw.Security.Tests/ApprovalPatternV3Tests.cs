@@ -163,37 +163,6 @@ public sealed class ApprovalPatternV3Tests
         Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [grant]));
     }
 
-    // gh -R o/r auth logout: the parser chain stops at "gh", so it is unproven.
-    // Only an exact-command grant for the identical words covers it.
-    [Fact]
-    public void Unproven_verb_chain_matches_only_the_identical_exact_command()
-    {
-        var words = new[] { "gh", "-R", "o/r", "auth", "logout" };
-        var bareGh = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["gh"]);
-        var legacyGh = ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "gh");
-        var exact = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, words);
-        var otherExact = ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["gh", "-R", "o/r", "auth", "status"]);
-        var candidate = new ApprovalCandidate("gh", Directory: null)
-        {
-            VerbTokens = Array.AsReadOnly(words),
-            Shell = ApprovalShell.Bash,
-            HasUnprovenVerbChain = true,
-        };
-
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [bareGh]));
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [legacyGh]));
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [otherExact]));
-        Assert.True(ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [exact]));
-
-        // An exact-command grant never covers a proved chain of the bare program.
-        var bareCall = new ApprovalCandidate("gh", Directory: null)
-        {
-            VerbTokens = Array.AsReadOnly(["gh"]),
-            Shell = ApprovalShell.Bash,
-        };
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(bareCall, cwd: null, [exact]));
-    }
-
     // A legacy phrase also needs the whole chain of the candidate tokens.
     [Theory]
     [InlineData(new[] { "git", "push", "origin" }, true)]

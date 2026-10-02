@@ -334,8 +334,6 @@ internal sealed class ToolApprovalActor : ReceiveActor
             return true;
         }
 
-        // An unproven verb chain carries its exact command words. The saved
-        // grant then covers only the identical command (#2306).
         if (grant.Candidate.Shell is not { } shell ||
             grant.Candidate.VerbTokens is not { } tokens)
         {

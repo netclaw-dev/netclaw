@@ -37,21 +37,12 @@ public sealed record ApprovalCandidate(
     }
 
     /// <summary>
-    /// The immutable canonical tokens that a shell grant must equal. For an
-    /// ordinary candidate these are the parser verb tokens, up to the first
-    /// word with a digit. For a candidate with <see cref="HasUnprovenVerbChain"/>
-    /// these are every static word of the command, options included. Null
-    /// means that no reusable grant can apply.
+    /// The immutable command words that a shell grant must equal: the
+    /// ShellSyntaxTree <c>CommandWords</c> fact (the program and every plain
+    /// word, in any option order). Null when the parser cannot prove the
+    /// command words, so no reusable grant can apply.
     /// </summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
-
-    /// <summary>
-    /// True when the parser cannot prove the verb chain, for example
-    /// <c>gh -R o/r pr view</c>. Then <see cref="VerbTokens"/> holds the exact
-    /// command words, and only an exact-command grant for the identical words
-    /// covers the candidate. A bare-program grant never covers it.
-    /// </summary>
-    public bool HasUnprovenVerbChain { get; init; }
 
     /// <summary>The native shell grammar that produced the candidate.</summary>
     public ApprovalShell? Shell { get; init; }
@@ -74,7 +65,6 @@ public sealed record ApprovalCandidate(
         Equals(other) &&
         AssignmentDigest == other.AssignmentDigest &&
         Shell == other.Shell &&
-        HasUnprovenVerbChain == other.HasUnprovenVerbChain &&
         HasSameVerbTokens(other.VerbTokens);
 
     private bool HasSameVerbTokens(IReadOnlyList<string>? other)
@@ -160,6 +150,22 @@ public interface IToolApprovalMatcher
 /// units and same-language child occurrences come from the selected
 /// ShellSyntaxTree parser; unresolved syntax never creates a persistent grant.
 /// </summary>
+/// <summary>The rewrite that gives a shell command known command words.</summary>
+public enum ShellCommandWordsRewrite
+{
+    /// <summary>A bare glob can expand to a command word. Use a path pattern with a slash.</summary>
+    UsePathGlob = 0,
+
+    /// <summary>An expansion can change a command word. Write the words literally.</summary>
+    WriteWordsLiterally = 1,
+
+    /// <summary>
+    /// A brace list, word splitting, or another expansion can change the words.
+    /// Run each command separately, and write the words literally.
+    /// </summary>
+    RunCommandsSeparately = 2,
+}
+
 public sealed record ShellApprovalAnalysis(
     IReadOnlyList<string> Patterns,
     IReadOnlyList<ApprovalCandidate> Candidates,
@@ -343,18 +349,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return null;
         }
 
-        // PowerShell cmdlets bind named parameters (Start-Sleep -Seconds 300),
-        // so the unproven-chain rule applies to the Bash grammar only.
-        var hasUnprovenVerbChain = shell == ApprovalShell.Bash && HasOpenVerbChain(occurrence);
-        var verbTokens = hasUnprovenVerbChain
-            ? GetExactCommandTokens(clause)
-            : CanonicalVerbTokens(clause.Verb.Tokens, clause.Verb.CanonicalVerb);
+        var verbTokens = GetCommandWords(occurrence);
         return directories
             .Select(directory => new ApprovalCandidate(verb, directory)
             {
                 AssignmentDigest = assignmentDigest,
                 VerbTokens = verbTokens,
-                HasUnprovenVerbChain = hasUnprovenVerbChain,
                 Shell = shell,
                 SourceOccurrence = occurrence,
             })
@@ -362,145 +362,69 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
-    /// Returns the verb chain that a grant must equal: the parser verb tokens up
-    /// to the first token after the program that contains a digit. Returns null
-    /// when the parser gives no verb token.
+    /// Returns the grant identity of a command: the ShellSyntaxTree command
+    /// words, or null when they are <c>Unknown</c>.
     /// </summary>
     /// <remarks>
-    /// A subcommand almost never contains a digit. A commit hash, a tag, a
-    /// version, or a pull request number does. The parser's greedy verb walk
-    /// folds such words into the chain (<c>git show b42bf5a</c>,
-    /// <c>git push origin v0.4.0</c>), so the chain ends there and the word and
-    /// the rest are arguments. One grant then covers every value. The cost: a
-    /// subcommand or a branch name with a digit (<c>release-2.0</c>) is an
-    /// argument, so a grant cannot control it per branch. The program token
-    /// itself (<c>python3</c>) always stays. The trust-verb CLI uses the same
-    /// rule, so a saved phrase and a call always agree.
+    /// SECURITY: a grant covers a call only when its words equal these words,
+    /// and the arguments are free. The parser keeps the program and every plain
+    /// word in any option order, so <c>gh -R o/r pr view 1</c> and
+    /// <c>gh pr view 1 -R o/r</c> both give <c>gh pr view</c>. It skips options,
+    /// paths, path patterns with <c>/</c>, words with a digit (hashes, tags,
+    /// versions), and quoted text with whitespace. A bare glob, an expansion, or
+    /// a dynamic program name gives <c>Unknown</c>: such a word could become a
+    /// subcommand, so no grant can cover the call. A PowerShell alias uses its
+    /// canonical cmdlet name.
     /// </remarks>
-    internal static IReadOnlyList<string>? CanonicalVerbTokens(
-        IReadOnlyList<string> parserTokens,
-        string? canonicalVerb)
+    private static IReadOnlyList<string>? GetCommandWords(ShellSyntaxTree.CommandOccurrence occurrence)
     {
-        if (parserTokens.Count == 0)
-        {
+        if (occurrence.CommandWords is not ShellSyntaxTree.ShellCommandWords.Known { Words: { Count: > 0 } words })
             return null;
-        }
 
-        // Focused mutation gate: run-exact-verb-chain-mutations.sh (digit rule).
-        var count = parserTokens.Count;
-        var length = 1;
-        while (length < count && !parserTokens[length].Any(char.IsAsciiDigit))
-            length++;
-
-        var tokens = parserTokens.Take(length).ToArray();
-        if (canonicalVerb is { Length: > 0 })
-        {
+        var tokens = words.ToArray();
+        if (occurrence.Clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
             tokens[0] = canonicalVerb;
-        }
 
         return Array.AsReadOnly(tokens);
     }
 
     /// <summary>
-    /// Returns every static word of the command, options included, for an
-    /// unproven verb chain (<c>df -h .</c> or <c>gh -R o/r pr view 123</c>).
-    /// A grant for these words covers only the identical command. Returns null
-    /// when a word is not static or cannot be stored, so only one-time consent
-    /// applies.
+    /// Returns the rewrite that gives a command known command words, or null
+    /// when no rewrite by the model can help (for example, a dynamic program
+    /// name or a PowerShell script block). Uses general parser facts only: the
+    /// grammar and the element role, kind, and value.
     /// </summary>
-    /// <remarks>
-    /// The words always include an option, and a parser verb chain never does.
-    /// So an exact-command grant never covers an ordinary verb chain, and an
-    /// older binary that reads it as a token-prefix entry never matches it.
-    /// </remarks>
-    private static IReadOnlyList<string>? GetExactCommandTokens(ShellSyntaxTree.Clause clause)
+    internal static ShellCommandWordsRewrite? ClassifyUnknownCommandWords(
+        ShellSyntaxTree.CommandOccurrence occurrence,
+        ApprovalShell shell)
     {
-        var words = new List<string>(clause.Elements.Count);
-        foreach (var element in clause.Elements)
+        var clause = occurrence.Clause;
+        if (occurrence.CommandWords is not ShellSyntaxTree.ShellCommandWords.Unknown
+            || !occurrence.IsComplete
+            || clause.Verb.IsDynamic
+            || clause.Verb.Tokens.Count == 0
+            || clause.Elements.Count == 0
+            || clause.Elements[0] is not { Role: ShellSyntaxTree.ClauseElementRole.Verb, Kind: ShellSyntaxTree.ArgKind.Literal })
         {
-            if (element.Role == ShellSyntaxTree.ClauseElementRole.Redirect)
-                continue;
-
-            if (element.Kind is not (ShellSyntaxTree.ArgKind.Literal
-                    or ShellSyntaxTree.ArgKind.Glob
-                    or ShellSyntaxTree.ArgKind.Tilde)
-                || element.Value.Length == 0
-                || element.Value.Any(static character => char.IsWhiteSpace(character) || char.IsControl(character)))
-            {
-                return null;
-            }
-
-            words.Add(element.Value);
+            return null;
         }
 
-        if (words.Count == 0 || words.All(static word => word.Length == 0 || word[0] != '-'))
+        var words = clause.Elements
+            .Skip(1)
+            .Where(static element => element.Role != ShellSyntaxTree.ClauseElementRole.Redirect)
+            .ToArray();
+        if (words.Any(static element => element.Kind == ShellSyntaxTree.ArgKind.Glob && !element.Value.Contains('/', StringComparison.Ordinal)))
+            return ShellCommandWordsRewrite.UsePathGlob;
+
+        // A PowerShell script block, subexpression, or array argument is normal
+        // syntax that a rewrite cannot remove, so it keeps the one-time prompt.
+        if (shell != ApprovalShell.Bash)
             return null;
 
-        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
-            words[0] = canonicalVerb;
+        if (words.Any(static element => element.Kind is ShellSyntaxTree.ArgKind.EnvVar or ShellSyntaxTree.ArgKind.DynamicSkip))
+            return ShellCommandWordsRewrite.WriteWordsLiterally;
 
-        return Array.AsReadOnly(words.ToArray());
-    }
-
-    /// <summary>
-    /// True when the parser verb chain stops at the program name and a plain
-    /// word follows an option, for example <c>gh -R o/r pr view 123</c> or
-    /// <c>git --no-pager log</c>. The parser stops its verb walk at the first
-    /// option, so the later word can be a subcommand. Only the executable's
-    /// private grammar can tell, and approval code must not parse that grammar.
-    /// Such a candidate gets an exact-command grant instead: it covers only the
-    /// identical words (<see cref="GetExactCommandTokens"/>).
-    /// </summary>
-    /// <remarks>
-    /// SECURITY: without this rule, an exact grant for the bare program
-    /// (<c>gh</c>, saved from <c>gh --help</c>) would cover
-    /// <c>gh -R o/r auth logout</c>. The rule uses general parser facts only:
-    /// the verb token count, option and path flags, argument order and source
-    /// positions, and parser-proved operand values. A word that the parser
-    /// classifies as a path or as a proved operand value cannot be a
-    /// subcommand. The value of an inline option (<c>--repo=o/r</c>) shares the
-    /// option's shell word, so it is not a later word. A verb with a one-token
-    /// chain in policy data (<c>ls</c>, <c>cat</c>, <c>grep</c>) has operands
-    /// only, so <c>ls -la</c> and <c>cat -n file</c> keep a proved chain.
-    /// The caller applies the rule to the Bash grammar only. A PowerShell
-    /// cmdlet takes named parameters, so a word after an option is usually a
-    /// parameter value. A native command under PowerShell keeps exact-chain
-    /// matching only.
-    /// </remarks>
-    internal static bool HasOpenVerbChain(ShellSyntaxTree.CommandOccurrence occurrence)
-    {
-        var verb = occurrence.Clause.Verb;
-        if (verb.Tokens.Count != 1
-            || ShellVerbPolicyData.HasSingleTokenVerbChain(verb.CanonicalVerb ?? verb.Tokens[0]))
-        {
-            return false;
-        }
-
-        int? optionWordStart = null;
-        var afterOption = false;
-        foreach (var argument in occurrence.Arguments)
-        {
-            var arg = argument.Argument;
-            if (arg.IsFlag)
-            {
-                afterOption = true;
-                optionWordStart = argument.Element.SourceStart;
-                continue;
-            }
-
-            var isInlineOptionValue = optionWordStart is not null
-                && argument.Element.SourceStart == optionWordStart;
-            if (afterOption
-                && !isInlineOptionValue
-                && !arg.IsPath
-                && argument.AuthoredFileSystemValue is ShellSyntaxTree.ShellValueDomain.Unknown
-                && argument.AuthoredNonFileSystemValue is ShellSyntaxTree.ShellValueDomain.Unknown)
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return ShellCommandWordsRewrite.RunCommandsSeparately;
     }
 
     private static IReadOnlyList<string?>? ResolveCommandDirectories(

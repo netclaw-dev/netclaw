@@ -215,6 +215,17 @@ internal sealed record ExpectedApproval(
             approvalChecks,
             approvalMatches);
 
+    // A correction asks the model for a different call. The call does not run.
+    public static ExpectedApproval Correct(int approvalChecks = 1, params string[] approvalMatches)
+        => new(
+            ApprovalOutcome.RequiresAgentCorrection,
+            null,
+            null,
+            [],
+            null,
+            approvalChecks,
+            approvalMatches);
+
     // A denial makes no grant lookup, except the trusted-root denial of an
     // unattended call in Approval mode: there a stored grant can decide (PR 6e).
     public static ExpectedApproval Deny(string reason, int approvalChecks = 0)
@@ -286,15 +297,14 @@ public static class ShellApprovalCases
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Require(["git ls-tree feature"])),
-        // A grant covers exactly its verb chain (#2306). The parser chain of
-        // this call is "git ls-tree feature", so a "git ls-tree" grant does not cover it.
+        // #2306: the command words are "git ls-tree feature", so a "git ls-tree" grant does not cover them.
         Case(
             "safe-git-ls-tree-external-reuses-canonical-grant",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Require(["git ls-tree feature"])),
+            ExpectedApproval.Require(["git ls-tree feature"], false, 1)),
         // PR 6e: in an unattended run, a stored grant decides outside the trusted roots.
-        // The "git ls-tree" grant does not cover the "git ls-tree feature" chain (#2306).
+        // #2306: the command words are "git ls-tree feature", so a "git ls-tree" grant does not cover them.
         Case(
             "unattended-external-grant-allows",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
@@ -513,11 +523,12 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git branch", "git remote", "git log"])),
 
+        // #2306: the loop variable gives Unknown command words, so the model gets a rewrite correction.
         Case(
             "live-finite-url-loop-prompts-with-reusable-phrase",
             Bash("for url in /api/first /api/second; do echo \"=== $url ===\"; curl -sS -m 10 \"$url\" | head -c 1500; echo; done"),
             Approvals.None,
-            ExpectedApproval.Require(["curl"], isMessy: false)),
+            ExpectedApproval.Correct()),
 
         Case(
             "gh-run-diagnostic-exit-status-prompts-without-grant",
@@ -527,6 +538,7 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["gh run view"])),
 
+        // #2306: the loop variable gives Unknown command words, so the model gets a rewrite correction.
         Case(
             "live-finite-run-loop-with-tr-data-reuses-gh-grant",
             Bash(
@@ -535,10 +547,7 @@ public static class ShellApprovalCases
                 + "gh run view $r --json headSha,headBranch,displayTitle 2>/dev/null "
                 + "| tr -d '\\n'; echo; done"),
             Approvals.PersistentAnywhere("gh run view"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:gh run view")),
+            ExpectedApproval.Correct()),
 
         Case(
             "live-inline-cd-mixed-read-chain-has-scoped-candidates",
@@ -650,11 +659,12 @@ public static class ShellApprovalCases
             Bash("ls *.txt"),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        // #2306: a bare glob gives Unknown command words, so the model gets a rewrite correction.
         Case(
             "local-glob-reuses-project-grant",
             Bash("rm *.tmp"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:rm")),
+            ExpectedApproval.Correct()),
         Case(
             // Use an isolated temp subdirectory as the covering directory, not
             // the shared system temp root: a symlink child there (e.g. an IDE
@@ -698,11 +708,12 @@ public static class ShellApprovalCases
             Bash("ls -d subdirs/*/ | xargs -n1 basename", ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Require(["ls", "xargs"], isMessy: false)),
+        // #2306: the command words of "git --no-pager status" are "git status", so the grant covers it.
         Case(
             "native-global-option-identity-gap-currently-prompts",
             Bash("git --no-pager status"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git status"),
-            ExpectedApproval.Require(["git"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git")),
 
         Case(
             "semicolon-sequence-prompts",
@@ -884,6 +895,7 @@ public static class ShellApprovalCases
             PowerShell7(@"& { Remove-Item .\victim.txt }"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "Remove-Item"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:Remove-Item")),
+        // #2306: the script block gives Unknown command words, so no grant covers ForEach-Object.
         Case(
             "powershell7-callback-region-reuses-host-and-body-grants",
             PowerShell7(@"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }"),
@@ -891,20 +903,15 @@ public static class ShellApprovalCases
                 ApprovalDirectoryShape.Project,
                 "ForEach-Object",
                 "Remove-Item"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:ForEach-Object",
-                "persistent:Remove-Item")),
+            ExpectedApproval.Require(["ForEach-Object"], false, 1, "persistent:Remove-Item")),
+        // #2306: the script block gives Unknown command words, so no grant covers ForEach-Object.
         Case(
             "powershell7-callback-region-host-grant-does-not-cover-body",
             PowerShell7(@"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }"),
             Approvals.PersistentHere(
                 ApprovalDirectoryShape.Project,
                 "ForEach-Object"),
-            ExpectedApproval.Require(
-                ["Remove-Item"],
-                approvalMatches: ["persistent:ForEach-Object"])),
+            ExpectedApproval.Require(["ForEach-Object", "Remove-Item"], false, 1)),
         Case(
             "powershell7-callback-region-body-grant-does-not-cover-host",
             PowerShell7(@"Get-ChildItem | ForEach-Object { Remove-Item .\victim.txt }"),
@@ -919,16 +926,14 @@ public static class ShellApprovalCases
             PowerShell7("Get-ChildItem | ForEach-Object { $_.FullName }"),
             Approvals.None,
             ExpectedApproval.Require(["ForEach-Object"])),
+        // #2306: the script block gives Unknown command words, so no grant covers ForEach-Object.
         Case(
             "powershell7-expression-region-reuses-host-grant",
             PowerShell7("Get-ChildItem | ForEach-Object { $_.FullName }"),
             Approvals.PersistentHere(
                 ApprovalDirectoryShape.Project,
                 "ForEach-Object"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:ForEach-Object")),
+            ExpectedApproval.Require(["ForEach-Object"], false, 1)),
         Case(
             "powershell7-expression-region-rejects-wrong-scope-grant",
             PowerShell7("Get-ChildItem | ForEach-Object { $_.FullName }"),
@@ -936,16 +941,14 @@ public static class ShellApprovalCases
                 ApprovalDirectoryShape.External,
                 "ForEach-Object"),
             ExpectedApproval.Require(["ForEach-Object"])),
+        // #2306: the script block gives Unknown command words, so no grant covers ForEach-Object.
         Case(
             "powershell7-split-index-join-region-reuses-host-grant",
             PowerShell7("Get-ChildItem | ForEach-Object { ($_ -split '/')[0..3] -join '/' }"),
             Approvals.PersistentHere(
                 ApprovalDirectoryShape.Project,
                 "ForEach-Object"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:ForEach-Object")),
+            ExpectedApproval.Require(["ForEach-Object"], false, 1)),
         Case(
             "powershell7-dynamic-split-index-join-region-stays-strict",
             PowerShell7("Get-ChildItem | ForEach-Object { ($_ -split $separator)[0] -join '/' }"),
@@ -953,16 +956,14 @@ public static class ShellApprovalCases
                 ApprovalDirectoryShape.Project,
                 "ForEach-Object"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        // #2306: the script block gives Unknown command words, so no grant covers ForEach-Object.
         Case(
             "powershell51-split-index-join-fallback-reuses-host-grant",
             WindowsPowerShell51("Get-ChildItem | ForEach-Object { ($_ -split '/')[0..3] -join '/' }"),
             Approvals.PersistentHere(
                 ApprovalDirectoryShape.Project,
                 "ForEach-Object"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:ForEach-Object")),
+            ExpectedApproval.Require(["ForEach-Object"], false, 1)),
         Case(
             "powershell51-dynamic-split-index-join-fallback-stays-strict",
             WindowsPowerShell51("Get-ChildItem | ForEach-Object { ($_ -split $separator)[0] -join '/' }"),
@@ -1035,14 +1036,12 @@ public static class ShellApprovalCases
             PowerShell7("Get-ChildItem |"),
             Approvals.PersistentAnywhere("Get-ChildItem"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        // #2306: reviewed-safe policy covers the read; the grant is not needed.
         Case(
             "powershell7-foreach-public-path-facts-reuse",
             PowerShell7("foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f }"),
             Approvals.PersistentAnywhere("Get-Content"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                approvalChecks: 1,
-                "persistent:Get-Content")),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy, 1)),
         Case(
             "powershell7-foreach-mutation-inherited-state-prompts",
             PowerShell7("foreach ($f in @('a.txt', 'b.txt')) { Remove-Item -LiteralPath $f }"),
@@ -1083,14 +1082,12 @@ public static class ShellApprovalCases
             WindowsPowerShell51(@"Set-Location C:\Temp; Get-Content result.log"),
             Approvals.PersistentAnywhere("Set-Location", "Get-Content"),
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        // #2306: reviewed-safe policy covers the read; the grant is not needed.
         Case(
             "powershell51-foreach-public-path-facts-reuse",
             WindowsPowerShell51("foreach ($f in @('a.txt', 'b.txt')) { Get-Content -LiteralPath $f }"),
             Approvals.PersistentAnywhere("Get-Content"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                approvalChecks: 1,
-                "persistent:Get-Content")),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy, 1)),
         Case(
             "powershell51-foreach-child-grant-does-not-cover-unknown-state",
             WindowsPowerShell51("powershell.exe -NoProfile -NonInteractive -Command 'foreach ($f in @(\"a.txt\", \"b.txt\")) { Remove-Item -LiteralPath $f }'"),
@@ -1120,9 +1117,7 @@ public static class ShellApprovalCases
             "timeout-nested-shell-prompts",
             Bash("timeout 5 bash -lc \"git push\""),
             Approvals.None,
-            // The timeout words hold "git push" with a space, so no exact-command
-            // grant can store them (#2306): one-time consent, no grant lookup.
-            ExpectedApproval.Require(["timeout", "git push"], approvalChecks: 0)),
+            ExpectedApproval.Require(["timeout", "git push"])),
         Case(
             "subshell-prompts",
             Bash("(git status && git push)"),
@@ -1283,17 +1278,12 @@ public static class ShellApprovalCases
             Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log; wc -c result.log"),
             Approvals.None,
             ExpectedApproval.Require(["cd", "gh api"])),
+        // #2306: a bare glob gives Unknown command words, so the model gets a rewrite correction.
         Case(
             "cd-causal-list-diagnostic-reuses-stored-grant",
             Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),
             Approvals.PersistentAnywhere("cd", "inspect", "cat"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:cd",
-                "persistent:inspect",
-                "persistent:cat",
-                "persistent:cat")),
+            ExpectedApproval.Correct(1, "persistent:cd", "persistent:inspect")),
         Case(
             "cd-causal-list-reviewed-diagnostic-keeps-intent-coverage",
             Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; wc -c result.log; head -100 result.log"),
@@ -1303,18 +1293,18 @@ public static class ShellApprovalCases
                 1,
                 "persistent:cd",
                 "persistent:gh api")),
+        // #2306: a bare glob gives Unknown command words, so the model gets a rewrite correction.
         Case(
             "cd-causal-list-folder-grant-outside-target-prompts",
             Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "cd", "inspect", "cat"),
-            ExpectedApproval.Require(["cd", "inspect", "cat"], approvalMatches: "persistent:cat")),
+            ExpectedApproval.Correct()),
+        // #2306: a bare glob gives Unknown command words, so the model gets a rewrite correction.
         Case(
             "cd-alternate-branch-prompts-for-the-other-branch",
             Bash("cd /netclaw-approval-external/cd-list && inspect || recover; cat *.md"),
             Approvals.PersistentAnywhere("cd", "inspect", "cat"),
-            ExpectedApproval.Require(
-                ["recover"],
-                approvalMatches: ["persistent:cd", "persistent:inspect", "persistent:cat", "persistent:cat"])),
+            ExpectedApproval.Correct(1, "persistent:cd", "persistent:inspect")),
         Case(
             "cd-dynamic-target-stays-one-time",
             Bash("cd \"$TARGET\" && inspect; cat *.md"),
@@ -1842,29 +1832,19 @@ public static class ShellApprovalCases
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
             Approvals.None,
             ExpectedApproval.Require(["git add", "git commit", "git push", "gh pr merge"])),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-anywhere-grants-allow",
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
             Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:git add",
-                "persistent:git commit",
-                "persistent:git push",
-                "persistent:gh pr merge")),
+            ExpectedApproval.Require(["git commit"], false, 1, "persistent:git add", "persistent:git push", "persistent:gh pr merge")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-one-missing-grant-prompts",
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
             Approvals.PersistentAnywhere("git add", "git commit", "git push"),
-            ExpectedApproval.Require(
-                ["gh pr merge"],
-                approvalMatches:
-                [
-                    "persistent:git add",
-                    "persistent:git commit",
-                    "persistent:git push"
-                ])),
+            ExpectedApproval.Require(["git commit", "gh pr merge"], false, 1, "persistent:git add", "persistent:git push")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-here-grants-allow",
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
@@ -1874,13 +1854,8 @@ public static class ShellApprovalCases
                 "git commit",
                 "git push",
                 "gh pr merge"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:git add",
-                "persistent:git commit",
-                "persistent:git push",
-                "persistent:gh pr merge")),
+            ExpectedApproval.Require(["git commit"], false, 1, "persistent:git add", "persistent:git push", "persistent:gh pr merge")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-one-wrong-directory-grant-prompts",
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
@@ -1891,42 +1866,24 @@ public static class ShellApprovalCases
                     "git commit",
                     "git push"),
                 Approvals.PersistentHere(ApprovalDirectoryShape.External, "gh pr merge")),
-            ExpectedApproval.Require(
-                ["gh pr merge"],
-                approvalMatches:
-                [
-                    "persistent:git add",
-                    "persistent:git commit",
-                    "persistent:git push"
-                ])),
+            ExpectedApproval.Require(["git commit", "gh pr merge"], false, 1, "persistent:git add", "persistent:git push")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-one-other-session-grant-prompts",
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
             Approvals.Combine(
                 Approvals.Session("git add", "git commit", "git push"),
                 Approvals.SessionForOtherSession("gh pr merge")),
-            ExpectedApproval.Require(
-                ["gh pr merge"],
-                approvalMatches:
-                [
-                    "session:git add",
-                    "session:git commit",
-                    "session:git push"
-                ])),
+            ExpectedApproval.Require(["git commit", "gh pr merge"], false, 1, "session:git add", "session:git push")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-one-other-audience-grant-prompts",
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
             Approvals.Combine(
                 Approvals.PersistentAnywhere("git add", "git commit", "git push"),
                 Approvals.PersistentForOtherAudience("gh pr merge")),
-            ExpectedApproval.Require(
-                ["gh pr merge"],
-                approvalMatches:
-                [
-                    "persistent:git add",
-                    "persistent:git commit",
-                    "persistent:git push"
-                ])),
+            ExpectedApproval.Require(["git commit", "gh pr merge"], false, 1, "persistent:git add", "persistent:git push")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-mixed-grant-sources-allow",
             Bash("git add . && git commit -m fix && git push && gh pr merge 123"),
@@ -1934,13 +1891,7 @@ public static class ShellApprovalCases
                 Approvals.Session("git add", "gh pr merge"),
                 Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git commit"),
                 Approvals.PersistentAnywhere("git push")),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "session:git add",
-                "persistent:git commit",
-                "persistent:git push",
-                "session:gh pr merge")),
+            ExpectedApproval.Require(["git commit"], false, 1, "session:git add", "persistent:git push", "session:gh pr merge")),
         Case(
             "safe-and-stored-authority-compose",
             Bash("git status && git push && git ls-tree HEAD && gh pr merge 123"),
@@ -1959,39 +1910,24 @@ public static class ShellApprovalCases
                 "netclaw daemon stop",
                 "git push"),
             ExpectedApproval.Deny("hard_deny_self_destructive")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-or-branches-with-grants-allow",
             Bash("git add . || git commit -m fix || git push || gh pr merge 123"),
             Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:git add",
-                "persistent:git commit",
-                "persistent:git push",
-                "persistent:gh pr merge")),
+            ExpectedApproval.Require(["git commit"], false, 1, "persistent:git add", "persistent:git push", "persistent:gh pr merge")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-newline-statements-with-grants-allow",
             Bash("git add .\ngit commit -m fix\ngit push\ngh pr merge 123"),
             Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:git add",
-                "persistent:git commit",
-                "persistent:git push",
-                "persistent:gh pr merge")),
+            ExpectedApproval.Require(["git commit"], false, 1, "persistent:git add", "persistent:git push", "persistent:gh pr merge")),
+        // #2306: "fix" after "-m" is a plain word, so the command words are "git commit fix".
         Case(
             "four-subshell-clauses-with-grants-allow",
             Bash("(git add . && git commit -m fix) || (git push && gh pr merge 123)"),
             Approvals.PersistentAnywhere("git add", "git commit", "git push", "gh pr merge"),
-            ExpectedApproval.Allow(
-                ApprovalAllowReason.StoredApproval,
-                1,
-                "persistent:git add",
-                "persistent:git commit",
-                "persistent:git push",
-                "persistent:gh pr merge")),
+            ExpectedApproval.Require(["git commit"], false, 1, "persistent:git add", "persistent:git push", "persistent:gh pr merge")),
 
         Case(
             "noninteractive-unapproved-requires-approval",

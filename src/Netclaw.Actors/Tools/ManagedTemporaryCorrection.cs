@@ -6,6 +6,7 @@
 using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 
 namespace Netclaw.Actors.Tools;
@@ -27,6 +28,14 @@ internal abstract record ToolCorrection
 
     /// <summary>Suggests a one-call shell directory without changing the project declaration.</summary>
     internal sealed record ShellWorkingDirectorySuggested(string Directory) : ToolCorrection;
+
+    /// <summary>
+    /// Suggests a rewrite that gives the shell command known command words. A
+    /// grant can cover a call only by its command words, so the call does not run.
+    /// </summary>
+    internal sealed record ShellCommandWordsRewriteSuggested(
+        ShellCommandWordsRewrite Rewrite,
+        ApprovalShell Shell) : ToolCorrection;
 }
 
 /// <summary>Groups compatible correction facts for one tool attempt.</summary>
@@ -83,6 +92,7 @@ internal sealed record ToolCorrectionDelivery(
         {
             [ToolCorrection.ProjectDirectorySuggested project] => CreateProject(project.Directory),
             [ToolCorrection.ShellWorkingDirectorySuggested shell] => CreateShellDirectory(shell.Directory),
+            [ToolCorrection.ShellCommandWordsRewriteSuggested words] => CreateCommandWords(words),
             [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
             [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] when managedTemporaryCall is not null
                 => CreateTemporary(temporary.Target, managedTemporaryCall),
@@ -111,6 +121,27 @@ internal sealed record ToolCorrectionDelivery(
             new ToolInvocationReceipt.Correction(ToolRemediationCode.UseShellWorkingDirectory),
             NativeTool: null,
             ManagedTemporaryStateChange: null);
+
+    private static ToolCorrectionDelivery CreateCommandWords(ToolCorrection.ShellCommandWordsRewriteSuggested words)
+        => new(
+            "Tool execution deferred: rewrite_shell_command_words\n" + DescribeRewrite(words),
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.RewriteShellCommandWords),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
+
+    internal static string DescribeRewrite(ToolCorrection.ShellCommandWordsRewriteSuggested words)
+        => (words.Rewrite, words.Shell) switch
+        {
+            (ShellCommandWordsRewrite.UsePathGlob, ApprovalShell.PowerShell) =>
+                "A bare wildcard pattern can expand to a command word. Quote the pattern, for example '*.cs', or use a path with a separator, for example ./*.cs.",
+            (ShellCommandWordsRewrite.UsePathGlob, _) =>
+                "A bare glob can expand to a command word. Use ./* (a path with /) instead of a bare glob, for example ./*.cs instead of *.cs.",
+            (ShellCommandWordsRewrite.WriteWordsLiterally, _) =>
+                "An expansion can change a command word. Write the command words literally.",
+            (ShellCommandWordsRewrite.RunCommandsSeparately, _) =>
+                "A brace list, word splitting, or an expansion can change the command words. Run each command separately, and write the command words literally.",
+            _ => throw new ArgumentOutOfRangeException(nameof(words), words.Rewrite, "Unknown command-word rewrite."),
+        };
 
     private static ToolCorrectionDelivery CreateNative(ToolName tool, ManagedTemporaryCorrectionTarget? temporaryTarget)
     {

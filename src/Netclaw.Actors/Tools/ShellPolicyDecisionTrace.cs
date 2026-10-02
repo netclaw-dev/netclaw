@@ -320,10 +320,13 @@ internal sealed class ShellPolicyDecisionTraceBuilder
 
     private static string? GetExecutableBasename(ApprovalCandidate candidate)
     {
-        if (candidate.VerbTokens is not { Count: > 0 })
+        // Unknown command words have no tokens; the display verb still names the program.
+        var executable = candidate.VerbTokens is { Count: > 0 } tokens
+            ? tokens[0]
+            : candidate.Verb.Split(' ', 2)[0];
+        if (executable.Length == 0)
             return null;
 
-        var executable = candidate.VerbTokens[0];
         var separator = executable.LastIndexOfAny(['/', '\\']);
         var basename = separator < 0 ? executable : executable[(separator + 1)..];
         return SanitizeText(basename);

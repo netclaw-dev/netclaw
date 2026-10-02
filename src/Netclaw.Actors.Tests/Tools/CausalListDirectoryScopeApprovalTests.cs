@@ -32,7 +32,7 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
         await using var harness = await CreateHarnessAsync("causal-list-grant-scope");
         var external = ExternalDirectory(harness);
         var other = Directory.CreateDirectory(Path.Combine(Path.GetDirectoryName(external)!, "other")).FullName;
-        var command = $"cd {external} && inspect; cat *.md";
+        var command = $"cd {external} && inspect; cat ./*.md";
 
         var prompt = await harness.EvaluateShellDecisionAsync(command, Ct);
 
@@ -67,7 +67,7 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
             grants,
             Ct);
         var reused = await harness.EvaluateShellAsync(command, Ct);
-        var elsewhere = await harness.EvaluateShellAsync($"cd {other} && inspect; cat *.md", Ct);
+        var elsewhere = await harness.EvaluateShellAsync($"cd {other} && inspect; cat ./*.md", Ct);
 
         Assert.Equal(ApprovalOutcome.Allowed, reused.Outcome);
         Assert.Equal(ApprovalAllowReason.StoredApproval, reused.AllowReason);
@@ -152,8 +152,8 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
         await using var unattended = await CreateHarnessAsync("causal-list-unattended", grants, interactive: false);
         await using var interactive = await CreateHarnessAsync("causal-list-interactive", grants);
         // Each harness owns its external directory, so the glob reads no shared entries.
-        var denied = await unattended.EvaluateShellAsync($"cd {ExternalDirectory(unattended)} && inspect; cat *.md", Ct);
-        var allowed = await interactive.EvaluateShellAsync($"cd {ExternalDirectory(interactive)} && inspect; cat *.md", Ct);
+        var denied = await unattended.EvaluateShellAsync($"cd {ExternalDirectory(unattended)} && inspect; cat ./*.md", Ct);
+        var allowed = await interactive.EvaluateShellAsync($"cd {ExternalDirectory(interactive)} && inspect; cat ./*.md", Ct);
 
         // The same grants allow the call in an interactive session. A headless run keeps
         // the unresolved-input gate that it had before causal lists used the directory proof.
@@ -215,7 +215,7 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
     {
         await using var harness = await CreateHarnessAsync("causal-list-missing-target");
         var missing = Path.Combine(ExternalDirectory(harness), "missing");
-        var command = $"cd {missing} && inspect; cat *.md";
+        var command = $"cd {missing} && inspect; cat ./*.md";
 
         var before = await harness.EvaluateShellAsync(command, Ct);
         Directory.CreateSymbolicLink(missing, harness.ProjectDirectory);

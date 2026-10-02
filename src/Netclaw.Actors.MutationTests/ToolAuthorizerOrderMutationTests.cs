@@ -147,6 +147,31 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
     }
 
+    // #2306: a bare glob gives Unknown command words, so no grant can cover the
+    // call. It gets a rewrite correction, not a prompt, and it does not run.
+    // A mutant that drops the correction turns it back into a prompt or a denial.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Unknown_command_words_get_a_rewrite_correction(bool interactive)
+    {
+        var command = OperatingSystem.IsWindows() ? "Remove-Item *.tmp" : "rm *.tmp";
+
+        var decision = await AuthorizeAsync(
+            CreateAuthorizer([], hardDenyPatterns: []),
+            command,
+            TrustAudience.Personal,
+            interactive);
+
+        var correction = Assert.IsType<AuthorizationDecision.CorrectionRequired>(decision);
+        Assert.Contains(
+            correction.Corrections.Items,
+            static item => item is ToolCorrection.ShellCommandWordsRewriteSuggested
+            {
+                Rewrite: ShellCommandWordsRewrite.UsePathGlob
+            });
+    }
+
     private static string ReadCommand(string path)
         => OperatingSystem.IsWindows() ? $"Get-Content '{path}'" : $"cat '{path}'";
 

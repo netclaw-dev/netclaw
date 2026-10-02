@@ -43,11 +43,11 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private const string ApprovalMatrixSha256 =
         "0169105efe87b345d9a82d777ef86909e31fa81a5255cc0cc30f32fbe4d0d6b0";
     private const string LiveRegressionCasesSha256 =
-        "c02304512f35e4b54cc6e2547e967e2be5f5c2ab47091620c2a9971b11ea69ca";
+        "684b89f8e01f6abc8d4b9cff49c1e1ab16d3df9cd6aaf028e2aa0822509c421a";
     private const string FreshSessionHarvestSha256 =
         "4a6acc38746dd23df75e6a95fa4fa84d43ae74a35ea3ca6dd17a8dfd3bc3b511";
     private const string FreshSessionPolicyFixturesSha256 =
-        "d6cb08dd3ca0f81ada828f8b45426bfa7bd6c4cfab99128798e51fa5ad759184";
+        "7a93c02a76c80985b74a8f72fa3c28b59b0fda15ac58fec66564de4205801386";
     private const string FreshSessionEvalBaselineSha256 =
         "be1c2fe0fc646f4692da75b0d5398fb4f8c3c5ea2707625266915b8d2e6cd31e";
     private const string FreshSessionEvalResultsSha256 =
@@ -766,9 +766,14 @@ public sealed partial class ShellApprovalEvidenceContractTests
             Assert.True(item.PolicyCase.Expected.ActorCheckCount >= 0);
         });
         Assert.Single(fixtures.LiveRegressionCases, item => item.TargetOutcome == "Allow");
+        // R08 (loop variable) and R09 (bare glob) have Unknown command words, so
+        // each gets a rewrite correction instead of a prompt (#2306).
         Assert.Equal(
-            8,
+            6,
             fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "RequiresApproval"));
+        Assert.Equal(
+            2,
+            fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "RequiresAgentCorrection"));
         Assert.Single(fixtures.LiveRegressionCases, item => item.TargetOutcome == "Deny");
         Assert.All(
             fixtures.LiveRegressionCases.Where(item =>
@@ -780,10 +785,9 @@ public sealed partial class ShellApprovalEvidenceContractTests
             item => item.PolicyCase.Id == "R09").PolicyCase;
         Assert.True(aliasCase.UsePhysicalHarnessScope);
         Assert.Equal("ProjectFileSymlink", Assert.Single(aliasCase.FileSystemFacts!).Kind);
-        Assert.False(aliasCase.Expected.IsMessy);
-        Assert.Equal(
-            ["approve_once", "approve_session", "approve_always", "approve_everywhere", "deny"],
-            aliasCase.Expected.OptionKeys);
+        Assert.Null(aliasCase.Expected.IsMessy);
+        Assert.Null(aliasCase.Expected.OptionKeys);
+        Assert.Equal("ShellCommandWordsRewriteSuggested", aliasCase.Expected.AgentCorrection);
 
         var protectedCase = Assert.Single(
             fixtures.LiveRegressionCases,
@@ -957,7 +961,9 @@ public sealed partial class ShellApprovalEvidenceContractTests
 
             foreach (var candidate in fixture.Candidates)
             {
-                Assert.NotEmpty(candidate.Tokens);
+                // Null tokens mean Unknown command words (#2306).
+                if (candidate.Tokens is not null)
+                    Assert.NotEmpty(candidate.Tokens);
                 Assert.Single(fixture.ExpectedTrace, row =>
                     row.CandidateId == candidate.Id
                     && row.Coverage == candidate.ExpectedCoverage);
@@ -1173,7 +1179,8 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.All(fact.AuthoredFileSystemValues, path =>
             Assert.True(new ToolPathPolicy(environment, [path])
                 .CommandReferencesDeniedPath(StructuredOnly(analysis))));
-        Assert.Equal("Allow", fixture.ExpectedFinal.Outcome);
+        // The loop variable gives Unknown command words, so the call gets a rewrite correction (#2306).
+        Assert.Equal("RequiresAgentCorrection", fixture.ExpectedFinal.Outcome);
     }
 
     [Fact]
@@ -1199,7 +1206,9 @@ public sealed partial class ShellApprovalEvidenceContractTests
             arguments);
 
         Assert.False(invocation.IsMessy);
-        Assert.True(matcher.IsApproved(
+        // "cat /work/$f" has Unknown command words (the loop variable), so the
+        // "cat" grant cannot cover it; the call gets a rewrite correction (#2306).
+        Assert.False(matcher.IsApproved(
             new ToolName("shell_execute"),
             arguments,
             grants,

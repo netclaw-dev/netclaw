@@ -55,7 +55,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ActiveExecutionTracker.TryRemove` | Only the current owner can remove its guard; cleanup removes that guard | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
 | `SkillManageTool.GuardMutationTarget` and the filesystem authority link and protection results | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 5 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
-| `ApprovalPatternMatching.VerbChainEquals` and `ShellApprovalMatcher.CanonicalVerbTokens` | A shell grant covers exactly its verb chain; a `gh` grant does not cover `gh auth logout`; a word with a digit ends the chain | 10 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
+| `ApprovalPatternMatching.VerbChainEquals` and `ShellPolicyCoordinator.SelectCommandWordsCorrection` | A shell grant covers exactly its command words; a `gh` grant does not cover `gh auth logout`; Unknown command words get a rewrite correction | 5 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -171,15 +171,15 @@ Run the exact verb chain gate:
 ./scripts/run-exact-verb-chain-mutations.sh
 ```
 
-The script selects two spans. The first is the length check in
+The script runs Stryker twice. The first run selects the length check in
 `ApprovalPatternMatching.VerbChainEquals`: `!=` to `==` and `return false` to
 `return true`. The `==` mutant restores prefix matching for a longer candidate,
-so a `gh` grant would cover `gh auth logout`. The second is the digit-rule loop
-in `ShellApprovalMatcher.CanonicalVerbTokens` (eight mutants). Each mutant
-changes which words are the chain. `ExactVerbChainMutationTests` must detect
-all ten. Removal of `length++` loops forever, so Stryker reports it as
-`Timeout`, which counts as detected. A missing or duplicated span fails before
-Stryker starts.
+so a `gh` grant would cover `gh auth logout`. The second run selects the return
+of `ShellPolicyCoordinator.SelectCommandWordsCorrection` (three mutants). A
+mutant that drops the rewrite correction turns a bare-glob call back into a
+prompt or a denial. `ExactVerbChainMutationTests` and
+`ToolAuthorizerOrderMutationTests` must detect all five. A missing or
+duplicated span fails before Stryker starts.
 
 The local run took about 1 minute after package restore. CI runs it in the
 `approval-and-execution` group of the `mutation-gates` job. Its report
@@ -445,6 +445,9 @@ case ID.
 | Change | Rule |
 | --- | --- |
 | `Allowed` to other | Fails unless an intended change has `approvedBy` and names a negative control. |
+| `RequiresAgentCorrection` to `Allowed` | Fails unless an intended change names a negative control. |
+| `RequiresAgentCorrection` to `Denied` | Fails unless an intended change has `approvedBy`. |
+| `RequiresApproval` to or from `RequiresAgentCorrection` | Passes. Neither outcome runs the call. |
 | `Denied` to other | Fails unless an intended change has `approvedBy`. |
 | `RequiresApproval` to `Allowed` | Fails unless an intended change names a negative control. |
 | `RequiresApproval` to `Denied` | Fails unless an intended change has `approvedBy`. |

@@ -580,10 +580,11 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The project glob regression defines POSIX behavior.")]
-    [InlineData("grep -rn \"Mode B\" docs/ *.md 2>/dev/null | head -20", true, "grep")]
-    [InlineData("grep -rn \"Mode B\" docs/ *.md 2>/dev/null | head -20", false, "grep|head")]
-    [InlineData("rm *.md", true, "rm")]
-    [InlineData("rm *.md", false, "rm")]
+    // A bare glob gets a rewrite correction (#2306), so the cases use the path glob ./*.md.
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md 2>/dev/null | head -20", true, "grep")]
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md 2>/dev/null | head -20", false, "grep|head")]
+    [InlineData("rm ./*.md", true, "rm")]
+    [InlineData("rm ./*.md", false, "rm")]
     public async Task Project_glob_with_in_root_file_alias_remains_approval_gated(
         string command,
         bool interactive,

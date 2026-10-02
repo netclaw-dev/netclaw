@@ -572,6 +572,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             "Allow" => ApprovalOutcome.Allowed,
             "RequiresApproval" => ApprovalOutcome.RequiresApproval,
             "Deny" => ApprovalOutcome.Denied,
+            "RequiresAgentCorrection" => ApprovalOutcome.RequiresAgentCorrection,
             _ => throw new InvalidDataException($"Unsupported fixture outcome: {outcome}.")
         };
 
@@ -583,6 +584,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             "NativeToolSuggested" => ApprovalCorrection.NativeTool,
             "ProjectDirectorySuggested" => ApprovalCorrection.ProjectDirectory,
             "ShellWorkingDirectorySuggested" => ApprovalCorrection.ShellWorkingDirectory,
+            "ShellCommandWordsRewriteSuggested" => ApprovalCorrection.ShellCommandWords,
             _ => throw new InvalidDataException($"Unsupported fixture correction: {correction}.")
         };
 

@@ -951,7 +951,8 @@ public sealed class ApprovalLaunchEnvironmentTests(ShellApprovalMatrixFixture fi
         await using var harness = await ShellApprovalHarness.CreateAsync(
             "launch-environment",
             new ShellApprovalInvocation("printenv"),
-            Approvals.PersistentAnywhere("printenv"),
+            // The command words keep each plain variable name (#2306), so the grant names them.
+            Approvals.PersistentAnywhere("printenv NETCLAW_LAUNCH_PROBE NETCLAW_BASH_ENV_PROBE LD_NETCLAW_PROBE DYLD_NETCLAW_PROBE"),
             fixture.ActorSystem,
             Ct);
         var startupFile = Path.Combine(harness.ProjectDirectory, "startup.sh");

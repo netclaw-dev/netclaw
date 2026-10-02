@@ -327,7 +327,8 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
             ToolCorrection.NativeToolSuggested native => $"native:{native.ToolName.Value}",
             ToolCorrection.ProjectDirectorySuggested project => $"project:{project.Directory}",
             ToolCorrection.ShellWorkingDirectorySuggested directory => $"directory:{directory.Directory}",
-            _ => throw new ArgumentOutOfRangeException(nameof(correction), correction, "Unknown correction.")
+            // A correction kind that one revision lacks prints its record text.
+            _ => correction.ToString()
         };
 
     /// <summary>Replaces each run-specific path with a placeholder, longest path first.</summary>

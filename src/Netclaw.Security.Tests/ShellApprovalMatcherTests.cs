@@ -109,9 +109,7 @@ public sealed class ShellApprovalMatcherTests
     [InlineData("rg -rn \"operation failed\" src/ tests/ | head -20; echo \"---\"; rg -rln \"upload\" src/ | head -20")]
     [InlineData("netclaw mcp --help 2>&1 | head -50")]
     [InlineData("find /work/project -iname \"*Command*\" -o -iname \"*Add*\" 2>/dev/null | head; echo \"---\"; rg -rn \"transport http|--transport\" /work/project --include=\"*.cs\" -l 2>/dev/null | head")]
-    [InlineData("for u in /api/first /api/second; do echo \"=== $u ===\"; curl -sS -m 10 \"$u\" | head -c 1500; echo; done")]
     [InlineData("cd /work/project && git status --short 2>&1 | head; echo \"---branch---\"; git branch --show-current 2>&1; echo \"---remotes---\"; git remote -v 2>&1 | head -4; echo \"---recent---\"; git log --oneline -3 2>&1")]
-    [InlineData("~/.dotnet/dotnet test tests/Project.Tests/Project.Tests.csproj --filter \"FullyQualifiedName~SchemaTests\" --nologo 2>&1 | tail -30")]
     [InlineData("docker run --rm -v tools:/tools --entrypoint sh ruby:3.1 -c 'find /tools -maxdepth 2 -type f | head'")]
     [InlineData("docker run --rm --user root -v tools:/workbench/tools -v /tmp/site:/workbench/site -w /workbench/site --entrypoint bash image:tag -c 'bundle exec jekyll build | head'")]
     public void Bash_live_read_and_diagnostic_shapes_are_reusable(string command)
@@ -1612,106 +1610,83 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             });
     }
 
-    // The parser stops its verb walk at the first option. A plain word after an
-    // option can be a subcommand, so the candidate has no verb chain.
+    // A grant key is the ShellSyntaxTree command words: the program and every
+    // plain word, in any option order. Options, paths, words with a digit, and
+    // quoted text with whitespace are arguments.
     [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    [InlineData("gh -R o/r pr view 123")]
-    [InlineData("gh --repo o/r pr list")]
-    [InlineData("git --no-pager log -1")]
-    [InlineData("gh --repo=o/r pr list")]
-    [InlineData("docker -H host ps")]
-    [InlineData("sort -o output input")]
-    public void ExtractCandidates_marks_the_verb_chain_unproven_when_a_word_follows_an_option(string command)
-    {
-        var candidate = Assert.Single(_matcher.ExtractCandidates(
-            new ToolName("shell_execute"),
-            Args(command, "/home/user/project")));
-
-        // The candidate carries every word, so a grant covers only the identical command.
-        Assert.True(candidate.HasUnprovenVerbChain);
-        Assert.Equal(command.Split(' '), candidate.VerbTokens);
-    }
-
-    // Rollback safety: an exact-command grant is stored as a token entry that
-    // always holds an option word. An ordinary verb chain never holds one, so
-    // an older binary (prefix matching on verb chains) can never match it.
-    [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
-    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    [InlineData("gh -R o/r pr view 123")]
-    [InlineData("du -sh *")]
-    [InlineData("git -C /home/user/project --no-pager log -1")]
-    [InlineData("gh pr view 123 -R o/r")]
-    [InlineData("git push origin v0.4.0 --force")]
-    [InlineData("ls -la")]
-    public void Only_an_exact_command_candidate_holds_an_option_word(string command)
+    [InlineData("gh -R o/r pr view 123", new[] { "gh", "pr", "view" })]
+    [InlineData("gh pr view 123 -R o/r", new[] { "gh", "pr", "view" })]
+    [InlineData("gh --repo=o/r pr list", new[] { "gh", "pr", "list" })]
+    [InlineData("git --no-pager log -1", new[] { "git", "log" })]
+    [InlineData("gh --help", new[] { "gh" })]
+    [InlineData("ls -la", new[] { "ls" })]
+    [InlineData("grep -rn needle .", new[] { "grep", "needle" })]
+    [InlineData("git -C /home/user/project status", new[] { "git", "status" })]
+    [InlineData("git push origin v0.4.0 --force", new[] { "git", "push", "origin" })]
+    [InlineData("git show b42bf5a", new[] { "git", "show" })]
+    [InlineData("git commit -m \"a b\"", new[] { "git", "commit" })]
+    [InlineData("du -sh ./*", new[] { "du" })]
+    [InlineData("df -h .", new[] { "df" })]
+    public void ExtractCandidates_uses_the_command_words(string command, string[] expected)
     {
         var candidates = _matcher.ExtractCandidates(
             new ToolName("shell_execute"),
             Args(command, "/home/user/project"));
 
         Assert.NotEmpty(candidates);
-        Assert.All(candidates, candidate => Assert.Equal(
-            candidate.HasUnprovenVerbChain,
-            candidate.VerbTokens!.Any(static token => token.StartsWith('-'))));
+        Assert.All(candidates, candidate => Assert.Equal(expected, candidate.VerbTokens));
     }
 
-    // Rule 2 uses the shell kind: a PowerShell cmdlet binds named parameters.
+    // A bare glob or a brace list can become a command word, so the command
+    // words are Unknown and no grant identity exists.
+    [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("git p?sh")]
+    [InlineData("ls *")]
+    [InlineData("du -sh *")]
+    [InlineData("echo {a,b}")]
+    public void ExtractCandidates_has_no_grant_identity_for_unknown_command_words(string command)
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/home/user/project"));
+
+        Assert.NotEmpty(candidates);
+        Assert.All(candidates, candidate => Assert.Null(candidate.VerbTokens));
+    }
+
+    // A loop variable or a "~" program path gives Unknown command words for
+    // that command (#2306). The call then gets a rewrite correction.
+    [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("for u in /api/first /api/second; do echo \"=== $u ===\"; curl -sS -m 10 \"$u\" | head -c 1500; echo; done")]
+    [InlineData("~/.dotnet/dotnet test tests/Project.Tests/Project.Tests.csproj --filter \"FullyQualifiedName~SchemaTests\" --nologo 2>&1 | tail -30")]
+    public void Live_shapes_with_an_expansion_in_a_command_word_have_no_grant_identity(string command)
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, "/work/project"));
+
+        Assert.Contains(candidates, static candidate => candidate.VerbTokens is null);
+    }
+
+    // PowerShell cmdlets bind named parameters; a parameter value is an argument.
     [Theory]
-    [InlineData("Start-Sleep -Seconds 300")]
-    [InlineData("Get-Process -Name dotnet")]
-    [InlineData("Select-String -Path a.txt -Pattern needle")]
-    public void PowerShell_candidates_keep_a_proved_verb_chain_after_a_named_parameter(string command)
+    [InlineData("Start-Sleep -Seconds 300", new[] { "Start-Sleep" })]
+    [InlineData("Get-Process -Name dotnet", new[] { "Get-Process", "dotnet" })]
+    public void PowerShell_candidates_use_the_command_words(string command, string[] expected)
     {
         var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.CreatePowerShell(
             @"C:\Program Files\PowerShell\7\pwsh.exe",
             PwshDialect.PowerShell7));
 
-        var candidates = matcher.ExtractCandidates(
+        var candidate = Assert.Single(matcher.ExtractCandidates(
             new ToolName("shell_execute"),
-            Args(command, @"C:\work\project"));
+            Args(command, @"C:\work\project")));
 
-        Assert.NotEmpty(candidates);
-        Assert.All(candidates, candidate =>
-        {
-            Assert.Equal(ApprovalShell.PowerShell, candidate.Shell);
-            Assert.False(candidate.HasUnprovenVerbChain);
-        });
-    }
-
-    // Options only, an inline option value, a path or proved operand after an
-    // option, or a verb with a one-token chain in policy data: the chain is proved.
-    [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
-    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
-    [InlineData("gh --help", new[] { "gh" })]
-    [InlineData("gh --version", new[] { "gh" })]
-    [InlineData("ls -la", new[] { "ls" })]
-    [InlineData("cat -n file", new[] { "cat" })]
-    [InlineData("grep -rn needle .", new[] { "grep" })]
-    [InlineData("tr -d abc", new[] { "tr" })]
-    [InlineData("wc --files0-from=/tmp/list", new[] { "wc" })]
-    [InlineData("du --exclude-from=/tmp/patterns ./data", new[] { "du" })]
-    [InlineData("git -C /home/user/project status", new[] { "git", "status" })]
-    [InlineData("gh pr view 123 -R o/r", new[] { "gh", "pr", "view" })]
-    [InlineData("git push origin 1.5.1 --force", new[] { "git", "push", "origin" })]
-    [InlineData("git push origin v0.4.0", new[] { "git", "push", "origin" })]
-    [InlineData("git show b42bf5a", new[] { "git", "show" })]
-    [InlineData("git cherry-pick c5a4090", new[] { "git", "cherry-pick" })]
-    [InlineData("python3 -m pytest", new[] { "python3" })]
-    public void ExtractCandidates_proves_the_verb_chain_without_a_word_after_an_option(
-        string command,
-        string[] expected)
-    {
-        var candidates = _matcher.ExtractCandidates(
-            new ToolName("shell_execute"),
-            Args(command, "/home/user/project"));
-
-        Assert.NotEmpty(candidates);
-        Assert.All(candidates, candidate =>
-        {
-            Assert.False(candidate.HasUnprovenVerbChain);
-            Assert.Equal(expected, candidate.VerbTokens);
-        });
+        Assert.Equal(ApprovalShell.PowerShell, candidate.Shell);
+        Assert.Equal(expected, candidate.VerbTokens);
     }
 
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]

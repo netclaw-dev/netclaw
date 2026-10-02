@@ -54,7 +54,8 @@ internal enum ApprovalCorrection
     ManagedTemporaryDirectory,
     NativeTool,
     ProjectDirectory,
-    ShellWorkingDirectory
+    ShellWorkingDirectory,
+    ShellCommandWords
 }
 
 /// <summary>
@@ -683,6 +684,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 ToolCorrection.ProjectDirectorySuggested suggestion => suggestion.Directory,
                 ToolCorrection.NativeToolSuggested suggestion => suggestion.ToolName.Value,
                 ToolCorrection.ManagedTemporaryDirectorySuggested suggestion => suggestion.Target.ManagedTemporaryDirectory,
+                ToolCorrection.ShellCommandWordsRewriteSuggested suggestion => suggestion.Rewrite.ToString(),
                 _ => null
             },
             PlatformTemporaryRoot = decision.AgentCorrection is ToolCorrection.ManagedTemporaryDirectorySuggested temporary
@@ -740,6 +742,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ToolCorrection.NativeToolSuggested => ApprovalCorrection.NativeTool,
             ToolCorrection.ProjectDirectorySuggested => ApprovalCorrection.ProjectDirectory,
             ToolCorrection.ShellWorkingDirectorySuggested => ApprovalCorrection.ShellWorkingDirectory,
+            ToolCorrection.ShellCommandWordsRewriteSuggested => ApprovalCorrection.ShellCommandWords,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(correction), correction, "Unknown approval correction.")
         };

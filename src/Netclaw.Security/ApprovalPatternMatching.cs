@@ -230,8 +230,7 @@ public static class ApprovalPatternMatching
 
         if (entry.Match is null)
         {
-            return !candidate.HasUnprovenVerbChain
-                   && ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
+            return ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb);
         }
 
         if (entry.Shell is not { } entryShell
@@ -243,22 +242,12 @@ public static class ApprovalPatternMatching
             return false;
         }
 
-        // SECURITY: the parser cannot prove this candidate's verb chain
-        // (gh -R o/r auth logout). Only an exact-command grant for the identical
-        // words covers it. A bare-program grant ("gh") never does.
-        if (candidate.HasUnprovenVerbChain)
-        {
-            return entry.Match == ApprovalMatchKind.TokenPrefix
-                   && entry.VerbTokens is { } exactTokens
-                   && VerbChainEquals(exactTokens, candidate.VerbTokens, entryShell);
-        }
-
         return entry.Match switch
         {
-            // The legacy phrase is the space-joined verb chain, and it must equal
-            // the whole chain: "git push origin" does not cover "git push origin main".
-            // It also must equal the display verb, as before, so the digit rule
-            // of the chain never widens a legacy phrase.
+            // The legacy phrase is the space-joined command words, and it must
+            // equal all of them: "git push origin" does not cover "git push origin main".
+            // It also must equal the display verb, as before, so the command
+            // words never widen a legacy phrase past the older matcher.
             ApprovalMatchKind.LegacyExact =>
                 ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb, entryShell)
                 && MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidate.VerbTokens, entryShell),
@@ -277,9 +266,9 @@ public static class ApprovalPatternMatching
 
     /// <summary>
     /// True when a bare-program grant names a program that policy data gives a
-    /// one-token verb chain (<c>echo</c>, <c>which</c>, <c>jq</c>). The parser
-    /// can fold an operand into its chain (<c>echo hi</c>), but policy treats
-    /// that word as an argument, as <see cref="ShellVerbPolicyData.ApplyVerbShortCircuit"/> does.
+    /// one-token verb chain (<c>echo</c>, <c>which</c>, <c>jq</c>). The command
+    /// words keep a plain operand (<c>echo hi</c>), but policy treats that word
+    /// as an argument, as <see cref="ShellVerbPolicyData.ApplyVerbShortCircuit"/> does.
     /// </summary>
     private static bool IsSingleTokenProgramGrant(
         IReadOnlyList<string> grantTokens,
@@ -290,11 +279,11 @@ public static class ApprovalPatternMatching
            && ToolApprovalEntryComparer.Equals(grantTokens[0], candidateTokens[0], shell);
 
     /// <summary>
-    /// True when a grant's command words equal the candidate's verb chain.
+    /// True when a grant's tokens equal the candidate's command words.
     /// </summary>
     /// <remarks>
-    /// SECURITY: a grant covers exactly its verb chain, and the arguments are
-    /// free. A grant never covers a longer chain: a <c>gh</c> grant covers
+    /// SECURITY: a grant covers exactly its command words, and the arguments are
+    /// free. A grant never covers other words: a <c>gh</c> grant covers
     /// <c>gh --help</c>, not <c>gh auth logout</c>. The stored match kind keeps
     /// its historical name <see cref="ApprovalMatchKind.TokenPrefix"/> so that
     /// the version-3 store format does not change.

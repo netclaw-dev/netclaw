@@ -267,11 +267,14 @@ internal sealed class ReviewedSafeShellPolicy
         if (candidate is not { Shell: { } candidateShell })
             return false;
 
-        if (candidate.VerbTokens is not { } verbTokens)
+        // The reviewed catalog lists parser verb phrases (git status), not grant
+        // command words, so it reads the parser verb chain of the occurrence.
+        if (sourceOccurrence is null || sourceOccurrence.Clause.Verb.Tokens.Count == 0)
             return false;
 
-        if (sourceOccurrence is null)
-            return false;
+        var verbTokens = sourceOccurrence.Clause.Verb.Tokens.ToArray();
+        if (sourceOccurrence.Clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
+            verbTokens[0] = canonicalVerb;
 
         if (ShellFileSystemTreeAccessPolicy.RequiresExactApproval(
                 candidateShell == ApprovalShell.PowerShell

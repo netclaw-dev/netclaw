@@ -113,6 +113,17 @@ class DirectionCheckTests(unittest.TestCase):
         self.assertEqual(0, code, output)
         self.assertIn("approved by owner", output)
 
+    def test_pass_requires_approval_to_correction(self):
+        code, output = self.run_check({**BASE_ROWS, "push-prompts": "RequiresAgentCorrection"})
+        self.assertEqual(0, code, output)
+        self.assertIn("the call does not run", output)
+
+    def test_fail_unlisted_correction_to_allowed(self):
+        baseline = {**BASE_ROWS, "push-prompts": "RequiresAgentCorrection"}
+        code, output = self.run_check({**BASE_ROWS, "push-prompts": "Allowed"}, baseline_rows=baseline)
+        self.assertEqual(1, code, output)
+        self.assertIn("RequiresAgentCorrection -> Allowed needs an intended change", output)
+
     def test_fail_denied_to_allowed(self):
         code, output = self.run_check({**BASE_ROWS, "hard-deny-blocks": "Allowed"})
         self.assertEqual(1, code, output)

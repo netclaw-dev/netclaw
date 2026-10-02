@@ -17,6 +17,9 @@ Outcome direction rule (plan decision D1):
     Denied           -> anything else   fails unless an intended change has approvedBy
     RequiresApproval -> Allowed         fails unless an intended change names a negative control
     RequiresApproval -> Denied          fails unless an intended change has approvedBy
+    RequiresAgentCorrection -> Allowed  fails unless an intended change names a negative control
+    RequiresAgentCorrection -> Denied   fails unless an intended change has approvedBy
+    RequiresApproval <-> RequiresAgentCorrection  passes (neither runs the call)
     case removed                        always fails
     case added                          passes (reported)
 
@@ -70,8 +73,9 @@ DEFAULT_BASE_REF = "origin/dev"
 
 ALLOWED = "Allowed"
 REQUIRES_APPROVAL = "RequiresApproval"
+REQUIRES_AGENT_CORRECTION = "RequiresAgentCorrection"
 DENIED = "Denied"
-OUTCOMES = (ALLOWED, REQUIRES_APPROVAL, DENIED)
+OUTCOMES = (ALLOWED, REQUIRES_APPROVAL, REQUIRES_AGENT_CORRECTION, DENIED)
 
 # Only an unescaped pipe separates cells. The review table renderer writes a
 # pipe inside a cell as "\|", and cell separators are " | ".
@@ -285,17 +289,22 @@ def evaluate(transition: Transition, entry: dict | None, baseline: dict, candida
         return
     if after == ALLOWED:
         if entry is None:
-            transition.note = "RequiresApproval -> Allowed needs an intended change"
+            transition.note = f"{before} -> Allowed needs an intended change"
             return
         if check_negative_control(transition, entry, baseline, candidate):
             transition.status = "ok"
         return
-    # RequiresApproval -> Denied
-    if entry is None or "approvedBy" not in entry:
-        transition.note = "RequiresApproval -> Denied needs an intended change with approvedBy"
+    if after == DENIED:
+        if entry is None or "approvedBy" not in entry:
+            transition.note = f"{before} -> Denied needs an intended change with approvedBy"
+            return
+        transition.status = "ok"
+        transition.note = f"approved by {entry['approvedBy']}"
         return
+    # RequiresApproval <-> RequiresAgentCorrection: neither outcome runs the call.
     transition.status = "ok"
-    transition.note = f"approved by {entry['approvedBy']}"
+    transition.note = "consent or correction; the call does not run"
+    return
 
 
 def check_negative_control(transition: Transition, entry: dict, baseline: dict, candidate: dict) -> bool:

@@ -1165,13 +1165,12 @@ public sealed class ToolAccessPolicy
         return repositories![0].CommonDirectory;
     }
 
-    // A candidate with an unproven verb chain carries its exact command words,
-    // so its reusable grant covers only the identical command.
+    // An approval-exempt output command is never saved, so it needs no command words.
     private static bool HasReusableShellPhrase(ApprovalCandidate candidate) =>
-        candidate.Shell is not null &&
-        candidate.VerbTokens is { Count: > 0 } tokens &&
-        tokens.All(static token =>
-            token.Length > 0 && !token.Any(char.IsWhiteSpace));
+        candidate.Shell is not null
+        && (ApprovalPatternMatching.IsPureSideEffect(candidate)
+            || candidate.VerbTokens is { Count: > 0 } tokens
+               && tokens.All(static token => token.Length > 0 && !token.Any(char.IsWhiteSpace)));
 
     /// <summary>
     /// Returns true when the cwd is too shallow to support a folder-scoped

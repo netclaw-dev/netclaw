@@ -231,9 +231,6 @@ internal sealed class ShellPolicyCoordinator(
         {
             if (candidate.Candidate.Shell is null)
                 return true;
-
-            if (candidate.Candidate.VerbTokens is null)
-                return true;
         }
 
         return false;
@@ -259,8 +256,11 @@ internal sealed class ShellPolicyCoordinator(
             if (candidate.Candidate.Shell != expectedShell)
                 return false;
 
-            // RequiresExactApproval handles missing facts before this validation of supplied facts.
-            var tokens = candidate.Candidate.VerbTokens!;
+            // Unknown command words are a valid fact: no grant can cover such a
+            // candidate, so coverage leaves it uncovered (CompleteUncovered).
+            if (candidate.Candidate.VerbTokens is not { } tokens)
+                continue;
+
             if (tokens.Count == 0 || tokens.Any(static token => token.Length == 0 || token.Any(char.IsWhiteSpace)))
                 return false;
         }
@@ -364,7 +364,7 @@ internal sealed class ShellPolicyCoordinator(
             evaluation,
             approvalContext,
             approvalMatches,
-            corrections);
+            SelectCommandWordsCorrection(remaining) ?? corrections);
     }
 
     /// <summary>Completes a shell call whose every candidate has coverage.</summary>
@@ -388,6 +388,41 @@ internal sealed class ShellPolicyCoordinator(
                 grantCandidateCount == 0
                     ? ToolAllowReason.ApprovalExemptShellCandidates
                     : ToolAllowReason.ReviewedSafePolicy));
+    }
+
+    /// <summary>
+    /// Returns a rewrite correction when an uncovered candidate has Unknown
+    /// command words and every such candidate has a cause that the model can
+    /// fix (a bare glob, or in Bash an expansion, brace list, or word
+    /// splitting). Returns null otherwise, so a dynamic program name or a
+    /// PowerShell script block keeps the one-time prompt or the denial.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the correction grants no authority. The call does not run and
+    /// does not prompt. The rewritten call passes normal approval. A candidate
+    /// that other coverage (reviewed-safe, approval-exempt output) already
+    /// covers needs no command words, so it never causes a correction.
+    /// </remarks>
+    internal static ToolCorrectionCollection? SelectCommandWordsCorrection(
+        IReadOnlyList<ShellPolicyCandidate> uncovered)
+    {
+        ToolCorrection.ShellCommandWordsRewriteSuggested? correction = null;
+        foreach (var candidate in uncovered)
+        {
+            if (candidate.Candidate.VerbTokens is not null)
+                continue;
+
+            if (candidate.SourceOccurrence is not { } occurrence
+                || candidate.Candidate.Shell is not { } shell
+                || ShellApprovalMatcher.ClassifyUnknownCommandWords(occurrence, shell) is not { } rewrite)
+            {
+                return null;
+            }
+
+            correction ??= new ToolCorrection.ShellCommandWordsRewriteSuggested(rewrite, shell);
+        }
+
+        return correction is null ? null : new ToolCorrectionCollection([correction]);
     }
 
     internal static ToolAuthorizationDecision CompleteOneTimeOrPrompt(

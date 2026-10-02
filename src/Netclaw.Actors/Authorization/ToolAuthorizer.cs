@@ -269,10 +269,13 @@ internal sealed class ToolAuthorizer
         ToolAuthorizationDecision denial,
         CancellationToken ct)
     {
-        // An exact-approval call, or a candidate without valid verb facts, cannot carry a grant.
+        // An exact-approval call, a candidate without valid verb facts, or a
+        // candidate with Unknown command words cannot carry a grant.
         if (call.Projection is not { } projection
             || ShellPolicyCoordinator.RequiresExactApproval(projection)
-            || !ShellPolicyCoordinator.HasValidCandidateSyntax(projection))
+            || !ShellPolicyCoordinator.HasValidCandidateSyntax(projection)
+            || projection.Candidates.Any(static candidate =>
+                candidate.CanRequestStoredGrant && candidate.Candidate.VerbTokens is null))
         {
             return denial;
         }
