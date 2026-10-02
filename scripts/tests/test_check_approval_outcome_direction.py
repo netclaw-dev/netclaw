@@ -90,11 +90,28 @@ class DirectionCheckTests(unittest.TestCase):
         self.assertEqual(1, code, output)
         self.assertIn("Allowed must stay Allowed", output)
 
-    def test_fail_allowed_change_even_when_listed_with_approval(self):
-        entry = change(id="safe-allows", **{"from": "Allowed", "to": "Denied"}, approvedBy="owner")
+    def test_fail_allowed_change_listed_without_approval(self):
+        entry = change(id="safe-allows", **{"from": "Allowed", "to": "Denied"}, negativeControl="hard-deny-blocks")
         code, output = self.run_check({**BASE_ROWS, "safe-allows": "Denied"}, [entry])
         self.assertEqual(1, code, output)
         self.assertIn("Allowed must stay Allowed", output)
+
+    def test_fail_allowed_change_with_approval_but_no_negative_control(self):
+        entry = change(id="safe-allows", **{"from": "Allowed", "to": "Denied"}, approvedBy="owner")
+        entry.pop("negativeControl", None)
+        code, output = self.run_check({**BASE_ROWS, "safe-allows": "Denied"}, [entry])
+        self.assertEqual(1, code, output)
+        self.assertIn("intended change has no negativeControl", output)
+
+    def test_pass_allowed_change_with_approval_and_negative_control(self):
+        entry = change(
+            id="safe-allows",
+            **{"from": "Allowed", "to": "RequiresApproval"},
+            approvedBy="owner",
+            negativeControl="hard-deny-blocks")
+        code, output = self.run_check({**BASE_ROWS, "safe-allows": "RequiresApproval"}, [entry])
+        self.assertEqual(0, code, output)
+        self.assertIn("approved by owner", output)
 
     def test_fail_denied_to_allowed(self):
         code, output = self.run_check({**BASE_ROWS, "hard-deny-blocks": "Allowed"})

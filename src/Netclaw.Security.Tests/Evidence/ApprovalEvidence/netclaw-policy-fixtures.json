@@ -142,12 +142,12 @@
       ],
       "expectedTrace": [
         { "stage": "StoredGrantMatch", "candidateId": 0, "executableBasename": "cd", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
-        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
+        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "git", "outcome": "Uncovered", "reason": "TokenMismatch", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "StoredGrantMatch", "candidateId": 2, "executableBasename": "tail", "outcome": "Uncovered", "reason": "NoGrant", "coverage": "Uncovered", "scopeRelation": "None", "grantTimestamp": null },
         { "stage": "ReviewedSafePolicy", "candidateId": 2, "executableBasename": "tail", "outcome": "Covered", "reason": "ReviewedSafePhrase", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderRealRoot", "grantTimestamp": null },
-        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "Allow", "reason": "AllCandidatesCovered", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
+        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
       ],
-      "expectedFinal": { "outcome": "Allow", "reason": "AllCandidatesCovered" }
+      "expectedFinal": { "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "approvalCandidates": ["git push upstream"], "isMessy": false, "agentCorrection": null }
     },
     {
       "evidenceId": "D08",
@@ -174,13 +174,13 @@
       ],
       "expectedTrace": [
         { "stage": "StoredGrantMatch", "candidateId": 0, "executableBasename": "cd", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
-        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
+        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "git", "outcome": "Uncovered", "reason": "TokenMismatch", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "StoredGrantMatch", "candidateId": 3, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "StoredGrantMatch", "candidateId": 4, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "ReviewedSafePolicy", "candidateId": 2, "executableBasename": "echo", "outcome": "Covered", "reason": "ApprovalExemptSideEffect", "coverage": "ReviewedSafePolicy", "scopeRelation": "None", "grantTimestamp": null },
-        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "Allow", "reason": "AllCandidatesCovered", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
+        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
       ],
-      "expectedFinal": { "outcome": "Allow", "reason": "AllCandidatesCovered" }
+      "expectedFinal": { "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "approvalCandidates": ["git ls-remote upstream"], "isMessy": false, "agentCorrection": null }
     },
     {
       "evidenceId": "D09",
@@ -254,7 +254,7 @@
       ],
       "expectedTrace": [
         { "stage": "StoredGrantMatch", "candidateId": 0, "executableBasename": "cd", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
-        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
+        { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "git", "outcome": "Uncovered", "reason": "TokenMismatch", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "StoredGrantMatch", "candidateId": 2, "executableBasename": "tail", "outcome": "Uncovered", "reason": "NoGrant", "coverage": "Uncovered", "scopeRelation": "None", "grantTimestamp": null },
         { "stage": "StoredGrantMatch", "candidateId": 4, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "StoredGrantMatch", "candidateId": 5, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
@@ -265,9 +265,9 @@
         { "stage": "ReviewedSafePolicy", "candidateId": 9, "executableBasename": "echo", "outcome": "Covered", "reason": "ApprovalExemptSideEffect", "coverage": "ReviewedSafePolicy", "scopeRelation": "None", "grantTimestamp": null },
         { "stage": "ReviewedSafePolicy", "candidateId": 2, "executableBasename": "tail", "outcome": "Covered", "reason": "ReviewedSafePhrase", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderRealRoot", "grantTimestamp": null },
         { "stage": "ReviewedSafePolicy", "candidateId": 8, "executableBasename": "grep", "outcome": "Covered", "reason": "ReviewedSafePhrase", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderRealRoot", "grantTimestamp": null },
-        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "Allow", "reason": "AllCandidatesCovered", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
+        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
       ],
-      "expectedFinal": { "outcome": "Allow", "reason": "AllCandidatesCovered" }
+      "expectedFinal": { "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "approvalCandidates": ["git fetch upstream"], "isMessy": false, "agentCorrection": null }
     },
     {
       "evidenceId": "D11",
@@ -328,14 +328,14 @@
       "expectedTrace": [
         { "stage": "StoredGrantMatch", "candidateId": 0, "executableBasename": "cd", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "StoredGrantMatch", "candidateId": 2, "executableBasename": "gh", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
-        { "stage": "StoredGrantMatch", "candidateId": 4, "executableBasename": "git", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
+        { "stage": "StoredGrantMatch", "candidateId": 4, "executableBasename": "git", "outcome": "Uncovered", "reason": "TokenMismatch", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "StoredGrantMatch", "candidateId": 6, "executableBasename": "gh", "outcome": "Covered", "reason": "PersistentGlobalGrant", "coverage": "PersistentGlobal", "scopeRelation": "Global", "grantTimestamp": "2026-08-13T00:00:00.0000000+00:00" },
         { "stage": "ReviewedSafePolicy", "candidateId": 1, "executableBasename": "echo", "outcome": "Covered", "reason": "ApprovalExemptSideEffect", "coverage": "ReviewedSafePolicy", "scopeRelation": "None", "grantTimestamp": null },
         { "stage": "ReviewedSafePolicy", "candidateId": 3, "executableBasename": "echo", "outcome": "Covered", "reason": "ApprovalExemptSideEffect", "coverage": "ReviewedSafePolicy", "scopeRelation": "None", "grantTimestamp": null },
         { "stage": "ReviewedSafePolicy", "candidateId": 5, "executableBasename": "echo", "outcome": "Covered", "reason": "ApprovalExemptSideEffect", "coverage": "ReviewedSafePolicy", "scopeRelation": "None", "grantTimestamp": null },
-        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "Allow", "reason": "AllCandidatesCovered", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
+        { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
       ],
-      "expectedFinal": { "outcome": "Allow", "reason": "AllCandidatesCovered" }
+      "expectedFinal": { "outcome": "RequiresApproval", "reason": "UncoveredCandidates", "approvalCandidates": ["git ls-remote upstream"], "isMessy": false, "agentCorrection": null }
     },
     {
       "evidenceId": "D14",
@@ -824,7 +824,7 @@
         "initialWorkingDirectory": "/work", "projectDirectory": "/work", "sessionDirectory": "/work",
         "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
         "useBundledSafeCatalog": true,
-        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["ssh"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+        "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["ssh"], "isMessy": false, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 1 }
       }
     },
     {
@@ -1062,7 +1062,7 @@
       "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
-      "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["sort"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["sort"], "isMessy": false, "optionKeys": ["approve_once", "deny"], "actorCheckCount": 1 }
     },
     {
       "id": "A12",

@@ -43,7 +43,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private const string ApprovalMatrixSha256 =
         "0169105efe87b345d9a82d777ef86909e31fa81a5255cc0cc30f32fbe4d0d6b0";
     private const string LiveRegressionCasesSha256 =
-        "684b89f8e01f6abc8d4b9cff49c1e1ab16d3df9cd6aaf028e2aa0822509c421a";
+        "230b82378bd3d8e81cd540d09d01cb06da132d19f717e37e1f57e188bdf534a3";
     private const string FreshSessionHarvestSha256 =
         "4a6acc38746dd23df75e6a95fa4fa84d43ae74a35ea3ca6dd17a8dfd3bc3b511";
     private const string FreshSessionPolicyFixturesSha256 =

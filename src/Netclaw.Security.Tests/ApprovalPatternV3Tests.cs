@@ -17,12 +17,14 @@ public sealed class ApprovalPatternV3Tests
     private static readonly ApprovalEntry BashGitPush =
         ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"]);
 
+    // A grant covers exactly its verb chain (#2306): only the equal chain matches.
     [Theory]
-    [InlineData("git push", new[] { "git", "push" })]
-    [InlineData("git push origin", new[] { "git", "push", "origin" })]
+    [InlineData("git push", new[] { "git", "push" }, true)]
+    [InlineData("git push origin", new[] { "git", "push", "origin" }, false)]
     public void Token_prefix_matches_complete_candidate_prefix(
         string verb,
-        string[] tokens)
+        string[] tokens,
+        bool expected)
     {
         var candidate = new ApprovalCandidate(verb, Directory: null)
         {
@@ -30,7 +32,7 @@ public sealed class ApprovalPatternV3Tests
             Shell = ApprovalShell.Bash,
         };
 
-        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+        Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(
             candidate,
             cwd: null,
             [BashGitPush]));
@@ -113,7 +115,8 @@ public sealed class ApprovalPatternV3Tests
             Shell = ApprovalShell.Bash,
         };
 
-        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
+        // The parser chain "git ls-tree feature" is longer than the grant (#2306).
+        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
             candidate,
             cwd: null,
             [grant]));

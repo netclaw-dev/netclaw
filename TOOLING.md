@@ -440,7 +440,7 @@ case ID.
 
 | Change | Rule |
 | --- | --- |
-| `Allowed` to other | Always fails. |
+| `Allowed` to other | Fails unless an intended change has `approvedBy` and names a negative control. |
 | `Denied` to other | Fails unless an intended change has `approvedBy`. |
 | `RequiresApproval` to `Allowed` | Fails unless an intended change names a negative control. |
 | `RequiresApproval` to `Denied` | Fails unless an intended change has `approvedBy`. |

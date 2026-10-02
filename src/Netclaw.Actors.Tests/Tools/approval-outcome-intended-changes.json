@@ -1,3 +1,22 @@
 {
-  "changes": []
+  "changes": [
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-git-ls-tree-external-reuses-canonical-grant",
+      "from": "Allowed",
+      "to": "RequiresApproval",
+      "reason": "A shell grant covers exactly its verb chain (#2306). The parser chain of 'git ls-tree feature' is longer than the 'git ls-tree' grant, so the grant does not cover it.",
+      "negativeControl": "safe-git-ls-tree-external-prompts-with-canonical-verb",
+      "approvedBy": "Aaron Stannard (owner), exact verb-chain decision for #2306, 2026-10-02"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-grant-allows",
+      "from": "Allowed",
+      "to": "Denied",
+      "reason": "A shell grant covers exactly its verb chain (#2306). The 'git ls-tree' grant does not cover 'git ls-tree feature', so no grant replaces the trusted-root denial of the unattended call.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), exact verb-chain decision for #2306, 2026-10-02"
+    }
+  ]
 }

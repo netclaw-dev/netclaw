@@ -138,7 +138,8 @@ public sealed class ToolApprovalActorTests : TestKit
         await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh"], persistent: false, cwd: null, ct);
 
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh pr"], cwd: null, ct);
-        Assert.Empty(unapproved);
+        // A grant covers exactly its verb chain (#2306): "gh" does not cover "gh pr".
+        Assert.Equal(["gh pr"], unapproved);
     }
 
     [Fact]
@@ -151,7 +152,8 @@ public sealed class ToolApprovalActorTests : TestKit
         await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push origin"], cwd: null, ct);
-        Assert.Empty(unapproved);
+        // A grant covers exactly its verb chain (#2306): "git push" does not cover "git push origin".
+        Assert.Equal(["git push origin"], unapproved);
     }
 
     [Theory]
@@ -676,8 +678,9 @@ public sealed class ToolApprovalActorTests : TestKit
                 cwd: null,
                 ct);
 
-            Assert.Empty(result.UnapprovedPatterns);
-            Assert.Single(result.ApprovedMatches);
+            // A grant covers exactly its verb chain (#2306): "git push" does not cover "git push origin".
+            Assert.Equal(["git push origin"], result.UnapprovedPatterns);
+            Assert.Empty(result.ApprovedMatches);
         }
         finally
         {

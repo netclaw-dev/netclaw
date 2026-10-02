@@ -345,7 +345,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             {
                 AssignmentDigest = assignmentDigest,
                 VerbTokens = GetCanonicalVerbTokens(clause),
-                HasUnprovenVerbChain = HasOpenVerbChain(occurrence),
+                // PowerShell cmdlets bind named parameters (Start-Sleep -Seconds 300),
+                // so the rule applies to the Bash grammar only.
+                HasUnprovenVerbChain = shell == ApprovalShell.Bash && HasOpenVerbChain(occurrence),
                 Shell = shell,
                 SourceOccurrence = occurrence,
             })
@@ -387,6 +389,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// option's shell word, so it is not a later word. A verb with a one-token
     /// chain in policy data (<c>ls</c>, <c>cat</c>, <c>grep</c>) has operands
     /// only, so <c>ls -la</c> and <c>cat -n file</c> keep a proved chain.
+    /// The caller applies the rule to the Bash grammar only. A PowerShell
+    /// cmdlet takes named parameters, so a word after an option is usually a
+    /// parameter value. A native command under PowerShell keeps exact-chain
+    /// matching only.
     /// </remarks>
     internal static bool HasOpenVerbChain(ShellSyntaxTree.CommandOccurrence occurrence)
     {

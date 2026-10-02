@@ -627,8 +627,10 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
 
         var observed = await harness.EvaluateShellAsync("git tag v0.5.0", Ct);
 
-        Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
-        Assert.Equal(ApprovalAllowReason.StoredApproval, observed.AllowReason);
+        // A grant covers exactly its verb chain (#2306). The parser chain is
+        // "git tag v0.5.0", so the "git tag" grant does not cover it.
+        Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+        Assert.Null(observed.AllowReason);
     }
 
     // ── 11. Assignment digest identity ──

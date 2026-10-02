@@ -1632,6 +1632,29 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.Equal([command.Split(' ')[0]], candidate.VerbTokens);
     }
 
+    // Rule 2 uses the shell kind: a PowerShell cmdlet binds named parameters.
+    [Theory]
+    [InlineData("Start-Sleep -Seconds 300")]
+    [InlineData("Get-Process -Name dotnet")]
+    [InlineData("Select-String -Path a.txt -Pattern needle")]
+    public void PowerShell_candidates_keep_a_proved_verb_chain_after_a_named_parameter(string command)
+    {
+        var matcher = new ShellApprovalMatcher(ShellExecutionEnvironment.CreatePowerShell(
+            @"C:\Program Files\PowerShell\7\pwsh.exe",
+            PwshDialect.PowerShell7));
+
+        var candidates = matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args(command, @"C:\work\project"));
+
+        Assert.NotEmpty(candidates);
+        Assert.All(candidates, candidate =>
+        {
+            Assert.Equal(ApprovalShell.PowerShell, candidate.Shell);
+            Assert.False(candidate.HasUnprovenVerbChain);
+        });
+    }
+
     // Options only, an inline option value, a path or proved operand after an
     // option, or a verb with a one-token chain in policy data: the chain is proved.
     [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]

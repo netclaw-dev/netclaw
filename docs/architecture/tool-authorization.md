@@ -539,7 +539,9 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   count, option and path flags, argument order and source positions, and
   parser-proved operand values. No grant covers such a candidate, and the
   prompt offers only `Once` and `Deny`. The approval actor also refuses to
-  save a grant for it. Reviewed-safe coverage still applies.
+  save a grant for it. Reviewed-safe coverage still applies. The rule uses the
+  shell kind and applies to Bash only: a PowerShell cmdlet binds named
+  parameters (`Start-Sleep -Seconds 300`), so a word after an option is a value.
 - Breaks: `ResolveAuthorizationScope` treats the first operand of `find` and
   `cd` as a directory. That is private grammar of two executables.
 

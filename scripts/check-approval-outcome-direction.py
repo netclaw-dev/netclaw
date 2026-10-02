@@ -12,7 +12,8 @@ Markdown heading above the table.
 
 Outcome direction rule (plan decision D1):
 
-    Allowed          -> anything else   always fails (regression)
+    Allowed          -> anything else   fails unless an intended change has approvedBy
+                                        and names a negative control
     Denied           -> anything else   fails unless an intended change has approvedBy
     RequiresApproval -> Allowed         fails unless an intended change names a negative control
     RequiresApproval -> Denied          fails unless an intended change has approvedBy
@@ -36,10 +37,12 @@ Intended-changes file (JSON):
     }
 
 - "section", "id", "from", "to", and "reason" are required.
-- "negativeControl" is required for RequiresApproval -> Allowed. It names a case
-  ID in the same section. That case must exist in the baseline and in the
-  candidate snapshot, and it must not be Allowed in either one.
-- "approvedBy" is required for Denied -> other and RequiresApproval -> Denied.
+- "negativeControl" is required for RequiresApproval -> Allowed and for
+  Allowed -> other. It names a case ID in the same section. That case must
+  exist in the baseline and in the candidate snapshot, and it must not be
+  Allowed in either one.
+- "approvedBy" is required for Allowed -> other, Denied -> other, and
+  RequiresApproval -> Denied.
 - Each entry that is new since the baseline must match an actual transition.
   A new entry that does not match fails the check (stale entry).
 - An entry that is also in the baseline version of the file is history. The
@@ -264,7 +267,14 @@ def evaluate(transition: Transition, entry: dict | None, baseline: dict, candida
             f"actual is {before} -> {after}")
         return
     if before == ALLOWED:
-        transition.note = "Allowed must stay Allowed"
+        # A tighter grant contract can stop an old Allowed case. Only an owner
+        # can approve it, and a control case must still prompt or deny.
+        if entry is None or "approvedBy" not in entry:
+            transition.note = "Allowed must stay Allowed unless an intended change has approvedBy"
+            return
+        if check_negative_control(transition, entry, baseline, candidate):
+            transition.status = "ok"
+            transition.note = f"approved by {entry['approvedBy']}; {transition.note}"
         return
     if before == DENIED:
         if entry is None or "approvedBy" not in entry:
@@ -277,26 +287,8 @@ def evaluate(transition: Transition, entry: dict | None, baseline: dict, candida
         if entry is None:
             transition.note = "RequiresApproval -> Allowed needs an intended change"
             return
-        control_id = entry.get("negativeControl")
-        if control_id is None:
-            transition.note = "intended change has no negativeControl"
-            return
-        # The control must be an existing case that prompts or denies before
-        # and after the change. A control that the same PR adds proves nothing.
-        control_key = (transition.section, control_id)
-        control_before = baseline.get(control_key)
-        control_after = candidate.get(control_key)
-        if control_before is None or control_after is None:
-            transition.note = (
-                f"negative control {control_id!r} must exist in the baseline and the candidate")
-            return
-        if control_id == transition.case_id or ALLOWED in (control_before.result, control_after.result):
-            transition.note = (
-                f"negative control {control_id!r} is Allowed in the baseline or the candidate; "
-                "it must prompt or deny in both")
-            return
-        transition.status = "ok"
-        transition.note = f"negative control {control_id} is {control_after.result}"
+        if check_negative_control(transition, entry, baseline, candidate):
+            transition.status = "ok"
         return
     # RequiresApproval -> Denied
     if entry is None or "approvedBy" not in entry:
@@ -304,6 +296,30 @@ def evaluate(transition: Transition, entry: dict | None, baseline: dict, candida
         return
     transition.status = "ok"
     transition.note = f"approved by {entry['approvedBy']}"
+
+
+def check_negative_control(transition: Transition, entry: dict, baseline: dict, candidate: dict) -> bool:
+    """Validates the entry's negative control and records the result in the note."""
+    control_id = entry.get("negativeControl")
+    if control_id is None:
+        transition.note = "intended change has no negativeControl"
+        return False
+    # The control must be an existing case that prompts or denies before
+    # and after the change. A control that the same PR adds proves nothing.
+    control_key = (transition.section, control_id)
+    control_before = baseline.get(control_key)
+    control_after = candidate.get(control_key)
+    if control_before is None or control_after is None:
+        transition.note = (
+            f"negative control {control_id!r} must exist in the baseline and the candidate")
+        return False
+    if control_id == transition.case_id or ALLOWED in (control_before.result, control_after.result):
+        transition.note = (
+            f"negative control {control_id!r} is Allowed in the baseline or the candidate; "
+            "it must prompt or deny in both")
+        return False
+    transition.note = f"negative control {control_id} is {control_after.result}"
+    return True
 
 
 def summarize(rows: dict[tuple[str, str], Row]) -> str:

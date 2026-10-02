@@ -286,17 +286,20 @@ public static class ShellApprovalCases
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Require(["git ls-tree feature"])),
+        // A grant covers exactly its verb chain (#2306). The parser chain of
+        // this call is "git ls-tree feature", so a "git ls-tree" grant does not cover it.
         Case(
             "safe-git-ls-tree-external-reuses-canonical-grant",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git ls-tree feature")),
+            ExpectedApproval.Require(["git ls-tree feature"])),
         // PR 6e: in an unattended run, a stored grant decides outside the trusted roots.
+        // The "git ls-tree" grant does not cover the "git ls-tree feature" chain (#2306).
         Case(
             "unattended-external-grant-allows",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git ls-tree feature")),
+            ExpectedApproval.Deny("shell_working_directory_outside_trust_zone", approvalChecks: 1)),
         Case(
             "unattended-external-without-grant-denies",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),

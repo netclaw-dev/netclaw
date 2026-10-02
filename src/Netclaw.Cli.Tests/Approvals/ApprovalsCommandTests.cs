@@ -778,6 +778,6 @@ public sealed class ApprovalsCommandTests : IDisposable
 
         var output = _output.ToString();
         Assert.Contains("trust-verb", output);
-        Assert.Contains("typed token prefixes", output);
+        Assert.Contains("covers exactly its command words", output);
     }
 }
