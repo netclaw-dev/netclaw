@@ -231,6 +231,14 @@ internal sealed class ShellPolicyCoordinator(
         {
             if (candidate.Candidate.Shell is null)
                 return true;
+
+            // A candidate with no parser verb (a redirect-only clause) has no
+            // command identity at all, as before: exact approval only.
+            if (candidate.Candidate.VerbTokens is null
+                && candidate.SourceOccurrence?.Clause.Verb.Tokens is not { Count: > 0 })
+            {
+                return true;
+            }
         }
 
         return false;
@@ -257,9 +265,19 @@ internal sealed class ShellPolicyCoordinator(
                 return false;
 
             // Unknown command words are a valid fact: no grant can cover such a
-            // candidate, so coverage leaves it uncovered (CompleteUncovered).
+            // candidate, so coverage leaves it uncovered (CompleteUncovered). Its
+            // parser verb chain still needs the same valid syntax as before, so
+            // unusable input keeps failing closed.
             if (candidate.Candidate.VerbTokens is not { } tokens)
+            {
+                if (candidate.SourceOccurrence?.Clause.Verb.Tokens is not { Count: > 0 } parserTokens
+                    || parserTokens.Any(static token => token.Length == 0 || token.Any(char.IsWhiteSpace)))
+                {
+                    return false;
+                }
+
                 continue;
+            }
 
             if (tokens.Count == 0 || tokens.Any(static token => token.Length == 0 || token.Any(char.IsWhiteSpace)))
                 return false;
