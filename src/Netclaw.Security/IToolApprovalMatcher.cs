@@ -38,9 +38,9 @@ public sealed record ApprovalCandidate(
 
     /// <summary>
     /// The immutable command words that a shell grant must equal: the
-    /// ShellSyntaxTree <c>CommandWords</c> fact (the program and every plain
-    /// word, in any option order). Null when the parser cannot prove the
-    /// command words, so no reusable grant can apply.
+    /// ShellSyntaxTree <c>CommandWords</c> fact (the program, the verb slot,
+    /// and the plain words after it, in any option order). Null when the parser
+    /// cannot prove the command words, so no reusable grant can apply.
     /// </summary>
     public IReadOnlyList<string>? VerbTokens { get; init; }
 
@@ -367,12 +367,14 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// </summary>
     /// <remarks>
     /// SECURITY: a grant covers a call only when its words equal these words,
-    /// and the arguments are free. The parser keeps the program and every plain
-    /// word in any option order, so <c>gh -R o/r pr view 1</c> and
-    /// <c>gh pr view 1 -R o/r</c> both give <c>gh pr view</c>. It skips options,
-    /// paths, path patterns with <c>/</c>, words with a digit (hashes, tags,
-    /// versions), and quoted text with whitespace. A bare glob, an expansion, or
-    /// a dynamic program name gives <c>Unknown</c>: such a word could become a
+    /// and the arguments are free. The parser keeps the program, the verb slot,
+    /// and the plain words after it, in any option order, so
+    /// <c>gh -R o/r pr view 1</c> and <c>gh pr view 1 -R o/r</c> both give
+    /// <c>gh pr view</c>. It skips options and their values, paths, path
+    /// patterns with <c>/</c>, words with a digit (hashes, tags, versions),
+    /// quoted text with whitespace, and, after the verb slot, expansions and
+    /// globs. A bare glob, an expansion, or a brace list in the verb slot, or a
+    /// dynamic program name, gives <c>Unknown</c>: such a word could become a
     /// subcommand, so no grant can cover the call. A PowerShell alias uses its
     /// canonical cmdlet name.
     /// </remarks>

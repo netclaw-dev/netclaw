@@ -20,84 +20,21 @@
     },
     {
       "section": "Fresh Personal approval matrix",
-      "id": "four-anywhere-grants-allow",
-      "from": "Allowed",
-      "to": "RequiresApproval",
-      "reason": "A grant covers exactly its command words (#2306). \"fix\" after \"-m\" is a plain word, so the command words of \"git commit -m fix\" are \"git commit fix\", and a \"git commit\" grant does not cover them.",
-      "negativeControl": "four-one-missing-grant-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
-    },
-    {
-      "section": "Fresh Personal approval matrix",
-      "id": "four-here-grants-allow",
-      "from": "Allowed",
-      "to": "RequiresApproval",
-      "reason": "A grant covers exactly its command words (#2306). \"fix\" after \"-m\" is a plain word, so the command words of \"git commit -m fix\" are \"git commit fix\", and a \"git commit\" grant does not cover them.",
-      "negativeControl": "four-one-missing-grant-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
-    },
-    {
-      "section": "Fresh Personal approval matrix",
-      "id": "four-mixed-grant-sources-allow",
-      "from": "Allowed",
-      "to": "RequiresApproval",
-      "reason": "A grant covers exactly its command words (#2306). \"fix\" after \"-m\" is a plain word, so the command words of \"git commit -m fix\" are \"git commit fix\", and a \"git commit\" grant does not cover them.",
-      "negativeControl": "four-one-missing-grant-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
-    },
-    {
-      "section": "Fresh Personal approval matrix",
-      "id": "four-newline-statements-with-grants-allow",
-      "from": "Allowed",
-      "to": "RequiresApproval",
-      "reason": "A grant covers exactly its command words (#2306). \"fix\" after \"-m\" is a plain word, so the command words of \"git commit -m fix\" are \"git commit fix\", and a \"git commit\" grant does not cover them.",
-      "negativeControl": "four-one-missing-grant-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
-    },
-    {
-      "section": "Fresh Personal approval matrix",
-      "id": "four-or-branches-with-grants-allow",
-      "from": "Allowed",
-      "to": "RequiresApproval",
-      "reason": "A grant covers exactly its command words (#2306). \"fix\" after \"-m\" is a plain word, so the command words of \"git commit -m fix\" are \"git commit fix\", and a \"git commit\" grant does not cover them.",
-      "negativeControl": "four-one-missing-grant-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
-    },
-    {
-      "section": "Fresh Personal approval matrix",
-      "id": "four-subshell-clauses-with-grants-allow",
-      "from": "Allowed",
-      "to": "RequiresApproval",
-      "reason": "A grant covers exactly its command words (#2306). \"fix\" after \"-m\" is a plain word, so the command words of \"git commit -m fix\" are \"git commit fix\", and a \"git commit\" grant does not cover them.",
-      "negativeControl": "four-one-missing-grant-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
-    },
-    {
-      "section": "Fresh Personal approval matrix",
       "id": "cd-causal-list-diagnostic-reuses-stored-grant",
       "from": "Allowed",
       "to": "RequiresAgentCorrection",
-      "reason": "A bare glob gives Unknown command words (#2306), so no grant can cover the call. The model gets a rewrite correction to use a path glob such as ./*; the call does not run.",
+      "reason": "A bare glob in the verb slot gives Unknown command words (#2306), so no grant can cover the call. The model gets a rewrite correction to use a path glob such as ./*; the call does not run.",
       "negativeControl": "cd-causal-list-folder-grant-outside-target-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
     },
     {
       "section": "Fresh Personal approval matrix",
       "id": "local-glob-reuses-project-grant",
       "from": "Allowed",
       "to": "RequiresAgentCorrection",
-      "reason": "A bare glob gives Unknown command words (#2306), so no grant can cover the call. The model gets a rewrite correction to use a path glob such as ./*; the call does not run.",
+      "reason": "A bare glob in the verb slot gives Unknown command words (#2306), so no grant can cover the call. The model gets a rewrite correction to use a path glob such as ./*; the call does not run.",
       "negativeControl": "mutating-command-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
-    },
-    {
-      "section": "Fresh Personal approval matrix",
-      "id": "live-finite-run-loop-with-tr-data-reuses-gh-grant",
-      "from": "Allowed",
-      "to": "RequiresAgentCorrection",
-      "reason": "The loop variable gives Unknown command words (#2306), so no grant can cover the call. The model gets a rewrite correction to write the command words literally; the call does not run.",
-      "negativeControl": "live-finite-url-loop-prompts-with-reusable-phrase",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
     },
     {
       "section": "Fresh Personal approval matrix",
@@ -106,7 +43,7 @@
       "to": "RequiresApproval",
       "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
       "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
     },
     {
       "section": "Fresh Personal approval matrix",
@@ -115,7 +52,7 @@
       "to": "RequiresApproval",
       "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
       "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
     },
     {
       "section": "Fresh Personal approval matrix",
@@ -124,7 +61,7 @@
       "to": "RequiresApproval",
       "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
       "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
     },
     {
       "section": "Fresh Personal approval matrix",
@@ -133,7 +70,7 @@
       "to": "RequiresApproval",
       "reason": "A PowerShell script block gives Unknown command words (#2306), so no grant can cover ForEach-Object. The call keeps a one-time prompt.",
       "negativeControl": "powershell7-expression-region-without-grant-prompts-for-host",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
     },
     {
       "section": "Fresh Personal approval matrix",
@@ -142,7 +79,7 @@
       "to": "Allowed",
       "reason": "The command words of \"git --no-pager status\" are \"git status\" in every option order (#2306), so the \"git status\" grant covers the call. A different subcommand still prompts.",
       "negativeControl": "mutating-command-prompts",
-      "approvedBy": "Aaron Stannard (owner), command-words design for #2306, 2026-10-02"
+      "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
     }
   ]
 }

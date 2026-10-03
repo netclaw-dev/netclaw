@@ -18,8 +18,9 @@ namespace Netclaw.Actors.Tests.Tools;
 /// A saved shell grant covers exactly its command words (the ShellSyntaxTree
 /// <c>CommandWords</c> fact), with any arguments. Every option order of one
 /// command has the same words. A grant never covers other words: a <c>gh</c>
-/// grant covers <c>gh --help</c>, not <c>gh auth logout</c>. A command with
-/// Unknown words gets a rewrite correction: it does not run and does not prompt.
+/// grant covers <c>gh --help</c>, not <c>gh auth logout</c>. After the verb
+/// slot, option values, expansions, and globs are arguments. Unknown words
+/// (only in the verb slot) get a rewrite correction: no run and no prompt.
 /// </summary>
 [Collection(ShellApprovalMatrixCollection.Name)]
 public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fixture)
@@ -117,7 +118,26 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
 
         Assert.Equal(["git", "push", "origin", "feature-x"], Assert.Single(stored).VerbTokens!);
         await AssertNeedsApprovalAsync(harness, "git push origin main", stored);
-        await AssertAllowedByStoredGrantAsync(harness, "git push --force-with-lease origin feature-x");
+        await AssertAllowedByStoredGrantAsync(harness, "git push origin feature-x --force-with-lease");
+        // The position rule skips a word after an option, so "git push -f
+        // origin main" has the words "git push main". It is not this grant.
+        await AssertNeedsApprovalAsync(harness, "git push -f origin feature-x", stored);
+    }
+
+    // After the verb slot, an expansion or a brace list is an argument.
+    // The command words stay known, so the grant for them covers the call.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData("gh pr update-branch", "for n in 160 161; do gh pr update-branch $n; done")]
+    [InlineData("git push main", "git push {origin,fork} main")]
+    [InlineData("dotnet build", "dotnet build -c Release")]
+    public async Task Arguments_after_the_verb_slot_do_not_change_the_words(string grant, string command)
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere(grant));
+        var stored = harness.GetStoredShellEntries(TrustAudience.Personal);
+
+        await AssertAllowedByStoredGrantAsync(harness, command);
+        await AssertNeedsApprovalAsync(harness, command.Replace(grant.Split(' ')[^1], "other-verb", StringComparison.Ordinal), stored);
     }
 
     // A word with a digit is an argument, so a tag grant covers every tag.
@@ -149,15 +169,15 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("rm *.md", ShellCommandWordsRewrite.UsePathGlob, "rm ./*.md", "Use ./* (a path with /)")]
-    [InlineData("for r in origin fork; do git push $r main; done", ShellCommandWordsRewrite.WriteWordsLiterally, "git push origin main", "Write the command words literally")]
-    [InlineData("git push {origin,fork} main", ShellCommandWordsRewrite.RunCommandsSeparately, "git push origin main", "Run each command separately")]
+    [InlineData("for v in push fetch; do git $v origin; done", ShellCommandWordsRewrite.WriteWordsLiterally, "git push origin", "Write the command words literally")]
+    [InlineData("git {push,fetch} origin", ShellCommandWordsRewrite.RunCommandsSeparately, "git push origin", "Run each command separately")]
     public async Task Unknown_command_words_get_a_rewrite_correction(
         string command,
         ShellCommandWordsRewrite expectedRewrite,
         string corrected,
         string expectedText)
     {
-        var grantWords = corrected.Split(' ')[0] == "rm" ? "rm" : "git push origin main";
+        var grantWords = corrected.Split(' ')[0] == "rm" ? "rm" : "git push origin";
         await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere(grantWords));
 
         var decision = await harness.EvaluateShellDecisionAsync(command, Ct);

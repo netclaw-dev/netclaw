@@ -524,22 +524,27 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
 - Follows: `git status` becomes a phrase from ShellSyntaxTree tokens. The
   reviewed-safe catalog lists that phrase as data.
 - Follows: a shell grant covers exactly its command words, the ShellSyntaxTree
-  `CommandWords` fact: the program and every plain word, in any option order.
-  The arguments are free. `ApprovalPatternMatching.VerbChainEquals` compares
-  the stored tokens with the candidate's words, so `gh -R o/r pr view 1` and
-  `gh pr view 1 -R o/r` both match a `gh pr view` grant, a `gh` grant covers
-  `gh --help` but not `gh auth logout`, and a `git push origin feature-x`
-  grant does not cover `git push origin main`. Options, paths, path patterns
-  with `/`, words with a digit, and quoted text with whitespace are arguments.
-  A plain word after an option is a command word (`git commit -m fix` gives
-  `git commit fix`). The stored match kind keeps the name `TokenPrefix`, so the
-  version-3 store does not change. A legacy phrase must also equal the words
+  `CommandWords` fact (0.4.0-beta.8 position rule). The words are the program,
+  the verb slot (the first word after the program and its options), and the
+  plain words after it. The arguments are free. `ApprovalPatternMatching.VerbChainEquals`
+  compares the stored tokens with the candidate's words, so `gh -R o/r pr view 1`
+  and `gh pr view 1 -R o/r` both match a `gh pr view` grant, a `gh` grant
+  covers `gh --help` but not `gh auth logout`, and a `git push origin feature-x`
+  grant does not cover `git push origin main`. Options, option values, paths,
+  path patterns with `/`, words with a digit, quoted text with whitespace, and
+  (after the verb slot) expansions and globs are arguments. So
+  `dotnet build -c Release` gives `dotnet build`, and
+  `gh pr update-branch $n` gives `gh pr update-branch`. Known limit: a plain
+  word after a flag that takes no value is also skipped (`git push -f origin
+  main` gives `git push main`). The stored match kind keeps the name
+  `TokenPrefix`, so the version-3 store does not change. A legacy phrase must also equal the words
   and the display verb. Policy data gives some programs a one-token chain
   (`echo`, `which`, `jq`); a bare-program grant for them also covers their
   plain words.
-- Follows: `Unknown` command words (a bare glob such as `*` or `p?sh`, an
-  expansion, a brace list, or word splitting) mean that no grant can cover
-  the call. Reviewed-safe policy and the approval-exempt output commands still
+- Follows: `Unknown` command words mean that no grant can cover the call.
+  They occur only when the verb slot holds a bare glob (`*`, `p?sh`), an
+  expansion, a brace list, or word splitting (`git {push,fetch}`,
+  `rm -f {a,b}.txt`). Reviewed-safe policy and the approval-exempt output commands still
   apply first. An uncovered candidate with `Unknown` words gets a rewrite
   correction (`ShellCommandWordsRewriteSuggested`, "Tool execution deferred:
   rewrite_shell_command_words"): the call does not run and does not prompt,
