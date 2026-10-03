@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
 using System.Diagnostics;
+using Netclaw.Tools;
 using ShellSyntaxTree;
 
 namespace Netclaw.Security;
@@ -45,6 +46,8 @@ public sealed class ShellExecutionEnvironment
     private static readonly ImmutableArray<string> BashCommandArguments = ["-c"];
     private static readonly ImmutableArray<string> PowerShellCommandArguments =
         ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command"];
+    private static readonly string[] TemporaryVariableNames = ["TMPDIR", "TMP", "TEMP"];
+    private static readonly string[] BashUnsetLaunchVariables = ["CDPATH"];
 
     private ShellExecutionEnvironment(
         ShellPlatform platform,
@@ -64,6 +67,9 @@ public sealed class ShellExecutionEnvironment
 
         Platform = platform;
         ExecutablePath = executablePath;
+        HomeDirectory = grammar == ShellGrammar.Bash
+            ? ResolveLaunchHomeDirectory(pathStyle)
+            : null;
         Grammar = grammar;
         PathStyle = pathStyle;
         CommandArguments = commandArguments;
@@ -120,6 +126,17 @@ public sealed class ShellExecutionEnvironment
     /// Gets the selected PowerShell dialect, or <see langword="null"/> for Bash.
     /// </summary>
     public PwshDialect? PowerShellDialect { get; }
+
+    /// <summary>
+    /// Gets the <c>HOME</c> value that the launcher sets on each Bash process, or
+    /// <see langword="null"/> when the daemon has no absolute home directory.
+    /// </summary>
+    /// <remarks>
+    /// The value is the parser's default home directory, so <c>~</c> keeps its
+    /// earlier result. Only the launch facts of a no-startup host let the parser
+    /// also trust <c>$HOME</c> and a <c>cd</c> with no operand.
+    /// </remarks>
+    public string? HomeDirectory { get; }
 
     /// <summary>
     /// Creates the fixed Bash identity used on Linux and macOS.
@@ -202,15 +219,21 @@ public sealed class ShellExecutionEnvironment
     /// Parses source with the environment's grammar, dialect, directory, and selected bounded initial state.
     /// </summary>
     public ParsedCommand Parse(string source, string? workingDirectory = null)
-        => ParseForApproval(source, workingDirectory, publishAuthoredSourceFacts: false);
+        => ParseForApproval(source, workingDirectory, publishAuthoredSourceFacts: false, launchEnvironment: null);
 
     /// <summary>
     /// Parses source for internal approval analysis with optional authored-source facts.
     /// </summary>
+    /// <param name="launchEnvironment">
+    /// The facts from <see cref="CreateLaunchEnvironment"/> for source that the launcher
+    /// runs directly, or <see langword="null"/> for source that another process reads,
+    /// such as the child of a <c>bash -lc</c> wrapper.
+    /// </param>
     internal ParsedCommand ParseForApproval(
         string source,
         string? workingDirectory,
-        bool publishAuthoredSourceFacts)
+        bool publishAuthoredSourceFacts,
+        ShellLaunchEnvironment? launchEnvironment)
     {
         ArgumentNullException.ThrowIfNull(source);
 
@@ -218,16 +241,94 @@ public sealed class ShellExecutionEnvironment
         {
             ShellGrammar.Bash => CreateBashParser(
                 workingDirectory,
-                publishAuthoredSourceFacts).Parse(source),
+                publishAuthoredSourceFacts,
+                launchEnvironment).Parse(source),
             ShellGrammar.PowerShell when PowerShellDialect is { } dialect =>
                 new PwshParser(new PwshParserOptions
                 {
                     WorkingDirectory = workingDirectory,
                     InitialStateMode = PowerShellInitialStateMode,
-                    Dialect = dialect
+                    Dialect = dialect,
+                    LaunchEnvironment = launchEnvironment
                 }).Parse(source),
             _ => throw new InvalidOperationException("The shell environment has no supported parser identity.")
         };
+    }
+
+    /// <summary>
+    /// Creates the parser facts for the variables that the launcher sets on a shell
+    /// process. The facts and the launcher read <see cref="GetLaunchVariables"/>, so
+    /// they cannot drift.
+    /// </summary>
+    /// <remarks>
+    /// The launcher sets <c>HOME</c> in <see cref="CreateProcessStartInfo"/> and the
+    /// temporary variables in <see cref="ApplyTemporaryVariables"/>. The parser uses
+    /// the facts only under a no-startup initial state. A statement that can change a
+    /// variable makes its value unknown again. The Bash facts also prove that
+    /// <c>CDPATH</c> is unset, because <see cref="RemoveBashStartupOverrides"/> removes it.
+    /// </remarks>
+    internal ShellLaunchEnvironment CreateLaunchEnvironment(ManagedTemporaryLocation? temporary)
+        => new(
+            GetLaunchVariables(temporary),
+            Grammar == ShellGrammar.Bash ? BashUnsetLaunchVariables : []);
+
+    /// <summary>
+    /// Gets the exact variables that a launched shell receives. The temporary variables
+    /// are present only when the call has a managed temporary location.
+    /// </summary>
+    internal IReadOnlyList<KeyValuePair<string, string>> GetLaunchVariables(ManagedTemporaryLocation? temporary)
+    {
+        var variables = new List<KeyValuePair<string, string>>(4);
+        if (temporary is { } location)
+            variables.AddRange(GetTemporaryVariables(location));
+        if (HomeDirectory is { } home)
+            variables.Add(new("HOME", home));
+        return variables;
+    }
+
+    /// <summary>Sets <c>TMPDIR</c>, <c>TMP</c>, and <c>TEMP</c> on one child environment.</summary>
+    internal static void ApplyTemporaryVariables(
+        IDictionary<string, string?> environment,
+        ManagedTemporaryLocation temporary)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        foreach (var variable in GetTemporaryVariables(temporary))
+            environment[variable.Key] = variable.Value;
+    }
+
+    /// <summary>Gets the exact temporary-variable value of a temporary location.</summary>
+    internal static string GetTemporaryDirectoryValue(ManagedTemporaryLocation temporary)
+        => PathUtility.Normalize(temporary.Directory.Value);
+
+    /// <summary>Sets the start directory of one shell process.</summary>
+    /// <remarks>
+    /// SECURITY: the parser resolves a relative <c>cd</c> lexically from the working
+    /// directory. Bash keeps an inherited <c>PWD</c> when it names the same directory,
+    /// so the launcher sets <c>PWD</c> to the exact working directory. With a symbolic
+    /// link in that path, <c>cd ..</c> then goes where the parser expects.
+    /// </remarks>
+    internal void ApplyWorkingDirectory(ProcessStartInfo startInfo, string workingDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(startInfo);
+        ArgumentException.ThrowIfNullOrWhiteSpace(workingDirectory);
+
+        startInfo.WorkingDirectory = workingDirectory;
+        if (Grammar == ShellGrammar.Bash)
+            startInfo.Environment["PWD"] = workingDirectory;
+    }
+
+    private static IEnumerable<KeyValuePair<string, string>> GetTemporaryVariables(ManagedTemporaryLocation temporary)
+    {
+        var directory = GetTemporaryDirectoryValue(temporary);
+        return TemporaryVariableNames.Select(name => new KeyValuePair<string, string>(name, directory));
+    }
+
+    // The daemon home is fixed for its lifetime. A home that is not absolute gives no HOME
+    // fact, and the launcher then leaves HOME as the daemon process has it.
+    private static string? ResolveLaunchHomeDirectory(ShellPathStyle pathStyle)
+    {
+        var home = System.Environment.GetFolderPath(System.Environment.SpecialFolder.UserProfile);
+        return IsFullyQualified(home, pathStyle) ? home : null;
     }
 
     /// <summary>
@@ -251,6 +352,7 @@ public sealed class ShellExecutionEnvironment
     internal bool TryProjectFiniteBashScopes(
         string source,
         string? workingDirectory,
+        ManagedTemporaryLocation? temporary,
         out BashFiniteScopeProjection? projection)
     {
         ArgumentNullException.ThrowIfNull(source);
@@ -260,18 +362,23 @@ public sealed class ShellExecutionEnvironment
             return false;
         }
 
-        return CreateBashParser(workingDirectory, publishAuthoredSourceFacts: true)
+        return CreateBashParser(
+                workingDirectory,
+                publishAuthoredSourceFacts: true,
+                CreateLaunchEnvironment(temporary))
             .TryProjectFiniteScopes(source, out projection);
     }
 
     private BashParser CreateBashParser(
         string? workingDirectory,
-        bool publishAuthoredSourceFacts)
+        bool publishAuthoredSourceFacts,
+        ShellLaunchEnvironment? launchEnvironment)
         => new(new BashParserOptions
         {
             WorkingDirectory = workingDirectory,
             InitialStateMode = BashInitialStateMode,
-            PublishAuthoredSourceFacts = publishAuthoredSourceFacts
+            PublishAuthoredSourceFacts = publishAuthoredSourceFacts,
+            LaunchEnvironment = launchEnvironment
         });
 
     private BashInitialStateMode BashInitialStateMode =>
@@ -309,6 +416,8 @@ public sealed class ShellExecutionEnvironment
         startInfo.ArgumentList.Add(command);
         if (Grammar == ShellGrammar.Bash)
             RemoveBashStartupOverrides(startInfo.Environment);
+        foreach (var variable in GetLaunchVariables(temporary: null))
+            startInfo.Environment[variable.Key] = variable.Value;
         return startInfo;
     }
 

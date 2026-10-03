@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tools;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -101,6 +103,19 @@ public sealed class ShellCommandPolicy
     {
         ArgumentNullException.ThrowIfNull(command);
         return _analyzer.Analyze(command, workingDirectory);
+    }
+
+    /// <summary>
+    /// Analyzes a command with the launch facts of one call, including the managed
+    /// temporary variables that the launcher sets for <paramref name="temporary"/>.
+    /// </summary>
+    public ShellCommandAnalysis Analyze(
+        string command,
+        string? workingDirectory,
+        ManagedTemporaryLocation? temporary)
+    {
+        ArgumentNullException.ThrowIfNull(command);
+        return _analyzer.Analyze(command, workingDirectory, temporary);
     }
 
     private static void TranslateRule(

@@ -72,6 +72,7 @@ internal sealed record BashDirectoryScopeProjection(
             || !source.Environment.TryProjectFiniteBashScopes(
                 source.Source,
                 initialDirectory.Value,
+                source.ManagedTemporary,
                 out var finite)
             || finite is null
             || source.Commands.Count != finite.Parsed.Commands.Count
@@ -114,7 +115,7 @@ internal sealed record BashDirectoryScopeProjection(
             }
 
             var directory = scopedPath.Value;
-            var analysis = commandPolicy.Analyze(scoped.Source, directory);
+            var analysis = commandPolicy.Analyze(scoped.Source, directory, source.ManagedTemporary);
             if (!analysis.IsResolved
                 || analysis.HasDynamicSyntax
                 || analysis.RequiresExactTreeApproval
@@ -124,7 +125,8 @@ internal sealed record BashDirectoryScopeProjection(
                 || !string.Equals(analyzedDirectory.Value, directory, StringComparison.Ordinal)
                 || !HasSameAuthoredElements(
                     scoped.ScopedOccurrence.Clause,
-                    analysis.Commands[0].Clause))
+                    analysis.Commands[0].Clause)
+                || !HasSameArgumentValues(scoped.ScopedOccurrence, analysis.Commands[0]))
             {
                 return false;
             }
@@ -337,6 +339,26 @@ internal sealed record BashDirectoryScopeProjection(
 
         return -1;
     }
+
+    // SECURITY: the slice parses again without the statements before it. A launch
+    // variable that an earlier statement can change is unknown in the full parse, but
+    // the slice alone sees the launch value. Every value must match the full parse.
+    private static bool HasSameArgumentValues(CommandOccurrence scoped, CommandOccurrence analyzed)
+        => scoped.Arguments.Count == analyzed.Arguments.Count
+           && scoped.Arguments.Zip(analyzed.Arguments).All(static pair =>
+               HasSameValue(pair.First.Value, pair.Second.Value)
+               && string.Equals(pair.First.Argument.Resolved, pair.Second.Argument.Resolved, StringComparison.Ordinal));
+
+    // Record equality compares list members by reference, so compare lists by content.
+    private static bool HasSameValue(ShellValueDomain first, ShellValueDomain second) => (first, second) switch
+    {
+        (ShellValueDomain.FiniteSet a, ShellValueDomain.FiniteSet b) => a.Values.SequenceEqual(b.Values, StringComparer.Ordinal),
+        (ShellValueDomain.OrderedList a, ShellValueDomain.OrderedList b) => a.Values.SequenceEqual(b.Values, StringComparer.Ordinal),
+        (ShellValueDomain.Concatenation a, ShellValueDomain.Concatenation b) =>
+            a.Parts.Count == b.Parts.Count
+            && a.Parts.Zip(b.Parts).All(static part => HasSameValue(part.First, part.Second)),
+        _ => Equals(first, second)
+    };
 
     private static bool HasSameAuthoredElements(Clause first, Clause second)
         => first.Elements.Count == second.Elements.Count

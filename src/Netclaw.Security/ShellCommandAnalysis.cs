@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
+using Netclaw.Tools;
 using ShellSyntaxTree;
 
 namespace Netclaw.Security;
@@ -38,7 +39,21 @@ internal sealed class ShellCommandAnalyzer
         BashInitialStateMode.FreshNonInteractiveNoStartup
     ];
 
+    /// <summary>
+    /// Analyzes a command for a call with no managed temporary location. The parser
+    /// still uses the launch facts that the shell environment sets on every process.
+    /// </summary>
     public ShellCommandAnalysis Analyze(string command, string? workingDirectory = null)
+        => Analyze(command, workingDirectory, temporary: null);
+
+    /// <summary>
+    /// Analyzes a command with the launch facts of one call. The facts include the
+    /// managed temporary variables when the call has a temporary location.
+    /// </summary>
+    public ShellCommandAnalysis Analyze(
+        string command,
+        string? workingDirectory,
+        ManagedTemporaryLocation? temporary)
     {
         var commands = new List<CommandOccurrence>();
         var denyOnlyClauses = new List<Clause>();
@@ -48,6 +63,7 @@ internal sealed class ShellCommandAnalyzer
         var failure = Analyze(
             command,
             workingDirectory,
+            _screenState is null ? _environment.CreateLaunchEnvironment(temporary) : null,
             depth: 0,
             commands,
             denyOnlyClauses,
@@ -63,6 +79,7 @@ internal sealed class ShellCommandAnalyzer
             knownRegionArguments,
             syntaxProofComplete)
         {
+            ManagedTemporary = temporary,
             ScreenClauses = _screenState is null
                             && _environment.Grammar == ShellGrammar.Bash
                             && (failure != ShellAnalysisFailure.None || commands.Count == 0)
@@ -111,6 +128,7 @@ internal sealed class ShellCommandAnalyzer
     private ShellAnalysisFailure Analyze(
         string command,
         string? workingDirectory,
+        ShellLaunchEnvironment? launchEnvironment,
         int depth,
         List<CommandOccurrence> commands,
         List<Clause> denyOnlyClauses,
@@ -135,7 +153,8 @@ internal sealed class ShellCommandAnalyzer
                 : _environment.ParseForApproval(
                     command,
                     workingDirectory,
-                    publishAuthoredSourceFacts: depth == 0);
+                    publishAuthoredSourceFacts: depth == 0,
+                    launchEnvironment);
         }
         catch
         {
@@ -229,9 +248,13 @@ internal sealed class ShellCommandAnalyzer
             }
 
             var innerCommandStart = commands.Count;
+            // SECURITY: the launcher sets the launch facts on the outer shell only. A child
+            // shell can read startup files (bash -lc reads the login profile) that change
+            // HOME or TMPDIR, so the child source gets no launch facts.
             var failure = Analyze(
                 exactSource.Source,
                 innerWorkingDirectory,
+                launchEnvironment: null,
                 depth + 1,
                 commands,
                 denyOnlyClauses,
@@ -530,6 +553,13 @@ public sealed record ShellCommandAnalysis
     public string Source { get; }
 
     public string? WorkingDirectory { get; }
+
+    /// <summary>
+    /// Gets the managed temporary location whose variables the parser used, or
+    /// <see langword="null"/> when the call had none. A later parse of part of this
+    /// source uses the same location.
+    /// </summary>
+    internal ManagedTemporaryLocation? ManagedTemporary { get; init; }
 
     public IReadOnlyList<CommandOccurrence> Commands { get; }
 

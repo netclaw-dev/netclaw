@@ -26,7 +26,7 @@ internal static class ManagedTemporaryEnvironment
 
         try
         {
-            var normalizedTemporaryDirectory = PathUtility.Normalize(location.Directory.Value);
+            var normalizedTemporaryDirectory = ShellExecutionEnvironment.GetTemporaryDirectoryValue(location);
             if (!CanonicalPath.TryCreateHost(location.StorageRoot.Value, relativeBase: null, out var root)
                 || !CanonicalPath.TryCreateHost(normalizedTemporaryDirectory, relativeBase: null, out var temporary))
             {
@@ -45,9 +45,8 @@ internal static class ManagedTemporaryEnvironment
             if (FileSystemAuthority.EvaluateMembership(temporary, storage) is not PathDecision.Allowed)
                 return "Error: The managed temporary directory contains an unsafe filesystem link.";
 
-            startInfo.Environment["TMPDIR"] = normalizedTemporaryDirectory;
-            startInfo.Environment["TMP"] = normalizedTemporaryDirectory;
-            startInfo.Environment["TEMP"] = normalizedTemporaryDirectory;
+            // The shell parser resolves these variables from the same values (ShellExecutionEnvironment.CreateLaunchEnvironment).
+            ShellExecutionEnvironment.ApplyTemporaryVariables(startInfo.Environment, location);
             return null;
         }
         catch (Exception ex) when (ex is ArgumentException
