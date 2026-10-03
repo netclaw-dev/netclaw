@@ -445,7 +445,7 @@ feature area, the corresponding skill **must** be updated in the same PR.
 
 | Feature area changed | Skill to update |
 |----------------------|-----------------|
-| Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `netclaw-identity` |
+| Identity files, SOUL/AGENTS/TOOLING paths, progressive disclosure | `netclaw-operations` |
 | Memory provider routing, SQLite memory tools, general memory guidance | `netclaw-memory` |
 | Config format, daemon health, logs, MCP wiring, diagnostics CLI, doctor | `netclaw-operations` |
 | Skill file format, discovery, authoring workflow | `skill-authoring` |
