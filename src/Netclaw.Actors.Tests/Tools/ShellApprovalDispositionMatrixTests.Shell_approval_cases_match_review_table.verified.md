@@ -43,12 +43,12 @@
 | safe-pipeline-allows | Bash | Personal | Project | Interactive | git ls-tree HEAD \| head -20 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | unsafe-catalog-find-exec-prompts | Bash | Personal | Project | Interactive | find . -exec rm {} + | none | RequiresApproval | approval required | find | No |
 | unsafe-catalog-awk-system-prompts | Bash | Personal | Project | Interactive | awk 'BEGIN { system("touch marker") }' | none | RequiresApproval | approval required | awk | No |
-| unsafe-catalog-rg-pre-prompts | Bash | Personal | Project | Interactive | rg --pre helper pattern . | none | RequiresApproval | approval required | rg | No |
-| unsafe-catalog-sort-output-prompts | Bash | Personal | Project | Interactive | sort -o output input | none | RequiresApproval | approval required | sort | No |
-| unsafe-catalog-date-set-prompts | Bash | Personal | Project | Interactive | date --set tomorrow | none | RequiresApproval | approval required | date | No |
-| unsafe-catalog-tree-output-prompts | Bash | Personal | Project | Interactive | tree -o output | none | RequiresApproval | approval required | tree | No |
-| unsafe-catalog-uniq-output-prompts | Bash | Personal | Project | Interactive | uniq input output | none | RequiresApproval | approval required | uniq input output | No |
-| unsafe-catalog-gh-web-prompts | Bash | Personal | Project | Interactive | gh run view 123456 --web | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-rg-pre-allows | Bash | Personal | Project | Interactive | rg --pre helper pattern . | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-sort-output-allows | Bash | Personal | Project | Interactive | sort -o output input | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-date-set-allows | Bash | Personal | Project | Interactive | date --set tomorrow | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-tree-output-allows | Bash | Personal | Project | Interactive | tree -o output | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-uniq-output-allows | Bash | Personal | Project | Interactive | uniq input output | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-gh-run-view-web-allows | Bash | Personal | Project | Interactive | gh run view 123456 --web | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-gh-pr-view-allows | Bash | Personal | Project | Interactive | gh pr view 42 --repo example/project --json title,state | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-gh-pr-checks-allows | Bash | Personal | Project | Interactive | gh pr checks 42 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-gh-pr-list-allows | Bash | Personal | Project | Interactive | gh pr list --state open --limit 5 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
@@ -78,8 +78,8 @@
 | reviewed-realpath-external-option-path-prompts | Bash | Personal | Project | Interactive | realpath --relative-to=/tmp ./data | none | RequiresApproval | approval required | realpath | No |
 | reviewed-grep-local-option-path-allows | Bash | Personal | Project | Interactive | grep -f ./patterns ./data.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-path-shaped-data-under-project-allows | Bash | Personal | Project | Interactive | gh run list --repo example/project | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| live-read-chain-with-separator-prompts-for-rg | Bash | Personal | Project | Interactive | rg -rn "operation failed" src/ tests/ \| head -20; echo "---"; rg -rln "upload" src/ \| head -20 | none | RequiresApproval | approval required | rg | No |
-| live-git-diagnostic-chain-prompts-for-unproved-phrases | Bash | Personal | Project | Interactive | git status --short 2>&1 \| head; echo "---branch---"; git branch --show-current 2>&1; echo "---remotes---"; git remote -v 2>&1 \| head -4; echo "---recent---"; git log --oneline -3 2>&1 | none | RequiresApproval | approval required | git branch, git remote, git log | No |
+| live-read-chain-with-separator-allows | Bash | Personal | Project | Interactive | rg -rn "operation failed" src/ tests/ \| head -20; echo "---"; rg -rln "upload" src/ \| head -20 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| live-git-diagnostic-chain-prompts-for-unproved-phrases | Bash | Personal | Project | Interactive | git status --short 2>&1 \| head; echo "---branch---"; git branch --show-current 2>&1; echo "---remotes---"; git remote -v 2>&1 \| head -4; echo "---recent---"; git log --oneline -3 2>&1 | none | RequiresApproval | approval required | git remote | No |
 | live-finite-url-loop-prompts-with-reusable-phrase | Bash | Personal | Project | Interactive | for url in /api/first /api/second; do echo "=== $url ==="; curl -sS -m 10 "$url" \| head -c 1500; echo; done | none | RequiresAgentCorrection | approval required | none | Not applicable |
 | gh-run-diagnostic-exit-status-prompts-without-grant | Bash | Personal | Project | Interactive | gh run view 123456 --repo example/project --log-failed --verbose 2>&1 \| head -200; echo "---EXIT $?---" | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | live-finite-run-loop-with-tr-data-reuses-gh-grant | Bash | Personal | Project | Interactive | for r in 100001 100002 100003 100004 100005; do echo -n "$r: "; gh run view $r --json headSha,headBranch,displayTitle 2>/dev/null \| tr -d '\n'; echo; done | persistent[anywhere]:gh run view | Allowed | StoredApproval | none | Not applicable |
@@ -87,7 +87,7 @@
 | post-334cb4c-independent-read-batch-remains-complex | Bash | Personal | Project | Interactive | grep -n "Alpha" src/Alpha.cs \| head -5; grep -rn "Beta" src/*.cs tests/*.cs docs/*.md 2>/dev/null \| head | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | post-334cb4c-inline-cd-read-batch-has-scoped-candidates | Bash | Personal | Project | Interactive | cd /work/project && git log --oneline -5 -- src/Alpha.cs && grep -n "Timeout" src/Alpha.cs tests/AlphaTests.cs 2>/dev/null \| head -5; cat Project.csproj | none | RequiresApproval | approval required | cd, git log, grep, head, cat | No |
 | live-typed-cwd-mixed-read-chain-prompts-for-sed-and-pattern | Bash | Personal | Project | Interactive | sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; echo "=== TESTS ==="; ls src/Netclaw.Daemon.Tests/ \| grep -i powershell; grep -rn "ProbeTimeout\\|WaitForExitAsync" src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null \| head | none | RequiresApproval | approval required | sed | No |
-| native-project-path-operand-prompts-for-unproved-verb | Bash | Personal | Project | Interactive | git diff install-skills.sh | none | RequiresApproval | approval required | git diff | No |
+| native-project-path-operand-allows | Bash | Personal | Project | Interactive | git diff install-skills.sh | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | native-external-path-operand-prompts | Bash | Personal | Project | Interactive | git diff /etc/passwd | none | RequiresApproval | approval required | git diff | No |
 | native-project-path-operand-reuses-grant | Bash | Personal | Project | Interactive | kubectl apply deployment.yaml | persistent[project]:kubectl apply | Allowed | StoredApproval | none | Not applicable |
 | native-external-path-operand-does-not-reuse-project-grant | Bash | Personal | Project | Interactive | kubectl apply /etc/deployment.yaml | persistent[project]:kubectl apply | RequiresApproval | approval required | kubectl apply | No |
@@ -162,7 +162,7 @@
 | powershell7-protected-path-denies-before-approval | PowerShell7 | Personal | Project | Interactive | Get-Content C:\protected\config\secret.txt | persistent[anywhere]:Get-Content | Denied | shell_references_protected_path | none | Not applicable |
 | powershell7-provider-drive-is-reviewed | PowerShell7 | Personal | Project | Interactive | Get-Content Env:\Path | none | RequiresApproval | approval required | none | Yes |
 | powershell7-environment-provider-value-stays-strict | PowerShell7 | Personal | Project | Interactive | Get-Content Env:SECRET | none | RequiresApproval | approval required | none | Yes |
-| powershell7-unsafe-catalog-gh-web-prompts | PowerShell7 | Personal | Project | Interactive | gh run view 123456 --web | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| powershell7-reviewed-gh-run-view-web-allows | PowerShell7 | Personal | Project | Interactive | gh run view 123456 --web | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | powershell7-reviewed-gh-pr-view-allows | PowerShell7 | Personal | Project | Interactive | gh pr view 42 --json title | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | powershell7-reviewed-gh-pr-merge-prompts | PowerShell7 | Personal | Project | Interactive | gh pr merge 42 --squash | none | RequiresApproval | approval required | gh pr merge | No |
 | powershell7-backslash-parent-separator-prompts | PowerShell7 | Personal | Project | Interactive | Get-Content ..\..\outside\secret.txt | none | RequiresApproval | approval required | Get-Content | No |
@@ -235,7 +235,7 @@
 | dynamic-here-string-cat-prompts | Bash | Personal | Project | Interactive | cat <<< "$value" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | here-string-cat-with-argument-prompts | Bash | Personal | Project | Interactive | cat -n <<< "hello" | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | here-string-interpreter-grant-prompts | Bash | Personal | Project | Interactive | bash <<< "echo ok" | persistent[anywhere]:bash | RequiresApproval | approval required | none | Yes |
-| workload-search-rg-in-project-prompts | Bash | Personal | Project | Interactive | rg -n "TODO" src | none | RequiresApproval | approval required | rg | No |
+| workload-search-rg-in-project-allows | Bash | Personal | Project | Interactive | rg -n "TODO" src | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-grep-in-project-allows | Bash | Personal | Project | Interactive | grep -R "error" src | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-find-in-project-prompts | Bash | Personal | Project | Interactive | find src -name "*.cs" -print | none | RequiresApproval | approval required | find | No |
 | workload-search-cat-in-project-allows | Bash | Personal | Project | Interactive | cat src/file.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
@@ -244,11 +244,11 @@
 | workload-search-sed-print-in-project-currently-prompts | Bash | Personal | Project | Interactive | sed -n '20,80p' src/file.txt | none | RequiresApproval | approval required | sed | No |
 | workload-search-rg-external-prompts | Bash | Personal | External | Interactive | rg -n "TODO" . | none | RequiresApproval | approval required | rg | No |
 | workload-search-rg-external-grant-allows | Bash | Personal | External | Interactive | rg -n "TODO" . | persistent[external]:rg | Allowed | StoredApproval | none | Not applicable |
-| workload-search-rg-head-pipeline-prompts | Bash | Personal | Project | Interactive | rg -n "TODO" src \| head -40 | none | RequiresApproval | approval required | rg | No |
+| workload-search-rg-head-pipeline-allows | Bash | Personal | Project | Interactive | rg -n "TODO" src \| head -40 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-grep-tail-pipeline-allows | Bash | Personal | Project | Interactive | grep -R "error" logs \| tail -20 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-find-head-pipeline-prompts | Bash | Personal | Project | Interactive | find src -name "*.cs" -print \| head -20 | none | RequiresApproval | approval required | find | No |
-| workload-search-cat-jq-pipeline-prompts-for-tail | Bash | Personal | Project | Interactive | cat config.json \| jq '.items[]' | none | RequiresApproval | approval required | jq | No |
-| workload-search-jq-direct-prompts | Bash | Personal | Project | Interactive | jq '.items[]' config.json | none | RequiresApproval | approval required | jq | No |
+| workload-search-cat-jq-pipeline-allows | Bash | Personal | Project | Interactive | cat config.json \| jq '.items[]' | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| workload-search-jq-direct-allows | Bash | Personal | Project | Interactive | jq '.items[]' config.json | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-jq-direct-grant-allows | Bash | Personal | Project | Interactive | jq '.items[]' config.json | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
 | workload-search-cat-jq-stored-tail-allows | Bash | Personal | Project | Interactive | cat config.json \| jq '.items[]' | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
 | workload-search-cat-jq-external-stored-tail-still-prompts | Bash | Personal | External | Interactive | cat config.json \| jq '.items[]' | persistent[external]:jq | RequiresApproval | approval required | cat | No |

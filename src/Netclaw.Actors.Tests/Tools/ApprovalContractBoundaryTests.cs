@@ -604,7 +604,7 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [InlineData("git tag v0.4.2", "git tag")]
     [InlineData("git tag 0.4.2", "git tag")]
     [InlineData("freshdesk ticket get 123", "freshdesk ticket get")]
-    [InlineData("git log v0.4.1..dev", "git log")]
+    [InlineData("git cherry-pick v0.4.1..dev", "git cherry-pick")]
     [InlineData("timeout 30 curl http://example.com", "timeout")]
     [InlineData("git commit -m \"fix the bug\"", "git commit")]
     public async Task Prompt_candidate_drops_trailing_version_and_number_operands(string command, string candidate)

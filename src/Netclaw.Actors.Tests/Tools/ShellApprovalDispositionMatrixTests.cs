@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
@@ -45,6 +46,34 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Equal(testCase.Expected.ApprovalChecks, observed.ApprovalChecks);
         Assert.Equal(testCase.Expected.ApprovalMatches, observed.ApprovalMatches);
     }
+
+    // The rows come from the bundled catalog, so a new catalog entry gets this
+    // proof with no test edit. The bare phrase runs in the project through the
+    // production approval path and must need no prompt.
+    public static TheoryData<string> BundledBashPhrases
+        => new(SafeVerbLoader.Load(isWindows: false).Verbs);
+
+    public static TheoryData<string> BundledPowerShellPhrases
+        => new(SafeVerbLoader.Load(isWindows: true).Verbs);
+
+    [SlopwatchSuppress("SW001", "The Bash catalog rows require a POSIX filesystem.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Bash catalog rows require POSIX filesystem semantics.")]
+    [MemberData(nameof(BundledBashPhrases))]
+    public Task Bundled_bash_catalog_phrase_needs_no_prompt_in_the_project(string phrase)
+        => AssertApprovalContract(new ShellApprovalCase(
+            $"bundled-bash-catalog:{phrase}",
+            new ShellApprovalInvocation(phrase),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
+
+    [Theory]
+    [MemberData(nameof(BundledPowerShellPhrases))]
+    public Task Bundled_power_shell_catalog_phrase_needs_no_prompt_in_the_project(string phrase)
+        => AssertApprovalContract(new ShellApprovalCase(
+            $"bundled-powershell-catalog:{phrase}",
+            new ShellApprovalInvocation(phrase, Host: ShellApprovalHost.PowerShell7),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
 
     [Fact]
     public Task Interactive_reviewed_safe_candidate_uses_reviewed_policy()

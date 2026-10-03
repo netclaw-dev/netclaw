@@ -128,6 +128,132 @@
       "to": "Allowed",
       "reason": "cd only changes the working directory. The reviewed catalog now lists it, and each later command keeps its own check. A cd out of the project still prompts.",
       "negativeControl": "cd-parent-then-safe-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-rg-pre-allows",
+      "renamedFrom": "unsafe-catalog-rg-pre-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. rg --pre runs the named program on each file. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-sort-output-allows",
+      "renamedFrom": "unsafe-catalog-sort-output-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists sort. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. The -o file is a path argument and must stay in the trusted roots. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-date-set-allows",
+      "renamedFrom": "unsafe-catalog-date-set-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists date. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. Only root can set the clock. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-tree-output-allows",
+      "renamedFrom": "unsafe-catalog-tree-output-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists tree. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. The -o file is a path argument and must stay in the trusted roots. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-uniq-output-allows",
+      "renamedFrom": "unsafe-catalog-uniq-output-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists uniq. The owner accepts a rare flag of a common read command and rejects a list of dangerous flags. The output file is a path argument and must stay in the trusted roots. A verb off the catalog still prompts.",
+      "negativeControl": "unsafe-catalog-awk-system-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "native-project-path-operand-allows",
+      "renamedFrom": "native-project-path-operand-prompts-for-unproved-verb",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists git diff. A project path operand stays in the trusted roots. A path outside the roots still prompts.",
+      "negativeControl": "native-external-path-operand-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "live-read-chain-with-separator-allows",
+      "renamedFrom": "live-read-chain-with-separator-prompts-for-rg",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg, and head and echo were already covered. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-rg-in-project-allows",
+      "renamedFrom": "workload-search-rg-in-project-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg. The search stays in the project. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-rg-head-pipeline-allows",
+      "renamedFrom": "workload-search-rg-head-pipeline-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists rg, and head was already covered. An rg call outside the project still prompts.",
+      "negativeControl": "workload-search-rg-external-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-cat-jq-pipeline-allows",
+      "renamedFrom": "workload-search-cat-jq-pipeline-prompts-for-tail",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists jq, and cat was already covered. jq reads JSON and writes no file. sed is not on the catalog and still prompts.",
+      "negativeControl": "workload-search-sed-print-in-project-currently-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-jq-direct-allows",
+      "renamedFrom": "workload-search-jq-direct-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The reviewed catalog now lists jq. The input file stays in the project. sed is not on the catalog and still prompts.",
+      "negativeControl": "workload-search-sed-print-in-project-currently-prompts",
+      "approvedBy": "Aaron Stannard (owner), safe-list read verbs decision, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-gh-run-view-web-allows",
+      "renamedFrom": "unsafe-catalog-gh-web-prompts",
+      "from": "Allowed",
+      "to": "Allowed",
+      "reason": "Rename only. gh run view --web runs with no prompt, so the old ID was wrong."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-reviewed-gh-run-view-web-allows",
+      "renamedFrom": "powershell7-unsafe-catalog-gh-web-prompts",
+      "from": "Allowed",
+      "to": "Allowed",
+      "reason": "Rename only. gh run view --web runs with no prompt, so the old ID was wrong."
     }
   ]
 }

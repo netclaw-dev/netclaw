@@ -446,34 +446,37 @@ public static class ShellApprovalCases
             Bash("awk 'BEGIN { system(\"touch marker\") }'"),
             Approvals.None,
             ExpectedApproval.Require(["awk"])),
+        // The owner accepts a rare flag of a common read command. These phrases
+        // are reviewed diagnostics, so the flag forms below run with no prompt.
+        // Each path argument must still stay in the trusted roots.
         Case(
-            "unsafe-catalog-rg-pre-prompts",
+            "reviewed-rg-pre-allows",
             Bash("rg --pre helper pattern ."),
             Approvals.None,
-            ExpectedApproval.Require(["rg"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "unsafe-catalog-sort-output-prompts",
+            "reviewed-sort-output-allows",
             Bash("sort -o output input"),
             Approvals.None,
-            ExpectedApproval.Require(["sort"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "unsafe-catalog-date-set-prompts",
+            "reviewed-date-set-allows",
             Bash("date --set tomorrow"),
             Approvals.None,
-            ExpectedApproval.Require(["date"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "unsafe-catalog-tree-output-prompts",
+            "reviewed-tree-output-allows",
             Bash("tree -o output"),
             Approvals.None,
-            ExpectedApproval.Require(["tree"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "unsafe-catalog-uniq-output-prompts",
+            "reviewed-uniq-output-allows",
             Bash("uniq input output"),
             Approvals.None,
-            ExpectedApproval.Require(["uniq input output"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "unsafe-catalog-gh-web-prompts",
-            // gh run view only reads; --web opens a browser and writes no data. The ID keeps its old name.
+            "reviewed-gh-run-view-web-allows",
+            // gh run view only reads; --web opens a browser and writes no data.
             Bash("gh run view 123456 --web"),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
@@ -628,16 +631,16 @@ public static class ShellApprovalCases
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
 
         Case(
-            "live-read-chain-with-separator-prompts-for-rg",
+            "live-read-chain-with-separator-allows",
             Bash("rg -rn \"operation failed\" src/ tests/ | head -20; echo \"---\"; rg -rln \"upload\" src/ | head -20"),
             Approvals.None,
-            ExpectedApproval.Require(["rg"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
 
         Case(
             "live-git-diagnostic-chain-prompts-for-unproved-phrases",
             Bash("git status --short 2>&1 | head; echo \"---branch---\"; git branch --show-current 2>&1; echo \"---remotes---\"; git remote -v 2>&1 | head -4; echo \"---recent---\"; git log --oneline -3 2>&1"),
             Approvals.None,
-            ExpectedApproval.Require(["git branch", "git remote", "git log"])),
+            ExpectedApproval.Require(["git remote"])),
 
         // #2306: the loop variable in the verb slot gives Unknown command words, so the model gets a rewrite correction.
         Case(
@@ -711,10 +714,10 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["sed"])),
 
         Case(
-            "native-project-path-operand-prompts-for-unproved-verb",
+            "native-project-path-operand-allows",
             Bash("git diff install-skills.sh"),
             Approvals.None,
-            ExpectedApproval.Require(["git diff"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "native-external-path-operand-prompts",
             Bash("git diff /etc/passwd"),
@@ -1133,8 +1136,8 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
-            "powershell7-unsafe-catalog-gh-web-prompts",
-            // gh run view only reads; --web opens a browser and writes no data. The ID keeps its old name.
+            "powershell7-reviewed-gh-run-view-web-allows",
+            // gh run view only reads; --web opens a browser and writes no data.
             PowerShell7("gh run view 123456 --web"),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
@@ -1529,10 +1532,10 @@ public static class ShellApprovalCases
         // file-change shapes in the sanitized local approval-prompt sample.
         // No command text, path, identifier, or free text came from the sample.
         Case(
-            "workload-search-rg-in-project-prompts",
+            "workload-search-rg-in-project-allows",
             Bash("rg -n \"TODO\" src"),
             Approvals.None,
-            ExpectedApproval.Require(["rg"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-grep-in-project-allows",
             Bash("grep -R \"error\" src"),
@@ -1574,10 +1577,10 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "rg"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:rg")),
         Case(
-            "workload-search-rg-head-pipeline-prompts",
+            "workload-search-rg-head-pipeline-allows",
             Bash("rg -n \"TODO\" src | head -40"),
             Approvals.None,
-            ExpectedApproval.Require(["rg"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-grep-tail-pipeline-allows",
             Bash("grep -R \"error\" logs | tail -20"),
@@ -1589,15 +1592,15 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["find"])),
         Case(
-            "workload-search-cat-jq-pipeline-prompts-for-tail",
+            "workload-search-cat-jq-pipeline-allows",
             Bash("cat config.json | jq '.items[]'"),
             Approvals.None,
-            ExpectedApproval.Require(["jq"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "workload-search-jq-direct-prompts",
+            "workload-search-jq-direct-allows",
             Bash("jq '.items[]' config.json"),
             Approvals.None,
-            ExpectedApproval.Require(["jq"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-jq-direct-grant-allows",
             Bash("jq '.items[]' config.json"),

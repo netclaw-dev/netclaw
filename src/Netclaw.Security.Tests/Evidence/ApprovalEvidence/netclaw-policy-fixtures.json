@@ -1050,7 +1050,7 @@
       "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
-      "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["rg"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
     },
     {
       "id": "A11",
@@ -1062,7 +1062,7 @@
       "sessionDirectory": "/work",
       "available": { "oneTimeApprovalKeys": [], "sessionGrants": [], "persistentGrants": [], "safePhrases": [] },
       "useBundledSafeCatalog": true,
-      "expected": { "outcome": "RequiresApproval", "denyReason": null, "approvalCandidates": ["sort"], "isMessy": false, "optionKeys": ["approve_once", "approve_session", "approve_everywhere", "deny"], "actorCheckCount": 1 }
+      "expected": { "outcome": "Allow", "denyReason": null, "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1 }
     },
     {
       "id": "A12",

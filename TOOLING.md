@@ -453,6 +453,7 @@ case ID.
 | `RequiresApproval` to `Denied` | Fails unless an intended change has `approvedBy`. |
 | Case removed | Always fails. |
 | Case added | Passes. The check reports it. |
+| Case renamed | Needs an intended change with `renamedFrom`. The check compares the old `Result` with the new `Result` under the rules above. |
 
 A negative control is a case ID in the same section. The case must exist in the
 baseline and in the candidate snapshot. It must prompt or deny in both. Only the
@@ -475,11 +476,16 @@ List intended changes in
       "to": "Allowed",
       "reason": "<why the change is safe>",
       "negativeControl": "<case ID that still prompts or denies>",
-      "approvedBy": "<owner, when the rule needs it>"
+      "approvedBy": "<owner, when the rule needs it>",
+      "renamedFrom": "<old case ID, only for a renamed case>"
     }
   ]
 }
 ```
+
+For a rename, the old ID must be in the baseline only, and the new ID must be in
+the candidate only. A rename with no outcome change uses the same value for
+`from` and `to`.
 
 The check fails when a new entry matches no transition (stale entry). An entry
 that is also in the baseline version of the file is history. The check ignores

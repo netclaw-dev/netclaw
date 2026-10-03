@@ -140,7 +140,22 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         if (OperatingSystem.IsMacOS() && policyCase.Id == "L17")
             return policyCase.Expected;
 
+        // The reviewed catalog lists sort, so L05 needs no prompt.
+        if (policyCase.Id == "L05")
+        {
+            return policyCase.Expected with
+            {
+                Outcome = "Allow",
+                ApprovalCandidates = null,
+                IsMessy = null,
+                OptionKeys = null,
+                ActorCheckCount = 1
+            };
+        }
+
         // The Windows bundled catalog has no cd entry, so L22 keeps cd on a Windows host.
+        // The catalog lists git diff, git show, and sort. In L17 each sort writes a
+        // file outside the project, so it still prompts.
         var windowsHost = OperatingSystem.IsWindows();
         List<string>? candidates = policyCase.Id switch
         {
@@ -148,12 +163,13 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             "L14" => ["git remote", "git fetch origin", "git fetch upstream"],
             "L15" => ["cd", "find", "head"],
             "L16" => ["git add", "git rebase"],
-            "L17" => ["git diff", "sort", "comm"],
+            "L17" => ["sort", "comm"],
             "L18" => ["cd", "ls", "head"],
             "L21" => ["cd", "git log", "grep"],
             "L22" => windowsHost ? ["cd", "python3"] : ["python3"],
-            "L29" => ["docker compose config", "git diff"],
-            "L30" => ["sed", "git show"],
+            "L29" => ["docker compose config"],
+            "L30" => ["sed"],
+            "L32" => ["gh api"],
             _ => null
         };
         if (candidates is null)

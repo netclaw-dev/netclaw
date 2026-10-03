@@ -190,12 +190,13 @@
         "useBundledSafeCatalog": true,
         "expected": {
           "outcome": "RequiresAgentCorrection", "denyReason": null, "agentCorrection": "ShellCommandWordsRewriteSuggested", "approvalCandidates": null, "isMessy": null, "optionKeys": null, "actorCheckCount": 1,
-          "candidateCoverage": [{ "candidateId": 0, "coverage": "Uncovered" }, { "candidateId": 1, "coverage": "Uncovered" }, { "candidateId": 2, "coverage": "Uncovered" }, { "candidateId": 1, "coverage": "ReviewedSafePolicy" }],
+          "candidateCoverage": [{ "candidateId": 0, "coverage": "Uncovered" }, { "candidateId": 1, "coverage": "Uncovered" }, { "candidateId": 2, "coverage": "Uncovered" }, { "candidateId": 1, "coverage": "ReviewedSafePolicy" }, { "candidateId": 2, "coverage": "ReviewedSafePolicy" }],
           "trace": [
             { "stage": "StoredGrantMatch", "candidateId": 0, "executableBasename": "jq", "outcome": "Uncovered", "reason": "NoGrant", "coverage": "Uncovered", "scopeRelation": "None", "grantTimestamp": null },
             { "stage": "StoredGrantMatch", "candidateId": 1, "executableBasename": "tail", "outcome": "Uncovered", "reason": "NoGrant", "coverage": "Uncovered", "scopeRelation": "None", "grantTimestamp": null },
             { "stage": "StoredGrantMatch", "candidateId": 2, "executableBasename": "sort", "outcome": "Uncovered", "reason": "NoGrant", "coverage": "Uncovered", "scopeRelation": "None", "grantTimestamp": null },
             { "stage": "ReviewedSafePolicy", "candidateId": 1, "executableBasename": "tail", "outcome": "Covered", "reason": "ReviewedSafePhrase", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderRealRoot", "grantTimestamp": null },
+            { "stage": "ReviewedSafePolicy", "candidateId": 2, "executableBasename": "sort", "outcome": "Covered", "reason": "ReviewedSafePhrase", "coverage": "ReviewedSafePolicy", "scopeRelation": "UnderRealRoot", "grantTimestamp": null },
             { "stage": "Completion", "candidateId": null, "executableBasename": null, "outcome": "RequiresAgentCorrection", "reason": "AgentCorrection", "coverage": null, "scopeRelation": "None", "grantTimestamp": null }
           ]
         }

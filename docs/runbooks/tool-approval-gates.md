@@ -167,11 +167,16 @@ covered:
   phrase, and every path is inside the session or project directory. The
   catalog ships with the daemon (`safe-verbs.linux.json`,
   `safe-verbs.windows.json`). It includes readers such as `ls`, `cat`, `grep`,
-  `pgrep`, `Get-Content`, and `Select-String`, the Bash `cd`, and queries such
-  as `git status`, `gh pr view`, `gh pr checks`, `gh issue list`, and
-  `gh run view`. It never includes `git push`, `rm`, `env`, `xargs`, `sudo`,
+  `rg`, `jq`, `sort`, `pgrep`, `ps`, `Get-Content`, and `Select-String`, the
+  Bash `cd`, and queries such as `git status`, `git log`, `git diff`,
+  `gh pr view`, `gh pr checks`, `gh issue list`, and `gh run view`. It never
+  includes `git push`, `rm`, `sed`, `find`, `awk`, `env`, `xargs`, `sudo`,
   `curl`, `gh api`, `gh pr create`, `gh pr merge`, or `printenv`. The agent
   cannot extend it.
+- The catalog lists a common read command even when a rare flag of that
+  command can write or run a program, for example `sort -o`, `rg --pre`, or
+  `git branch -D`. Each path argument must still be inside the session or
+  project directory.
 - A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,
   so it does not stop the catalog coverage. A redirect to any other file does.
 - On Linux and macOS, a backslash in a Bash word is a file-name character, not

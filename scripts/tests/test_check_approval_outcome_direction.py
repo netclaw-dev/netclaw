@@ -219,6 +219,57 @@ class DirectionCheckTests(unittest.TestCase):
         code, output = self.run_check(BASE_ROWS, [change()], baseline_changes=[change()])
         self.assertEqual(0, code, output)
 
+    @staticmethod
+    def renamed(rows: dict[str, str], old: str, new: str, result: str) -> dict[str, str]:
+        rows = {key: value for key, value in rows.items() if key != old}
+        rows[new] = result
+        return rows
+
+    def test_pass_rename_with_same_result(self):
+        rows = self.renamed(BASE_ROWS, "safe-allows", "safe-read-allows", "Allowed")
+        entry = change(id="safe-read-allows", renamedFrom="safe-allows",
+                       **{"from": "Allowed", "to": "Allowed"})
+        code, output = self.run_check(rows, [entry])
+        self.assertEqual(0, code, output)
+        self.assertIn("renamed from safe-allows", output)
+
+    def test_fail_rename_without_entry_is_a_removal(self):
+        rows = self.renamed(BASE_ROWS, "safe-allows", "safe-read-allows", "Allowed")
+        code, output = self.run_check(rows)
+        self.assertEqual(1, code, output)
+        self.assertIn("case removed", output)
+
+    def test_pass_rename_to_allowed_with_negative_control(self):
+        rows = self.renamed(BASE_ROWS, "push-prompts", "push-allows", "Allowed")
+        entry = change(id="push-allows", renamedFrom="push-prompts")
+        code, output = self.run_check(rows, [entry])
+        self.assertEqual(0, code, output)
+        self.assertIn("renamed from push-prompts; negative control external-prompts", output)
+
+    def test_fail_rename_to_allowed_without_negative_control(self):
+        rows = self.renamed(BASE_ROWS, "push-prompts", "push-allows", "Allowed")
+        entry = change(id="push-allows", renamedFrom="push-prompts")
+        del entry["negativeControl"]
+        code, output = self.run_check(rows, [entry])
+        self.assertEqual(1, code, output)
+        self.assertIn("no negativeControl", output)
+
+    def test_fail_rename_from_allowed_without_approval(self):
+        rows = self.renamed(BASE_ROWS, "safe-allows", "safe-prompts", "RequiresApproval")
+        entry = change(id="safe-prompts", renamedFrom="safe-allows",
+                       **{"from": "Allowed", "to": "RequiresApproval"})
+        code, output = self.run_check(rows, [entry])
+        self.assertEqual(1, code, output)
+        self.assertIn("approvedBy", output)
+
+    def test_fail_rename_when_old_id_stays(self):
+        rows = {**BASE_ROWS, "safe-read-allows": "Allowed"}
+        entry = change(id="safe-read-allows", renamedFrom="safe-allows",
+                       **{"from": "Allowed", "to": "Allowed"})
+        code, output = self.run_check(rows, [entry])
+        self.assertEqual(1, code, output)
+        self.assertIn("needs the old ID only in the baseline", output)
+
     def test_bad_input_duplicate_case_id(self):
         text = snapshot(BASE_ROWS) + "| safe-allows | Bash | ls | Allowed | reason |\n"
         code, output = self.run_check(BASE_ROWS, candidate_text=text)
