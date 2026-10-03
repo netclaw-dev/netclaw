@@ -104,7 +104,19 @@ internal enum ToolAllowReason
     /// This value does not represent a session or persistent approval.
     /// The pipeline clears the retry state after the attempt.
     /// </remarks>
-    OneTimeApproval
+    OneTimeApproval,
+
+    /// <summary>
+    /// Existing approval grants match every candidate, and they replace a denial
+    /// of a path that is only outside the trusted roots.
+    /// </summary>
+    /// <remarks>
+    /// Only an unattended shell call in Approval mode gets this reason
+    /// (authorization PR 6e). The outcome and the matched grants are the same as
+    /// for <see cref="StoredApproval"/>. The value exists so that an operator can
+    /// find these allows in the logs and the decision trace. No rule reads it.
+    /// </remarks>
+    StoredApprovalOutsideTrustedRoots
 }
 
 /// <summary>
@@ -135,6 +147,8 @@ internal static class ToolAllowReasonExtensions
                 "Existing approval grants matched every candidate that required a grant.",
             ToolAllowReason.OneTimeApproval =>
                 "A one-time approval matched this invocation retry.",
+            ToolAllowReason.StoredApprovalOutsideTrustedRoots =>
+                "Existing approval grants matched every candidate and replaced a trusted-root denial in an unattended run.",
             _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown tool allow reason.")
         };
 }

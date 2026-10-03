@@ -328,12 +328,12 @@ public static class ShellApprovalCases
             "unattended-cd-semicolon-grant-allows",
             Bash("cd /netclaw-approval-external/cd-list; make", interactive: false),
             Approvals.PersistentAnywhere("cd", "make"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:make", "persistent:make")),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApprovalOutsideTrustedRoots, 1, "persistent:cd", "persistent:make", "persistent:make")),
         Case(
             "unattended-cd-or-exit-grant-allows",
             Bash("cd /netclaw-approval-external/cd-list || exit 1; make", interactive: false),
             Approvals.PersistentAnywhere("cd", "exit", "make"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:exit", "persistent:make", "persistent:make")),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApprovalOutsideTrustedRoots, 1, "persistent:cd", "persistent:exit", "persistent:make", "persistent:make")),
         Case(
             "unattended-cd-semicolon-without-grant-denies",
             Bash("cd /netclaw-approval-external/cd-list; make", interactive: false),

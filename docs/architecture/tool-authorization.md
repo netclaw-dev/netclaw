@@ -188,7 +188,11 @@ shell rules, in order:
 
 Consolidation PR 6d deleted the old gate. By owner decision, PR 6e lets a
 stored grant decide ahead of both trusted-root checks for unattended Approval
-mode. A denial that stays names each missing grant.
+mode. A denial that stays names each missing grant. An allow of this type has
+its own reason, `StoredApprovalOutsideTrustedRoots`, in the "Tool
+authorization evaluated" log line. The trace completion row has the reason
+`StoredGrantOutsideTrustedRoots`. The outcome and the matched grants are the
+same as for `StoredApproval`, and no rule reads the reason.
 
 Each context below lists its question, the classes that answer it today, its
 published contract today, what it must not know, and where its data lives.

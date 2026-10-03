@@ -386,8 +386,15 @@ internal sealed class ShellPolicyCoordinator(
     }
 
     /// <summary>Completes a shell call whose every candidate has coverage.</summary>
+    /// <param name="evaluation">The covered candidates.</param>
+    /// <param name="grantReplacedTrustedRoot">
+    /// True when stored grants replaced a trusted-root denial (PR 6e). It changes
+    /// only the allow reason, not the outcome or the matched grants.
+    /// </param>
+    /// <param name="cancellationToken">The call cancellation.</param>
     internal static ToolAuthorizationDecision CompleteCovered(
         ShellPolicyEvaluation evaluation,
+        bool grantReplacedTrustedRoot,
         CancellationToken cancellationToken)
     {
         var approvalMatches = evaluation.ApprovalMatches;
@@ -397,7 +404,9 @@ internal sealed class ShellPolicyCoordinator(
         {
             return evaluation.Complete(
                 ToolAuthorizationDecision.Allow(
-                    ToolAllowReason.StoredApproval,
+                    grantReplacedTrustedRoot
+                        ? ToolAllowReason.StoredApprovalOutsideTrustedRoots
+                        : ToolAllowReason.StoredApproval,
                     approvalMatches));
         }
 
