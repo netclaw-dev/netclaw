@@ -29,11 +29,36 @@ public sealed class ProviderOAuthTokenRefreshService(
         ProviderEntry entry,
         OAuthAuth oauth,
         CancellationToken ct = default)
+        => await GetAccessTokenAsync(
+            providerName, entry, oauth, forceRefresh: false, expectedAccessToken: null, ct: ct);
+
+    /// <summary>
+    /// Refreshes the provider token after a request was rejected with HTTP 401.
+    /// If another request already replaced the token while this call waited for the
+    /// provider lock, the newer token is reused instead of rotating it again.
+    /// </summary>
+    public async Task<SensitiveString> ForceRefreshAccessTokenAsync(
+        string providerName,
+        ProviderEntry entry,
+        OAuthAuth oauth,
+        string rejectedAccessToken,
+        CancellationToken ct = default)
+        => await GetAccessTokenAsync(
+            providerName, entry, oauth, forceRefresh: true,
+            expectedAccessToken: rejectedAccessToken, ct: ct);
+
+    private async Task<SensitiveString> GetAccessTokenAsync(
+        string providerName,
+        ProviderEntry entry,
+        OAuthAuth oauth,
+        bool forceRefresh,
+        string? expectedAccessToken,
+        CancellationToken ct)
     {
         var accessToken = entry.OAuthAccessToken.RequireValid(
             $"OAuth access token for provider '{providerName}'");
 
-        if (!NeedsRefresh(entry.OAuthTokenExpiry))
+        if (!forceRefresh && !NeedsRefresh(entry.OAuthTokenExpiry))
             return accessToken;
 
         // Coalesce concurrent refreshes for the same configured provider so a
@@ -45,7 +70,14 @@ public sealed class ProviderOAuthTokenRefreshService(
             accessToken = entry.OAuthAccessToken.RequireValid(
                 $"OAuth access token for provider '{providerName}'");
 
-            if (!NeedsRefresh(entry.OAuthTokenExpiry))
+            if (forceRefresh
+                && expectedAccessToken is not null
+                && !string.Equals(accessToken.Value, expectedAccessToken, StringComparison.Ordinal))
+            {
+                return accessToken;
+            }
+
+            if (!forceRefresh && !NeedsRefresh(entry.OAuthTokenExpiry))
                 return accessToken;
 
             if (entry.OAuthRefreshToken.IsNullOrEmpty())

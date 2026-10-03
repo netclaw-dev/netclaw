@@ -198,6 +198,62 @@ public sealed class OpenAiCodexTests
             Assert.Equal("account-new", accountId);
         }
 
+        [Fact]
+        public async Task ProcessAsync_RefreshesAndRetriesOnceAfterUnauthorizedResponse()
+        {
+            using var dir = new DisposableTempDir();
+            var paths = new NetclawPaths(dir.Path);
+            var now = new DateTimeOffset(2026, 6, 23, 12, 0, 0, TimeSpan.Zero);
+            var time = new FakeTimeProvider(now);
+            var idToken = JwtTestToken.Make(new Dictionary<string, object>
+            {
+                ["https://api.openai.com/auth"] = new Dictionary<string, object>
+                {
+                    ["chatgpt_account_id"] = "account-new"
+                }
+            });
+            var httpClient = new HttpClient(new FakeHttpMessageHandler(_ => FakeHttpMessageHandler.JsonResponse(new
+            {
+                access_token = "access-new",
+                refresh_token = "refresh-new",
+                id_token = idToken,
+                expires_in = 3600,
+            })));
+            var refreshService = new ProviderOAuthTokenRefreshService(
+                paths,
+                new DeviceFlowServiceFactory(
+                    new OAuthDeviceFlowService(httpClient, time),
+                    new OpenAiDeviceFlowService(httpClient, time)),
+                NullNotificationSink.Instance,
+                time);
+            var entry = new ProviderEntry
+            {
+                Type = "openai",
+                AuthMethod = AuthMethod.OAuthDevice,
+                OAuthAccessToken = new SensitiveString("access-old"),
+                OAuthRefreshToken = new SensitiveString("refresh-old"),
+                OAuthTokenExpiry = now.AddHours(1),
+                OAuthAccountId = new SensitiveString("account-old"),
+            };
+            var credential = new ApiKeyCredential("access-old");
+            var policy = new OpenAiCodexRequestPolicy(
+                "openai-codex", entry, OpenAiOAuth, credential, refreshService);
+            var pipeline = ClientPipeline.Create(new ClientPipelineOptions());
+            using var message = pipeline.CreateMessage();
+            message.Request.Method = "POST";
+            message.Request.Uri = new Uri("https://chatgpt.com/backend-api/codex/responses");
+            var terminal = new UnauthorizedOncePolicy();
+
+            await policy.ProcessAsync(message, [policy, terminal], 0);
+
+            Assert.Equal(2, terminal.Calls);
+            Assert.Equal("access-new", entry.OAuthAccessToken!.Value);
+            credential.Deconstruct(out var currentCredential);
+            Assert.Equal("access-new", currentCredential);
+            message.Request.Headers.TryGetValue("ChatGPT-Account-Id", out var accountId);
+            Assert.Equal("account-new", accountId);
+        }
+
         private sealed class TerminalPolicy : PipelinePolicy
         {
             public bool WasCalled { get; private set; }
@@ -212,6 +268,28 @@ public sealed class OpenAiCodexTests
                 PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
             {
                 WasCalled = true;
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        private sealed class UnauthorizedOncePolicy : PipelinePolicy
+        {
+            public int Calls { get; private set; }
+
+            public override void Process(
+                PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
+                => throw new NotSupportedException("The async policy path is required for OAuth refresh.");
+
+            public override ValueTask ProcessAsync(
+                PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
+            {
+                Calls++;
+                if (Calls == 1)
+                {
+                    throw new HttpRequestException(
+                        "unauthorized", null, HttpStatusCode.Unauthorized);
+                }
+
                 return ValueTask.CompletedTask;
             }
         }

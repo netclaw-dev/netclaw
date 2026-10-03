@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.ClientModel.Primitives;
+using System.Net;
 using System.Text.Json.Nodes;
 using System.ClientModel;
 using Netclaw.Configuration;
@@ -68,18 +69,51 @@ internal sealed class OpenAiCodexRequestPolicy : PipelinePolicy
     public override async ValueTask ProcessAsync(
         PipelineMessage message, IReadOnlyList<PipelinePolicy> pipeline, int currentIndex)
     {
+        SensitiveString? requestToken = null;
         if (_tokenRefreshService is not null)
         {
-            var token = await _tokenRefreshService.GetValidAccessTokenAsync(
+            requestToken = await _tokenRefreshService.GetValidAccessTokenAsync(
                 _providerName!,
                 _entry!,
                 _oauth!,
                 message.CancellationToken);
-            _credential!.Update(token.Value);
+            _credential!.Update(requestToken.Value);
         }
 
         Modify(message, ResolveAccountId());
-        await ProcessNextAsync(message, pipeline, currentIndex);
+        try
+        {
+            await ProcessNextAsync(message, pipeline, currentIndex);
+        }
+        catch (Exception ex) when (requestToken is not null && IsUnauthorized(ex))
+        {
+            // OAuth providers can revoke or rotate an access token before its local
+            // expiry. Retry exactly once with a refresh, while allowing a concurrent
+            // request that already refreshed this token to win.
+            var refreshedToken = await _tokenRefreshService!.ForceRefreshAccessTokenAsync(
+                _providerName!,
+                _entry!,
+                _oauth!,
+                requestToken.Value,
+                message.CancellationToken);
+            _credential!.Update(refreshedToken.Value);
+            Modify(message, ResolveAccountId());
+            await ProcessNextAsync(message, pipeline, currentIndex);
+        }
+    }
+
+    private static bool IsUnauthorized(Exception exception)
+    {
+        for (var current = exception; current is not null; current = current.InnerException)
+        {
+            if (current is ClientResultException { Status: 401 }
+                || current is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized })
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private string ResolveAccountId()
@@ -162,7 +196,7 @@ internal sealed class OpenAiCodexRequestPolicy : PipelinePolicy
         // Merge with any existing instructions from the SDK
         var existing = body["instructions"]?.GetValue<string>() ?? "";
         var combined = systemTexts.Count > 0
-            ? string.Join("\n", [existing, ..systemTexts]).TrimStart('\n')
+            ? string.Join("\n", [existing, .. systemTexts]).TrimStart('\n')
             : existing;
 
         body["instructions"] = combined;
