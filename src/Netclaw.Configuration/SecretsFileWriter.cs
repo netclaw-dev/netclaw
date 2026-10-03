@@ -28,6 +28,16 @@ public static class SecretsFileWriter
     };
 
     /// <summary>
+    /// Re-assert owner-only permissions on an existing secrets file.
+    /// This repairs mode changes that a volume mount or another process made after the last write.
+    /// </summary>
+    public static void HardenExistingFile(string secretsPath)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(secretsPath);
+        AtomicFile.HardenOwnerOnly(secretsPath);
+    }
+
+    /// <summary>
     /// Write JSON content to the secrets file, creating parent directories as needed.
     /// On Linux/macOS, the file is set to owner-only read/write (chmod 600).
     /// </summary>

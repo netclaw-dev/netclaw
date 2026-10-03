@@ -51,6 +51,27 @@ public sealed class SecretsFileWriterTests : IDisposable
     }
 
     [Fact]
+    public void HardenExistingFile_reasserts_chmod_600_on_linux()
+    {
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            return; // Skip on Windows
+
+        SecretsFileWriter.Write(_secretsPath, "{\"test\": true}", new NullSecretsProtector());
+        File.SetUnixFileMode(
+            _secretsPath,
+            UnixFileMode.UserRead
+            | UnixFileMode.UserWrite
+            | UnixFileMode.GroupRead
+            | UnixFileMode.GroupWrite);
+
+        SecretsFileWriter.HardenExistingFile(_secretsPath);
+
+        Assert.Equal(
+            UnixFileMode.UserRead | UnixFileMode.UserWrite,
+            File.GetUnixFileMode(_secretsPath));
+    }
+
+    [Fact]
     public void Write_creates_parent_directories()
     {
         var nestedPath = Path.Combine(_dir.Path, "nested", "deep", "secrets.json");
