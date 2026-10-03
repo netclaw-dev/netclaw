@@ -33,11 +33,11 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
     [InlineData("cat \"$TMPDIR/notes.txt\"", "cat {T}/notes.txt", true)]
     [InlineData("cat \"$TMP/notes.txt\" \"$TEMP/more.txt\"", "cat {T}/notes.txt {T}/more.txt", true)]
     [InlineData("cat $TMPDIR/notes.txt", "cat {T}/notes.txt", true)]
-    [InlineData("cd \"$TMPDIR/out\" && ls", "cd {T}/out && ls", false)]
-    [InlineData("cd ./sub && cat notes.txt", "cd {P}/sub && cat notes.txt", false)]
-    [InlineData("cd ./sub; cat notes.txt", "cd {P}/sub; cat notes.txt", false)]
-    [InlineData("cd sub && cat notes.txt", "cd {P}/sub && cat notes.txt", false)]
-    [InlineData("cd sub; cat notes.txt", "cd {P}/sub; cat notes.txt", false)]
+    [InlineData("cd \"$TMPDIR/out\" && ls", "cd {T}/out && ls", true)]
+    [InlineData("cd ./sub && cat notes.txt", "cd {P}/sub && cat notes.txt", true)]
+    [InlineData("cd ./sub; cat notes.txt", "cd {P}/sub; cat notes.txt", true)]
+    [InlineData("cd sub && cat notes.txt", "cd {P}/sub && cat notes.txt", true)]
+    [InlineData("cd sub; cat notes.txt", "cd {P}/sub; cat notes.txt", true)]
     public async Task Launch_variable_gets_the_decision_of_its_literal_value(
         string command,
         string literal,
