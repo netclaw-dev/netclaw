@@ -48,7 +48,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
-| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 84 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text | 88 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -347,7 +347,7 @@ Run the shell analysis gate:
 ./scripts/run-shell-command-analysis-mutations.sh
 ```
 
-The script tests 84 mutants across execution-region accounting, denial-only
+The script tests 88 mutants across execution-region accounting, denial-only
 matching, tree traversal and root correspondence, bounded non-filesystem
 values, data operands of output commands, candidate extraction, approval
 mode, path facts, and reviewed-safe policy. The job fails unless every mutant
@@ -363,6 +363,12 @@ of `cat`, a dynamic program word, a dynamic redirect target, or a PowerShell
 `echo` stays unresolved. PowerShell keeps the bare `$?` rule (2 mutants);
 `Power_shell_bare_status_output_keeps_static_candidates` kills them. The gate
 kills 75 Security and 9 Actors mutants (3.5 minutes).
+
+Approval taxonomy PR 3 adds `ShellApprovalMatcher.ResolveControlCharacterScope`
+(4 mutants). A word with a control character, such as multi-line
+`python3 -c` code, gets the deepest ancestor directory of its text before the
+first control character. `Control_character_word_gets_its_clean_ancestor_scope`
+kills the mutants. The gate now kills 79 Security and 9 Actors mutants.
 
 The script groups targets by source project. Stryker analyzes each source project once.
 The local run on 2026-09-24 took under four minutes.

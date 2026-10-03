@@ -42,6 +42,30 @@ public sealed class ShellCommandAnalysisMutationTests
             .Order(StringComparer.Ordinal));
     }
 
+    // A word with a control character gets the deepest ancestor directory of
+    // its text before that character, not an unresolved scope.
+    [Theory]
+    [InlineData("python3 -c \"import sys\nprint(1)\"", "python3@/work")]
+    [InlineData("python3 -c \"/opt/tools/run\nexit()\"", "python3@/opt/tools")]
+    public void Control_character_word_gets_its_clean_ancestor_scope(string command, string expected)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = "/work"
+            });
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            [expected],
+            analysis.Candidates.Select(static candidate => $"{candidate.Verb}@{candidate.Directory}"));
+    }
+
     // A dynamic value is data only in an operand of an output command: echo,
     // :, true, false, or printf after a literal format that is not an option.
     [Theory]

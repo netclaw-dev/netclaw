@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.79.0"
+  version: "2.80.0"
 ---
 
 # Netclaw Operations
@@ -535,6 +535,8 @@ is intended behavior. Mutating verbs in the same directory still prompt.
 - **Unresolved commands** get only `Once` and `Deny`.
   These commands include dynamic assignments and unknown path facts.
   The matcher cannot extract a complete reusable identity.
+  Multi-line `python3 -c` code is not unresolved: its scope is the working
+  directory, so the prompt offers reusable grants.
 - **Shallow cwd** (e.g. `/etc/`, `/`) hides `Always here` only. Persisting a
   too-shallow root would grant the verb across most of the filesystem;
   `This chat` and `Always anywhere` remain available.

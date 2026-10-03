@@ -1238,15 +1238,28 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             out _));
     }
 
-    [Fact]
-    public void ExtractCandidates_rejects_control_character_in_relative_glob()
+    // A word with a control character (multi-line python3 -c code) gets the
+    // deepest ancestor directory of its text before the first control
+    // character. Each path that the word can name is inside that directory.
+    [SlopwatchSuppress("SW001", "This theory verifies Bash path scopes, which do not apply to the Windows shell parser.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    [InlineData("du -sh \"./bad\0/*\"", "du@/work")]
+    [InlineData("python3 -c \"import sys\nprint(sys.argv)\"", "python3@/work")]
+    [InlineData("python3 -c \"/opt/tools/run\nexit()\"", "python3@/opt/tools")]
+    [InlineData("curl -s https://example.com/a | python3 -c \"\nimport sys\"", "curl@/work|python3@/work")]
+    public void Control_character_word_uses_its_clean_ancestor_scope(string command, string expected)
     {
-        var arguments = Args("du -sh \"./bad\0/*\"", "/work");
-
-        Assert.Empty(_matcher.ExtractCandidates(
+        var analysis = _matcher.AnalyzeInvocation(
             new ToolName("shell_execute"),
-            arguments));
-        Assert.True(_matcher.IsMessy(new ToolName("shell_execute"), arguments));
+            Args(command, "/work"));
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            expected.Split('|'),
+            analysis.Candidates.Select(static candidate => $"{candidate.Verb}@{candidate.Directory}"));
+        Assert.DoesNotContain(
+            analysis.Candidates,
+            static candidate => candidate.Directory!.Any(char.IsControl));
     }
 
     [Fact]

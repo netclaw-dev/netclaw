@@ -204,6 +204,15 @@ read -r candidate_start candidate_end < <(
 )
 security_mutations+=("IToolApprovalMatcher.cs{$candidate_start..$candidate_end}")
 
+read -r control_start control_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static string? ResolveControlCharacterScope(" \
+    "var firstControl = resolved.AsSpan().IndexOfAny(ControlCharacters);" \
+    ": GetRedirectDirectory(resolved![..firstControl], pathStyle);"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$control_start..$control_end}")
+
 read -r messy_start messy_end < <(
   find_span \
     "$matcher_file" \
@@ -216,7 +225,7 @@ security_mutations+=("IToolApprovalMatcher.cs{$messy_start..$messy_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  75 \
+  79 \
   "${security_mutations[@]}"
 
 actor_mutations=()

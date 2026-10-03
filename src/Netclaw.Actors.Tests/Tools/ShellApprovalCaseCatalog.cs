@@ -1284,6 +1284,16 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
         Case(
+            "multi-line-inline-code-offers-reusable-grant",
+            Bash("python3 -c \"import sys\nprint(sys.argv)\""),
+            Approvals.None,
+            ExpectedApproval.Require(["python3"])),
+        Case(
+            "multi-line-inline-code-uses-folder-grant",
+            Bash("python3 -c \"import sys\nprint(sys.argv)\""),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "python3"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:python3")),
+        Case(
             "echo-substitution-data-uses-inner-grant",
             Bash("echo \"base: $(git merge-base origin/main origin/dev)\"; echo \"=== done ===\""),
             Approvals.PersistentAnywhere("git merge-base"),
