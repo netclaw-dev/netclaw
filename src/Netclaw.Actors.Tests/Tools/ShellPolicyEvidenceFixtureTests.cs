@@ -133,15 +133,21 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         PolicyAdversarialCase policyCase)
     {
         // The archived fixture keeps the prior exact-only result.
-        // These rows state the current finite-scope contract. The reviewed
-        // catalog covers a cd into the project, so only L12, L15, L18, and L21
-        // still list cd: their cd leaves the project or targets a new directory.
+        // These rows state the current finite-scope contract. In an
+        // interactive run on a POSIX host, the reviewed catalog covers a cd and
+        // a read in each directory that the audience may read, so no row lists
+        // cd there. A Windows host keeps the project-root results.
         // macOS resolves /tmp through a link, so the redirect paths in L17 stay exact.
         if (OperatingSystem.IsMacOS() && policyCase.Id == "L17")
             return policyCase.Expected;
 
-        // The reviewed catalog lists sort, so L05 needs no prompt.
-        if (policyCase.Id == "L05")
+        // The reviewed catalog lists sort, so L05 needs no prompt. In an
+        // interactive run a reviewed phrase covers each path that the audience
+        // may read, so the external reads in L18, L21, and L28 need no prompt.
+        // The fixtures use POSIX paths. Only a POSIX host can read them, so a
+        // Windows host keeps the archived project-root results.
+        var posixHost = !OperatingSystem.IsWindows();
+        if (policyCase.Id is "L05" || posixHost && policyCase.Id is "L18" or "L21" or "L28")
         {
             return policyCase.Expected with
             {
@@ -159,14 +165,15 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var windowsHost = OperatingSystem.IsWindows();
         List<string>? candidates = policyCase.Id switch
         {
-            "L12" => ["mkdir", "cd", "git clone"],
+            "L12" => posixHost ? ["mkdir", "git clone"] : ["mkdir", "cd", "git clone"],
             "L14" => ["git remote", "git fetch origin", "git fetch upstream"],
-            "L15" => ["cd", "find", "head"],
+            "L15" => posixHost ? ["find"] : ["cd", "find", "head"],
             "L16" => ["git add", "git rebase"],
             "L17" => ["sort", "comm"],
             "L18" => ["cd", "ls", "head"],
             "L21" => ["cd", "git log", "grep"],
             "L22" => windowsHost ? ["cd", "python3"] : ["python3"],
+            "L24" when posixHost => ["external-crm deals list"],
             "L29" => ["docker compose config"],
             "L30" => ["sed"],
             "L32" => ["gh api"],
@@ -180,6 +187,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             ApprovalOptionKeys.ApproveOnce,
             ApprovalOptionKeys.ApproveSession
         };
+
         if (policyCase.Id is "L18" or "L21")
             optionKeys.Add(ApprovalOptionKeys.ApproveAlways);
         optionKeys.Add(ApprovalOptionKeys.ApproveEverywhere);
@@ -212,7 +220,28 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         var liveCase = Assert.Single(
             catalog.LiveRegressionCases,
             item => item.PolicyCase.Id == caseId);
-        await AssertPolicyCaseAsync(catalog, timeProvider, liveCase.PolicyCase);
+        var policyCase = liveCase.PolicyCase;
+        // The archived R05 result prompts for cat and rg outside the project.
+        // An interactive reviewed phrase now covers each path that the
+        // audience may read, so the call needs no prompt.
+        if (policyCase.Id == "R05")
+        {
+            policyCase = policyCase with
+            {
+                Expected = policyCase.Expected with
+                {
+                    Outcome = "Allow",
+                    ApprovalCandidates = null,
+                    IsMessy = null,
+                    OptionKeys = null,
+                    ActorCheckCount = 1,
+                    CandidateCoverage = null,
+                    Trace = null
+                }
+            };
+        }
+
+        await AssertPolicyCaseAsync(catalog, timeProvider, policyCase);
     }
 
     private async Task AssertPolicyCaseAsync(

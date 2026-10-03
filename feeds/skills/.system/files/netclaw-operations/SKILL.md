@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.77.0"
+  version: "2.78.0"
 ---
 
 # Netclaw Operations
@@ -471,10 +471,10 @@ Preserve an explicitly required platform temporary path.
 Netclaw does not automatically clean managed temporary storage yet.
 
 1. **Hard-deny list** — system-protected paths. Always blocks.
-2. **Safe-verb ∩ safe-space short-circuit** — when the verb is on the curated
-   safe list AND the effective directory (path arg or cwd) is under your
-   declared safe space (`session_dir` or `project_dir`), the call auto-runs
-   with no prompt. The list covers demonstrably read-only verbs: file readers
+2. **Safe-verb short-circuit** — in an interactive session, when the verb is
+   on the curated safe list AND your audience may read every path of the call
+   with a file tool, the call auto-runs with no prompt. A protected path never
+   qualifies. The list covers demonstrably read-only verbs: file readers
    (`ls`, `grep`, `cat`, …), system/info verbs (`date`, `whoami`, `uname`,
    `uptime`, …), and read-only `git`/`gh` queries (`git status`, `git log`,
    `gh pr view`, `gh run list`, …). Mutating verbs (`git push`, `git fetch`,
@@ -524,10 +524,9 @@ The reminder expires ten minutes after the interruption. A completed turn,
 partial reply, or possible tool effect does not create this reminder.
 
 **Why you may not see a prompt at all.** If the user invokes a read-only verb
-(say `grep`) with a path argument under a tree the operator has previously
-trusted, the safe-verb short-circuit applies and there is no prompt. This
-is intended behavior — read-only inspection of declared work surfaces is
-implicit. Mutating verbs in the same directory still prompt.
+(say `grep`) on a path that the audience may read, the safe-verb
+short-circuit applies in an interactive session and there is no prompt. This
+is intended behavior. Mutating verbs in the same directory still prompt.
 
 **When the prompt offers fewer buttons.** Two cases:
 
@@ -538,11 +537,9 @@ implicit. Mutating verbs in the same directory still prompt.
   too-shallow root would grant the verb across most of the filesystem;
   `This chat` and `Always anywhere` remain available.
 
-If a user keeps getting prompted in their repo on read-only verbs, the
-likely cause is the commands they're running don't carry a path argument
-(e.g. `git status` with no `-C`). Suggest they call
-`set_working_directory <path>` so the safe-verb short-circuit treats that
-tree as a safe space. If they keep getting prompted for the same mutating
+If a user keeps getting prompted on read-only verbs, the likely cause is an
+unresolved command, a write redirect, or an option before the verb
+(`git -C dir status`). Prefer `WorkingDirectory` over `-C`. If they keep getting prompted for the same mutating
 verb (e.g. `git push`), suggest `Always here` to persist
 `(git push, effective directory)`.
 

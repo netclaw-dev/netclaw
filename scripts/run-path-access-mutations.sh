@@ -23,11 +23,28 @@ read -r span_start span_end < <(
   ' "$source_file"
 )
 
+# The interactive read branch of the reviewed-safe path check: only an
+# interactive run, and only a host path of the shell's own style, can use the
+# read authority of the audience.
+read -r read_start read_end < <(
+  perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
+    $start_marker = "=> context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available";
+    $end_marker = "is PathAccessDecision.Allowed;";
+    $start = index($_, $start_marker);
+    die "The read-branch start marker is missing or duplicated.\n"
+      if $start < 0 || index($_, $start_marker, $start + 1) >= 0;
+    $end_start = index($_, $end_marker, $start);
+    die "The read-branch end marker is missing.\n" if $end_start < 0;
+    print "$start ", $end_start + length($end_marker), "\n";
+  ' "$source_file"
+)
+
 (
   cd "$test_project"
   dotnet stryker \
     --config-file stryker-config.json \
     --mutate "Tools/PathAccessPolicy.cs{$span_start..$span_end}" \
+    --mutate "Tools/PathAccessPolicy.cs{$read_start..$read_end}" \
     --output "$output_path" \
     --skip-version-check
 )
@@ -38,7 +55,7 @@ tested_count="$(
 )"
 killed_count="$(jq '[.files[].mutants[] | select(.status == "Killed")] | length' "$report")"
 
-if [[ "$tested_count" -ne 2 || "$killed_count" -ne 2 ]]; then
-  echo "Expected two killed path-access mutants. Found $killed_count killed from $tested_count tested." >&2
+if [[ "$tested_count" -ne 5 || "$killed_count" -ne 5 ]]; then
+  echo "Expected five killed path-access mutants. Found $killed_count killed from $tested_count tested." >&2
   exit 1
 fi

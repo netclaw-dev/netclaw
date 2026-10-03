@@ -42,7 +42,7 @@ coverage. They do not replace positive and negative behavior tests.
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
-| `PathAccessPolicy.AddSessionRoots` | Only a Personal context receives shared session roots | 2 killed | `./scripts/run-path-access-mutations.sh` |
+| `PathAccessPolicy.AddSessionRoots` and `PathAccessPolicy.IsReadableInInteractiveRun` | Only a Personal context receives shared session roots; only an interactive run lets a reviewed phrase use the read authority of the audience, and only for a host path of the shell's own style | 5 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
@@ -63,8 +63,12 @@ Run the path-access check locally:
 ./scripts/run-path-access-mutations.sh
 ```
 
-The script tests two mutants in the shared session-root boundary.
-The job fails unless both mutants die.
+The script tests two mutants in the shared session-root boundary and three
+mutants in the interactive read branch of the reviewed-safe path check.
+`Reviewed_shell_path_uses_read_authority_only_when_interactive` kills the
+branch mutants: an unattended read of a global read root, a relative path, and
+a protected path must not qualify. The job fails unless all five mutants die.
+The approval taxonomy PR 1 run took 3 minutes after package restore.
 The local prototype took 1 minute 28 seconds after package restore.
 A cold CI runner should take two to four minutes.
 

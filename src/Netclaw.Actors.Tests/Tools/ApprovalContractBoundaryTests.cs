@@ -547,19 +547,39 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
 
             // A write in %TEMP% gets managed-directory advice. The production
             // Windows safe-verb list marks Get-Content as a reviewed diagnostic,
-            // and a diagnostic gets no relocation advice; it asks for approval.
+            // and a diagnostic gets no relocation advice. The interactive
+            // Personal profile may read %TEMP%, so the reviewed phrase runs.
             var write = await harness.EvaluateShellAsync("Remove-Item result.log", Ct, temporary);
             var diagnostic = await harness.EvaluateShellAsync("Get-Content result.log", Ct, temporary);
 
             Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, write.Outcome);
             Assert.Equal(ApprovalCorrection.ManagedTemporaryDirectory, write.AgentCorrection);
-            Assert.Equal(ApprovalOutcome.RequiresApproval, diagnostic.Outcome);
+            Assert.Equal(ApprovalOutcome.Allowed, diagnostic.Outcome);
+            Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, diagnostic.AllowReason);
             Assert.NotEqual(ApprovalCorrection.ManagedTemporaryDirectory, diagnostic.AgentCorrection);
         }
         finally
         {
             root.Delete(recursive: true);
         }
+    }
+
+    // On a Windows host, the catalog row powershell7-backslash-parent-separator-prompts
+    // reads a real path outside the project. The interactive Personal profile
+    // may read it, so the reviewed phrase runs. A POSIX host simulates the
+    // Windows paths, cannot judge them, and keeps the prompt.
+    [SlopwatchSuppress("SW001", "The case needs real Windows paths.")]
+    [Fact(SkipUnless = nameof(IsWindows), Skip = "The case needs real Windows paths.")]
+    public async Task Windows_host_reviewed_phrase_reads_a_path_outside_the_project()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "windows-outside-read",
+            new ShellApprovalInvocation(@"Get-Content ..\..\outside\secret.txt", Host: ShellApprovalHost.PowerShell7));
+
+        var decision = await harness.EvaluateAsync(Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, decision.Outcome);
+        Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, decision.AllowReason);
     }
 
     private static string CanonicalPath(string path)

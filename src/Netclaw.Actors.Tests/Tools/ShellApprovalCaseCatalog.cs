@@ -243,7 +243,17 @@ internal sealed record ShellApprovalCase(
     string Id,
     ShellApprovalInvocation Invocation,
     ApprovalState Approvals,
-    ExpectedApproval Expected);
+    ExpectedApproval Expected)
+{
+    /// <summary>
+    /// True when the row reads a real path outside the project on a Windows
+    /// host. An interactive reviewed phrase may read each path that the
+    /// audience may read, so the Windows host gives another result than the
+    /// simulated Windows paths of a POSIX host. Such a row runs on a POSIX host
+    /// only, and a Windows-host test pins the Windows result.
+    /// </summary>
+    public bool ReadsOutsidePathOnWindowsHost { get; init; }
+}
 
 public static class ShellApprovalCases
 {
@@ -293,16 +303,16 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "safe-git-ls-tree-external-prompts-with-canonical-verb",
+            "safe-git-ls-tree-external-allows-with-canonical-verb",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.None,
-            ExpectedApproval.Require(["git ls-tree feature"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         // #2306: the command words are "git ls-tree feature", so a "git ls-tree" grant does not cover them.
         Case(
             "safe-git-ls-tree-external-reuses-canonical-grant",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Require(["git ls-tree feature"], false, 1)),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         // PR 6e: in an unattended run, a stored grant decides outside the trusted roots.
         // #2306: the command words are "git ls-tree feature", so a "git ls-tree" grant does not cover them.
         Case(
@@ -361,33 +371,35 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "safe-verb-context-project-traversal-prompts",
+            "safe-verb-context-project-traversal-allows",
             Bash("cat ../secret.txt", ApprovalDirectoryShape.None),
             Approvals.None,
-            ExpectedApproval.Require(["cat"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-verb-session-allows",
             Bash("git status", ApprovalDirectoryShape.Session),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "safe-verb-external-prompts",
+            "safe-verb-external-allows",
             Bash("git status", ApprovalDirectoryShape.External),
             Approvals.None,
-            ExpectedApproval.Require(["git status"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "safe-verb-external-path-prompts",
+            "safe-verb-external-path-allows",
             Bash("cat /etc/passwd"),
             Approvals.None,
-            ExpectedApproval.Require(["cat"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "safe-verb-quoted-external-path-prompts",
+            "safe-verb-quoted-external-path-allows",
             Bash("cat \"/etc/netclaw.secret\""),
             Approvals.None,
-            ExpectedApproval.Require(["cat"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-verb-traversal-external-path-prompts",
-            Bash("cat safe/../../../../../../etc/netclaw.secret"),
+            // The ".." segments climb above the file-system root on every host,
+            // so the path stays invalid and the call keeps its prompt.
+            Bash("cat safe/" + string.Concat(Enumerable.Repeat("../", 24)) + "etc/netclaw.secret"),
             Approvals.None,
             ExpectedApproval.Require(["cat"])),
         Case(
@@ -553,10 +565,10 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["rm"])),
         Case(
-            "reviewed-cd-external-prompts",
+            "reviewed-cd-external-allows",
             Bash("cd /netclaw-approval-external && ls"),
             Approvals.None,
-            ExpectedApproval.Require(["cd", "ls"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         // A redirect to /dev/null writes no file. A redirect to any other file is still a write.
         Case(
             "reviewed-null-device-stderr-allows",
@@ -590,35 +602,35 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "reviewed-backslash-word-external-path-prompts",
+            "reviewed-backslash-word-external-path-allows",
             Bash("cat '/etc/a\\b'"),
             Approvals.None,
-            ExpectedApproval.Require(["cat"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "reviewed-git-global-option-before-phrase-prompts",
             Bash("git -c include.path=/tmp/external status"),
             Approvals.None,
             ExpectedApproval.Require(["git status"])),
         Case(
-            "reviewed-grep-external-option-path-prompts",
+            "reviewed-grep-external-option-path-allows",
             Bash("grep -f /tmp/patterns ./data.txt"),
             Approvals.None,
-            ExpectedApproval.Require(["grep"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "reviewed-wc-external-option-path-prompts",
+            "reviewed-wc-external-option-path-allows",
             Bash("wc --files0-from=/tmp/list"),
             Approvals.None,
-            ExpectedApproval.Require(["wc"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "reviewed-du-external-option-path-prompts",
+            "reviewed-du-external-option-path-allows",
             Bash("du --exclude-from=/tmp/patterns ./data"),
             Approvals.None,
-            ExpectedApproval.Require(["du"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "reviewed-realpath-external-option-path-prompts",
+            "reviewed-realpath-external-option-path-allows",
             Bash("realpath --relative-to=/tmp ./data"),
             Approvals.None,
-            ExpectedApproval.Require(["realpath"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "reviewed-grep-local-option-path-allows",
             Bash("grep -f ./patterns ./data.txt"),
@@ -681,7 +693,7 @@ public static class ShellApprovalCases
                 + "grep -rn \"ProbeTimeout\\|WaitForExitAsync\" "
                 + "src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null | head"),
             Approvals.None,
-            ExpectedApproval.Require(["cd", "sed", "ls", "grep", "head"])),
+            ExpectedApproval.Require(["sed"])),
 
         Case(
             "post-334cb4c-independent-read-batch-remains-complex",
@@ -699,7 +711,7 @@ public static class ShellApprovalCases
                 + "&& grep -n \"Timeout\" src/Alpha.cs tests/AlphaTests.cs 2>/dev/null | head -5; "
                 + "cat Project.csproj"),
             Approvals.None,
-            ExpectedApproval.Require(["cd", "git log", "grep", "head", "cat"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
 
         Case(
             "live-typed-cwd-mixed-read-chain-prompts-for-sed-and-pattern",
@@ -719,10 +731,10 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "native-external-path-operand-prompts",
+            "native-external-path-operand-allows",
             Bash("git diff /etc/passwd"),
             Approvals.None,
-            ExpectedApproval.Require(["git diff"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "native-project-path-operand-reuses-grant",
             Bash("kubectl apply deployment.yaml"),
@@ -824,14 +836,14 @@ public static class ShellApprovalCases
             "directory-listing-glob-external-offers-persistent-grant",
             Bash("ls -d subdirs/*/", ApprovalDirectoryShape.External),
             Approvals.None,
-            ExpectedApproval.Require(["ls"], isMessy: false)),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         // The exact reported command: the pipe folds into one approval unit and
         // the directory glob no longer forces the whole pipeline one-shot.
         Case(
             "directory-listing-glob-pipeline-offers-persistent-grant",
             Bash("ls -d subdirs/*/ | xargs -n1 basename", ApprovalDirectoryShape.External),
             Approvals.None,
-            ExpectedApproval.Require(["ls", "xargs"], isMessy: false)),
+            ExpectedApproval.Require(["xargs"])),
         // #2306: the command words of "git --no-pager status" are "git status", so the grant covers it.
         Case(
             "native-global-option-identity-gap-currently-prompts",
@@ -1156,7 +1168,7 @@ public static class ShellApprovalCases
             "powershell7-backslash-parent-separator-prompts",
             PowerShell7(@"Get-Content ..\..\outside\secret.txt"),
             Approvals.None,
-            ExpectedApproval.Require(["Get-Content"])),
+            ExpectedApproval.Require(["Get-Content"])) with { ReadsOutsidePathOnWindowsHost = true },
         Case(
             "powershell7-findstr-external-option-path-prompts",
             PowerShell7(@"findstr /G:C:\outside\patterns.txt C:\project\data.txt"),
@@ -1386,10 +1398,10 @@ public static class ShellApprovalCases
                 "persistent:git push",
                 "persistent:curl")),
         Case(
-            "input-redirect-outside-zone-prompts",
+            "input-redirect-outside-zone-allows",
             Bash($"cat < {TemporaryFile("netclaw-approval-input.txt")}"),
             Approvals.None,
-            ExpectedApproval.Require(["cat"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "error-redirect-outside-zone-prompts",
             Bash($"git status 2> {TemporaryFile("netclaw-approval-errors.txt")}"),
@@ -1402,15 +1414,15 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "cd-parent-then-safe-prompts",
+            "cd-parent-then-safe-allows",
             Bash("cd .. && git status"),
             Approvals.None,
-            ExpectedApproval.Require(["cd", "git status"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "multiple-cd-then-safe-prompts",
+            "multiple-cd-then-safe-allows",
             Bash("cd . && cd .. && git status"),
             Approvals.None,
-            ExpectedApproval.Require(["cd", "git status"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         // The rows use a directory that no test creates: a glob in the shared /tmp
         // reads entries that other processes change.
         // A causal list (cd dir && action; diagnostic) uses the directory proof.
@@ -1461,7 +1473,7 @@ public static class ShellApprovalCases
             "cd-alternate-branch-prompts-for-the-other-branch",
             Bash("cd /netclaw-approval-external/cd-list && inspect || recover; cat *.md"),
             Approvals.PersistentAnywhere("cd", "inspect", "cat"),
-            ExpectedApproval.Correct(1, "persistent:cd", "persistent:inspect")),
+            ExpectedApproval.Require(["recover"], approvalMatches: ["persistent:cd", "persistent:inspect"])),
         Case(
             "cd-dynamic-target-stays-one-time",
             Bash("cd \"$TARGET\" && inspect; cat *.md"),
@@ -1567,10 +1579,10 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["sed"])),
         Case(
-            "workload-search-rg-external-prompts",
+            "workload-search-rg-external-allows",
             Bash("rg -n \"TODO\" .", ApprovalDirectoryShape.External),
             Approvals.None,
-            ExpectedApproval.Require(["rg"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "workload-search-rg-external-grant-allows",
             Bash("rg -n \"TODO\" .", ApprovalDirectoryShape.External),
@@ -1612,12 +1624,10 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "jq"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:jq")),
         Case(
-            "workload-search-cat-jq-external-stored-tail-still-prompts",
+            "workload-search-cat-jq-external-stored-tail-allows",
             Bash("cat config.json | jq '.items[]'", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "jq"),
-            ExpectedApproval.Require(
-                ["cat"],
-                approvalMatches: ["persistent:jq"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:jq")),
         Case(
             "workload-edit-grep-tee-pipeline-prompts",
             Bash("grep \"error\" logs/app.log | tee reports/errors.txt"),
@@ -1724,7 +1734,7 @@ public static class ShellApprovalCases
                 "grep -R \"error\" logs | head -20 > reports/errors.txt",
                 ApprovalDirectoryShape.External),
             Approvals.None,
-            ExpectedApproval.Require(["grep", "head"])),
+            ExpectedApproval.Require(["head"])),
         Case(
             "workload-edit-search-pipeline-redirect-external-grant-allows",
             Bash(
@@ -2171,6 +2181,7 @@ public static class ShellApprovalCases
     public static IEnumerable<TheoryDataRow<string>> PowerShellRows => All
         .Where(testCase => testCase.Invocation.Host is
             ShellApprovalHost.PowerShell7 or ShellApprovalHost.WindowsPowerShell51)
+        .Where(static testCase => !OperatingSystem.IsWindows() || !testCase.ReadsOutsidePathOnWindowsHost)
         .Select(CreateRow);
 
     private static TheoryDataRow<string> CreateRow(ShellApprovalCase testCase) =>

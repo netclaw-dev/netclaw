@@ -266,14 +266,16 @@ internal sealed class PathAccessPolicy
     }
 
     /// <summary>
-    /// Evaluates whether one parser-resolved shell path is inside the bounded
-    /// roots eligible for reviewed-safe approval coverage.
+    /// Evaluates whether one parser-resolved shell path is eligible for
+    /// reviewed-safe approval coverage.
     /// </summary>
     /// <remarks>
     /// The caller first checks shell capability, shell command policy, and the
     /// conservative <see cref="FileOperation.Write"/> file-protection decision.
-    /// This method adds only the narrower reviewed-safe root requirement (R12). It
-    /// grants neither shell nor file authority.
+    /// In an interactive run, the path is eligible when the audience profile lets
+    /// a file tool read it. In an unattended run, the path must be inside a
+    /// session root or the project root (R12). The method grants neither shell
+    /// nor file authority.
     /// </remarks>
     /// <param name="canonicalPath">The parser-resolved path to evaluate.</param>
     /// <param name="context">The invocation that supplies session and project roots.</param>
@@ -291,8 +293,16 @@ internal sealed class PathAccessPolicy
         string? proposedProjectRoot = null,
         bool includeRootInLinkCheck = true)
     {
-        // A reviewed diagnostic can read only session roots and an admitted
-        // project root. It cannot inherit the broader global read-root catalog.
+        // An interactive reviewed diagnostic can read each path that the audience
+        // profile lets a file tool read (owner rule: interactive Personal reads
+        // are not confined to the project). The read decision applies protection
+        // to the lexical and the link-resolved path. Unattended runs keep only the
+        // session and project roots below, because nobody can answer a prompt.
+        if (IsReadableInInteractiveRun(canonicalPath, context, pathStyle))
+            return PathAccessDecision.Allow(canonicalPath);
+
+        // Otherwise a reviewed diagnostic can read only session roots and an
+        // admitted project root. It cannot inherit the global read-root catalog.
         var roots = new List<string>();
         AddSessionRoots(roots, context);
         if (context.Audience != TrustAudience.Public)
@@ -344,6 +354,18 @@ internal sealed class PathAccessPolicy
             PathAccessFailure.AccessDenied,
             canonicalPath);
     }
+
+    // SECURITY: only a host path of the shell's own style can use file-tool read
+    // authority. A path of another style (C:\x on Linux) is not fully qualified
+    // here, and Evaluate would read it as a path relative to the project.
+    private bool IsReadableInInteractiveRun(
+        string canonicalPath,
+        ToolInvocationContext context,
+        ShellPathStyle pathStyle)
+        => context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available
+           && CanonicalPath.IsHostPathStyle(pathStyle)
+           && Path.IsPathFullyQualified(canonicalPath)
+           && Evaluate(canonicalPath, context, FileOperation.Read) is PathAccessDecision.Allowed;
 
     /// <summary>Gets the effective trusted roots for one operation and invocation.</summary>
     public IReadOnlyList<string> GetTrustedRoots(ToolInvocationContext context, FileOperation accessKind)
