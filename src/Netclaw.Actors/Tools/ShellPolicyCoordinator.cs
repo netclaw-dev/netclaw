@@ -7,6 +7,7 @@ using Microsoft.Extensions.AI;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Configuration;
 using Netclaw.Security;
+using Netclaw.Security.Authorization.Consent;
 using Netclaw.Security.Authorization.Filesystem;
 using Netclaw.Tools;
 using ShellSyntaxTree;
@@ -98,10 +99,13 @@ internal sealed class ShellPolicyCoordinator(
         if (native is not null)
             return null;
 
-        if (isMessy)
-            return candidates.Count == 0
-                ? SelectOneCallDirectoryCorrection(analysis, toolCall, context)
-                : null;
+        // An unresolved source, or one exact candidate of an unresolved
+        // command, gets the one-call directory advice. Unresolved candidates of
+        // a directory proof keep their own decisions.
+        if (isMessy || candidates.Any(static candidate => candidate.Unresolved != ShellUnresolvedPart.None))
+            return isMessy && candidates.Count > 0
+                ? null
+                : SelectOneCallDirectoryCorrection(analysis, toolCall, context);
 
         return GetAvailableProjectCorrection(candidates, analysis.WorkingDirectory, context.Invocation);
     }
@@ -198,7 +202,7 @@ internal sealed class ShellPolicyCoordinator(
                 Array.AsReadOnly(requestCandidates)),
             cancellationToken);
         cancellationToken.ThrowIfCancellationRequested();
-        evaluation.ApplyActorEvidence(actorResult);
+        evaluation.ApplyActorEvidence(KeepUnknownOperandGlobalGrants(actorResult, requestCandidates, projection));
         cancellationToken.ThrowIfCancellationRequested();
         if (approvalService is not null)
         {
@@ -218,6 +222,38 @@ internal sealed class ShellPolicyCoordinator(
             ApplyReviewedSafeCoverage(evaluation, policy, context.Invocation);
         }
         cancellationToken.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>
+    /// Keeps a stored grant for an exact candidate only under owner decision
+    /// D1: only an operand is unknown, and the grant applies everywhere.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a global grant already lets a literal operand name any path,
+    /// so an unknown operand adds no new reach. A folder, repository, or chat
+    /// grant would stretch its meaning to text that Netclaw cannot read, so it
+    /// does not cover an exact candidate. An unknown program word, structure,
+    /// working directory, or redirect never gets a grant. Only an interactive
+    /// call has exact candidates; an unattended call keeps its denial.
+    /// </remarks>
+    private static ShellApprovalMatchResult KeepUnknownOperandGlobalGrants(
+        ShellApprovalMatchResult result,
+        IReadOnlyList<ShellGrantCandidate> requestCandidates,
+        ShellPolicyProjection projection)
+    {
+        var filtered = result.Candidates
+            .Select(evidence =>
+            {
+                var candidate = projection.Candidates[evidence.CandidateId.Value].Candidate;
+                return candidate.Unresolved == ShellUnresolvedPart.None
+                       || candidate.Unresolved == ShellUnresolvedPart.Operand
+                       && evidence.Grant is { Scope: GrantScope.Everywhere }
+                    ? evidence
+                    : ShellGrantCandidateResult.Uncovered(
+                        requestCandidates.Single(request => request.CandidateId == evidence.CandidateId));
+            })
+            .ToArray();
+        return ShellApprovalMatchResult.Create(requestCandidates, result.PersistentStoreFailure, filtered);
     }
 
     internal static bool RequiresExactApproval(ShellPolicyProjection projection)
@@ -438,6 +474,11 @@ internal sealed class ShellPolicyCoordinator(
         ToolCorrection.ShellCommandWordsRewriteSuggested? correction = null;
         foreach (var candidate in uncovered)
         {
+            // A rewrite of the words cannot prove a directory, a redirect, a
+            // link, or a glob scope, so such a call keeps its prompt.
+            if (candidate.Candidate.Unresolved == ShellUnresolvedPart.Command)
+                return null;
+
             if (candidate.Candidate.VerbTokens is not null)
                 continue;
 

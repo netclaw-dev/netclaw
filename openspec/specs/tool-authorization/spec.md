@@ -448,16 +448,25 @@ one analysis.
 - `Exact` and `FiniteSet` effective path values and authored filesystem
   values SHALL enter path policy. `AuthoredPathShape` alone SHALL NOT create
   filesystem authority.
-- Unresolved syntax (a dynamic command name, an unknown value, an unresolved
-  path or redirect, incomplete control flow, a command-resolution mutation
-  such as `alias` or `hash`, `&&` under Windows PowerShell 5.1) SHALL produce
-  no reusable candidate. It SHALL allow only a one-time consent in an
-  interactive session and SHALL be denied in a non-interactive session with
+- An unresolved command (a dynamic command name, an unknown value, an
+  unresolved path or redirect, a command after an unproved directory change)
+  SHALL produce one exact candidate: its source text, with no reusable grant.
+  In an interactive Bash session, each other command of the call SHALL keep
+  its own candidates and coverage.
+- A source that does not split into commands (incomplete control flow, a
+  command-resolution mutation such as `alias` or `hash`, `&&` under Windows
+  PowerShell 5.1, unresolved PowerShell syntax) SHALL allow only a one-time
+  consent for the whole call.
+- Unresolved syntax SHALL be denied in a non-interactive session with
   `shell_unresolved_trust_zone_input`.
 - In Bash, a dynamic operand of an output command (`echo`, `printf`, `:`,
   `true`, `false`) SHALL be data, not unresolved syntax. A command
   substitution inside it SHALL be its own command with its own candidate, and
   a redirect target SHALL keep its own check.
+- Owner decision D1: in an interactive session, a command whose command words
+  are known and whose only unknown part is an operand value SHALL be covered
+  by a reviewed safe phrase or by a grant for anywhere. A folder, repository,
+  or chat grant SHALL NOT cover it.
 - A bounded assignment fact SHALL qualify a reusable grant with a SHA-256
   digest of the canonical assignment facts. A changed assignment SHALL need
   separate authority. An assignment inside an opaque fallback wrapper SHALL
@@ -481,6 +490,13 @@ one analysis.
 - **THEN** authorization returns `RequiresApproval` with the candidate `git push`
 - **AND** the `echo` operand is data, so `echo` needs no grant
 
+#### Scenario: An unknown operand under a grant for anywhere
+
+- **GIVEN** an interactive Personal session with a grant for anywhere for `kubectl get pods`
+- **WHEN** the model calls `shell_execute` with `kubectl get pods -l "app=$(whoami)"` (catalog case `unknown-operand-global-grant-allows`)
+- **THEN** authorization returns `Allowed`
+- **AND** the same call with a folder grant prompts with one exact candidate and only `Once` and `Deny`
+
 #### Scenario: Unresolved syntax in a headless run
 
 - **GIVEN** a headless Personal session with `shell_execute` in `Approval` mode
@@ -501,7 +517,10 @@ Coverage sources SHALL be:
   repository;
 - reviewed-safe policy, only in an interactive session, only for a catalog
   phrase, and only when the audience profile lets a file tool read every
-  path (a protected path never qualifies);
+  known path (a protected path never qualifies). Under decision D1 it also
+  covers an unknown operand value;
+- under decision D1, a grant for anywhere for an exact candidate whose only
+  unknown part is an operand, in an interactive session;
 - an approval-exempt output command (`echo`, `printf`, `:`, `true`, `false`)
   with no directory scope and no assignment digest, while the store is
   available.
@@ -614,9 +633,9 @@ and labels:
 | `approve_everywhere` | Always anywhere (Always allow this tool for an MCP tool) |
 | `deny` | Deny |
 
-- The prompt SHALL offer only `Once` and `Deny` when any candidate has
-  unresolved syntax or no reusable phrase, or when the call is a managed
-  temporary retry.
+- The prompt SHALL offer only `Once` and `Deny` when any uncovered
+  candidate has unresolved syntax or no reusable phrase, or when the call is
+  a managed temporary retry.
 - `Always here` SHALL be offered only for a shell call with a directory scope
   that is not shallow and not session-owned.
 - `This repository` SHALL be offered only for a clean reusable shell phrase

@@ -182,7 +182,12 @@ shell rules, in order:
 6. Admission: a Deny consent mode.
 7. Advice: a native tool, then Auto mode with its directory advice.
 8. A call without command text, the projected trusted-root check, and unresolved
-   input: one-time consent or a Once-only request.
+   input: one-time consent or a Once-only request. Since approval taxonomy
+   PR 5, an interactive Bash call splits an unresolved source into commands:
+   each unresolved command is one exact candidate, and the other commands go
+   to rule 9 with their own candidates. Decision D1 lets a safe phrase or a
+   grant for anywhere cover an exact candidate whose only unknown part is an
+   operand. An unattended call keeps the unresolved-input denial (rule 4).
 9. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
    policy), then the uncovered candidates.
 

@@ -286,12 +286,15 @@ public sealed class HardDenyParityCorpusTests(ShellApprovalMatrixFixture fixture
             .Select(static row => new TheoryDataRow<string>(row.Id));
 
     // Content denials only. A trusted-root denial depends on the working directory
-    // of its row, which this corpus replaces with the project directory.
+    // of its row, which this corpus replaces with the project directory. The
+    // unresolved-input denial depends on the run mode of its row.
     public static IEnumerable<TheoryDataRow<string>> CatalogDeniedRows
         => ShellApprovalCases.All
             .Where(static testCase => testCase.Expected.Outcome == ApprovalOutcome.Denied)
             .Where(static testCase => testCase.Expected.DenyReason
-                is not ("shell_working_directory_outside_trust_zone" or "shell_path_outside_trust_zone"))
+                is not ("shell_working_directory_outside_trust_zone"
+                    or "shell_path_outside_trust_zone"
+                    or "shell_unresolved_trust_zone_input"))
             .Where(static testCase => IsPosix || testCase.Invocation.Host is not (ShellApprovalHost.Bash or ShellApprovalHost.Bash52))
             .Select(static testCase => new TheoryDataRow<string>(testCase.Id));
 

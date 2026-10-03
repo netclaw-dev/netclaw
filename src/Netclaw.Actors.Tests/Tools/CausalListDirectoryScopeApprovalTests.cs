@@ -112,8 +112,8 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
         // A file-writing redirect is not a causal diagnostic, so this call keeps its
         // exact consent: the grants cannot cover it and no reusable option appears.
         Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-        Assert.True(observed.Prompt!.IsMessy);
-        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], observed.Prompt.OptionKeys);
+        // Only exact consent: "Once" or "Deny".
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], observed.Prompt!.OptionKeys);
     }
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
@@ -138,8 +138,8 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
 
         // A linked scope directory is not a proof, so even existing grants give only Once.
         Assert.Equal(ApprovalOutcome.RequiresApproval, viaLink.Outcome);
-        Assert.True(viaLink.Prompt!.IsMessy);
-        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], viaLink.Prompt.OptionKeys);
+        // Only exact consent: "Once" or "Deny".
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], viaLink.Prompt!.OptionKeys);
         Assert.Equal(ApprovalOutcome.Denied, viaProtectedAlias.Outcome);
         Assert.Equal("shell_references_protected_path", viaProtectedAlias.DenyReason);
     }
@@ -205,8 +205,8 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
         // directory (#2283). The directory proof cannot use that scope: even existing
         // grants give only exact consent.
         Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-        Assert.True(observed.Prompt!.IsMessy);
-        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], observed.Prompt.OptionKeys);
+        // Only exact consent: "Once" or "Deny".
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], observed.Prompt!.OptionKeys);
     }
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
@@ -230,8 +230,8 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
             [missing, missing, harness.ProjectDirectory, missing],
             before.Prompt.CandidateDirectories);
         // A link at that path later is not a proof, so the same call falls back to exact consent.
-        Assert.True(linked.Prompt!.IsMessy);
-        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], linked.Prompt.OptionKeys);
+        // Only exact consent: "Once" or "Deny".
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], linked.Prompt!.OptionKeys);
     }
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]

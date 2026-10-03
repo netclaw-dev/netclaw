@@ -11,6 +11,7 @@ using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Jobs;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -1018,13 +1019,16 @@ public partial class DispatchingToolExecutorTests
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
-    [InlineData("cd /tmp && inspect; pushd /other; head result.log")]
-    [InlineData("cd /tmp && inspect; popd; head result.log")]
-    [InlineData("cd /tmp && inspect; cd \"$1\"; head result.log")]
-    [InlineData("cd /tmp extra && inspect; head result.log")]
-    [InlineData("cd -z /tmp && inspect; head result.log")]
+    // An invalid cd always fails, so the parser proves that head runs in the
+    // call directory. Then inspect is the command with no proved directory.
+    [InlineData("cd /tmp && inspect; pushd /other; head result.log", "head result.log")]
+    [InlineData("cd /tmp && inspect; popd; head result.log", "head result.log")]
+    [InlineData("cd /tmp && inspect; cd \"$1\"; head result.log", "head result.log")]
+    [InlineData("cd /tmp extra && inspect; head result.log", "inspect")]
+    [InlineData("cd -z /tmp && inspect; head result.log", "inspect")]
     public async Task Unproved_directory_effect_keeps_causal_chain_strict(
-        string command)
+        string command,
+        string exactCommand)
     {
         var approvalService = GrantEveryShellCandidate();
         var executor = CreateApprovalGatedShellExecutor(
@@ -1046,9 +1050,12 @@ public partial class DispatchingToolExecutorTests
             CreateInteractivePersonalContext("signalr/causal-intent-strict-effect"),
             TestContext.Current.CancellationToken);
 
+        // The command after the unproved directory change is one exact
+        // candidate. No grant and no intent rule covers it.
         Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-        Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
-        Assert.Null(approvalService.LastRequest);
+        var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
+        Assert.Contains(exactCommand, approval.CandidateVerbs);
+        Assert.Equal([ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.DenyKey], approval.Options.Select(static option => option.Key));
         Assert.DoesNotContain(
             decision.ShellPolicyTrace.Rows,
             row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
@@ -1126,10 +1133,10 @@ public partial class DispatchingToolExecutorTests
                 context,
                 TestContext.Current.CancellationToken);
 
+            // The command after the linked directory change is one exact candidate.
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
             var approval = Assert.IsType<ToolApprovalContext>(decision.ApprovalContext);
-            Assert.True(approval.IsMessy);
-            Assert.Null(approvalService.LastRequest);
+            Assert.Equal(["head result.log"], approval.CandidateVerbs);
             Assert.DoesNotContain(
                 decision.ShellPolicyTrace.Rows,
                 row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
@@ -1140,11 +1147,16 @@ public partial class DispatchingToolExecutorTests
                 context,
                 TestContext.Current.CancellationToken);
 
+            // The "Once" answer covers only the exact command. The proved
+            // commands keep their own grant decisions.
             Assert.Equal(ToolAuthorizationOutcome.Allowed, retry.Outcome);
             Assert.Equal(ToolAllowReason.OneTimeApproval, retry.AllowReason);
-            Assert.Null(approvalService.LastRequest);
-            var completion = Assert.Single(retry.ShellPolicyTrace.Rows);
-            Assert.Equal(ShellPolicyTraceStage.Completion, completion.Stage);
+            Assert.Contains(
+                retry.ShellPolicyTrace.Rows,
+                row => row.Stage == ShellPolicyTraceStage.OneTimeApproval && row.ExecutableBasename == "head");
+            var completion = Assert.Single(
+                retry.ShellPolicyTrace.Rows,
+                row => row.Stage == ShellPolicyTraceStage.Completion);
             Assert.Equal(ShellPolicyTraceOutcome.Allow, completion.Outcome);
         }
         finally
@@ -1184,9 +1196,11 @@ public partial class DispatchingToolExecutorTests
                 CreateInteractivePersonalContext("signalr/causal-intent-symlink-fallback"),
                 TestContext.Current.CancellationToken);
 
+            // The command after the linked directory change is one exact candidate.
             Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
-            Assert.True(Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).IsMessy);
-            Assert.Null(approvalService.LastRequest);
+            Assert.Contains(
+                "head result.log",
+                Assert.IsType<ToolApprovalContext>(decision.ApprovalContext).CandidateVerbs);
             Assert.DoesNotContain(
                 decision.ShellPolicyTrace.Rows,
                 row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
@@ -3968,6 +3982,11 @@ public partial class DispatchingToolExecutorTests
         {
             var results = request.Candidates.Select(candidate =>
             {
+                // A candidate without command words (an exact unresolved
+                // command) has no grant identity, as in the real store.
+                if (candidate.Candidate.VerbTokens is null)
+                    return ShellGrantCandidateResult.Uncovered(candidate);
+
                 var shell = Assert.IsType<ApprovalShell>(candidate.Candidate.Shell);
                 var tokens = Assert.IsAssignableFrom<IReadOnlyList<string>>(
                     candidate.Candidate.VerbTokens);

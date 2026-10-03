@@ -53,6 +53,13 @@ public sealed record ApprovalCandidate(
     internal CommandOccurrence? SourceOccurrence { get; init; }
 
     /// <summary>
+    /// How much of the command the parser could not prove. A candidate with an
+    /// unresolved part is exact: its verb is the command text, and only a
+    /// "Once" answer, or the D1 rule for an unknown operand, can cover it.
+    /// </summary>
+    internal ShellUnresolvedPart Unresolved { get; init; }
+
+    /// <summary>
     /// Parser source metadata does not change occurrence identity.
     /// </summary>
     public bool Equals(ApprovalCandidate? other) =>
@@ -64,6 +71,7 @@ public sealed record ApprovalCandidate(
     internal bool HasSameApprovalFacts(ApprovalCandidate? other) =>
         other is not null &&
         Equals(other) &&
+        Unresolved == other.Unresolved &&
         AssignmentDigest == other.AssignmentDigest &&
         Shell == other.Shell &&
         HasSameVerbTokens(other.VerbTokens);
@@ -176,7 +184,16 @@ public sealed record ShellApprovalAnalysis(
     IReadOnlyList<string> Patterns,
     IReadOnlyList<ApprovalCandidate> Candidates,
     string DisplayText,
-    bool IsMessy);
+    bool IsMessy)
+{
+    /// <summary>
+    /// The candidates of each command of an unresolved source, or empty when
+    /// the source does not split into proved commands. Each unresolved command
+    /// gives one exact candidate, so the other commands keep their own
+    /// candidates and grants. Only an interactive call uses them.
+    /// </summary>
+    internal IReadOnlyList<ApprovalCandidate> CommandCandidates { get; init; } = [];
+}
 
 public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 {
@@ -242,11 +259,15 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 patterns.Add(unit);
         }
 
+        var isMessy = IsMessy(analysis, hostLinks);
         return new ShellApprovalAnalysis(
             patterns.ToList(),
             ExtractCandidatesViaAnalysis(analysis, hostLinks),
             FormatForDisplay(command, analysis),
-            IsMessy(analysis, hostLinks));
+            isMessy)
+        {
+            CommandCandidates = isMessy ? ExtractCommandCandidates(analysis, hostLinks) : []
+        };
     }
 
     public IReadOnlyList<string> ExtractCandidateVerbs(ToolName toolName, IDictionary<string, object?>? arguments)
@@ -309,6 +330,120 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return candidates;
+    }
+
+    /// <summary>
+    /// Returns the candidates of each command of an unresolved source. An
+    /// unresolved command becomes one exact candidate: its verb is its source
+    /// text, and it has no directory. Returns empty when the source does not
+    /// split into proved commands, so the whole call keeps one exact answer.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: an exact candidate offers only "Once". A grant covers it only
+    /// under decision D1: just an operand is unknown, and the grant applies
+    /// everywhere. No folder, repository, or chat grant can cover it. The other commands get their
+    /// normal candidates, so a grant covers exactly what it covered before.
+    /// </remarks>
+    private IReadOnlyList<ApprovalCandidate> ExtractCommandCandidates(
+        ShellCommandAnalysis result,
+        LinkRule hostLinks)
+    {
+        // PowerShell carries unknown state from a script block or a pipeline
+        // variable into its child commands, so it keeps one exact answer for
+        // the whole call.
+        if (Environment.Grammar != ShellGrammar.Bash
+            || !result.IsResolved
+            || result.RequiresExactTreeApproval)
+            return [];
+
+        var candidates = new List<ApprovalCandidate>();
+        foreach (var occurrence in result.Commands)
+        {
+            // SECURITY: after an unproved directory change (cd "$x", pushd,
+            // popd, a failed cd), the parser has no exact directory for the
+            // command. The call's directory would be a wrong scope, so the
+            // command stays exact as a whole.
+            var part = occurrence.WorkingDirectory is ShellValueDomain.Exact
+                ? result.GetUnresolvedPart(occurrence)
+                : ShellUnresolvedPart.Command;
+            if (part == ShellUnresolvedPart.None
+                && ExtractCandidatesForOccurrence(
+                    occurrence,
+                    result.WorkingDirectory,
+                    resolveUnknownPathsFromEffectiveValues: false,
+                    hostLinks) is { } resolved)
+            {
+                candidates.AddRange(resolved);
+                continue;
+            }
+
+            if (CreateExactCandidate(result.Source, occurrence, part) is not { } exact)
+                return [];
+
+            candidates.Add(exact);
+        }
+
+        return candidates;
+    }
+
+    private ApprovalCandidate? CreateExactCandidate(
+        string source,
+        CommandOccurrence occurrence,
+        ShellUnresolvedPart part)
+    {
+        var parserTokens = occurrence.Clause.Verb.Tokens;
+        if (parserTokens.Count == 0
+            || parserTokens.Any(static token => token.Length == 0 || token.Any(char.IsWhiteSpace)))
+        {
+            return null;
+        }
+
+        // A proved command whose scope still failed (a glob, a link, an
+        // assignment) is unresolved as a whole. The command words stay, so the
+        // grant filter of the coordinator can apply decision D1.
+        var unresolved = part == ShellUnresolvedPart.None ? ShellUnresolvedPart.Command : part;
+        return new ApprovalCandidate(ExactCommandText(source, occurrence), Directory: null)
+        {
+            VerbTokens = GetCommandWords(occurrence),
+            // Only a Bash source splits into commands.
+            Shell = ApprovalShell.Bash,
+            SourceOccurrence = occurrence,
+            Unresolved = unresolved,
+        };
+    }
+
+    /// <summary>
+    /// Returns the source text of one command, from its first word to its last
+    /// redirect. A control character shows as an escape, so the prompt cannot
+    /// break its own layout.
+    /// </summary>
+    private static string ExactCommandText(string source, CommandOccurrence occurrence)
+    {
+        var elements = occurrence.Clause.Elements;
+        string text;
+        if (elements.Count > 0
+            && elements.All(element => element.SourceStart is >= 0 && element.SourceLength is >= 0
+                && element.SourceStart + element.SourceLength <= source.Length))
+        {
+            var start = elements.Min(static element => element.SourceStart!.Value);
+            var end = elements.Max(static element => element.SourceStart!.Value + element.SourceLength!.Value);
+            text = source[start..end];
+        }
+        else
+        {
+            text = string.Join(' ', elements.Select(static element => element.Raw));
+        }
+
+        var display = new StringBuilder(text.Length);
+        foreach (var character in text)
+        {
+            if (char.IsControl(character))
+                display.Append(character == '\n' ? "\\n" : $"\\u{(int)character:x4}");
+            else
+                display.Append(character);
+        }
+
+        return display.ToString();
     }
 
     internal IReadOnlyList<ApprovalCandidate>? ExtractCandidatesForOccurrence(

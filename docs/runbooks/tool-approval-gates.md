@@ -131,8 +131,11 @@ the options that are safe for this call:
 The prompt offers fewer options when a broader grant is not safe:
 
 - Only `Once` and `Deny` appear when the shell parser cannot prove a reusable
-  phrase for every command in the call, or when the call is a managed
-  temporary directory retry.
+  phrase for every uncovered command in the call, or when the call is a
+  managed temporary directory retry. In an interactive Bash call, each
+  unresolved command (for example `cat "$f"` in a loop, or a command after
+  `cd "$dir"`) is one exact candidate with its own text. The other commands
+  keep their grants, so the prompt names only the unresolved part.
   A multi-line operand, such as `python3 -c` code, does not cause this. Its
   scope is the deepest directory of its text before the first line break,
   usually the working directory.
@@ -183,6 +186,12 @@ covered:
   command can write or run a program, for example `sort -o`, `rg --pre`, or
   `git branch -D`. Each path argument must still be a path that the audience
   may read.
+- In an interactive session, a command whose only unknown part is an operand
+  value (for example `kubectl get pods -l "app=$(whoami)"`) runs when a safe
+  phrase or an `Always anywhere` grant covers its command words (owner
+  decision D1). A folder, repository, or chat grant does not cover it. An
+  unknown program word, an unknown redirect target, a glob with a wildcard in
+  a directory part, and an unattended run keep the prompt or the denial.
 - A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,
   so it does not stop the catalog coverage. A redirect to any other file does.
 - An absolute word whose top-level directory does not exist on the host, such

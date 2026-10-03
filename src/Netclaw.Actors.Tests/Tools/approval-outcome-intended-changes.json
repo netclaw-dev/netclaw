@@ -465,7 +465,50 @@
       "id": "unquoted-status-output-redirect-remains-complex",
       "from": "RequiresApproval",
       "to": "RequiresAgentCorrection",
-      "reason": "A dynamic value in an echo operand is data, so the call keeps its echo candidate. The $? word is not literal, so the echo grant does not cover it. The agent gets advice to write the command words literally."
+      "reason": "Each command gets its own decision. A command with unknown command words gets the rewrite correction. The call does not run."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "bash-substitution-quoted-path-operand-allows",
+      "renamedFrom": "bash-substitution-quoted-path-fails-closed",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Owner decision D1: in an interactive call, a safe phrase or a global grant covers a command whose only unknown part is an operand. Each other command keeps its own decision. An unknown redirect target, a folder grant, and an unattended call keep the prompt or the denial.",
+      "negativeControl": "bash-substitution-redirect-target-fails-closed",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "bash-substitution-multiple-nested-operand-allows",
+      "renamedFrom": "bash-substitution-multiple-nested-fails-closed",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Owner decision D1: in an interactive call, a safe phrase or a global grant covers a command whose only unknown part is an operand. Each other command keeps its own decision. An unknown redirect target, a folder grant, and an unattended call keep the prompt or the denial.",
+      "negativeControl": "bash-substitution-redirect-target-fails-closed",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "bash-substitution-state-is-isolated",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Owner decision D1: in an interactive call, a safe phrase or a global grant covers a command whose only unknown part is an operand. Each other command keeps its own decision. An unknown redirect target, a folder grant, and an unattended call keep the prompt or the denial.",
+      "negativeControl": "bash-substitution-redirect-target-fails-closed",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-edit-loop-inherited-state-prompts",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "Each command gets its own decision. A command with unknown command words gets the rewrite correction. The call does not run."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "control-flow-fails-closed",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "Each command gets its own decision. A command with unknown command words gets the rewrite correction. The call does not run."
     }
   ]
 }
