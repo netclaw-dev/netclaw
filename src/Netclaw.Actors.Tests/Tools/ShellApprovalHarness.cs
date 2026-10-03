@@ -230,6 +230,11 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     /// <summary>The session directory of the tool execution context.</summary>
     public string SessionDirectory { get; }
 
+    /// <summary>The value that the launcher sets for <c>TMPDIR</c>, <c>TMP</c>, and <c>TEMP</c>.</summary>
+    public string ManagedTemporaryDirectory => ShellExecutionEnvironment.GetTemporaryDirectoryValue(
+        _context.SessionStorage?.ManagedTemporary
+        ?? throw new InvalidOperationException("The harness context has no session storage."));
+
     public static Task<ShellApprovalHarness> CreateAsync(
         ShellApprovalCase testCase,
         ActorSystem actorSystem,

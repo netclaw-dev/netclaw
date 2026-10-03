@@ -439,9 +439,16 @@ internal sealed class ToolAuthorizer
         internal string? WorkingDirectory => _workingDirectory.Value;
 
         /// <summary>The parsed command, or null when the call has no command text.</summary>
+        /// <remarks>
+        /// The parser uses the variables that the launcher sets for this session's
+        /// temporary location (ShellProcessLaunch parses with the same location).
+        /// </remarks>
         internal ShellCommandAnalysis? Analysis => (_analysis ??= new(() =>
             ToolAccessPolicy.ExtractShellCommand(call.Arguments) is { } command
-                ? authorizer._policy.ShellCommandPolicy.Analyze(command, WorkingDirectory)
+                ? authorizer._policy.ShellCommandPolicy.Analyze(
+                    command,
+                    WorkingDirectory,
+                    context.SessionStorage?.ManagedTemporary)
                 : null)).Value;
 
         /// <summary>The directory proof of an unresolved Bash compound, or null when none applies.</summary>

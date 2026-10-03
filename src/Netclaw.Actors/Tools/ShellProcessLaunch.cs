@@ -137,7 +137,8 @@ public sealed class ShellProcessLaunch
     private ShellCommandAnalysis CheckHardPolicies()
     {
         // Parse again because filesystem facts and policy can change while the request waits.
-        var analysis = _commandPolicy.Analyze(Command, WorkingDirectory);
+        // The launch facts are the variables that this launch sets on the child process.
+        var analysis = _commandPolicy.Analyze(Command, WorkingDirectory, Storage.ManagedTemporary);
         var decision = _commandPolicy.Evaluate(analysis);
         if (!decision.Allowed)
             throw new ShellProcessStartException($"Error: Command blocked by hard deny policy: {decision.DenyReason}");
@@ -176,7 +177,7 @@ public sealed class ShellProcessLaunch
                 $"Error: Working directory '{WorkingDirectory}' does not exist. Create it first, e.g.: {CreateDirectoryHint()}");
         }
 
-        _startInfo.WorkingDirectory = WorkingDirectory;
+        Environment.ApplyWorkingDirectory(_startInfo, WorkingDirectory);
     }
 
     private string CreateDirectoryHint()
