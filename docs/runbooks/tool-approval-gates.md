@@ -185,6 +185,10 @@ covered:
   may read.
 - A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,
   so it does not stop the catalog coverage. A redirect to any other file does.
+- An absolute word whose top-level directory does not exist on the host, such
+  as the API route in `gh api /repos/o/r/actions/jobs/1/logs`, names no file.
+  It has no path scope, so the candidate uses the working directory. A URL
+  also has no path scope.
 - On Linux and macOS, a backslash in a Bash word is a file-name character, not
   a path separator. `grep -n "a\|b" file` therefore stays inside the project.
 

@@ -213,6 +213,24 @@ read -r control_start control_end < <(
 )
 security_mutations+=("IToolApprovalMatcher.cs{$control_start..$control_end}")
 
+read -r absent_guard_start absent_guard_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool HasAbsentTopLevelDirectory(" \
+    "if (!CanonicalPath.IsHostPathStyle(pathStyle)" \
+    "|| !Directory.Exists(workingDirectory))"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$absent_guard_start..$absent_guard_end}")
+
+read -r absent_start absent_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool HasAbsentTopLevelDirectory(" \
+    "return !Path.Exists(topLevel);" \
+    "return !Path.Exists(topLevel);"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$absent_start..$absent_end}")
+
 read -r messy_start messy_end < <(
   find_span \
     "$matcher_file" \
@@ -225,7 +243,7 @@ security_mutations+=("IToolApprovalMatcher.cs{$messy_start..$messy_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  79 \
+  82 \
   "${security_mutations[@]}"
 
 actor_mutations=()

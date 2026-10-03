@@ -188,6 +188,8 @@
 | timeout-nested-shell-prompts | Bash | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout, git push | No |
 | subshell-prompts | Bash | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git push | No |
 | command-substitution-fails-closed | Bash | Personal | Project | Interactive | echo $(git push) | none | RequiresApproval | approval required | git push | No |
+| api-route-word-uses-project-folder-grant | Bash | Personal | Project | Interactive | gh api /repos/o/r/actions/jobs/1/logs | persistent[project]:gh api | Allowed | StoredApproval | none | Not applicable |
+| absent-top-level-path-write-uses-project-scope | Bash | Personal | Project | Interactive | mkdir -p /netclaw-approval-absent/output | none | RequiresApproval | approval required | mkdir | No |
 | multi-line-inline-code-offers-reusable-grant | Bash | Personal | Project | Interactive | python3 -c "import sys\nprint(sys.argv)" | none | RequiresApproval | approval required | python3 | No |
 | multi-line-inline-code-uses-folder-grant | Bash | Personal | Project | Interactive | python3 -c "import sys\nprint(sys.argv)" | persistent[project]:python3 | Allowed | StoredApproval | none | Not applicable |
 | echo-substitution-data-uses-inner-grant | Bash | Personal | Project | Interactive | echo "base: $(git merge-base origin/main origin/dev)"; echo "=== done ===" | persistent[anywhere]:git merge-base | Allowed | StoredApproval | none | Not applicable |

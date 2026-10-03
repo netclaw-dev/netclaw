@@ -979,6 +979,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return false;
         }
 
+        if (HasAbsentTopLevelDirectory(arg, workingDirectory, pathStyle))
+            return false;
+
         var containsSeparator = pathStyle == ShellPathStyle.Windows
             ? arg.Raw.IndexOfAny(['/', '\\']) >= 0
             : arg.Raw.Contains('/', StringComparison.Ordinal);
@@ -1033,6 +1036,54 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
            || word.StartsWith("~/", StringComparison.Ordinal)
            || word.StartsWith("./", StringComparison.Ordinal)
            || word.StartsWith("../", StringComparison.Ordinal);
+
+    /// <summary>
+    /// Returns true when an absolute word names a top-level directory that does
+    /// not exist on this host, for example the API route
+    /// <c>/repos/o/r/actions/jobs/1/logs</c> of <c>gh api</c>.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: no existing file is below an absent top-level directory, so
+    /// the call cannot read or change an existing file through the word. The
+    /// word gets no path scope, and the candidate uses the working directory.
+    /// Only a host path of the shell's own style qualifies, and only when the
+    /// working directory of the occurrence exists on this host. Otherwise the
+    /// call describes another file system, and the probe proves nothing. A
+    /// probe failure keeps the word as a path, so the approval gate keeps its scope.
+    /// </remarks>
+    private static bool HasAbsentTopLevelDirectory(
+        ShellSyntaxTree.Arg arg,
+        string? workingDirectory,
+        ShellPathStyle pathStyle)
+    {
+        if (!CanonicalPath.IsHostPathStyle(pathStyle)
+            || !CanonicalPath.TryCreateHost(arg.Resolved, relativeBase: null, out var path)
+            || !Directory.Exists(workingDirectory))
+        {
+            return false;
+        }
+
+        var root = Path.GetPathRoot(path.Value) ?? string.Empty;
+        var separator = path.Value.IndexOfAny(['/', '\\'], root.Length);
+        var topLevel = separator < 0 ? path.Value : path.Value[..separator];
+        try
+        {
+            // A dangling link is an entry too: Path.Exists follows the link.
+            if (new FileInfo(topLevel).LinkTarget is not null)
+                return false;
+
+            // The root itself always exists, so a word "/" keeps its scope.
+            return !Path.Exists(topLevel);
+        }
+        catch (Exception ex) when (ex is ArgumentException
+                                      or IOException
+                                      or NotSupportedException
+                                      or UnauthorizedAccessException
+                                      or System.Security.SecurityException)
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Returns true only when an all-digit operand does not identify a filesystem object.
