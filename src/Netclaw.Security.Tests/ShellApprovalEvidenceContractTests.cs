@@ -47,7 +47,7 @@ public sealed partial class ShellApprovalEvidenceContractTests
     private const string FreshSessionHarvestSha256 =
         "4a6acc38746dd23df75e6a95fa4fa84d43ae74a35ea3ca6dd17a8dfd3bc3b511";
     private const string FreshSessionPolicyFixturesSha256 =
-        "7a93c02a76c80985b74a8f72fa3c28b59b0fda15ac58fec66564de4205801386";
+        "2d36140084da7014a455a7a3edb44dbf8793da5ce45c24d67974c39dfe113eb5";
     private const string FreshSessionEvalBaselineSha256 =
         "be1c2fe0fc646f4692da75b0d5398fb4f8c3c5ea2707625266915b8d2e6cd31e";
     private const string FreshSessionEvalResultsSha256 =
@@ -765,15 +765,19 @@ public sealed partial class ShellApprovalEvidenceContractTests
             Assert.Null(completion.CandidateId);
             Assert.True(item.PolicyCase.Expected.ActorCheckCount >= 0);
         });
-        Assert.Single(fixtures.LiveRegressionCases, item => item.TargetOutcome == "Allow");
-        // R08 (loop variable) and R09 (bare glob) have Unknown command words, so
-        // each gets a rewrite correction instead of a prompt (#2306).
+        // R09 reads project files with a reviewed phrase. Its 2>/dev/null
+        // redirect writes no file, so the reviewed catalog covers it.
+        Assert.Equal(
+            2,
+            fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "Allow"));
+        // R08 (loop variable) has Unknown command words, so it gets a rewrite
+        // correction instead of a prompt (#2306).
         Assert.Equal(
             6,
             fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "RequiresApproval"));
-        Assert.Equal(
-            2,
-            fixtures.LiveRegressionCases.Count(item => item.TargetOutcome == "RequiresAgentCorrection"));
+        Assert.Single(
+            fixtures.LiveRegressionCases,
+            item => item.TargetOutcome == "RequiresAgentCorrection");
         Assert.Single(fixtures.LiveRegressionCases, item => item.TargetOutcome == "Deny");
         Assert.All(
             fixtures.LiveRegressionCases.Where(item =>
@@ -787,7 +791,8 @@ public sealed partial class ShellApprovalEvidenceContractTests
         Assert.Equal("ProjectFileSymlink", Assert.Single(aliasCase.FileSystemFacts!).Kind);
         Assert.Null(aliasCase.Expected.IsMessy);
         Assert.Null(aliasCase.Expected.OptionKeys);
-        Assert.Equal("ShellCommandWordsRewriteSuggested", aliasCase.Expected.AgentCorrection);
+        Assert.Null(aliasCase.Expected.AgentCorrection);
+        Assert.Equal("Allow", aliasCase.Expected.Outcome);
 
         var protectedCase = Assert.Single(
             fixtures.LiveRegressionCases,

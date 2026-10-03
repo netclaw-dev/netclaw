@@ -27,6 +27,15 @@
     { "tokens": ["git", "shortlog"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["gh", "pr", "status"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["gh", "run", "list"], "classification": "ReviewedDiagnostic" },
-    { "tokens": ["gh", "release", "list"], "classification": "ReviewedDiagnostic" }
+    { "tokens": ["gh", "release", "list"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "pr", "view"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "pr", "checks"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "pr", "list"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "pr", "diff"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "issue", "view"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "issue", "list"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "run", "view"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "repo", "view"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["gh", "release", "view"], "classification": "ReviewedDiagnostic" }
   ]
 }

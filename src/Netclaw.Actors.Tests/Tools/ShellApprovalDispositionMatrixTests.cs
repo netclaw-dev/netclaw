@@ -581,7 +581,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The project glob regression defines POSIX behavior.")]
     // A bare glob gets a rewrite correction (#2306), so the cases use the path glob ./*.md.
-    [InlineData("grep -rn \"Mode B\" docs/ ./*.md 2>/dev/null | head -20", true, "grep")]
+    // The interactive read is a reviewed diagnostic; the next test covers it.
     [InlineData("grep -rn \"Mode B\" docs/ ./*.md 2>/dev/null | head -20", false, "grep|head")]
     [InlineData("rm ./*.md", true, "rm")]
     [InlineData("rm ./*.md", false, "rm")]
@@ -610,6 +610,97 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
         Assert.False(observed.Prompt?.IsMessy);
         Assert.Equal(1, observed.ApprovalChecks);
+    }
+
+    // The in-root alias only keeps the analysis complete. The reviewed catalog
+    // then decides: an interactive read of project files runs with no prompt,
+    // and a redirect to /dev/null writes no file. A real output file still prompts.
+    [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The project glob regression defines POSIX behavior.")]
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md 2>/dev/null | head -20", null)]
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md | head -20", null)]
+    [InlineData("grep -rn \"Mode B\" docs/ ./*.md > hits.txt", "grep")]
+    public async Task Project_glob_with_in_root_file_alias_reads_with_reviewed_catalog(
+        string command,
+        string? expectedCandidates)
+    {
+        var testCase = new ShellApprovalCase(
+            "project-glob-with-in-root-alias-reads-with-reviewed-catalog",
+            new ShellApprovalInvocation(command),
+            Approvals.None,
+            expectedCandidates is null
+                ? ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)
+                : ExpectedApproval.Require(expectedCandidates.Split('|')));
+        await using var harness = await ShellApprovalHarness.CreateAsync(
+            testCase,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken);
+        harness.CreateProjectDirectory("docs");
+        harness.CreateProjectFileSymlink("CLAUDE.md", "AGENTS.md");
+
+        var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+
+        if (expectedCandidates is null)
+        {
+            Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
+            Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, observed.AllowReason);
+        }
+        else
+        {
+            Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+            Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
+        }
+    }
+
+    // A reviewed cd into a project folder needs no prompt. It covers only the
+    // directory change: each later command keeps its own check. {src} is the
+    // absolute path of a project folder; the parser does not resolve a relative cd.
+    [SlopwatchSuppress("SW001", "This regression requires POSIX directory and Bash authorization behavior.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The cd regression defines Bash behavior.")]
+    [InlineData("cd {src} && git status", null)]
+    [InlineData("cd {src} && ls -la; pwd", null)]
+    [InlineData("cd {src} && rm -rf build", "rm")]
+    [InlineData("cd {src} && git push", "git push")]
+    [InlineData("cd {src}/../.. && ls", "cd|ls")]
+    public async Task Reviewed_cd_into_project_folder_keeps_later_checks(
+        string command,
+        string? expectedCandidates)
+    {
+        var project = Directory.CreateTempSubdirectory("netclaw-reviewed-cd-");
+        try
+        {
+            var source = project.CreateSubdirectory("src");
+            await using var harness = await ShellApprovalHarness.CreateAsync(
+                "reviewed-cd-into-project-folder",
+                new ShellApprovalInvocation(
+                    command.Replace("{src}", source.FullName, StringComparison.Ordinal),
+                    ApprovalDirectoryShape.None),
+                Approvals.None,
+                fixture.ActorSystem,
+                TestContext.Current.CancellationToken,
+                scope: new ShellApprovalHarnessScope(
+                    project.FullName,
+                    project.FullName,
+                    "signalr/reviewed-cd",
+                    []));
+
+            var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
+
+            if (expectedCandidates is null)
+            {
+                Assert.Equal(ApprovalOutcome.Allowed, observed.Outcome);
+                Assert.Equal(ApprovalAllowReason.ReviewedSafePolicy, observed.AllowReason);
+            }
+            else
+            {
+                Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
+                Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
+            }
+        }
+        finally
+        {
+            project.Delete(recursive: true);
+        }
     }
 
     [Fact]

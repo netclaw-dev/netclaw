@@ -41,8 +41,10 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
 
     public static TheoryData<string, string[]> Commands => new()
     {
-        { "gh pr view 123", ["gh", "pr", "view"] },
-        { "gh pr view 123 -R o/r", ["gh", "pr", "view"] },
+        // gh pr view is a reviewed diagnostic and needs no grant, so the bare
+        // forms use gh pr comment, which still prompts.
+        { "gh pr comment 123", ["gh", "pr", "comment"] },
+        { "gh pr comment 123 -R o/r", ["gh", "pr", "comment"] },
         { "gh -R o/r pr view 123", ["gh", "pr", "view"] },
         { "gh --repo o/r pr list", ["gh", "pr", "list"] },
         { "gh api repos/o/r/contents/x", ["gh", "api"] },
@@ -81,12 +83,12 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
     {
         await using var harness = await CreateHarnessAsync(Approvals.None);
 
-        var stored = await ApproveEverywhereAsync(harness, "gh pr view 1 -R o/r --web");
+        var stored = await ApproveEverywhereAsync(harness, "gh pr comment 1 -R o/r --web");
 
-        Assert.Equal(["gh", "pr", "view"], Assert.Single(stored).VerbTokens!);
-        await AssertAllowedByStoredGrantAsync(harness, "gh -R o/r pr view 2");
-        await AssertAllowedByStoredGrantAsync(harness, "gh pr -R o/r view 3 --web");
-        await AssertAllowedByStoredGrantAsync(harness, "gh --repo=o/r pr view 4");
+        Assert.Equal(["gh", "pr", "comment"], Assert.Single(stored).VerbTokens!);
+        await AssertAllowedByStoredGrantAsync(harness, "gh -R o/r pr comment 2");
+        await AssertAllowedByStoredGrantAsync(harness, "gh pr -R o/r comment 3 --web");
+        await AssertAllowedByStoredGrantAsync(harness, "gh --repo=o/r pr comment 4");
         await AssertNeedsApprovalAsync(harness, "gh pr merge 1", stored);
         await AssertNeedsApprovalAsync(harness, "gh -R o/r pr merge 1", stored);
     }

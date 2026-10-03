@@ -23,8 +23,8 @@ internal readonly record struct ShellPolicyCandidateId
 
 /// <summary>
 /// Selects the coverage rules of a candidate. A causal list keeps the rules that it had before
-/// its candidates came from the directory proof: no reviewed-safe policy of the real directory and
-/// no side-effect exemption. Only its diagnostics can use the intent rule.
+/// its candidates came from the directory proof: no reviewed-safe policy of the real directory.
+/// Only its diagnostics can use the intent rule. The side-effect exemption does not read the role.
 /// </summary>
 internal enum ShellPolicyCandidateRole
 {

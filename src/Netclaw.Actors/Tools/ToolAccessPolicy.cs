@@ -595,7 +595,7 @@ public sealed class ToolAccessPolicy
         ToolAuthorizationDecision? denial = null;
         outsideOnly = true;
         foreach (var path in paths
-                     .Where(static path => !IsNullDevice(path))
+                     .Where(static path => !ShellRedirectPolicyFacts.IsNullDevice(path))
                      .DistinctBy(static path => (path.Style, path.Value)))
         {
             var access = _pathAccessPolicy.EvaluateShellPath(path, context);
@@ -642,10 +642,6 @@ public sealed class ToolAccessPolicy
             yield return path;
         }
     }
-
-    private static bool IsNullDevice(CanonicalPath path)
-        => path.Style == ShellPathStyle.Posix
-           && string.Equals(path.Value, "/dev/null", StringComparison.Ordinal);
 
     internal ToolAuthorizationDecision? PreflightStructuredPathAccess(
         INetclawTool tool,

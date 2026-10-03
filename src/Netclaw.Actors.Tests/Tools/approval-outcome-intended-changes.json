@@ -80,6 +80,54 @@
       "reason": "The command words of \"git --no-pager status\" are \"git status\" in every option order (#2306), so the \"git status\" grant covers the call. A different subcommand still prompts.",
       "negativeControl": "mutating-command-prompts",
       "approvedBy": "Aaron Stannard (owner), command-words position rule for #2306, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-null-device-redirect-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "A redirect to /dev/null discards output and writes no file. The reviewed catalog now covers \"ls -la 2>/dev/null\". A redirect to a real file still prompts.",
+      "negativeControl": "safe-verb-external-redirect-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "post-334cb4c-independent-read-batch-remains-complex",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "The only uncovered part was a grep with 2>/dev/null. That redirect writes no file, so the reviewed catalog covers the project read. A redirect to a real file still prompts.",
+      "negativeControl": "error-redirect-outside-zone-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unsafe-catalog-gh-web-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "gh run view only reads. No flag writes data; --web opens a browser. The reviewed catalog now lists it. A mutating command still prompts.",
+      "negativeControl": "mutating-verb-project-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-unsafe-catalog-gh-web-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "gh run view only reads. No flag writes data; --web opens a browser. The Windows reviewed catalog now lists it. A stage outside the catalog still prompts.",
+      "negativeControl": "powershell7-pipeline-prompts-for-unsafe-stage"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "gh-run-diagnostic-exit-status-prompts-without-grant",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "gh run view only reads, and head and echo were already covered. The reviewed catalog now lists gh run view. A mutating command still prompts.",
+      "negativeControl": "mutating-verb-project-prompts"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "cd-current-then-safe-prompts-for-navigation",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "cd only changes the working directory. The reviewed catalog now lists it, and each later command keeps its own check. A cd out of the project still prompts.",
+      "negativeControl": "cd-parent-then-safe-prompts"
     }
   ]
 }

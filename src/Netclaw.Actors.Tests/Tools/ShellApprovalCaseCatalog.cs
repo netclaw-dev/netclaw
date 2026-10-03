@@ -402,9 +402,10 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["git status"])),
         Case(
             "safe-verb-null-device-redirect-prompts",
+            // A redirect to /dev/null writes no file. The ID keeps its old name.
             Bash("ls -la 2>/dev/null"),
             Approvals.None,
-            ExpectedApproval.Require(["ls"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "mutating-verb-project-prompts",
             Bash("git push"),
@@ -472,9 +473,124 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["uniq input output"])),
         Case(
             "unsafe-catalog-gh-web-prompts",
+            // gh run view only reads; --web opens a browser and writes no data. The ID keeps its old name.
             Bash("gh run view 123456 --web"),
             Approvals.None,
-            ExpectedApproval.Require(["gh run view"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        // Read-only gh queries are reviewed diagnostics. gh pr create and gh pr merge still prompt.
+        Case(
+            "reviewed-gh-pr-view-allows",
+            Bash("gh pr view 42 --repo example/project --json title,state"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-pr-checks-allows",
+            Bash("gh pr checks 42"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-pr-list-allows",
+            Bash("gh pr list --state open --limit 5"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-pr-diff-allows",
+            Bash("gh pr diff 42 --name-only"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-issue-view-allows",
+            Bash("gh issue view 7 --comments"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-issue-list-allows",
+            Bash("gh issue list --label bug"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-repo-view-allows",
+            Bash("gh repo view example/project --json visibility"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-release-view-allows",
+            Bash("gh release view v1.2.3"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-gh-pr-create-prompts",
+            Bash("gh pr create --title fix --body text"),
+            Approvals.None,
+            ExpectedApproval.Require(["gh pr create"])),
+        Case(
+            "reviewed-gh-pr-merge-prompts",
+            Bash("gh pr merge 42 --squash"),
+            Approvals.None,
+            ExpectedApproval.Require(["gh pr merge"])),
+        Case(
+            "reviewed-gh-pr-view-then-edit-prompts-for-edit",
+            Bash("gh pr view 42; gh pr edit 42 --add-label bug"),
+            Approvals.None,
+            ExpectedApproval.Require(["gh pr edit"])),
+        Case(
+            "reviewed-pgrep-allows",
+            Bash("pgrep -fl dotnet"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-pgrep-into-kill-prompts",
+            Bash("pgrep -f server | xargs kill"),
+            Approvals.None,
+            ExpectedApproval.Require(["xargs kill"])),
+        // A reviewed cd changes only the directory. Each command after it keeps its own check.
+        Case(
+            "reviewed-cd-then-remove-prompts-for-remove",
+            Bash("cd . && rm -rf build"),
+            Approvals.None,
+            ExpectedApproval.Require(["rm"])),
+        Case(
+            "reviewed-cd-external-prompts",
+            Bash("cd /netclaw-approval-external && ls"),
+            Approvals.None,
+            ExpectedApproval.Require(["cd", "ls"])),
+        // A redirect to /dev/null writes no file. A redirect to any other file is still a write.
+        Case(
+            "reviewed-null-device-stderr-allows",
+            Bash("grep -rn needle src 2>/dev/null"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-null-device-all-output-allows",
+            Bash("ls -la src > /dev/null 2>&1"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-project-file-redirect-prompts",
+            Bash("grep -n needle src/readme.txt > hits.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["grep"])),
+        Case(
+            "reviewed-null-device-with-file-redirect-prompts",
+            Bash("ls src 2>/dev/null > listing.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["ls"])),
+        Case(
+            "echo-external-redirect-prompts",
+            Bash($"echo x > {TemporaryFile("netclaw-approval-echo.txt")}"),
+            Approvals.None,
+            ExpectedApproval.Require(["echo"])),
+        // On a POSIX host a backslash is a file-name character, not a separator.
+        Case(
+            "reviewed-backslash-pattern-allows",
+            Bash("grep -n \"alpha\\|beta\" src/readme.txt"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "reviewed-backslash-word-external-path-prompts",
+            Bash("cat '/etc/a\\b'"),
+            Approvals.None,
+            ExpectedApproval.Require(["cat"])),
         Case(
             "reviewed-git-global-option-before-phrase-prompts",
             Bash("git -c include.path=/tmp/external status"),
@@ -532,11 +648,12 @@ public static class ShellApprovalCases
 
         Case(
             "gh-run-diagnostic-exit-status-prompts-without-grant",
+            // gh run view is a reviewed diagnostic now. The ID keeps its old name.
             Bash(
                 "gh run view 123456 --repo example/project --log-failed --verbose 2>&1 "
                 + "| head -200; echo \"---EXIT $?---\""),
             Approvals.None,
-            ExpectedApproval.Require(["gh run view"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
 
         Case(
             "live-finite-run-loop-with-tr-data-reuses-gh-grant",
@@ -569,7 +686,8 @@ public static class ShellApprovalCases
                 "grep -n \"Alpha\" src/Alpha.cs | head -5; "
                 + "grep -rn \"Beta\" src/*.cs tests/*.cs docs/*.md 2>/dev/null | head"),
             Approvals.None,
-            ExpectedApproval.Require(["grep"])),
+            // The redirect to /dev/null writes no file. The ID keeps its old name.
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
 
         Case(
             "post-334cb4c-inline-cd-read-batch-has-scoped-candidates",
@@ -589,7 +707,8 @@ public static class ShellApprovalCases
                 + "grep -rn \"ProbeTimeout\\|WaitForExitAsync\" "
                 + "src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null | head"),
             Approvals.None,
-            ExpectedApproval.Require(["sed", "grep"])),
+            // The grep redirect to /dev/null writes no file, so only sed prompts.
+            ExpectedApproval.Require(["sed"])),
 
         Case(
             "native-project-path-operand-prompts-for-unproved-verb",
@@ -1015,9 +1134,26 @@ public static class ShellApprovalCases
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "powershell7-unsafe-catalog-gh-web-prompts",
+            // gh run view only reads; --web opens a browser and writes no data. The ID keeps its old name.
             PowerShell7("gh run view 123456 --web"),
             Approvals.None,
-            ExpectedApproval.Require(["gh run view"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "powershell7-reviewed-gh-pr-view-allows",
+            PowerShell7("gh pr view 42 --json title"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "powershell7-reviewed-gh-pr-merge-prompts",
+            PowerShell7("gh pr merge 42 --squash"),
+            Approvals.None,
+            ExpectedApproval.Require(["gh pr merge"])),
+        // Under PowerShell a backslash stays a path separator.
+        Case(
+            "powershell7-backslash-parent-separator-prompts",
+            PowerShell7(@"Get-Content ..\..\outside\secret.txt"),
+            Approvals.None,
+            ExpectedApproval.Require(["Get-Content"])),
         Case(
             "powershell7-findstr-external-option-path-prompts",
             PowerShell7(@"findstr /G:C:\outside\patterns.txt C:\project\data.txt"),
@@ -1258,9 +1394,10 @@ public static class ShellApprovalCases
             ExpectedApproval.Require(["git status"])),
         Case(
             "cd-current-then-safe-prompts-for-navigation",
+            // cd is a reviewed diagnostic now. The ID keeps its old name.
             Bash("cd . && git status"),
             Approvals.None,
-            ExpectedApproval.Require(["cd"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "cd-parent-then-safe-prompts",
             Bash("cd .. && git status"),
@@ -1296,6 +1433,21 @@ public static class ShellApprovalCases
                 "persistent:cd",
                 "persistent:gh api")),
         // #2306: a bare glob in the verb slot gives Unknown command words, so the model gets a rewrite correction.
+        // echo has no directory, so the side-effect exemption applies in a causal list too.
+        Case(
+            "cd-causal-list-echo-is-exempt",
+            Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; echo \"--- size ---\"; wc -c result.log"),
+            Approvals.PersistentAnywhere("cd", "gh api"),
+            ExpectedApproval.Allow(
+                ApprovalAllowReason.StoredApproval,
+                1,
+                "persistent:cd",
+                "persistent:gh api")),
+        Case(
+            "cd-causal-list-echo-without-grants-prompts",
+            Bash("cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; echo \"--- size ---\"; wc -c result.log"),
+            Approvals.None,
+            ExpectedApproval.Require(["cd", "gh api"])),
         Case(
             "cd-causal-list-folder-grant-outside-target-prompts",
             Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),

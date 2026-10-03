@@ -29,6 +29,19 @@ public sealed class SafeVerbLoaderTests
         Assert.True(list.Contains("git ls-tree"));
         Assert.True(list.Contains("gh run list"));
 
+        // Read-only gh queries, cd, and pgrep. No flag of these phrases writes data.
+        Assert.True(list.Contains("cd"));
+        Assert.True(list.Contains("pgrep"));
+        Assert.True(list.Contains("gh pr view"));
+        Assert.True(list.Contains("gh pr checks"));
+        Assert.True(list.Contains("gh pr list"));
+        Assert.True(list.Contains("gh pr diff"));
+        Assert.True(list.Contains("gh issue view"));
+        Assert.True(list.Contains("gh issue list"));
+        Assert.True(list.Contains("gh run view"));
+        Assert.True(list.Contains("gh repo view"));
+        Assert.True(list.Contains("gh release view"));
+
         // Each excluded phrase has an accepted argument shape that can mutate,
         // execute code, or expose ambient secrets.
         Assert.False(list.Contains("find"));
@@ -44,10 +57,21 @@ public sealed class SafeVerbLoaderTests
         Assert.False(list.Contains("git show"));
         Assert.False(list.Contains("git branch"));
         Assert.False(list.Contains("git remote"));
-        Assert.False(list.Contains("gh pr view"));
-        Assert.False(list.Contains("gh issue list"));
-        Assert.False(list.Contains("gh run view"));
-        Assert.False(list.Contains("gh repo view"));
+        Assert.False(list.Contains("gh pr create"));
+        Assert.False(list.Contains("gh pr merge"));
+        Assert.False(list.Contains("gh pr edit"));
+        Assert.False(list.Contains("gh pr checkout"));
+        Assert.False(list.Contains("gh run rerun"));
+        Assert.False(list.Contains("gh run download"));
+        Assert.False(list.Contains("gh release download"));
+        Assert.False(list.Contains("gh repo edit"));
+        Assert.False(list.Contains("pkill"));
+        Assert.False(list.Contains("xargs"));
+        Assert.False(list.Contains("jq"));
+        Assert.False(list.Contains("sed"));
+        Assert.False(list.Contains("curl"));
+        Assert.False(list.Contains("timeout"));
+        Assert.False(list.Contains("gunzip"));
         Assert.False(list.Contains("env"));
         Assert.False(list.Contains("git fetch"));
         Assert.False(list.Contains("gh api"));
@@ -83,9 +107,16 @@ public sealed class SafeVerbLoaderTests
         Assert.False(list.Contains("type"));
         Assert.False(list.Contains("where"));
         Assert.False(list.Contains("git log"));
-        Assert.False(list.Contains("gh pr view"));
         Assert.False(list.Contains("gh api"));
         Assert.False(list.Contains("gh auth status"));
+
+        // Read-only gh queries apply on Windows too. The PowerShell cd alias is
+        // Set-Location, which can enter a non-filesystem provider; it is not listed.
+        Assert.True(list.Contains("gh pr view"));
+        Assert.True(list.Contains("gh run view"));
+        Assert.True(list.Contains("gh issue list"));
+        Assert.False(list.Contains("gh pr merge"));
+        Assert.False(list.Contains("Set-Location"));
     }
 
     [Fact]

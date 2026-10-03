@@ -162,13 +162,20 @@ covered:
 - A grant that you saved (this chat, a folder, a repository, or everywhere)
   covers the phrase.
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
+  This rule also applies after `cd dir && action;`.
 - In an interactive session, the reviewed diagnostic catalog covers the
   phrase, and every path is inside the session or project directory. The
   catalog ships with the daemon (`safe-verbs.linux.json`,
   `safe-verbs.windows.json`). It includes readers such as `ls`, `cat`, `grep`,
-  `Get-Content`, and `Select-String`, and queries such as `git status` and
-  `gh run list`. It never includes `git push`, `rm`, `env`, `xargs`, `sudo`,
-  `curl`, `gh api`, or `printenv`. The agent cannot extend it.
+  `pgrep`, `Get-Content`, and `Select-String`, the Bash `cd`, and queries such
+  as `git status`, `gh pr view`, `gh pr checks`, `gh issue list`, and
+  `gh run view`. It never includes `git push`, `rm`, `env`, `xargs`, `sudo`,
+  `curl`, `gh api`, `gh pr create`, `gh pr merge`, or `printenv`. The agent
+  cannot extend it.
+- A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,
+  so it does not stop the catalog coverage. A redirect to any other file does.
+- On Linux and macOS, a backslash in a Bash word is a file-name character, not
+  a path separator. `grep -n "a\|b" file` therefore stays inside the project.
 
 For a compound command (`&&`, `||`, `;`, `|`), each command needs its own
 coverage. The prompt asks only for the commands that remain uncovered.

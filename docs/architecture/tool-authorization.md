@@ -241,9 +241,10 @@ Leaks today:
   matcher candidates of the full parse, and the directory proof for a list
   with an exact `cd`. The directory proof also marks the diagnostics of a
   causal list (`cd dir && action; diagnostic`) for the reviewed-safe intent
-  rule. That rule, the headless denial of a causal list, and its exclusion
-  from the side-effect exemption stay until the owner changes the outcomes
-  that they protect.
+  rule. That rule and the headless denial of a causal list stay until the
+  owner changes the outcomes that they protect. The side-effect exemption
+  (`echo`, `printf`, `:`, `true`, `false`) applies in a causal list too: the
+  exempt command has no directory, so the list role does not change it.
 - `ResolveAuthorizationScope` in `IToolApprovalMatcher.cs` names `find`, `cd`,
   `pushd`, and `Set-Location`. This conflicts with the Shell Approval
   Abstraction Rule in [`AGENTS.md`](../../AGENTS.md).

@@ -223,6 +223,9 @@ internal sealed class ReviewedSafeShellPolicy
             pathStyle) is PathAccessDecision.Allowed;
     }
 
+    // A redirect to the null device discards output and writes no file, so it
+    // does not disqualify a reviewed diagnostic. Every other output redirect does,
+    // including one into the project.
     private static bool HasFileWritingRedirect(ShellPolicyResolvedPathView? resolvedPaths)
         => resolvedPaths?.Facts.Any(static fact =>
             fact.Source is
@@ -230,7 +233,14 @@ internal sealed class ReviewedSafeShellPolicy
                 Origin: ShellPolicyPathOrigin.Redirect,
                 RedirectMode: { } mode
             }
-            && ShellRedirectPolicyFacts.IsFileWritingMode(mode)) == true;
+            && ShellRedirectPolicyFacts.IsFileWritingMode(mode)
+            && !IsNullDeviceSink(fact)) == true;
+
+    private static bool IsNullDeviceSink(ShellPolicyResolvedPathFact fact)
+        => fact.Source.RedirectIsComplete
+           && fact.State == ShellPolicyPathResolutionState.Known
+           && fact.Paths.Count > 0
+           && fact.Paths.All(ShellRedirectPolicyFacts.IsNullDevice);
 
     private static bool HasUnprovedNonFileSystemSemantics(
         ShellPolicyResolvedPathView? resolvedPaths)
@@ -325,10 +335,16 @@ internal sealed class ReviewedSafeShellPolicy
             var validDomain = fact.Source.Origin == ShellPolicyPathOrigin.FileSystemTreeRoot
                 ? fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.PathPattern
                 : fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
+            // The parser's Windows shape is lexical: a backslash, a leading
+            // "//", or a drive prefix. A backslash is a separator only under
+            // Windows path rules. Under POSIX rules it is an ordinary file-name
+            // character, so the POSIX-resolved paths are the real targets. The
+            // shape is a mismatch only when the paths used other rules than the
+            // shell. A POSIX shape under Windows path rules stays a mismatch.
             if (fact.Source.AuthoredPathShape == ShellPathShape.Posix
                     && pathStyle != ShellPathStyle.Posix
                 || fact.Source.AuthoredPathShape == ShellPathShape.Windows
-                    && pathStyle != ShellPathStyle.Windows
+                    && fact.Paths.Any(path => path.Style != pathStyle)
                 || !validDomain
                 || fact.State != ShellPolicyPathResolutionState.Known
                 || fact.Paths.Count == 0

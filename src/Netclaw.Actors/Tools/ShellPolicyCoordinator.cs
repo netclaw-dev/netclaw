@@ -202,9 +202,11 @@ internal sealed class ShellPolicyCoordinator(
         cancellationToken.ThrowIfCancellationRequested();
         if (approvalService is not null)
         {
+            // A pure side effect has no directory and no assignment, so its
+            // exemption does not depend on the role. The causal list role keeps
+            // a directory change and its action uncovered; it does not change echo.
             foreach (var candidate in evaluation.Candidates.Where(static item =>
-                         item.Role == ShellPolicyCandidateRole.Ordinary
-                         && ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
+                         ApprovalPatternMatching.IsPureSideEffect(item.Candidate)))
             {
                 evaluation.Cover(candidate, Coverage.Exempt.Instance);
             }
