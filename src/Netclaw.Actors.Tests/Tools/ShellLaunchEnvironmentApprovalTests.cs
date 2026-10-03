@@ -36,6 +36,8 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
     [InlineData("cd \"$TMPDIR/out\" && ls", "cd {T}/out && ls", false)]
     [InlineData("cd ./sub && cat notes.txt", "cd {P}/sub && cat notes.txt", false)]
     [InlineData("cd ./sub; cat notes.txt", "cd {P}/sub; cat notes.txt", false)]
+    [InlineData("cd sub && cat notes.txt", "cd {P}/sub && cat notes.txt", false)]
+    [InlineData("cd sub; cat notes.txt", "cd {P}/sub; cat notes.txt", false)]
     public async Task Launch_variable_gets_the_decision_of_its_literal_value(
         string command,
         string literal,
@@ -96,6 +98,26 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
         var observed = await harness.EvaluateShellAsync(command, Ct);
 
         Assert.Equal(ApprovalOutcome.Allowed, literal.Outcome);
+        Assert.NotEqual(ApprovalOutcome.Allowed, observed.Outcome);
+    }
+
+    // Negative controls: with grants for cd and cat, the literal twin is allowed. A CDPATH
+    // that the source sets can send a relative cd to another directory, so the cd stays unresolved.
+    [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
+    [InlineData("CDPATH=/etc; cd sub && cat notes.txt")]
+    [InlineData("export CDPATH=/etc && cd sub && cat notes.txt")]
+    public async Task Changed_cdpath_keeps_a_relative_cd_unresolved(string command)
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere("cd", "cat", "export"));
+        harness.CreateProjectDirectory("sub");
+
+        var literal = await harness.EvaluateShellAsync(Expand("cd {P}/sub && cat notes.txt", harness), Ct);
+        var relative = await harness.EvaluateShellAsync("cd sub && cat notes.txt", Ct);
+        var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, literal.Outcome);
+        Assert.Equal(ApprovalOutcome.Allowed, relative.Outcome);
         Assert.NotEqual(ApprovalOutcome.Allowed, observed.Outcome);
     }
 
