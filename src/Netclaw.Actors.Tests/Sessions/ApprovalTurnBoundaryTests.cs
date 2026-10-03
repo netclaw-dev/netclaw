@@ -132,12 +132,21 @@ public sealed class ApprovalTurnBoundaryTests : LlmSessionTestBase
         Assert.IsType<CommandAck>(await ReplyAsync(manager, sessionId, requests[deniedCall], ApprovalOptionKeys.DenyKey));
 
         var results = new Dictionary<string, ToolResultOutput>(StringComparer.Ordinal);
-        while (results.Count < 2)
+        var outcomes = new Dictionary<string, ApprovalOutcomeOutput>(StringComparer.Ordinal);
+        while (results.Count < 2 || outcomes.Count < 2)
         {
-            var result = await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            var output = await subscriber.ExpectMsgAsync<SessionOutput>(
                 TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);
-            results[result.CallId.Value] = result;
+            if (output is ApprovalOutcomeOutput outcome)
+                outcomes.Add(outcome.CallId.Value, outcome);
+            else
+            {
+                var result = Assert.IsType<ToolResultOutput>(output);
+                results.Add(result.CallId.Value, result);
+            }
         }
+        Assert.Equal(ApprovalOptionKeys.ApproveOnceKey, outcomes[approvedCall].SelectedKey);
+        Assert.Equal(ApprovalOptionKeys.DenyKey, outcomes[deniedCall].SelectedKey);
 
         await subscriber.ExpectMsgAsync<TextOutput>(
             TimeSpan.FromSeconds(10), cancellationToken: TestContext.Current.CancellationToken);

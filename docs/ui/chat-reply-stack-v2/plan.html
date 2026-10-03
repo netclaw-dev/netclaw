@@ -1,0 +1,356 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <link rel="icon" href="data:,">
+  <title>Netclaw chat: October implementation plan</title>
+  <style>
+    :root { --paper:#f6f5f0; --ink:#202b33; --muted:#52616b; --line:#d7dedb; --accent:#155e58; --soft:#e9f2ef; --warm:#fff3dd; }
+    * { box-sizing:border-box; }
+    body { margin:0; background:var(--paper); color:var(--ink); font:16px/1.65 system-ui,sans-serif; overflow-wrap:anywhere; }
+    a { color:var(--accent); text-underline-offset:.2em; overflow-wrap:anywhere; }
+    :focus-visible { outline:3px solid #b45c25; outline-offset:4px; }
+    .skip { position:absolute; top:-80px; left:16px; padding:12px; background:white; }
+    .skip:focus { top:12px; }
+    .wrap { max-width:1080px; padding:0 28px; margin:auto; }
+    header { padding:48px 0 28px; border-bottom:1px solid var(--line); }
+    .eyebrow { font-size:.8rem; letter-spacing:.13em; text-transform:uppercase; color:var(--accent); font-weight:750; }
+    h1 { font-size:clamp(2rem,4.5vw,3.3rem); line-height:1.15; letter-spacing:-.04em; margin:16px 0; }
+    h2 { font-size:1.55rem; line-height:1.3; margin:0 0 14px; }
+    h3 { font-size:1.1rem; margin:0 0 10px; }
+    p { margin:0 0 14px; } li + li { margin-top:6px; }
+    h1,h2,h3 { overflow-wrap:anywhere; }
+    .lead,.muted { color:var(--muted); }
+    .status,.note { background:var(--warm); padding:10px 14px; border-radius:6px; }
+    .status { display:inline-block; font-size:.85rem; }
+    nav { padding:16px 0; border-bottom:1px solid var(--line); }
+    nav .wrap { display:flex; flex-wrap:wrap; gap:12px 24px; }
+    main { padding-top:30px; padding-bottom:45px; }
+    section { margin-bottom:28px; scroll-margin-top:16px; }
+    .card { background:white; padding:26px; border:1px solid var(--line); border-radius:10px; }
+    .recommendation { border-left:5px solid var(--accent); }
+    .grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:18px; }
+    code,pre { font-family:ui-monospace,SFMono-Regular,Consolas,monospace; font-size:.85em; }
+    code { overflow-wrap:anywhere; }
+    pre { background:var(--soft); padding:18px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+    pre code { font-size:inherit; }
+    table { width:100%; border-collapse:collapse; font-size:.9rem; }
+    th,td { text-align:left; vertical-align:top; padding:10px 12px; border-bottom:1px solid var(--line); overflow-wrap:anywhere; }
+    th { background:#f8faf9; color:var(--muted); }
+    details { border:1px solid var(--line); border-radius:8px; background:white; margin:12px 0; }
+    summary { padding:16px 20px; font-weight:650; cursor:pointer; }
+    details[open] summary { border-bottom:1px solid var(--line); }
+    .detail { padding:20px; }
+    footer { padding:24px 0; border-top:1px solid var(--line); color:var(--muted); }
+    @media(max-width:700px) {
+      .wrap { padding:0 18px; } .card { padding:18px; } .grid { grid-template-columns:1fr; }
+      table,tbody,tr,td { display:block; width:100%; }
+      thead { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); }
+      td::before { content:attr(data-label); display:block; color:var(--muted); font-weight:700; }
+      tr + tr { margin-top:14px; border-top:2px solid var(--line); }
+    }
+    @media print {
+      body { background:white; font-size:10pt; } .wrap { max-width:none; padding:0; }
+      .skip,nav { display:none; } header { padding:0 0 16px; } h1 { font-size:25pt; }
+      h2,h3,summary { break-after:avoid; } tr { break-inside:avoid; }
+      pre { overflow:visible; } details::details-content { content-visibility:visible; }
+      .grid { grid-template-columns:1fr; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip" href="#main">Skip to the plan</a>
+  <header><div class="wrap">
+    <div class="eyebrow">Systematize · Netclaw chat · 2026-10-03</div>
+    <h1>A readable chat, with control during every turn.</h1>
+    <p class="lead">Keep the quiet Reply Stack. Reuse the current daemon contracts. Let the terminal own settled transcript scrollback.</p>
+    <p class="status">Ready for plan review. The feature is not verified. No merge or binary swap is authorized by this plan.</p>
+    <p style="margin-top:16px">Review choice: approve the three PR boundaries below, or keep one integration PR with the same gates.</p>
+    <p>The separate PRs expose input, data, and visual defects independently. They need more branch coordination.</p>
+    <p><a href="index.html">Review the accepted visual mock-up</a> · <a href="https://github.com/netclaw-dev/netclaw/pull/1897">Existing draft PR #1897</a></p>
+  </div></header>
+  <nav aria-label="Plan sections"><div class="wrap">
+    <a href="#example">Concrete change</a><a href="#goals">Goals</a><a href="#ownership">Ownership</a>
+    <a href="#grammar">Visual grammar</a><a href="#delivery">Delivery</a><a href="#proof">Proof</a><a href="#handoff">Handoff</a>
+  </div></nav>
+  <main class="wrap" id="main">
+    <section id="example" class="card">
+      <h2>Start with a prompt that steers active work</h2>
+      <p>Input admission means that the actor records a prompt before it acknowledges receipt. Pull means that the actor adds that prompt to model input.</p>
+      <p>The current <code>dev</code> branch owns durable input admission and replay. The old prototype adds separate queue receipts and display counters.</p>
+      <div class="grid">
+        <div><h3>Current prototype: several owners</h3><pre><code>Actor: InputAdmitted → buffer → model input
+Actor: emit queued/pulled receipts from that buffer
+ViewModel: retain IDs and a legacy queue counter
+Page: retain another list of prompt previews
+TurnCompleted: clear legacy display counters</code></pre></div>
+        <div><h3>Proposed: derive display state from receipts</h3><pre><code>send(text, stableSourceMessageId)
+  → show local state: Sending
+actor persists InputAdmitted → acknowledge → show Queued
+actor drains ALL eligible prompts in FIFO order
+  → emit one correlated Pulled receipt for that batch
+client removes only those IDs from the Queue Shelf
+  → add one "Pulled by agent" row to the Reply Block</code></pre></div>
+      </div>
+      <p>This schematic pseudocode omits existing policy gates and replay guards. Those gates remain before the affected operations.</p>
+      <p>A pull can occur between tool-loop steps. The client must not wait for <code>TurnCompleted</code> or dispatch one prompt per turn.</p>
+      <p>During reconnect, the client retries the same source identity. The actor must not create another admitted input or another model action.</p>
+    </section>
+    <section class="card recommendation">
+      <h2>Recommendation and limits</h2>
+      <p>Retain the primary terminal buffer, one bounded live area, and the existing immutable presentation reducer.</p>
+      <p>Repair the contract seams first. Then make the visual grammar coherent against the accepted HTML examples.</p>
+      <p>A smaller alternative changes only spacing, colors, and labels. It does not address queue recovery or transcript compatibility.</p>
+      <p>Do not introduce another session engine, state framework, approval policy, or rationale retry counter.</p>
+      <p>No measured performance or code-size benefit is claimed. The intended benefit is fewer decision owners and clear, testable behavior.</p>
+      <p class="note">Release blocker: old prototype journals used protobuf tags that current <code>dev</code> uses for durable input data. A source rebase does not migrate those journals.</p>
+    </section>
+    <section id="goals" class="card">
+      <h2>Goals, in priority order</h2>
+      <ol>
+        <li><strong>User control.</strong> Keep the Composer available during agent work. Show every queued prompt and the exact batch that the agent pulls.</li>
+        <li><strong>Readable conversation.</strong> Use clear speaker labels, whitespace, and quiet prose. Place all tool and sub-agent activity inside the relevant Reply Block.</li>
+        <li><strong>Useful live feedback.</strong> Stream text immediately. Show real tool progress, rationale, parallel activity, and provider-supplied thought or token data.</li>
+        <li><strong>Native terminal behavior.</strong> Preserve terminal scrollback, search, selection, and copy. Do not virtualize settled history again.</li>
+        <li><strong>Safe decisions.</strong> Show one approval at a time. Keep the current daemon policy, request identities, scope, and outcomes authoritative.</li>
+        <li><strong>Low review burden.</strong> Supply headless proof and local visual checkpoints. Do not leave the user with a large manual QA list.</li>
+      </ol>
+      <p>Preserve <code>Shift+Enter</code>, prompt recall, draft restoration, <code>Esc x2 clear</code>, and <code>Ctrl+O</code> detail.</p>
+      <p>Cancellation through Escape remains a <a href="https://memory.testlab.petabridge.net/view/886d7774-81fb-4ead-b76b-0c0e2f6e4881">separate follow-up</a>.</p>
+      <p>Exclude a web chat product, broad actor refactors, new approval authority, and a new chat tape suite for CI.</p>
+      <p>All public, wire, and persistence changes remain additive. Non-chat Termina applications retain their full-screen default.</p>
+    </section>
+    <section id="ownership" class="card">
+      <h2>One owner for each decision</h2>
+      <table role="table"><thead><tr role="row"><th role="columnheader">Owner</th><th role="columnheader">Retain or reuse</th><th role="columnheader">Change or retire</th></tr></thead><tbody>
+        <tr role="row"><td role="cell" data-label="Owner">Session actor</td><td role="cell" data-label="Retain or reuse">InputAdmitted, pending inputs, consumed IDs, replay, tool-cycle guard, policy, consent.</td><td role="cell" data-label="Change or retire">Derive receipts from admission and consumption. Assess the prototype's separate user-message list before its removal.</td></tr>
+        <tr role="row"><td role="cell" data-label="Owner">Transport</td><td role="cell" data-label="Retain or reuse">SignalR DTOs, output filters, caller identity, source message ID.</td><td role="cell" data-label="Change or retire">Add only missing correlation fields. Keep Slack and Discord output free of chat-only lifecycle rows.</td></tr>
+        <tr role="row"><td role="cell" data-label="Owner">Chat client state</td><td role="cell" data-label="Retain or reuse">ChatPresentationReducer and stable call/run IDs. The ViewModel owns transport retry.</td><td role="cell" data-label="Change or retire">Choose one display owner for queued prompts and approval order. Remove parallel counters after compatibility tests.</td></tr>
+        <tr role="row"><td role="cell" data-label="Owner">Termina</td><td role="cell" data-label="Retain or reuse">Inline host, input capabilities, keyed nodes, viewport measurements, terminal restoration.</td><td role="cell" data-label="Change or retire">Repair a library defect only when native evidence isolates it. Do not put chat policy in the library.</td></tr>
+        <tr role="row"><td role="cell" data-label="Owner">Terminal emulator</td><td role="cell" data-label="Retain or reuse">Settled scrollback, native search, selection, and wheel behavior.</td><td role="cell" data-label="Change or retire">No app-owned copy of settled scroll state. Printed text cannot become unselectable.</td></tr>
+      </tbody></table>
+      <p>The current reducer and ViewModel each retain an approval queue. A render projection must not make a second approval-order decision.</p>
+      <p>Prefer data already present at the seam. A new field needs a named consumer and a reason that existing data cannot serve it.</p>
+      <p>Persist settled semantic content only. Keep pulse frames, spinner frames, and transient progress outside the model history and journal.</p>
+    </section>
+    <section id="grammar" class="card">
+      <h2>Region names and behavior</h2>
+      <p>A display Turn contains a request, any prompts that steer it, and one Reply Block. It does not create a new actor lifecycle.</p>
+      <p>A Reply Passage groups prose and work from one model step. Model prose between tool batches creates another passage in the same block.</p>
+      <table role="table"><thead><tr role="row"><th role="columnheader">Region</th><th role="columnheader">Motion and lifetime</th></tr></thead><tbody>
+        <tr role="row"><td role="cell" data-label="Region">Transcript</td><td role="cell" data-label="Motion and lifetime">Immutable settled content in the primary buffer. No border, rail, spinner, or recurring divider.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Reply Block / Reply Passage</td><td role="cell" data-label="Motion and lifetime">Text appears with each delta. The active viewport permits explicit scroll and tail follow. Settlement prints each block once.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Work Trace</td><td role="cell" data-label="Motion and lifetime">Each active call has a stable row and local spinner. Safe progress text updates that row. Results remain as compact receipts.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Decision Sheet</td><td role="cell" data-label="Motion and lifetime">One approval owns input. Remaining requests wait in order. Ctrl+O preserves the selection. The outcome removes only its request.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Queue Shelf</td><td role="cell" data-label="Motion and lifetime">Each prompt stays visible until its correlated pull. A short terminal uses a bounded shelf with access to every prompt, not count-only overflow.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Session Strip</td><td role="cell" data-label="Motion and lifetime">The live bottom area retains session, model, context, and connection state. Native scrollback can move the whole live area out of view.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Composer</td><td role="cell" data-label="Motion and lifetime">Available during model and tool work. An approval temporarily owns input. The draft survives that transition.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Pulse Line</td><td role="cell" data-label="Motion and lifetime">Reserve a 12-cell left slot. Only the dots in Thinking. / Thinking.. / Thinking... change. Key hints stay stationary.</td></tr>
+        <tr role="row"><td role="cell" data-label="Region">Inspector</td><td role="cell" data-label="Motion and lifetime">Temporary detail and semantic copy. On exit, restore the draft, selection, terminal modes, and live state.</td></tr>
+      </tbody></table>
+      <p>Use normal foreground for prose, one identity accent, and muted metadata. Reserve amber for decisions and red for failures.</p>
+      <p>Success uses a label or symbol, not a field of green text. Use at most three emphasis colors within one region.</p>
+      <p>Use one blank line between speakers and settled turns. Nest work with indentation. Do not add a horizontal line between every block.</p>
+      <p>Keep rejected rationale calls visible. Use the canonical result failure code. Do not imply that a rejected request ran a tool.</p>
+      <p>Distinguish absent provider thought data from zero reported tokens. Do not infer thought text or hide provider errors.</p>
+      <details><summary>Native scrollback and the active reply are different</summary><div class="detail">
+        <pre><code>PRIMARY BUFFER
+  settled YOU / NETCLAW blocks     ← terminal owns scroll and selection
+  settled semantic work receipts
+
+LIVE BOTTOM AREA
+  active Reply Block               ← app viewport scroll / End tail
+  Session Strip
+  Queue Shelf
+  Composer OR Decision Sheet
+  fixed-width Pulse Line</code></pre>
+        <p>The prototype caps the active reply at 18 rows or half the terminal height. That cap causes the small-window effect.</p>
+        <p>Allocate space from measured height after the input and decision regions. Keep stable viewport nodes when content changes.</p>
+        <p>Use PageUp, PageDown, and End for the active reply. Keep terminal-owned wheel behavior for settled scrollback.</p>
+        <p>A headless wheel event does not prove native wheel routing. Terminal and tmux behavior need real-terminal proof.</p>
+        <p>Consider early passage commits only after a finalization signal proves that later events cannot revise them.</p>
+        <p>Do not print mutable prose into scrollback and then print the same prose again at turn completion.</p>
+      </div></details>
+    </section>
+    <section id="delivery" class="card">
+      <h2>Delivery</h2>
+      <p>Keep PR #1897 as the draft integration checkpoint. Build each proposed slice from current <code>dev</code> or a verified predecessor.</p>
+      <p>Reuse original issues: Netclaw #577 and #1338; Termina #45 and #240. Check their current scope before any issue edit.</p>
+      <p>Do not recreate rationale PR #1933. The current <code>dev</code> branch already contains that work.</p>
+      <h3>First PR: report when the actor pulls a complete prompt batch</h3>
+      <p>The user sees every queued prompt disappear only when the actor consumes its identity. Two prompts reach the same follow-up model call.</p>
+      <ol>
+        <li>Reconcile the existing OpenSpec change with durable input admission, mid-loop pulls, and current consent policy through the repository workflows.</li>
+        <li>Anchor queue/pull output in <code>AdmitInput</code> and <code>DrainBufferedUserMessages</code>. Preserve the current journal-before-ack sequence.</li>
+        <li>Carry existing source identities through SignalR. Include source identity in recovery data only if the consumer cannot reconstruct it safely.</li>
+        <li>Update the existing client queue consumer. Keep local send state distinct from actor acceptance and consumption.</li>
+        <li>Add a gated actor test for a two-prompt batch, duplicate delivery, disconnect, and recovery. Extend the existing fake hub fixture.</li>
+        <li>Update the queue requirement in PRD-004 and the operations chat reference. Run the mapped skill evals if that reference changes.</li>
+      </ol>
+      <p><strong>Start:</strong> the reviewer accepts this scope. Resolve any spec conflict before behavior changes. Preserve current policy and tool-cycle semantics.</p>
+      <p><strong>Review map:</strong> admission → model input → receipt → shelf. Review source identity, replay, and subscriber filtering together.</p>
+      <p><strong>Intermediate state:</strong> the existing UI remains. New clients use receipts; older clients ignore additive data. Capability absence stays explicit.</p>
+      <p><strong>Merge evidence:</strong> procedures Q1–Q3 pass on the combined branch. No duplicate model input, lost prompt, new grant, or non-chat receipt occurs.</p>
+      <p><strong>Rollout:</strong> no local binary swap until review and compatibility proof. The user retains merge authority.</p>
+      <p><strong>Advance or reverse:</strong> a coherent receipt contract unlocks event and visual work. Disable the new display consumer before a downgrade.</p>
+      <p><strong>Retirement:</strong> remove duplicate queue counters in this slice when all supported server cases have an explicit tested path.</p>
+      <details open><summary>Later PR: preserve structured reply events through transport and resume</summary><div class="detail">
+        <p>Rationale, call identity, parent identity, outcomes, and prose passages survive transport and session resume.</p>
+        <p>Reuse existing output records, DTO converters, journal entries, and serializers. Add only fields that a concrete UI consumer needs.</p>
+        <p>Keep the current tool-cycle and rationale validation owners. The TUI reports their decisions; it does not implement another retry budget.</p>
+        <p><strong>Start:</strong> the receipt contract is stable. Inventory current output types and approved protobuf numbers.</p>
+        <p><strong>Intermediate state:</strong> existing clients still read RecentMessages. The prototype client prefers structured data only when the daemon supplies it.</p>
+        <p><strong>Merge evidence:</strong> old-state fixtures, new-state round trips, live/resume chronology, rejected calls, and output redaction pass.</p>
+        <p>Retain the existing tool_rationale_contract eval. Repair instrumentation before attributing a failure to a model.</p>
+        <p><strong>Rollout:</strong> prove released-dev state loads. Isolate or migrate prototype state before any real-data binary swap.</p>
+        <p><strong>Advance or reverse:</strong> stable consumer data unlocks the visual slice. Additive journal data can remain after source rollback.</p>
+        <p><strong>Retirement:</strong> remove redundant transcript state only after recovery tests prove that canonical records retain all required semantic data.</p>
+        <p>Exact order inside one model response remains uncertain. Do not promise it without an ordered segment contract or verified provider ordering.</p>
+      </div></details>
+      <details open><summary>Later PR: deliver the quiet inline chat against real terminal behavior</summary><div class="detail">
+        <p>Implement the named regions in InlineChatPage. Keep prose, completed receipts, and active work inside one Reply Block.</p>
+        <p>Use one display owner for approval order. Retain daemon consent options and correlate each answer with its request.</p>
+        <p>Preserve the Composer, bound the Queue Shelf, improve active reply height, and keep pulse motion local.</p>
+        <p>Keep semantic copy safe and complete. Show clipboard failures. Remove border glyphs from settled output instead of promising unselectable text.</p>
+        <p><strong>Start:</strong> combined event contracts pass. Verify the Termina package capabilities against its current branch and released API.</p>
+        <p><strong>Intermediate state:</strong> chat uses Inline/NativeTerminal. Setup, config, and pickers retain FullScreen.</p>
+        <p><strong>Merge evidence:</strong> typed-key tests, existing native smoke, visual checkpoints, selection, resize, and terminal restoration pass.</p>
+        <p><strong>Rollout:</strong> keep the PR draft. The user reviews proof before any final swap. Cross-platform gaps remain visible blockers.</p>
+        <p><strong>Advance or reverse:</strong> a UI rollback does not remove additive data. Recheck terminal exit modes after rollback.</p>
+        <p><strong>Retirement:</strong> remove the old ChatPage route and duplicate display state after caller inventory and regression proof.</p>
+        <p>Keep unrelated cleanup outside this slice. Update the operations reference with the final input and scroll controls.</p>
+      </div></details>
+      <p>A Termina PR is conditional, not a mandatory extra layer. First reproduce a library defect outside Netclaw.</p>
+      <p>That PR must preserve the full-screen default, approve additive APIs, and pass native resize, input, scroll, and exit tests.</p>
+      <p>A prerelease package needs the repository release procedure and API proof. Do not publish one merely to bypass a failure.</p>
+      <p>Work on later slices can start when their contracts are stable. Serialize edits to actor, protocol, reducer, and package files.</p>
+      <p>After each merge or material discovery, update this sequence. A merged predecessor needs combined verification before the next merge.</p>
+    </section>
+    <section id="proof" class="card">
+      <h2>Proof procedures</h2>
+      <p>These cases define expected results before further implementation. A procedure is not evidence that it passed.</p>
+      <details open><summary>Q1 — full FIFO pull at a safe tool boundary</summary><div class="detail">
+        <p>Extend Active_turn_messages_emit_ordered_queue_and_pull_receipts and ToolCycleUserInputTests.</p>
+        <ol>
+          <li>Start an isolated actor session. Subscribe with MessageLifecycle and pause the fake model or tool through an explicit completion source.</li>
+          <li>Submit distinct prompts A and B with stable source IDs. Await CommandAck and both correlated queue receipts.</li>
+          <li>Release the paused operation. Assert one pull receipt contains A and B in order.</li>
+          <li>Inspect the next model call. Assert both prompts occur exactly once in order before TurnCompleted.</li>
+          <li>Retain the tool-cycle tests that reset guards only for fresh input. Assert replay does not reset that budget.</li>
+        </ol>
+        <p>Before: the old branch test assumes the prompts are the last two user-role entries. Current memory notices invalidate that assumption.</p>
+        <p>After: assertions identify actual prompts without excluding duplicates. No prompt is dispatched separately to make the test pass.</p>
+        <p>Keep the actor test transcript and revision. Dispose the fixture. Use no sleeps and no real operator session.</p>
+      </div></details>
+      <details><summary>Q2 — reconnect and persistence cannot lie about consumption</summary><div class="detail">
+        <p>Extend DaemonClientSessionTests with its real in-memory SignalR fixture and the actor input compatibility fixtures.</p>
+        <ol>
+          <li>Pause model work. Submit A and B. Simulate a lost acknowledgment through the existing fake transport seam.</li>
+          <li>Reconnect and resend A with the same ID. Assert one admission, one model input, and one display row for A.</li>
+          <li>Recover the actor after admission but before the pull. Assert no admitted prompt disappears from recovery state.</li>
+          <li>Deliver the pull receipt twice. Assert the shelf removes only A and B, with no second receipt row.</li>
+          <li>Deliver TurnCompleted before a pull. Assert the shelf does not falsely mark a modern queued prompt as consumed.</li>
+        </ol>
+        <p>Before: reconnect has explicit local retry state, but complete pending-input recovery into the Queue Shelf lacks proof.</p>
+        <p>After: the shelf follows actor state, not an optimistic completion count. Missing server capability produces an explicit supported state or error.</p>
+        <p>The implementer must add any absent recovery fixture before claiming this case passed. Round-trip tests alone do not prove replay.</p>
+      </div></details>
+      <details><summary>Q3 — preserve approval authority and channel isolation</summary><div class="detail">
+        <p>Run ShellApprovalLifecycleIntegrationTests and ApprovalTurnBoundaryTests against the combined branch.</p>
+        <p>Assert one native process for allow-once, no process or grant after deny, correct scope boundaries, and stale-answer rejection.</p>
+        <p>Consume and assert the additive ApprovalOutcomeOutput. Do not discard unknown events to conceal a contract defect.</p>
+        <p>Extend subscriber filter tests: chat receives queue/pull receipts; ordinary Slack and Discord filters do not receive those rows.</p>
+        <p>Assert visible approval details use canonical scope and target data. UI text cannot grant authority.</p>
+        <p>Keep sanitized call IDs and outcome counts. The fixtures must remove only their own process and directory resources.</p>
+      </div></details>
+      <details><summary>Later checks — native visuals, compatibility, and rationale eval</summary><div class="detail">
+        <p>Extend InlineChatPageTests for delta-by-delta prose, 20 queued prompts at short heights, parallel work, approval focus, and copy errors.</p>
+        <p>Run the existing native smoke procedures in <a href="../../../TOOLING.md">TOOLING.md</a>. Preserve the repository's required gates.</p>
+        <pre><code>./scripts/smoke/run-smoke.sh init-wizard
+./scripts/smoke/run-smoke.sh light
+dotnet slopwatch analyze
+pwsh ./scripts/Add-FileHeaders.ps1 -Verify</code></pre>
+        <p>Use disposable local tapes at three checkpoints: stream/queue, parallel work/approval, and scroll/resize/inspector.</p>
+        <p>Capture video and lossless frames at 40, 80, and 120 columns. Inspect at least one short terminal height.</p>
+        <p>Verify stable speaker spacing, a stationary pulse row, prompt access, readable receipts, and no repeated settled prose.</p>
+        <p>Check native selection and wheel behavior outside the headless fixture. Include Linux and tmux, then the supported macOS and Windows hosts.</p>
+        <p>Record missing hosts as unverified. An animation sample cannot prove every frame or every emulator.</p>
+        <p>Use the existing SmokeLlmServer for deterministic proof. Use the authorized spark2 provider for bounded model checkpoints after endpoint readiness.</p>
+        <p>Discover its current model ID and credential requirements. Do not assume that the August endpoint remains ready.</p>
+        <pre><code>NETCLAW_EVAL_CASE=tool_rationale_contract ./evals/run-evals.sh</code></pre>
+        <p>The eval needs provider type, endpoint, model ID, and any required secret through the existing environment variables.</p>
+        <p>Assert four rationale-bearing calls across two tool stages, no rejected call execution, and no loss of sibling results.</p>
+        <p>Run the broader eval suite when changes affect tool definitions, prompt assembly, skills, or other repository-mapped areas.</p>
+        <p>Keep temporary media and sanitized logs outside tracked product source. Retain bounded evidence links with the tested revision.</p>
+        <p>No new permanent chat tape suite enters CI under this plan. Existing required native smoke remains required.</p>
+      </div></details>
+    </section>
+    <section id="handoff" class="card">
+      <h2>Baseline and implementation handoff</h2>
+      <p>Baseline: <a href="https://github.com/netclaw-dev/netclaw/commit/0448098a">dev at 0448098a</a>, fetched on 2026-10-03.</p>
+      <p>Local rebase checkpoint: <code>39bb2ed6</code>. Integration repairs and focused tests target <code>a4349cdb</code>. Compare any later checkout against this baseline.</p>
+      <p>The branch carries 39 old commits. The rebase retains current policy, durable input, package, and host-pairing changes.</p>
+      <p>Original state remains at <code>backup/chat-tui-before-october-rebase-20261003</code>. The named October stash preserves the original dirty rationale changes.</p>
+      <p>Do not apply that stash wholesale. Current <code>dev</code> already contains rationale work and a newer tool-cycle guard.</p>
+      <details open><summary>Observed results and remaining gates</summary><div class="detail" id="results">
+        <ul>
+          <li>CLI build: passed after the current approval request and tool-result API adaptations.</li>
+          <li>Focused CLI tests: 88 passed, zero failed, zero skipped.</li>
+          <li>First focused actor run: 116 passed, eight failed. The failures exposed stale approval-event and model-context expectations.</li>
+          <li>Actor rerun after fixture adaptations: 124 passed, zero failed, zero skipped.</li>
+          <li>Final quality checks: Slopwatch found zero issues. All C# files have the required headers. The diff has no whitespace errors.</li>
+          <li>Plan page: local browser checks cover desktop, narrow layout, expanded details, local links, and print output.</li>
+          <li>Native smoke, live eval, cross-platform matrix, and binary swap: not run in this planning task.</li>
+          <li>Independent review: no blocker in the plan or integration repairs. The reviewer inspected assertions but did not repeat the suites.</li>
+          <li>Independent feature verification: not complete. Passing focused tests cannot close the redesign.</li>
+        </ul>
+        <p>Run tests serially when projects share build outputs. Concurrent builds produced one DLL copy retry during discovery.</p>
+        <pre><code>dotnet test src/Netclaw.Cli.Tests/Netclaw.Cli.Tests.csproj --filter 'FullyQualifiedName~Tui.Chat|FullyQualifiedName~Tui.InlineChat|FullyQualifiedName~TerminalRuntimeProfile|FullyQualifiedName~DaemonClientSessionTests'
+dotnet test src/Netclaw.Actors.Tests/Netclaw.Actors.Tests.csproj --filter 'FullyQualifiedName~LlmSessionIntegrationTests|FullyQualifiedName~ToolCycleUserInputTests|FullyQualifiedName~SerializationRoundTripTests|FullyQualifiedName~ApprovalTurnBoundaryTests|FullyQualifiedName~ShellApprovalLifecycleIntegrationTests|FullyQualifiedName~SessionInputCompatibilityIntegrationTests|FullyQualifiedName~SessionTranscriptEntryFactoryTests'</code></pre>
+      </div></details>
+      <details><summary>Persistence numbers, drift, and source evidence</summary><div class="detail">
+        <p>Released-dev protobuf numbers remain unchanged. The rebase assigns prototype additions to unused numbers.</p>
+        <pre><code>TurnRecordedProto: consumed_input_ids = 7
+  transcript_entries = 8; user_messages = 9
+SessionSnapshotProto: pending_inputs = 10
+  recent_source_message_keys = 11; recent_transcript = 12
+ToolBatchStartedProto: consumed_input_ids = 5; user_messages = 6</code></pre>
+        <p>Load real old bytes through the new serializer in an isolated fixture. Also test unknown additive fields through the older reader.</p>
+        <p>Old private prototype bytes can contain conflicting field numbers. Detect or migrate that format before rollout; never reset operator state silently.</p>
+        <p>Existing OpenSpec artifacts all exist, but their status does not prove implementation or acceptance.</p>
+        <p>The tool-call metadata main spec still permits missing rationale execution. Current <code>dev</code> rejects it. Reconcile this documented drift through OpenSpec.</p>
+        <p>The old visual memory also hides the Composer and advertises cancellation. The October plan supersedes those statements.</p>
+        <p>PR #2187 proposes payload-free tool-cycle disposition events. It is not a dependency until its contract enters the target branch.</p>
+        <ul>
+          <li><a href="../../../src/Netclaw.Actors/Sessions/LlmSessionActor.cs">Actor admission, drain, and consent</a></li>
+          <li><a href="../../../src/Netclaw.Actors/Serialization/Protos/netclaw_messages.proto">Persistence contract</a></li>
+          <li><a href="../../../src/Netclaw.Cli/Tui/ChatViewModel.cs">Client retry, queue, and approval state</a></li>
+          <li><a href="../../../src/Netclaw.Cli/Tui/ChatPresentation.cs">Presentation reducer and semantic content</a></li>
+          <li><a href="../../../src/Netclaw.Cli/Tui/InlineChatPage.cs">Inline layout, bounded reply, queue, and inspector</a></li>
+          <li><a href="../../../src/Netclaw.Cli/Tui/TerminalRuntimeProfiles.cs">Terminal ownership profiles</a></li>
+          <li><a href="../../../docs/prd/PRD-004-cli-onboarding-and-config.md">PRD-004 CLI-011</a> and <a href="../../../docs/prd/PRD-009-input-adapters-and-unified-input.md">PRD-009</a></li>
+          <li><a href="../../../docs/spec/SPEC-002-session-lifecycle-and-protocol.md">SPEC-002</a>, <a href="../../../docs/spec/SPEC-004-cli-contract.md">SPEC-004</a>, <a href="../../../docs/spec/SPEC-010-testing-and-smoke-strategy.md">SPEC-010</a>, <a href="../../../docs/spec/SPEC-011-daemon-architecture.md">SPEC-011</a></li>
+          <li><a href="../../../docs/spec/GLOSSARY.md">Project terms and definitions</a></li>
+          <li><a href="../../../openspec/changes/redesign-netclaw-chat-tui/proposal.md">Existing OpenSpec change</a></li>
+          <li><a href="https://memory.testlab.petabridge.net/projects/39efd66f-3afc-4322-bd92-ccf127eedfc8">Existing Memorizer project</a></li>
+        </ul>
+      </div></details>
+      <details><summary>Skills, authority, and closure</summary><div class="detail">
+        <p>Use systematize:architectural-principles for state and contract choices. Use systematize:plan only when material discoveries change this sequence.</p>
+        <p>Use systematize:verify for the proof procedures. An independent verification agent must assess substantial feature claims before verified status.</p>
+        <p>Use the repository OpenSpec workflows for artifact changes. Do not edit OpenSpec files outside those workflows.</p>
+        <p>Consult the mapped Akka, API design, serialization, and Termina guidance before edits at those boundaries.</p>
+        <p>Use dotnet-skills:dotnet-slopwatch after code edits. If required guidance is absent, report the gap and pause its dependent task.</p>
+        <p>Current authority covers the rebase, plan, commits, and existing draft branch update. Further feature work starts after plan review.</p>
+        <p>When publication is authorized, open an early draft PR with concrete behavior, evidence, and limits. Do not merge or deploy.</p>
+        <p>Return the PR link, commit, tests, remaining work, and rollout limits. Preserve unrelated local changes.</p>
+        <p>At closure, update enduring specs and architecture references. Remove this plan from active indexes only after its final state exists in retained history.</p>
+        <p>Record a retrievable merged revision before any authorized plan deletion. Do not create a permanent second task list.</p>
+      </div></details>
+    </section>
+  </main>
+  <footer><div class="wrap">The plan supports review. It does not prove a terminal contract or authorize a merge.</div></footer>
+</body>
+</html>

@@ -426,7 +426,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
                 offered => offered.Key == option);
         }
 
-        return await journey.Manager.Ask<ISessionResponse>(
+        var response = await journey.Manager.Ask<ISessionResponse>(
             new ToolInteractionResponse
             {
                 SessionId = journey.SessionId,
@@ -436,6 +436,16 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
             },
             TimeSpan.FromSeconds(10),
             TestContext.Current.CancellationToken);
+        if (response is CommandAck)
+        {
+            var outcome = await journey.Subscriber.ExpectMsgAsync<ApprovalOutcomeOutput>(
+                TimeSpan.FromSeconds(10),
+                cancellationToken: TestContext.Current.CancellationToken);
+            Assert.Equal(journey.Request.CallId, outcome.CallId);
+            Assert.Equal(option, outcome.SelectedKey);
+        }
+
+        return response;
     }
 
     private static async Task ExpectCompletedAsync(TestProbe subscriber)

@@ -70,6 +70,15 @@ public static partial class SessionProtocol
 
         public required ToolName ToolName { get; init; }
 
+        /// <summary>Stable identity for the model tool-call batch.</summary>
+        public string BatchId { get; init; } = string.Empty;
+
+        /// <summary>Number of calls in the model tool-call batch.</summary>
+        public int BatchSize { get; init; } = 1;
+
+        /// <summary>The model-supplied intent for this call.</summary>
+        public string? Rationale { get; init; }
+
         /// <summary>
         /// Tool arguments as a JSON string. Kept opaque at the protocol level —
         /// tool executors parse based on their schema.
@@ -91,6 +100,23 @@ public static partial class SessionProtocol
 
         /// <summary>The stable preflight failure code, or null after execution.</summary>
         public string? FailureCode { get; init; }
+    }
+
+    /// <summary>
+    /// A nonterminal tool update with stable call and turn correlation.
+    /// Requires <see cref="OutputFilter.ToolCalls"/>.
+    /// </summary>
+    public sealed record ToolActivityOutput : SessionOutput
+    {
+        public required ToolCallId CallId { get; init; }
+
+        public required ToolName ToolName { get; init; }
+
+        public required Protocol.TurnId TurnId { get; init; }
+
+        public required string Phase { get; init; }
+
+        public string? Summary { get; init; }
     }
 
     /// <summary>
@@ -256,6 +282,18 @@ public static partial class SessionProtocol
         public required SubAgents.AgentName AgentName { get; init; }
         public required SubAgents.SubAgentPhase Phase { get; init; }
 
+        /// <summary>Stable identity for one sub-agent run.</summary>
+        public SubAgentRunId? RunId { get; init; }
+
+        /// <summary>Tool call that owns this run. Null for a routed skill run.</summary>
+        public ToolCallId? ParentCallId { get; init; }
+
+        /// <summary>Safe activity phase for <see cref="SubAgents.SubAgentPhase.Activity"/>.</summary>
+        public string? ActivityPhase { get; init; }
+
+        /// <summary>Safe activity summary for <see cref="SubAgents.SubAgentPhase.Activity"/>.</summary>
+        public string? ActivitySummary { get; init; }
+
         /// <summary>Number of tools available to the subagent (on Started).</summary>
         public int ToolCount { get; init; }
 
@@ -309,6 +347,37 @@ public static partial class SessionProtocol
         /// indicators can be ignored by channels that do not support them.
         /// </summary>
         public bool IsRequired { get; init; }
+    }
+
+    /// <summary>
+    /// Signals that the session actor accepted a user message into its active-turn buffer.
+    /// Requires <see cref="OutputFilter.MessageLifecycle"/>.
+    /// </summary>
+    public sealed record UserMessageQueuedOutput : SessionOutput
+    {
+        public required string MessageId { get; init; }
+
+        public required Protocol.TurnId TurnId { get; init; }
+
+        public required int QueueDepth { get; init; }
+    }
+
+    /// <summary>
+    /// One user message that the agent pulled from the active-turn buffer.
+    /// </summary>
+    public sealed record PulledUserMessage(string MessageId, string Content);
+
+    /// <summary>
+    /// Signals that the session actor pulled one ordered user-message batch into model context.
+    /// Requires <see cref="OutputFilter.MessageLifecycle"/>.
+    /// </summary>
+    public sealed record UserMessagesPulledOutput : SessionOutput
+    {
+        public required string BatchId { get; init; }
+
+        public required Protocol.TurnId TurnId { get; init; }
+
+        public required IReadOnlyList<PulledUserMessage> Messages { get; init; }
     }
 
     /// <summary>
@@ -456,6 +525,25 @@ public static partial class SessionProtocol
         /// True when adopted-context provenance was preserved in stored approval state.
         /// </summary>
         public bool PersistedAdoptedContext { get; init; }
+    }
+
+    /// <summary>
+    /// A tool approval decision that the session accepted.
+    /// Lifecycle — always delivered so interactive clients can settle the gate.
+    /// </summary>
+    public sealed record ApprovalOutcomeOutput : SessionOutput
+    {
+        public required ToolCallId CallId { get; init; }
+
+        public required ToolName ToolName { get; init; }
+
+        public required ApprovalOptionKey SelectedKey { get; init; }
+
+        /// <summary>
+        /// Parent tool call for a relayed sub-agent approval.
+        /// An empty value identifies a direct session tool request.
+        /// </summary>
+        public string ParentCallId { get; init; } = string.Empty;
     }
 
     /// <summary>

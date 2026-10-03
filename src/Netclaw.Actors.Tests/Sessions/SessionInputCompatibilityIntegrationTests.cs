@@ -75,6 +75,10 @@ public sealed class SessionInputCompatibilityIntegrationTests : LlmSessionTestBa
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(1, joined.TurnCount);
+        Assert.Contains(joined.RecentTranscript!, entry =>
+            entry.Type == SessionTranscriptEntryTypes.User && entry.Text == "Describe this image.");
+        Assert.Contains(joined.RecentTranscript!, entry =>
+            entry.Type == SessionTranscriptEntryTypes.Assistant && entry.Text == "A prior response.");
 
         await sessionManager.Ask<CommandAck>(new SendUserMessage
         {

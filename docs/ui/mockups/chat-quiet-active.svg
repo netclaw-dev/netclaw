@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900">
+  <style>
+    text { font-family: "JetBrains Mono", "Cascadia Mono", "DejaVu Sans Mono", monospace; font-size: 18px; fill: #cdd6f4; }
+    .small { font-size: 15px; }
+    .body { font-size: 19px; }
+    .title { font-size: 17px; font-weight: 700; letter-spacing: 1px; }
+    .muted { fill: #7f849c; }
+    .primary { fill: #89b4fa; }
+    .human { fill: #a6e3a1; }
+    .success { fill: #a6e3a1; }
+    .warning { fill: #f9e2af; }
+    .bold { font-weight: 700; }
+  </style>
+  <rect width="1440" height="900" fill="#111318"/>
+  <rect x="0" y="0" width="1440" height="64" fill="#171a21"/>
+  <rect x="0" y="63" width="1440" height="1" fill="#313746"/>
+  <text x="54" y="39" class="title primary">NETCLAW</text>
+  <text x="180" y="39" class="small">incident-review</text>
+  <text x="358" y="39" class="small muted">deepseek-v4-flash</text>
+  <circle cx="1166" cy="32" r="5" fill="#a6e3a1"/>
+  <text x="1181" y="39" class="small muted">connected</text>
+  <text x="1309" y="39" class="small muted">39%</text>
+
+  <text x="70" y="112" class="small human bold">You</text>
+  <text x="118" y="112" class="small muted">09:56</text>
+  <rect x="54" y="130" width="1120" height="58" rx="4" fill="#19221f"/>
+  <rect x="54" y="130" width="5" height="58" fill="#a6e3a1"/>
+  <text x="76" y="166" class="body">Audit the failed release and ask two reviewers for independent diagnoses.</text>
+
+  <text x="70" y="239" class="small warning bold">Thought</text>
+  <text x="159" y="239" class="small">I will compare the release job with the package manifest.</text>
+  <text x="1112" y="239" class="small muted">4s</text>
+
+  <rect x="54" y="276" width="1120" height="292" rx="4" fill="#171b22"/>
+  <rect x="54" y="276" width="5" height="292" fill="#89b4fa"/>
+  <text x="76" y="310" class="small primary bold">ACTIVITY</text>
+  <text x="181" y="310" class="small">2 active</text>
+  <text x="289" y="310" class="small success">1 complete</text>
+  <text x="1081" y="310" class="small muted">12s</text>
+
+  <rect x="76" y="337" width="60" height="26" rx="3" fill="#24402f"/>
+  <text x="87" y="356" class="small success bold">DONE</text>
+  <text x="157" y="356" class="small muted">Tool</text>
+  <text x="218" y="356" class="small">read release workflow</text>
+  <text x="1058" y="356" class="small muted">1.2s</text>
+
+  <rect x="76" y="383" width="60" height="26" rx="3" fill="#24354d"/>
+  <text x="87" y="402" class="small primary bold">LIVE</text>
+  <text x="157" y="402" class="small muted">Tool</text>
+  <text x="218" y="402" class="small">spawn_agent</text>
+  <text x="405" y="402" class="small muted">two reviewers</text>
+  <text x="1058" y="402" class="small muted">8.4s</text>
+
+  <text x="196" y="447" class="small primary bold">Agent</text>
+  <text x="267" y="447" class="small">release-reviewer</text>
+  <text x="493" y="447" class="small muted">checks package order</text>
+  <text x="1058" y="447" class="small muted">model</text>
+
+  <text x="196" y="487" class="small primary bold">Agent</text>
+  <text x="267" y="487" class="small">compatibility-reviewer</text>
+  <text x="553" y="487" class="small muted">checks feed compatibility</text>
+  <text x="1058" y="487" class="small muted">model</text>
+
+  <rect x="76" y="511" width="60" height="26" rx="3" fill="#24354d"/>
+  <text x="87" y="530" class="small primary bold">LIVE</text>
+  <text x="157" y="530" class="small muted">Tool</text>
+  <text x="218" y="530" class="small">compare package manifest</text>
+  <text x="1058" y="530" class="small muted">3.1s</text>
+
+  <text x="70" y="829" class="small warning bold">Working</text>
+  <text x="159" y="829" class="small muted">Ctrl+C interrupt</text>
+  <text x="337" y="829" class="small muted">Ctrl+O inspect</text>
+  <text x="504" y="829" class="small muted">Ctrl+Q quit</text>
+</svg>

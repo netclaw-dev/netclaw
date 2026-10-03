@@ -195,7 +195,32 @@ public sealed class SessionRegistry
     /// <summary>
     /// Pushes a user message into an existing session's input queue.
     /// </summary>
-    public async Task SendMessageAsync(string connectionId, string sessionId, string text, ClaimsPrincipal? principal = null)
+    public Task SendMessageAsync(string connectionId, string sessionId, string text, ClaimsPrincipal? principal = null)
+        => SendMessageCoreAsync(connectionId, sessionId, text, null, principal);
+
+    public Task SendMessageWithIdAsync(
+        string connectionId,
+        string sessionId,
+        string messageId,
+        string text,
+        ClaimsPrincipal? principal = null)
+    {
+        if (string.IsNullOrWhiteSpace(messageId))
+            throw new HubException("The message ID must not be blank.");
+        if (messageId.Length > 128)
+            throw new HubException("The message ID must not exceed 128 characters.");
+        if (messageId.Any(char.IsControl))
+            throw new HubException("The message ID must not contain control characters.");
+
+        return SendMessageCoreAsync(connectionId, sessionId, text, messageId, principal);
+    }
+
+    private async Task SendMessageCoreAsync(
+        string connectionId,
+        string sessionId,
+        string text,
+        string? clientMessageId,
+        ClaimsPrincipal? principal)
     {
         var callerConnectionId = ParseConnectionId(connectionId);
         var requestedSessionId = ParseSessionId(sessionId);
@@ -213,7 +238,8 @@ public sealed class SessionRegistry
 
         var identity = _mapper.Map(principal);
 
-        var signalrMessageId = $"signalr:{callerConnectionId.Value}:{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}:{Guid.NewGuid():N}";
+        var signalrMessageId = clientMessageId
+            ?? $"signalr:{callerConnectionId.Value}:{_timeProvider.GetUtcNow().ToUnixTimeMilliseconds()}:{Guid.NewGuid():N}";
         if (signalrMessageId.Length > 128)
             signalrMessageId = signalrMessageId[..128];
 

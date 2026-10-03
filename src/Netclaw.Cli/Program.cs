@@ -1127,8 +1127,8 @@ static async Task RunAsync(string[] args)
         case "chat":
             webBuilder.Services.AddTermina("/chat", termina =>
             {
-                ConfigureNativeSelection(termina);
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
+                ConfigureInlineChat(termina);
+                termina.RegisterRoute<InlineChatPage, ChatViewModel>("/chat");
             });
             break;
 
@@ -1137,7 +1137,6 @@ static async Task RunAsync(string[] args)
             {
                 ConfigureNativeSelection(termina);
                 termina.RegisterRoute<SessionsPage, SessionsViewModel>("/sessions");
-                termina.RegisterRoute<ChatPage, ChatViewModel>("/chat");
             });
             break;
 
@@ -1159,18 +1158,59 @@ static async Task RunAsync(string[] args)
             return;
     }
 
-    using var app = webBuilder.Build();
-    await RunTerminaHostAsync(app);
+    using (var app = webBuilder.Build())
+    {
+        if (mode == "chat")
+            await RunChatHostAsync(app);
+        else
+            await RunTerminaHostAsync(app);
+    }
+
+    if (mode == "sessions" && navState.ChatLaunchRequested)
+        await RunInlineChatHostAsync(args, navState.ResumeSessionId);
+}
+
+static async Task RunInlineChatHostAsync(string[] args, string? resumeSessionId)
+{
+    var builder = WebApplication.CreateBuilder(args);
+    builder.WebHost.UseUrls("http://127.0.0.1:0");
+    ConfigureConfigServices(builder.Services, builder.Configuration);
+    ConfigureCliChatServices(builder.Services, builder.Configuration);
+    builder.Services.AddSingleton(new ChatNavigationState
+    {
+        ResumeSessionId = resumeSessionId
+    });
+    builder.Logging.ClearProviders();
+    builder.Logging.SetMinimumLevel(LogLevel.Warning);
+    builder.Services.AddTermina("/chat", termina =>
+    {
+        ConfigureInlineChat(termina);
+        termina.RegisterRoute<InlineChatPage, ChatViewModel>("/chat");
+    });
+
+    using var app = builder.Build();
+    await RunChatHostAsync(app);
+}
+
+static async Task RunChatHostAsync(IHost host)
+{
+    var started = await ChatHostGuard.TryRunAsync(
+        () => RunTerminaHostAsync(host),
+        Console.Error,
+        WriteCrashLog);
+
+    if (!started)
+        Environment.ExitCode = 1;
 }
 
 static void ConfigureNativeSelection(TerminaBuilder termina)
 {
-    termina.ConfigureRuntime(options =>
-    {
-        options.PreferRawInput = true;
-        options.ScrollInputMode = ScrollInputMode.AlternateScroll;
-        options.CtrlCHandlingMode = CtrlCHandlingMode.DoublePressWhenRawInput;
-    });
+    termina.ConfigureRuntime(TerminalRuntimeProfiles.ConfigureFullScreenSelection);
+}
+
+static void ConfigureInlineChat(TerminaBuilder termina)
+{
+    termina.ConfigureRuntime(TerminalRuntimeProfiles.ConfigureInlineChat);
 }
 
 static void WriteCrashLog(Exception ex)
@@ -1410,6 +1450,15 @@ static void WriteChatHelp()
     Console.WriteLine("  -p, --prompt        Send a single headless prompt (non-interactive)");
     Console.WriteLine("  --json              Output structured JSON (headless mode only)");
     Console.WriteLine("                      Includes sessionId, response, toolCalls, and usage");
+    Console.WriteLine();
+    Console.WriteLine("Interactive keys:");
+    Console.WriteLine("  Enter               Send the prompt");
+    Console.WriteLine("  Shift+Enter         Add a line to the prompt");
+    Console.WriteLine("  Up / Down           Recall prompts and restore the current draft");
+    Console.WriteLine("  Esc x2              Clear the prompt");
+    Console.WriteLine("  Ctrl+O              Open the Inspector or expand an approval");
+    Console.WriteLine("  Y / Shift+Y         Copy an Inspector event or its complete turn");
+    Console.WriteLine("  Ctrl+Q              Exit chat");
     Console.WriteLine();
     Console.WriteLine("Examples:");
     Console.WriteLine("  netclaw chat                                       Interactive TUI");

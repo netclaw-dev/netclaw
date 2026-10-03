@@ -212,6 +212,38 @@ public sealed class SessionRegistryTests
         Assert.Equal(TransportAuthenticity.Unknown, enqueue.Input.Provenance!.TransportAuthenticity);
     }
 
+    [Fact]
+    public async Task SendMessageWithId_preserves_the_client_message_identity()
+    {
+        var capturing = new CapturingRequiredActor();
+        var registry = BuildRegistry(actorProvider: capturing);
+        var sessionId = await registry.CreateSessionAsync("conn-1", "tui");
+
+        await registry.SendMessageWithIdAsync(
+            "conn-1",
+            sessionId,
+            "tui:message-1",
+            "Use the release branch");
+
+        var enqueue = capturing.Messages.OfType<EnqueueSignalRInput>().Single();
+        Assert.Equal("tui:message-1", enqueue.Input.MessageId);
+        var content = Assert.Single(enqueue.Input.Contents.OfType<Microsoft.Extensions.AI.TextContent>());
+        Assert.Equal("Use the release branch", content.Text);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("bad\nidentity")]
+    public async Task SendMessageWithId_rejects_an_invalid_message_identity(string messageId)
+    {
+        var registry = BuildRegistry();
+        var sessionId = await registry.CreateSessionAsync("conn-1", "tui");
+
+        await Assert.ThrowsAsync<Microsoft.AspNetCore.SignalR.HubException>(() =>
+            registry.SendMessageWithIdAsync("conn-1", sessionId, messageId, "hello"));
+    }
+
     /// <summary>
     /// Stub implementation of <see cref="IRequiredActor{T}"/> that returns
     /// <see cref="ActorRefs.Nobody"/> for all requests. Used to isolate

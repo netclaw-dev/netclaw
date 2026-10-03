@@ -69,4 +69,36 @@ internal static class SessionMemoryCheckpointFactory
             Title: "compaction-boundary",
             UpdateSemantics: "append-document");
     }
+
+    public static MemoryCheckpointPayload ForTurnComplete(
+        SessionId sessionId,
+        TurnRecorded turn,
+        string boundary,
+        string audience)
+    {
+        var userContent = string.Join(
+            "\n\n",
+            (turn.UserMessages.Count > 0 ? turn.UserMessages : [turn.UserMessage])
+            .Select(message => message.Content));
+
+        return new(
+            SessionId: sessionId.Value,
+            TriggerType: CheckpointTriggerType.TurnComplete.ToWireValue(),
+            Source: "session",
+            Content: $"User: {userContent}\nAssistant: {turn.AssistantReply.Content}",
+            UserContent: userContent,
+            AssistantContent: turn.AssistantReply.Content,
+            IsExplicitRequest: false,
+            HasVerifiedToolFinding: false,
+            IsCompactionBoundary: false,
+            HasAcceptedSubAgentFinding: false,
+            Boundary: boundary,
+            Audience: audience,
+            Sensitivity: MemorySensitivity.Normal.ToWireValue(),
+            RecallMode: MemoryRecallMode.Auto.ToWireValue(),
+            Confidence: 0.7,
+            Kind: MemoryKind.Document.ToWireValue(),
+            Title: "turn-completion",
+            UpdateSemantics: "append-document");
+    }
 }

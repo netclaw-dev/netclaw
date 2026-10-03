@@ -86,4 +86,6 @@ public sealed record SessionSnapshot : INetclawSerializableMessage
 
     public IReadOnlyList<string> RecentSourceMessageKeys { get; init; } =
         Array.Empty<string>();
+    public IReadOnlyList<SessionTranscriptEntry> RecentTranscript { get; init; } =
+        Array.Empty<SessionTranscriptEntry>();
 }

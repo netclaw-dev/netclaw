@@ -49,6 +49,8 @@ public sealed record SessionState
     public ImmutableList<InputAdmitted> PendingInputs { get; init; } = [];
 
     public ImmutableList<string> RecentSourceMessageKeys { get; init; } = [];
+    public ImmutableList<SessionTranscriptEntry> RecentTranscript { get; init; } =
+        [];
 
     public int TurnCount { get; init; }
 
@@ -137,12 +139,59 @@ public sealed record SessionState
         // Background-job dedup/remove/prune is delegated to the single shared
         // helper so the replay path here and the live turn-completion path in
         // LlmSessionActor cannot drift.
-        return (this with
+        var userMessages = evt.UserMessages.Count > 0
+            ? evt.UserMessages
+            : [evt.UserMessage];
+
+        return (AppendTranscript(evt) with
         {
-            History = History.Add(evt.UserMessage).Add(evt.AssistantReply),
+            History = History.AddRange(userMessages).Add(evt.AssistantReply),
             TurnCount = TurnCount + 1,
             ProcessedReminderIds = processedReminders
         }).CompleteTurnBackgroundJobBookkeeping(evt.SourceBackgroundJobId);
+    }
+
+    public SessionState AppendTranscript(TurnRecorded evt)
+    {
+        var userMessages = evt.UserMessages.Count > 0
+            ? evt.UserMessages
+            : [evt.UserMessage];
+        var entries = evt.TranscriptEntries.Count > 0
+            ? evt.TranscriptEntries
+            : SessionTranscriptExtractor.Extract(
+                userMessages.Append(evt.AssistantReply),
+                timestampMs: evt.RecordedAtMs);
+
+        return this with { RecentTranscript = RecentTranscript.AddRange(entries) };
+    }
+
+    public SessionState KeepRecentTranscriptTurns(int maximumTurnCount)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumTurnCount);
+
+        var turnCount = 0;
+        var oldestKeptTurnIndex = 0;
+        for (var index = RecentTranscript.Count - 1; index >= 0; index--)
+        {
+            if (RecentTranscript[index].Type != SessionTranscriptEntryTypes.User)
+                continue;
+
+            turnCount++;
+            if (turnCount <= maximumTurnCount)
+            {
+                oldestKeptTurnIndex = index;
+                continue;
+            }
+
+            return this with
+            {
+                RecentTranscript = RecentTranscript.GetRange(
+                    oldestKeptTurnIndex,
+                    RecentTranscript.Count - oldestKeptTurnIndex)
+            };
+        }
+
+        return this;
     }
 
     /// <summary>
@@ -468,6 +517,7 @@ public sealed record SessionState
             History = new List<SerializableChatMessage>(History),
             PendingInputs = PendingInputs.ToArray(),
             RecentSourceMessageKeys = RecentSourceMessageKeys.ToArray(),
+            RecentTranscript = [.. RecentTranscript],
             TurnCount = TurnCount,
             Title = Title,
             WorkingContext = WorkingContext.IsEmpty ? null : WorkingContext,
@@ -525,11 +575,16 @@ public sealed record SessionState
                             message.AuthorityAtInclusion))]))
             : [];
 
+        var recentTranscript = snapshot.RecentTranscript.Count > 0
+            ? snapshot.RecentTranscript
+            : SessionTranscriptExtractor.Extract(snapshot.History);
+
         return new SessionState
         {
             History = ImmutableList.CreateRange(snapshot.History),
             PendingInputs = ImmutableList.CreateRange(snapshot.PendingInputs),
             RecentSourceMessageKeys = ImmutableList.CreateRange(snapshot.RecentSourceMessageKeys),
+            RecentTranscript = ImmutableList.CreateRange(recentTranscript),
             TurnCount = snapshot.TurnCount,
             Title = snapshot.Title,
             WorkingContext = snapshot.WorkingContext ?? WorkingContext.Empty,

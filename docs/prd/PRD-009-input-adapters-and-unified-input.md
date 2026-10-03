@@ -6,6 +6,7 @@
 - Owner: Netclaw engineering
 - Date: 2026-02-21
 - Revised: 2026-02-23 (daemon + thin client split, TUI as SignalR client)
+- Revised: 2026-08-11 (correlated activity and structured resume output)
 - Depends on: `PRD-001`, `PRD-002`, `PRD-008`
 
 ## Goal
@@ -53,9 +54,11 @@ child session actor.
 - Receives keyboard input via Termina TextInputNode
 - Sends `ChannelInput` to daemon over SignalR
 - Subscribes to `SessionOutput` stream over SignalR for rendering
-- Renders responses as streaming text via StreamingTextNode
-- Displays tool invocation status inline (name, duration, spinner)
-- Shows model name, token usage, and context percentage in status bar
+- Reduces typed output into settled transcript blocks and one bounded live deck
+- Correlates parallel tools by `CallId` and sub-agents by `RunId`
+- Shows thought, approval, file, error, usage, compaction, and turn outcome data
+- Restores settled event chronology from the structured resume contract
+- Keeps transient tool progress outside model context and persisted history
 
 **Slack Socket Mode Adapter** (Phase 1):
 - Runs in-process within the daemon
@@ -166,6 +169,14 @@ send `ChannelInput` messages, and subscribe to `SessionOutput` for rendering.
 The TUI adapter is a pure thin client running in the `Netclaw.Cli` binary —
 all agent logic lives in the daemon. The TUI adapter SHALL display tool
 invocation status inline between user message and response.
+
+The output contract SHALL preserve all security-safe typed fields across
+SignalR. Tool activity SHALL retain `CallId` and turn identity. Sub-agent
+activity SHALL retain `RunId` and parent `CallId`.
+
+The daemon SHALL emit both the current `RecentMessages` field and an additive
+structured settled transcript during the compatibility period. The TUI SHALL
+not restore an old settled record as active work.
 
 ## Acceptance Criteria (MVP)
 

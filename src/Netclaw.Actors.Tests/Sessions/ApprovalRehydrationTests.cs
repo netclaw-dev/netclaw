@@ -360,6 +360,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
 
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.ApproveOnce);
+
         // The parked batch re-drives: the tool executes successfully (the
         // ApprovedOnce pre-seed bypassed the gate without a duplicate prompt)
         // and the follow-up LLM call produces a final text response.
@@ -457,6 +459,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
 
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.ApproveOnce);
+
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
@@ -528,6 +532,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.IsType<CommandAck>(validReply);
+        await ExpectApprovalOutcomeAsync(subscriber, callId, ApprovalOptionKeys.ApproveOnce);
         await subscriber.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriber.ExpectMsgAsync<TextOutput>(
@@ -592,6 +597,7 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
         Assert.IsType<CommandAck>(reply);
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.ApproveOnce);
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
@@ -678,6 +684,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         });
 
+        await ExpectApprovalOutcomeAsync(subscriberB, shellCallId, ApprovalOptionKeys.ApproveOnce);
+
         var shellResult = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(shellCallId, shellResult.CallId.Value);
@@ -760,6 +768,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         });
 
+        await ExpectApprovalOutcomeAsync(subscriberB, readCallId, ApprovalOptionKeys.ApproveOnce);
+
         // One sibling approval is still pending, so the recovered session must
         // not advance the LLM with a half-closed assistant tool-call batch.
         await subscriberB.ExpectNoMsgAsync(
@@ -773,6 +783,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
         });
+
+        await ExpectApprovalOutcomeAsync(subscriberB, shellCallId, ApprovalOptionKeys.ApproveOnce);
 
         var resultCallIds = new HashSet<string>(StringComparer.Ordinal);
         await AwaitAssertAsync(async () =>
@@ -850,6 +862,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
+
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.ApproveOnce);
 
         await _toolExecutor.BlockedExecutionStarted.Task.WaitAsync(
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -942,6 +956,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
 
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.ApproveOnce);
+
         await _toolExecutor.BlockedExecutionStarted.Task.WaitAsync(
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
@@ -1009,6 +1025,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
+
+        await ExpectApprovalOutcomeAsync(subscriber, callId, ApprovalOptionKeys.ApproveOnce);
 
         await _toolExecutor.BlockedExecutionStarted.Task.WaitAsync(
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
@@ -1088,6 +1106,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("local-user")
         });
+
+        await ExpectApprovalOutcomeAsync(subscriber, callId, ApprovalOptionKeys.ApproveOnce);
 
         await subscriber.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -1250,6 +1270,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("U-requester")
         }, ActorRefs.Nobody);
 
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.ApproveOnce);
+
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
@@ -1332,6 +1354,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("U-requester")
         }, ActorRefs.Nobody);
+
+        await ExpectApprovalOutcomeAsync(subscriberB, parkedCallId, ApprovalOptionKeys.ApproveOnce);
 
         // Drain through the redriven shell_execute result, the LLM continuation
         // call that produces the read_file batch, and the read_file result.
@@ -1419,6 +1443,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("U-requester")
         }, ActorRefs.Nobody);
 
+        await ExpectApprovalOutcomeAsync(subscriberB, parkedCallId, ApprovalOptionKeys.ApproveOnce);
+
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<ToolCallOutput>(
@@ -1437,6 +1463,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
             SenderId = new SenderId("U-requester")
         }, ActorRefs.Nobody);
+
+        await ExpectApprovalOutcomeAsync(subscriberB, continuationCallId, ApprovalOptionKeys.Deny);
 
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -1498,6 +1526,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.Deny),
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
+
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.Deny);
 
         var toolResult = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -1669,6 +1699,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SenderId = new SenderId("local-user")
         }, ActorRefs.Nobody);
 
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.Deny);
+
         var toolResult = await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
         await subscriberB.ExpectMsgAsync<TextOutput>(
@@ -1734,6 +1766,8 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
             SelectedKey = new ApprovalOptionKey(ApprovalOptionKeys.ApproveOnce),
             SenderId = new SenderId("U-requester")
         }, ActorRefs.Nobody);
+
+        await ExpectApprovalOutcomeAsync(subscriberB, callId, ApprovalOptionKeys.ApproveOnce);
 
         await subscriberB.ExpectMsgAsync<ToolResultOutput>(
             TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
@@ -1894,6 +1928,17 @@ public sealed class ApprovalRehydrationTests : LlmSessionTestBase
         Watch(child);
         Sys.Stop(child);
         await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    private static async Task ExpectApprovalOutcomeAsync(
+        Akka.TestKit.TestProbe subscriber,
+        string callId,
+        string selectedKey)
+    {
+        var outcome = await subscriber.ExpectMsgAsync<ApprovalOutcomeOutput>(
+            TimeSpan.FromSeconds(5), cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(callId, outcome.CallId.Value);
+        Assert.Equal(selectedKey, outcome.SelectedKey.Value);
     }
 
     private MessageSource RequesterSource(string senderId) => new()

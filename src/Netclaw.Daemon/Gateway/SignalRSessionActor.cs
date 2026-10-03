@@ -67,7 +67,8 @@ internal sealed class SignalRSessionActor : ReceiveActor, IWithUnboundedStash, I
 
     private SessionPipelineOptions BuildOptions() => new()
     {
-        ChannelType = _channelType
+        ChannelType = _channelType,
+        Filter = OutputFilter.Full | OutputFilter.MessageLifecycle
     };
 
     private void Initializing()

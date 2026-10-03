@@ -1,6 +1,6 @@
 # SPEC-002: Session Lifecycle and Protocol
 
-Source PRDs: `PRD-001`
+Source PRDs: `PRD-001`, `PRD-009`
 Research: `docs/research/context-management-patterns.md`
 
 ## Purpose
@@ -106,6 +106,19 @@ always delivered regardless of filter.
 `UsageOutput` includes `ContextWindowTokens` and `UsagePercent` so subscribers
 can display context consumption without duplicating session config.
 
+`ToolActivityOutput` carries a stable `CallId`, turn identity, safe phase, and
+safe summary. A terminal tool result uses the same `CallId`.
+
+`SubAgentOutput` carries an additive `RunId` and parent `CallId`. Start,
+activity, and completion output for one run uses the same identities.
+
+Tool and sub-agent activity uses `OutputFilter.ToolCalls`. Thought activity
+uses `OutputFilter.Thinking`. Transient activity does not enter model context
+or the actor journal.
+
+Every supported output field has an explicit SignalR mapper disposition. A
+mapper test fails when a new field lacks mapped or security-omitted handling.
+
 ## Behavior States
 
 ```
@@ -184,7 +197,31 @@ are summarized as "Used {tool} for {purpose} → {outcome}".
 | `SessionTitleSet` | Title generated or updated |
 | `SessionCompacted` | History compacted with summary + retained messages |
 
+## Structured Resume Timeline
+
+The session keeps a bounded settled timeline for the recent turn window. The
+timeline uses framework-owned records with stable discriminators.
+
+The timeline can contain these settled entries:
+
+- user and assistant text
+- disclosed thought summary
+- tool call and result
+- sub-agent result
+- file metadata
+- error and usage detail
+- compaction detail
+- approval and turn outcome
+
+`SessionJoined` keeps `RecentMessages`. It adds a nullable `RecentTranscript`.
+The daemon emits both fields during the compatibility period.
+
+New readers prefer `RecentTranscript` when present. An absent timeline selects
+an explicit legacy conversion path. Unsupported legacy detail produces a
+diagnostic entry and never creates a false active state.
+
 ## Snapshot
 
-`SessionSnapshot` captures `History`, `TurnCount`, `Title` for fast recovery.
-Taken periodically per `SessionConfig.SnapshotInterval` and after compaction.
+`SessionSnapshot` captures `History`, `TurnCount`, `Title`, and the additive
+settled timeline for fast recovery. New Protobuf tags preserve current tags.
+Snapshots occur per `SessionConfig.SnapshotInterval` and after compaction.

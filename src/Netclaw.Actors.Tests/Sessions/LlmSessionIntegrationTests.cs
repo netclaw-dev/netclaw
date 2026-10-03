@@ -874,7 +874,141 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
         // Only two LLM calls total
         Assert.Equal(2, _fakeChatClient.CallCount);
 
+        var followUpUserMessages = _fakeChatClient.ReceivedMessages[1]
+            .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User)
+            .Select(message => message.Text)
+            .ToList();
+        Assert.Equal(
+            ["Second message", "Third message"],
+            followUpUserMessages.TakeLast(2));
+
         await subscriber.ExpectNoMsgAsync(TimeSpan.FromMilliseconds(300), cancellationToken: TestContext.Current.CancellationToken);
+
+        var escapedId = Uri.EscapeDataString(sessionId.Value);
+        var child = await Sys.ActorSelection($"/user/session-manager/{escapedId}")
+            .ResolveOne(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
+        Watch(child);
+        Sys.Stop(child);
+        await ExpectTerminatedAsync(child, cancellationToken: TestContext.Current.CancellationToken);
+
+        var recoverySubscriber = CreateTestProbe("adapter-batch-recovery");
+        var recovered = await sessionManager.Ask<SessionJoined>(new JoinSession(recoverySubscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
+        await recoverySubscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: TestContext.Current.CancellationToken);
+
+        Assert.Contains(recovered.RecentTranscript!, entry =>
+            entry.Type == SessionTranscriptEntryTypes.User && entry.Text == "Second message");
+        Assert.Contains(recovered.RecentTranscript!, entry =>
+            entry.Type == SessionTranscriptEntryTypes.User && entry.Text == "Third message");
+    }
+
+    [Fact]
+    public async Task Active_turn_messages_emit_ordered_queue_and_pull_receipts()
+    {
+        _fakeChatClient.ToolCallsOnFirstCall =
+        [
+            new FunctionCallContent("call-load", "load_tool", new Dictionary<string, object?>
+            {
+                ["Name"] = "browser_chrome_devtools/navigate_page",
+                ["_rationale"] = "Load the browser tool for the test."
+            })
+        ];
+        _fakeToolExecutor.Results["load_tool"] = "browser_chrome_devtools/navigate_page";
+        var responseGate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _fakeChatClient.NextResponseGate = responseGate;
+
+        var sessionId = new SessionId("signalr/message-lifecycle");
+        var source = new MessageSource
+        {
+            ChannelType = ChannelType.SignalR,
+            SenderId = new SenderId("operator-1"),
+            ChannelId = "operator-channel",
+            Audience = TrustAudience.Personal,
+            Boundary = TrustBoundary.Personal,
+            Principal = PrincipalClassification.Operator,
+            Provenance = new SourceProvenance(TransportAuthenticity.Verified, PayloadTaint.Trusted),
+            ReceivedAt = _timeProvider.GetUtcNow()
+        };
+        var sessionManager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("message-lifecycle-sub");
+        await sessionManager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full | OutputFilter.MessageLifecycle
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<SessionJoined>(
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Inspect the page"
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await _fakeChatClient.FirstCallEntered.Task.WaitAsync(
+            TimeSpan.FromSeconds(3),
+            TestContext.Current.CancellationToken);
+
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Use the dev branch",
+            Source = source with { MessageId = "tui:message-1" }
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+        await sessionManager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Check the compact layout",
+            Source = source with { MessageId = "tui:message-2" }
+        }, TimeSpan.FromSeconds(3), cancellationToken: TestContext.Current.CancellationToken);
+
+        var firstQueued = await subscriber.ExpectMsgAsync<UserMessageQueuedOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var secondQueued = await subscriber.ExpectMsgAsync<UserMessageQueuedOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal("tui:message-1", firstQueued.MessageId);
+        Assert.Equal(1, firstQueued.QueueDepth);
+        Assert.Equal("tui:message-2", secondQueued.MessageId);
+        Assert.Equal(2, secondQueued.QueueDepth);
+        Assert.Equal(firstQueued.TurnId, secondQueued.TurnId);
+
+        responseGate.TrySetResult();
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        var pulled = await subscriber.ExpectMsgAsync<UserMessagesPulledOutput>(
+            TimeSpan.FromSeconds(3),
+            cancellationToken: TestContext.Current.CancellationToken);
+        Assert.Equal(firstQueued.TurnId, pulled.TurnId);
+        Assert.Equal(
+            ["tui:message-1", "tui:message-2"],
+            pulled.Messages.Select(message => message.MessageId));
+        Assert.Equal(
+            ["Use the dev branch", "Check the compact layout"],
+            pulled.Messages.Select(message => message.Content));
+
+        await subscriber.ExpectMsgAsync<TextOutput>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+        await subscriber.ExpectMsgAsync<TurnCompleted>(
+            TimeSpan.FromSeconds(6),
+            cancellationToken: TestContext.Current.CancellationToken);
+
+        var nextCallUsers = _fakeChatClient.ReceivedMessages[1]
+            .Where(message => message.Role == Microsoft.Extensions.AI.ChatRole.User)
+            .Select(message => message.Text)
+            .ToList();
+        string[] expectedPrompts = ["Inspect the page", "Use the dev branch", "Check the compact layout"];
+        Assert.Equal(
+            expectedPrompts,
+            nextCallUsers.Where(text => expectedPrompts.Contains(text, StringComparer.Ordinal)));
     }
 
     [Fact]

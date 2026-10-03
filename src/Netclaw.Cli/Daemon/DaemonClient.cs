@@ -183,7 +183,22 @@ public sealed class DaemonClient : IAsyncDisposable
             throw new InvalidOperationException("Only non-empty text messages are currently supported.");
 
         var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        await PostAsync(new SendCommand(text, ack, cancellationToken), cancellationToken);
+        await PostAsync(new SendCommand(text, null, ack, cancellationToken), cancellationToken);
+        await ack.Task.WaitAsync(cancellationToken);
+    }
+
+    public async Task SendWithIdAsync(
+        string text,
+        string messageId,
+        CancellationToken cancellationToken = default)
+    {
+        if (string.IsNullOrWhiteSpace(text))
+            throw new InvalidOperationException("Only non-empty text messages are currently supported.");
+        if (string.IsNullOrWhiteSpace(messageId))
+            throw new InvalidOperationException("Only non-empty message IDs are supported.");
+
+        var ack = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await PostAsync(new SendCommand(text, messageId, ack, cancellationToken), cancellationToken);
         await ack.Task.WaitAsync(cancellationToken);
     }
 
@@ -308,7 +323,10 @@ public sealed class DaemonClient : IAsyncDisposable
                 using var op = LinkOperation(c.Token);
                 await EnsureConnectedAsync(op.Token);
                 await ReattachIfNeededAsync(op.Token);
-                await InvokeAsync("SendMessage", [RequireSession(), c.Text], op.Token);
+                if (c.MessageId is null)
+                    await InvokeAsync("SendMessage", [RequireSession(), c.Text], op.Token);
+                else
+                    await InvokeAsync("SendMessageWithId", [RequireSession(), c.MessageId, c.Text], op.Token);
                 c.Ack.TrySetResult();
                 break;
             }
@@ -647,7 +665,11 @@ public sealed class DaemonClient : IAsyncDisposable
         TaskCompletionSource<string> Reply,
         CancellationToken Token) : ClientCommand;
 
-    private sealed record SendCommand(string Text, TaskCompletionSource Ack, CancellationToken Token) : ClientCommand;
+    private sealed record SendCommand(
+        string Text,
+        string? MessageId,
+        TaskCompletionSource Ack,
+        CancellationToken Token) : ClientCommand;
 
     private sealed record RespondCommand(
         string CallId,

@@ -26,6 +26,13 @@ public static partial class SessionProtocol
 
         public SerializableChatMessage UserMessage { get; init; } = new();
 
+        /// <summary>
+        /// All user messages that the actor submitted in this turn.
+        /// Empty records use <see cref="UserMessage"/> for legacy replay.
+        /// </summary>
+        public IReadOnlyList<SerializableChatMessage> UserMessages { get; init; } =
+            Array.Empty<SerializableChatMessage>();
+
         public SerializableChatMessage AssistantReply { get; init; } = new();
 
         public long RecordedAtMs { get; init; }
@@ -50,6 +57,11 @@ public static partial class SessionProtocol
         public BackgroundJobId? SourceBackgroundJobId { get; init; }
 
         public IReadOnlyList<InputId> ConsumedInputIds { get; init; } = [];
+        /// <summary>
+        /// Settled structured entries for this turn. Empty for legacy records.
+        /// </summary>
+        public IReadOnlyList<SessionTranscriptEntry> TranscriptEntries { get; init; } =
+            Array.Empty<SessionTranscriptEntry>();
 
         public DateTimeOffset RecordedAt => DateTimeOffset.FromUnixTimeMilliseconds(RecordedAtMs);
 
@@ -105,6 +117,13 @@ public static partial class SessionProtocol
         public SessionId SessionId { get; init; }
 
         public SerializableChatMessage UserMessage { get; init; } = new();
+
+        /// <summary>
+        /// All user messages that caused this tool batch.
+        /// Empty records use <see cref="UserMessage"/> for legacy replay.
+        /// </summary>
+        public IReadOnlyList<SerializableChatMessage> UserMessages { get; init; } =
+            Array.Empty<SerializableChatMessage>();
 
         public SerializableChatMessage AssistantMessage { get; init; } = new();
 

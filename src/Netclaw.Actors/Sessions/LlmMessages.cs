@@ -128,6 +128,7 @@ internal sealed record WorkingContextSnapshotFatal(Exception Cause)
 internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 {
     public required SubAgentRunId RunId { get; init; }
+    public required ToolCallId ParentCallId { get; init; }
     public required SubAgents.AgentName AgentName { get; init; }
     public required ChildRunCompletion Completion { get; init; }
     public required TimeSpan Duration { get; init; }
@@ -143,6 +144,7 @@ internal sealed record CompletedSubAgentRun : INoSerializationVerificationNeeded
 internal sealed record AcceptedSubAgentFinding : INoSerializationVerificationNeeded
 {
     public required SubAgentRunId RunId { get; init; }
+    public required ToolCallId ParentCallId { get; init; }
     public required SubAgents.AgentName AgentName { get; init; }
     public required TimeSpan Duration { get; init; }
     public required SubAgentFindingShape Shape { get; init; }

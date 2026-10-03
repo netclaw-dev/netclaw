@@ -115,84 +115,170 @@ PanelNode (outer: "Netclaw Setup")
 
 ---
 
-## `netclaw chat` — Interactive Agent Prompt (TUI)
+## `netclaw chat` — Inline Developer Chat
 
-Full interactive chat session with the Netclaw agent. Hosts the actor system
-in-process. Session entity key: `tui/{uuid}`.
+Chat is a thin SignalR client. The daemon owns the session, tools, and
+persistence. Chat uses Termina `Inline` presentation in the primary buffer.
 
-### Wireframe
+The settled Transcript becomes normal terminal scrollback. Termina owns only
+the current live region.
 
-```
-╭─ Netclaw Chat ─────────────────── session: tui/a1b2c3 ──────╮
-│                                                              │
-│  System: Personality loaded. 5 tools. Memorizer connected.   │
-│                                                              │
-│  You: Check the CI status on netclaw and summarize           │
-│                                                              │
-│  ╭─ Tool Activity ──────────────────────────────────────╮    │
-│  │ ✓ shell: gh run list --limit 3           (2.1s)      │    │
-│  │ ● web_fetch: github.com/...actions        (...)      │    │
-│  ╰──────────────────────────────────────────────────────╯    │
-│                                                              │
-│  Netclaw: Here's your CI status:                             │
-│                                                              │
-│  | Run  | Branch | Status  | Duration |                      │
-│  |------|--------|---------|----------|                      │
-│  | #42  | dev    | ✓ pass  | 3m 12s   |                      │
-│  | #41  | dev    | ✓ pass  | 2m 58s   |                      │
-│  | #40  | feat/x | ✗ fail  | 1m 04s   |                      │
-│                                                              │
-│  Run #40 failed on feat/x. Want me to investigate?           │
-│  ●                                                           │
-╰──────────────────────────────────────────────────────────────╯
-╭─ Input ──────────────────────────────────────────────────────╮
-│ Yes, show me the failure logs and                            │
-│ see if it's a flaky test or a real issue.                    │
-│ █                                                            │
-╰──────────────────────────────────────────────────────────────╯
- [Enter] Send  [PgUp/PgDn] Scroll  [Ctrl+Q] Quit  ✓ MCP (2/2)
-```
+### Region Grammar
 
-### Layout Structure
+| Region | Purpose | Lifetime |
+|--------|---------|----------|
+| Session Header | Shows session, model, context, and connection state | Printed when context changes |
+| Transcript | Holds immutable settled Turns | Terminal scrollback |
+| Turn | Groups one prompt with its settled events and reply | Immutable after settlement |
+| Live Deck | Shows current work above the bottom dock | Mutable live region |
+| Activity Group | Groups parallel tools and sub-agents for one turn | Live until every row settles |
+| Event Row | Shows one event identity, phase, summary, and detail state | Live or settled |
+| Decision Gate | Replaces the Composer for a pending approval | Live until a decision |
+| Composer | Accepts the next prompt | Live except during a decision |
+| Hint Line | Shows only valid actions for the current mode | Live |
+| Inspector | Shows complete safe detail for one event or Turn | Temporary full-screen view |
+
+The Transcript has no outer border. Settled rows use indentation, symbols,
+space, and color for hierarchy. The Composer can use one small border.
+
+### Idle State at 120 Columns
 
 ```
-PanelNode (outer: "Netclaw Chat", subtitle: session ID)
-├── StreamingTextNode (scrollable chat history, fills available space)
-│   ├── System messages (personality, tool count, MCP status)
-│   ├── User messages (prefixed "You:")
-│   ├── Tool Activity PanelNode (inline, collapsible)
-│   │   ├── TextNode (✓ completed: tool name + duration, green)
-│   │   └── SpinnerNode (● in-progress: tool name, yellow)
-│   └── Assistant messages (prefixed "Netclaw:", streamed via SpinnerSegment)
-│
-PanelNode (input: "Input")
-├── TextInputNode (multi-line, 3 rows, fixed at bottom)
-│
-TextNode (status bar: key bindings + MCP indicator)
+netclaw  session tui/a1b2c3  model gpt-5.6  context 38%  daemon connected
+
+YOU  Check the CI status and inspect any failed run.
+
+NETCLAW
+Run 2481 passed. Run 2480 failed in the Linux test job.
+
+  ✓ tool  gh run list                         2.1s   #call-a
+  ✗ tool  gh run view 2480 --log-failed       1.4s   #call-b   detail available
+
+The failure is a deterministic path assertion. I can prepare a fix.
+
+┌ prompt ───────────────────────────────────────────────────────────────────────────────────────────┐
+│ Ask Netclaw…                                                                                     │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+Enter send  Shift+Enter newline  ↑↓ history  Esc x2 clear  Ctrl+Q quit
 ```
 
-### Key Behaviors
+### Active Turn at 80 Columns
 
-- **StreamingTextNode** fills most of the screen, scrollable with PgUp/PgDn
-- **TextInputNode** is multi-line (3 rows), fixed at bottom in its own PanelNode
-- **Tool Activity** panel appears inline between user message and response:
-  - ✓ completed tools with name + duration (green)
-  - ● in-progress tools with SpinnerNode (yellow)
-  - Panel collapses when no tools are active
-- **MCP status indicator** (bottom-right of status bar, reactive):
-  - `✓ MCP (2/2)` = green — all servers connected
-  - `⚠ MCP (1/2)` = yellow — degraded (auth required or warning)
-  - `✗ MCP (0/2)` = red — server(s) unreachable
-- **SpinnerSegment** shows while LLM is thinking; tokens stream in real-time
-- **Session entity key**: `tui/{uuid}`, full actor system hosted in-process
-- **MCP**: per-agent, not gateway-level
+```
+netclaw  tui/a1b2c3  gpt-5.6  context 38%
 
-### Input Handling
+YOU  Check the CI status and inspect any failed run.
 
-- [Enter] sends the current input buffer as a user message
-- Multi-line input supported (Shift+Enter or paste)
-- Input buffer clears after send
-- History scrollback not implemented in MVP
+THOUGHT  ● analyzing repository and workflow state                         3s
+
+ACTIVITY  2 active · 1 complete
+  ✓ tool   gh run list                                      2.1s  #call-a
+  ● tool   gh run view 2480                                 1.4s  #call-b
+    └─ ● agent  test-diagnostics                         2 tools  #run-7
+  ● tool   read failure log                                  0.8s  #call-c
+
+Working…  Ctrl+C interrupt  Ctrl+O detail  Ctrl+Q quit
+
+QUEUED  2 messages
+  1  Also inspect the failed test history.
+  2  Then propose the smallest deterministic fix.
+
+MESSAGE
+  Ask Netclaw…
+```
+
+The Live Deck shows current work above the bottom dock. The Composer remains
+available during an active turn. The Queue Shelf shows every accepted prompt.
+The session actor includes the complete FIFO set in one follow-up model call.
+
+### Decision Gate at 80 Columns
+
+```
+APPROVAL  shell wants permission
+
+Target   dotnet test
+Effect   starts a local process
+Scope    this exact command in /work/netclaw
+
+  Allow once     Always allow     Deny
+
+Enter decide  Esc deny  Ctrl+O full detail  ←→ choice  Ctrl+Q quit
+```
+
+The expanded state keeps the selected decision. Page Up and Page Down move a
+bounded detail viewport. Approval content displays control bytes as safe text.
+
+### Narrow State at 40 Columns
+
+```
+netclaw  tui/a1b2c3  38%
+
+YOU  Check CI and inspect failures.
+
+ACTIVITY  2 active
+  ✓ gh run list             #call-a
+  ● gh run view             #call-b
+    └─ ● test-diagnostics    #run-7
+
+Working…  ^C stop  ^O detail  ^Q quit
+```
+
+At 40 columns, optional duration, model, and count detail leaves first. Event
+identity, lifecycle, error state, input text, and detail availability remain.
+
+### Responsive Rules
+
+| Width | Session Header | Event Row | Hint Line |
+|-------|----------------|-----------|-----------|
+| 120+ | session, model, context, daemon, usage | phase, kind, full summary, duration, short ID | complete action labels |
+| 80-119 | session, model, context | phase, kind, summary, duration, short ID | common action labels |
+| 60-79 | session, context | phase, short kind, clipped summary, short ID | compact action labels |
+| 40-59 | session suffix, context | phase, clipped name, short ID | control-key labels |
+
+No responsive rule merges unrelated events onto one line. Long content remains
+available through the Inspector and semantic copy.
+
+### Event Forms
+
+- User and assistant text use quiet labels and no side rail.
+- Thought uses one active row and a settled duration or token summary.
+- Tool rows use `CallId` as their stable key.
+- Sub-agent rows use `RunId` and show their parent `CallId` relation.
+- File rows show path, change kind, and available metadata.
+- Error rows show category, message, and short correlation ID.
+- Usage rows retain input, output, cached, and reasoning token classes.
+- Compaction rows retain cleared-result and summary counts.
+- Unknown output creates a visible diagnostic row.
+
+### Flow Control
+
+```
+Composer --Enter--> Live Deck --settled events--> Transcript
+    |                    |
+    |                    +--approval--> Decision Gate --decision--> Live Deck
+    |                    +--inspect--> Inspector --close--> queued output commit
+    +--Enter while live--> Queue Shelf --turn end--> one FIFO follow-up call
+```
+
+Settled events print once in chronological order. A settled event never returns
+to the Live Deck. Parallel completion updates only the matching stable identity.
+
+### Input and Copy
+
+- Bare `Enter` submits the prompt.
+- `Shift+Enter` adds one newline.
+- Up and Down traverse history at text boundaries.
+- Down past the newest prompt restores the saved draft.
+- Two Escape keys inside the defined virtual-time window clear prompt text.
+- One Escape keeps prompt text.
+- A pending approval owns Escape and paste before the Composer.
+- `Ctrl+O` changes compact and expanded detail.
+- Semantic copy can copy one complete event or one complete Turn.
+- Semantic copy excludes ANSI bytes, borders, rails, spinners, and hints.
+- A copy failure keeps the selected data and shows a visible error.
+
+Terminal-native selection cannot exclude selected glyphs. The borderless
+Transcript prevents border and corner glyphs from entering ordinary selection.
 
 ---
 

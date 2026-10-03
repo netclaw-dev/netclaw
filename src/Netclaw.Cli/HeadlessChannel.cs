@@ -227,14 +227,15 @@ public sealed class HeadlessChannel : IChannel
                     {
                         CallId = msg.CallId.Value,
                         ToolName = msg.ToolName.Value,
-                        ArgumentsJson = msg.ArgumentsJson
+                        ArgumentsJson = msg.ArgumentsJson,
+                        Rationale = msg.Rationale
                     });
                 }
                 else
                 {
                     Console.WriteLine($"[tool:call] {msg.ToolName}({msg.ArgumentsJson ?? ""})");
                 }
-                Log(log, $"TOOL_CALL: {msg.ToolName} call_id={msg.CallId} args={msg.ArgumentsJson ?? "{}"}");
+                Log(log, $"TOOL_CALL: {msg.ToolName} call_id={msg.CallId} rationale={msg.Rationale ?? "<missing>"} args={msg.ArgumentsJson ?? "{}"}");
                 break;
 
             case ToolResultOutput msg:
@@ -383,6 +384,7 @@ public sealed class HeadlessChannel : IChannel
         public required string CallId { get; init; }
         public required string ToolName { get; init; }
         public string? ArgumentsJson { get; init; }
+        public string? Rationale { get; init; }
     }
 
     private sealed class JsonUsage

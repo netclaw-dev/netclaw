@@ -195,7 +195,6 @@ public sealed class SessionsPageTests : IDisposable
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.DownArrow);
         input.EnqueueKey(ConsoleKey.Enter);
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
@@ -203,6 +202,7 @@ public sealed class SessionsPageTests : IDisposable
         Assert.Equal(2, vm.SelectedIndex.Value);
         // SessionId strips the "session-" prefix.
         Assert.Equal("003", nav.ResumeSessionId);
+        Assert.True(nav.ChatLaunchRequested);
     }
 
     [Fact]
@@ -216,12 +216,11 @@ public sealed class SessionsPageTests : IDisposable
         var (_, app, _, nav) = CreateHeadlessApp(out var input, sessions);
 
         input.EnqueueKey(ConsoleKey.N);
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
         Assert.Null(nav.ResumeSessionId);
+        Assert.True(nav.ChatLaunchRequested);
     }
 
     [Fact]
@@ -239,12 +238,11 @@ public sealed class SessionsPageTests : IDisposable
 
         input.EnqueueKey(ConsoleKey.Escape);            // must be a no-op
         input.EnqueueKey(ConsoleKey.Enter);             // still on sessions root -> resume
-        input.EnqueueKey(ConsoleKey.Q, false, false, true);
-
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         await app.RunAsync(cts.Token);
 
         Assert.Equal("001", nav.ResumeSessionId);
+        Assert.True(nav.ChatLaunchRequested);
     }
 
     [Fact]
@@ -316,13 +314,6 @@ public sealed class SessionsPageTests : IDisposable
                     return capturedVm;
                 });
 
-            // Landing route for the Enter/N resume paths: the ViewModel navigates to
-            // "/chat" after setting resume state. The stub terminates immediately so the
-            // app loop exits without waiting on the cancellation timeout.
-            builder.RegisterRoute<StubChatPage, StubChatViewModel>(
-                "/chat",
-                _ => new StubChatPage(),
-                _ => new StubChatViewModel());
         });
 
         var sp = services.BuildServiceProvider();
@@ -385,19 +376,5 @@ public sealed class SessionsPageTests : IDisposable
         public MockHttpClientFactory(HttpMessageHandler handler) => _handler = handler;
 
         public HttpClient CreateClient(string name) => new(_handler);
-    }
-
-    private sealed class StubChatViewModel : ReactiveViewModel
-    {
-        public override void OnActivated()
-        {
-            base.OnActivated();
-            Shutdown();
-        }
-    }
-
-    private sealed class StubChatPage : ReactivePage<StubChatViewModel>
-    {
-        public override ILayoutNode BuildLayout() => Layouts.Empty();
     }
 }

@@ -10,8 +10,9 @@ namespace Netclaw.Actors.SubAgents;
 /// </summary>
 public enum SubAgentPhase
 {
-    Started,
-    Completed
+    Started = 0,
+    Completed = 1,
+    Activity = 2
 }
 
 /// <summary>
