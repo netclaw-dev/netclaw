@@ -48,7 +48,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
-| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 81 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval | 84 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -347,14 +347,22 @@ Run the shell analysis gate:
 ./scripts/run-shell-command-analysis-mutations.sh
 ```
 
-The script tests 81 mutants across execution-region accounting, denial-only
+The script tests 84 mutants across execution-region accounting, denial-only
 matching, tree traversal and root correspondence, bounded non-filesystem
-values, bare status-parameter output, candidate extraction, approval mode,
-path facts, and reviewed-safe policy. The job fails unless every mutant dies.
+values, data operands of output commands, candidate extraction, approval
+mode, path facts, and reviewed-safe policy. The job fails unless every mutant
+dies.
 
-Two status-parameter mutants test the rule that only bare `$?` can preserve
-reusable candidates. The focused test rejects other unknown output data.
-The new target took 49 seconds after package restore.
+Approval taxonomy PR 2 adds the Bash data-operand rule: a dynamic operand of
+`echo`, `printf`, `:`, `true`, or `false` is data. Three mutants cover the
+grammar and verb check and two cover its use in `CommandHasDynamicSyntax`.
+`Dynamic_value_is_data_only_in_an_output_operand` and
+`Power_shell_output_alias_keeps_a_dynamic_value_unresolved` kill them: a
+substitution in an `echo` operand keeps the candidates, and a dynamic operand
+of `cat`, a dynamic program word, a dynamic redirect target, or a PowerShell
+`echo` stays unresolved. PowerShell keeps the bare `$?` rule (2 mutants);
+`Power_shell_bare_status_output_keeps_static_candidates` kills them. The gate
+kills 75 Security and 9 Actors mutants (3.5 minutes).
 
 The script groups targets by source project. Stryker analyzes each source project once.
 The local run on 2026-09-24 took under four minutes.

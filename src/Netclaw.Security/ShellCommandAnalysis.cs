@@ -762,7 +762,18 @@ public sealed record ShellCommandAnalysis
                 || frame.Region == CommandAncestryRegion.Unknown)
             || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
             || command.Clause.Verb.IsDynamic
+            || !HasOnlyDataOperands(command)
+                && HasUnresolvedOperand(command, accountedRegionArguments)
+            // A glob in a directory segment can hide traversal or a symlink.
+            // Only a leaf glob has a fixed directory scope.
             || command.Clause.Args.Any(arg =>
+                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
+            || HasUnresolvedRedirect(command);
+
+    private static bool HasUnresolvedOperand(
+        CommandOccurrence command,
+        IReadOnlySet<ClauseElement> accountedRegionArguments)
+        => command.Clause.Args.Any(arg =>
                 arg.Kind == ArgKind.DynamicSkip
                 && !arg.IsCwdAttribution
                 && !IsAccountedExecutionRegionArgument(
@@ -780,12 +791,7 @@ public sealed record ShellCommandAnalysis
                     argument,
                     accountedRegionArguments)
                 && HasUnsupportedArgumentDomain(argument)
-                && !IsUnknownOutputData(command, argument))
-            // A glob in a directory segment can hide traversal or a symlink.
-            // Only a leaf glob has a fixed directory scope.
-            || command.Clause.Args.Any(arg =>
-                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
-            || HasUnresolvedRedirect(command);
+                && !IsUnknownOutputData(command, argument));
 
     internal static bool TryCollectKnownExecutionRegionArguments(
         ShellSyntaxNode node,
@@ -1102,12 +1108,34 @@ public sealed record ShellCommandAnalysis
         };
     }
 
+    /// <summary>
+    /// Returns true when every operand of the command is data: an output
+    /// command (<c>echo</c>, <c>printf</c>, <c>:</c>, <c>true</c>, <c>false</c>)
+    /// prints or ignores its operands.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a dynamic operand of such a command reaches stdout only. It is
+    /// not the program word, and it is not a redirect target:
+    /// <see cref="HasUnresolvedRedirect(CommandOccurrence)"/> checks each
+    /// redirect target separately. A command substitution inside an operand is
+    /// its own occurrence with its own candidate, so the rule hides no command.
+    /// ShellSyntaxTree accepts a dynamic printf operand only after a literal
+    /// format, and it rejects <c>printf -v</c>, so no dynamic value reaches the
+    /// printf format or a shell variable. The rule is Bash only: in PowerShell
+    /// these words are aliases or external programs with their own parameters.
+    /// </remarks>
+    private bool HasOnlyDataOperands(CommandOccurrence command)
+        => Environment.Grammar == ShellGrammar.Bash
+           && command.Clause.Verb.Tokens is [var verb]
+           && ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(verb);
+
     private static bool IsUnknownOutputData(
         CommandOccurrence command,
         AnalyzedArgument argument)
     {
         // The parser proves the verb and every child command before this check.
         // A bare status value cannot add an option or a path to an output command.
+        // PowerShell keeps this rule; Bash output operands use HasOnlyDataOperands.
         return command.Redirects.Count == 0
                && !command.Clause.Verb.IsDynamic
                && command.Clause.Verb.Tokens.Count == 1

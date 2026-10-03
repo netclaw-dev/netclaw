@@ -88,12 +88,35 @@ public sealed class ShellApprovalMatcherTests
             analysis.Candidates.Select(static candidate => candidate.Verb));
     }
 
+    // A dynamic value is data in an operand of echo, :, true, and false, and
+    // after a literal printf format. A command substitution inside the value
+    // keeps its own candidate, and a redirect target keeps its own scope.
     [Theory]
-    [InlineData("echo \"$(touch /tmp/marker)\"")]
-    [InlineData("echo $? > /tmp/marker")]
+    [InlineData("echo \"$(touch /tmp/marker)\"", "touch@/tmp/marker|echo@")]
+    [InlineData("echo $? > /work/out/marker", "echo@/work/out")]
+    [InlineData("echo $@", "echo@")]
+    [InlineData(": \"$(date)\"; true \"$(date)\"; false $@", "date@/work|:@|date@/work|true@|false@")]
+    [InlineData("printf '%s\\n' \"$(git rev-parse HEAD)\"", "git rev-parse@/work|printf@")]
+    [InlineData("git push; echo \"branch: $(git branch --show-current)\"", "git push@/work|git branch@/work|echo@")]
+    public void Bash_output_data_value_keeps_static_candidates(string command, string expected)
+    {
+        var analysis = _matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            Args(command, "/work"));
+
+        Assert.False(analysis.IsMessy);
+        Assert.Equal(
+            expected.Split('|'),
+            analysis.Candidates.Select(static candidate => $"{candidate.Verb}@{candidate.Directory}"));
+    }
+
+    [Theory]
     [InlineData("grep \"$TARGET\"; echo $?")]
-    [InlineData("echo $@")]
     [InlineData("printf $@")]
+    [InlineData("printf \"$FORMAT\" value")]
+    [InlineData("printf -v name '%s' \"$x\"")]
+    [InlineData("echo \"$x\" > \"$y\"")]
+    [InlineData("cat \"$x\"; echo done")]
     public void Bash_output_exception_rejects_unknown_values_and_side_effects(string command)
     {
         var analysis = _matcher.AnalyzeInvocation(
@@ -879,7 +902,7 @@ public sealed class ShellApprovalMatcherTests
     {
         Assert.True(_matcher.IsMessy(
             new ToolName("shell_execute"),
-            Args("for pid in $(pgrep netclawd); do echo $pid; done")));
+            Args("for pid in $(pgrep netclawd); do cat \"/proc/$pid/status\"; done")));
     }
 
     [Fact]
@@ -896,10 +919,10 @@ public sealed class ShellApprovalMatcherTests
         // Even if every conceivable verb is approved, a messy command never
         // auto-runs: the matcher cannot extract verb chains to evaluate, and
         // the prompt must offer Once/Deny only.
-        var approved = new[] { Verb("for"), Verb("do"), Verb("done"), Verb("echo"), Verb("printf") };
+        var approved = new[] { Verb("for"), Verb("do"), Verb("done"), Verb("cat"), Verb("printf") };
         Assert.False(_matcher.IsApproved(
             new ToolName("shell_execute"),
-            Args("for x in $(printf '1 2 3'); do echo \"$x\"; done"),
+            Args("for x in $(printf '1 2 3'); do cat \"$x\"; done"),
             approved,
             cwd: null));
     }

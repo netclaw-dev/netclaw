@@ -454,6 +454,10 @@ one analysis.
   no reusable candidate. It SHALL allow only a one-time consent in an
   interactive session and SHALL be denied in a non-interactive session with
   `shell_unresolved_trust_zone_input`.
+- In Bash, a dynamic operand of an output command (`echo`, `printf`, `:`,
+  `true`, `false`) SHALL be data, not unresolved syntax. A command
+  substitution inside it SHALL be its own command with its own candidate, and
+  a redirect target SHALL keep its own check.
 - A bounded assignment fact SHALL qualify a reusable grant with a SHA-256
   digest of the canonical assignment facts. A changed assignment SHALL need
   separate authority. An assignment inside an opaque fallback wrapper SHALL
@@ -470,12 +474,12 @@ one analysis.
 - **THEN** authorization returns `RequiresApproval`
 - **AND** the candidates contain `git status` and `npm test` as separate phrases
 
-#### Scenario: Command substitution fails closed
+#### Scenario: A command substitution is its own command
 
 - **GIVEN** an interactive Personal session
 - **WHEN** the model calls `shell_execute` with `echo $(git push)` (catalog case `command-substitution-fails-closed`)
-- **THEN** authorization returns `RequiresApproval` with no reusable candidate
-- **AND** the prompt offers only `Once` and `Deny`
+- **THEN** authorization returns `RequiresApproval` with the candidate `git push`
+- **AND** the `echo` operand is data, so `echo` needs no grant
 
 #### Scenario: Unresolved syntax in a headless run
 
