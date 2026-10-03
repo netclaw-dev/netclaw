@@ -46,7 +46,8 @@ internal enum ApprovalAllowReason
     ReviewedSafePolicy,
     ApprovalExemptShellCandidates,
     StoredApproval,
-    OneTimeApproval
+    OneTimeApproval,
+    StoredApprovalOutsideTrustedRoots
 }
 
 internal enum ApprovalCorrection
@@ -729,6 +730,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ToolAllowReason.ApprovalExemptShellCandidates => ApprovalAllowReason.ApprovalExemptShellCandidates,
             ToolAllowReason.StoredApproval => ApprovalAllowReason.StoredApproval,
             ToolAllowReason.OneTimeApproval => ApprovalAllowReason.OneTimeApproval,
+            ToolAllowReason.StoredApprovalOutsideTrustedRoots => ApprovalAllowReason.StoredApprovalOutsideTrustedRoots,
             _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown allow reason.")
         };
 

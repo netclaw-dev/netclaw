@@ -280,11 +280,17 @@ internal sealed class ToolAuthorizer
         await CoverOnceAsync(call, ct);
         var states = call.Evaluation.CandidateStates;
         var missing = states.Where(static state => state.Coverage is not Coverage.Stored).ToArray();
-        return missing.Length == 0
-            ? null
-            : ToolAuthorizationDecision.Deny(
+        if (missing.Length > 0)
+        {
+            return ToolAuthorizationDecision.Deny(
                 denial.DenyReason ?? InternalPolicyFailure,
                 MissingGrantMessage(denial.DenyReason, missing));
+        }
+
+        // The allow keeps its outcome and grants. Only its log and trace reason
+        // differ, so that an operator can find the grants that replaced a denial.
+        call.GrantReplacedTrustedRoot = true;
+        return null;
     }
 
     private static string MissingGrantMessage(
@@ -308,7 +314,7 @@ internal sealed class ToolAuthorizer
     {
         await CoverOnceAsync(call, ct);
         return call.Evaluation.AllCovered
-            ? ShellPolicyCoordinator.CompleteCovered(call.Evaluation, ct)
+            ? ShellPolicyCoordinator.CompleteCovered(call.Evaluation, call.GrantReplacedTrustedRoot, ct)
             : null;
     }
 
@@ -462,6 +468,12 @@ internal sealed class ToolAuthorizer
 
         /// <summary>True after the one stored-grant lookup of this call.</summary>
         internal bool Covered { get; set; }
+
+        /// <summary>
+        /// True when stored grants replaced a trusted-root denial (PR 6e). It
+        /// selects only the allow reason for the log and the trace.
+        /// </summary>
+        internal bool GrantReplacedTrustedRoot { get; set; }
 
         /// <summary>
         /// The result after every screen passed: an automatic allow, a consent

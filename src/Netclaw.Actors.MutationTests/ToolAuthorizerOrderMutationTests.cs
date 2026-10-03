@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Sessions;
@@ -70,19 +71,24 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     }
 
     // PR 6e: a stored grant decides for an unattended call in Approval mode,
-    // also outside every trusted root. The interactive control uses the same grant.
+    // also outside every trusted root. That allow has its own reason in the log
+    // and the trace. The interactive control uses the same grant and keeps the
+    // ordinary stored-grant reason, because no trusted-root rule denied it.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
     public async Task A_stored_grant_decides_outside_the_trusted_roots(bool interactive)
     {
         var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
-        var authorizer = CreateAuthorizer(await PromptVerbsAsync(command), hardDenyPatterns: []);
+        var logger = new AuthorizationReasonLogger();
+        var executor = CreateExecutor(await PromptVerbsAsync(command), hardDenyPatterns: [], logger: logger);
 
-        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive);
+        var decision = await executor.EvaluateAuthorizationAsync(
+            ShellCall(command, workingDirectory: null),
+            CreateContext(TrustAudience.Personal, interactive),
+            CancellationToken.None);
 
-        var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
-        Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
+        AssertStoredGrantAllow(decision, logger, replacedTrustedRootDenial: !interactive);
     }
 
     // Negative control: without a grant the unattended call stays denied, and
@@ -137,14 +143,39 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     [InlineData(false)]
     public async Task A_stored_grant_decides_for_a_working_directory_outside_the_trusted_roots(bool interactive)
     {
-        var authorizer = CreateAuthorizer(
+        var logger = new AuthorizationReasonLogger();
+        var executor = CreateExecutor(
             await PromptVerbsAsync("git status", _outsideDirectory),
-            hardDenyPatterns: []);
+            hardDenyPatterns: [],
+            logger: logger);
 
-        var decision = await AuthorizeAsync(authorizer, "git status", TrustAudience.Personal, interactive, _outsideDirectory);
+        var decision = await executor.EvaluateAuthorizationAsync(
+            ShellCall("git status", _outsideDirectory),
+            CreateContext(TrustAudience.Personal, interactive),
+            CancellationToken.None);
 
+        AssertStoredGrantAllow(decision, logger, replacedTrustedRootDenial: !interactive);
+    }
+
+    // A grant that replaced a trusted-root denial keeps the outcome and the grants
+    // of an ordinary stored-grant allow. Only the reason in the decision, the
+    // trace completion row, and the "Tool authorization evaluated" line differ.
+    private static void AssertStoredGrantAllow(
+        AuthorizationDecision decision,
+        AuthorizationReasonLogger logger,
+        bool replacedTrustedRootDenial)
+    {
         var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
-        Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
+        Assert.NotEmpty(allowed.Matches);
+        var (reason, traceReason) = replacedTrustedRootDenial
+            ? (ToolAllowReason.StoredApprovalOutsideTrustedRoots, ShellPolicyTraceReason.StoredGrantOutsideTrustedRoots)
+            : (ToolAllowReason.StoredApproval, ShellPolicyTraceReason.AllCandidatesCovered);
+        Assert.Equal(reason, allowed.Reason);
+        var completion = allowed.Trace.Rows[^1];
+        Assert.Equal(ShellPolicyTraceStage.Completion, completion.Stage);
+        Assert.Equal(ShellPolicyTraceOutcome.Allow, completion.Outcome);
+        Assert.Equal(traceReason, completion.Reason);
+        Assert.Equal(reason.ToString(), Assert.Single(logger.AuthorizationReasons));
     }
 
     private static string ReadCommand(string path)
@@ -171,6 +202,13 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         IReadOnlyList<string> grantedVerbs,
         IReadOnlyList<string> hardDenyPatterns,
         ToolApprovalMode shellMode = ToolApprovalMode.Approval)
+        => CreateExecutor(grantedVerbs, hardDenyPatterns, shellMode, logger: null).Authorizer;
+
+    private DispatchingToolExecutor CreateExecutor(
+        IReadOnlyList<string> grantedVerbs,
+        IReadOnlyList<string> hardDenyPatterns,
+        ToolApprovalMode shellMode = ToolApprovalMode.Approval,
+        ILogger<DispatchingToolExecutor>? logger = null)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         foreach (var profile in new[]
@@ -193,8 +231,7 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             new ToolPathPolicy(NativeEnvironment, [_paths.ConfigDirectory]));
         var registry = new ToolRegistry();
         registry.Register(new ShellProbeTool());
-        var executor = new DispatchingToolExecutor(registry, policy, new VerbGrantService(grantedVerbs));
-        return executor.Authorizer;
+        return new DispatchingToolExecutor(registry, policy, new VerbGrantService(grantedVerbs), logger);
     }
 
     private Task<AuthorizationDecision> AuthorizeAsync(
@@ -204,25 +241,60 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         bool interactive,
         string? workingDirectory = null)
         => authorizer.AuthorizeAsync(
-            new FunctionCallContent(
-                "order-call",
-                ShellTool.ToolName,
-                workingDirectory is null
-                    ? new Dictionary<string, object?> { ["Command"] = command }
-                    : new Dictionary<string, object?> { ["Command"] = command, ["WorkingDirectory"] = workingDirectory }),
-            new ToolExecutionContext(
-                new ToolRunScope
-                {
-                    Session = new ToolSessionScope.Bound("signalr/order-mutation", _storage),
-                    Audience = audience,
-                    Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
-                    InlineOutputBudget = InlineOutputBudget.Default,
-                    InteractiveApproval = interactive
-                        ? new InteractiveApprovalCapability.Available(new UnexpectedApprovalBridge())
-                        : new InteractiveApprovalCapability.Unavailable()
-                },
-                ToolExecutionTimeout.Default),
+            ShellCall(command, workingDirectory),
+            CreateContext(audience, interactive),
             CancellationToken.None);
+
+    private static FunctionCallContent ShellCall(string command, string? workingDirectory)
+        => new(
+            "order-call",
+            ShellTool.ToolName,
+            workingDirectory is null
+                ? new Dictionary<string, object?> { ["Command"] = command }
+                : new Dictionary<string, object?> { ["Command"] = command, ["WorkingDirectory"] = workingDirectory });
+
+    private ToolExecutionContext CreateContext(TrustAudience audience, bool interactive)
+        => new(
+            new ToolRunScope
+            {
+                Session = new ToolSessionScope.Bound("signalr/order-mutation", _storage),
+                Audience = audience,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(audience),
+                InlineOutputBudget = InlineOutputBudget.Default,
+                InteractiveApproval = interactive
+                    ? new InteractiveApprovalCapability.Available(new UnexpectedApprovalBridge())
+                    : new InteractiveApprovalCapability.Unavailable()
+            },
+            ToolExecutionTimeout.Default);
+
+    // Keeps the reason field of each "Tool authorization evaluated" line.
+    private sealed class AuthorizationReasonLogger : ILogger<DispatchingToolExecutor>
+    {
+        internal List<string?> AuthorizationReasons { get; } = [];
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public void Log<TState>(
+            LogLevel logLevel,
+            EventId eventId,
+            TState state,
+            Exception? exception,
+            Func<TState, Exception?, string> formatter)
+        {
+            if (state is not IReadOnlyList<KeyValuePair<string, object?>> fields
+                || !formatter(state, exception).StartsWith("Tool authorization evaluated", StringComparison.Ordinal))
+            {
+                return;
+            }
+
+            AuthorizationReasons.Add(fields
+                .Where(static field => field.Key == "AuthorizationReason")
+                .Select(static field => field.Value?.ToString())
+                .SingleOrDefault());
+        }
+    }
 
     // A grant store with one chat grant for each named phrase.
     private sealed class VerbGrantService(IReadOnlyCollection<string> verbs) : IToolApprovalService, IShellApprovalMatchService

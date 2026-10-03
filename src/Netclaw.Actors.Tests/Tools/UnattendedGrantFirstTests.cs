@@ -67,7 +67,7 @@ public sealed class UnattendedGrantFirstTests(ShellApprovalMatrixFixture fixture
         var observed = await EvaluateAsync(template, new ApprovalState([.. target.Seeds, .. workingDirectory.Seeds]));
 
         Assert.True(observed.Outcome == ApprovalOutcome.Allowed, observed.DenyMessage);
-        Assert.Equal(ApprovalAllowReason.StoredApproval, observed.AllowReason);
+        Assert.Equal(ApprovalAllowReason.StoredApprovalOutsideTrustedRoots, observed.AllowReason);
     }
 
     private string _projectDirectory = string.Empty;
