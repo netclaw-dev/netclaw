@@ -39,6 +39,12 @@ public static class SkillSyncResult
 
         /// <summary>A safe operator message. This value never includes secrets.</summary>
         public string? Error { get; init; }
+
+        /// <summary>The installed Git commit, when this row represents a Git plugin.</summary>
+        public string? Commit { get; init; }
+
+        /// <summary>The declared plugin version, when available.</summary>
+        public string? Version { get; init; }
     }
 
     /// <summary>Result data for the inventory publication owned by this pass.</summary>
