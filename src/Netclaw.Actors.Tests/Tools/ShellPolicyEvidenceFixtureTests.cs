@@ -140,6 +140,8 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         if (OperatingSystem.IsMacOS() && policyCase.Id == "L17")
             return policyCase.Expected;
 
+        // The Windows bundled catalog has no cd entry, so L22 keeps cd on a Windows host.
+        var windowsHost = OperatingSystem.IsWindows();
         List<string>? candidates = policyCase.Id switch
         {
             "L12" => ["mkdir", "cd", "git clone"],
@@ -149,7 +151,7 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             "L17" => ["git diff", "sort", "comm"],
             "L18" => ["cd", "ls", "head"],
             "L21" => ["cd", "git log", "grep"],
-            "L22" => ["python3"],
+            "L22" => windowsHost ? ["cd", "python3"] : ["python3"],
             "L29" => ["docker compose config", "git diff"],
             "L30" => ["sed", "git show"],
             _ => null
