@@ -140,6 +140,8 @@ internal sealed record ToolCorrectionDelivery(
                 "An expansion can change a command word. Write the command words literally.",
             (ShellCommandWordsRewrite.RunCommandsSeparately, _) =>
                 "A brace list, word splitting, or an expansion can change the command words. Run each command separately, and write the command words literally.",
+            (ShellCommandWordsRewrite.WriteProgramPathInFull, _) =>
+                "A ~ in the program path is an expansion. Write the full path of the program, for example /home/user/bin/tool instead of ~/bin/tool.",
             _ => throw new ArgumentOutOfRangeException(nameof(words), words.Rewrite, "Unknown command-word rewrite."),
         };
 

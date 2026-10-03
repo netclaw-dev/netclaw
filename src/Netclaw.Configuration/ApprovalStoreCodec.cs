@@ -27,22 +27,38 @@ internal static class ApprovalStoreCodec
         return value;
     }
 
-    internal static ToolApprovalData ReadVersion3(JsonElement root, string shellToolName)
+    /// <summary>
+    /// Reads a version-3 store. A shell grant that an older version saved with a
+    /// program spelling gets the program path of R1 (see
+    /// <see cref="ShellProgramPath.NormalizeGrant"/>). Two grants that name one
+    /// file become one grant, and the earlier grant stays.
+    /// </summary>
+    /// <param name="root">The store root element.</param>
+    /// <param name="shellToolName">The tool key of the shell tool.</param>
+    /// <param name="homeDirectory">The home directory that the shell launcher gives to <c>HOME</c>, or null when it has none.</param>
+    internal static ToolApprovalData ReadVersion3(JsonElement root, string shellToolName, string? homeDirectory)
     {
         var members = ReadRoot(root);
         RequireVersion(members["version"], ToolApprovalStore.CurrentSchemaVersion);
         var data = new ToolApprovalData();
         ReadAudienceMap(
             members["audiences"],
-            (entry, toolName) => ReadVersion3Entry(entry, toolName, shellToolName),
+            (entry, toolName) => ReadVersion3Entry(entry, toolName, shellToolName, homeDirectory),
             data);
+        foreach (var tools in data.Audiences.Values)
+        {
+            if (tools.TryGetValue(shellToolName, out var entries))
+                tools[shellToolName] = RemoveEquivalentEntries(entries);
+        }
+
         return data;
     }
 
     private static ApprovalEntry ReadVersion3Entry(
         JsonElement element,
         string toolName,
-        string shellToolName)
+        string shellToolName,
+        string? homeDirectory)
     {
         var entry = ApprovalEntryWireCodec.ReadVersion3(element);
         var isShellTool = string.Equals(toolName, shellToolName, StringComparison.Ordinal);
@@ -51,12 +67,25 @@ internal static class ApprovalStoreCodec
             throw Invalid("The approval entry form does not match its tool key.");
         }
 
-        return entry;
+        return isShellTool ? ShellProgramPath.NormalizeGrant(entry, homeDirectory) : entry;
+    }
+
+    private static List<ApprovalEntry> RemoveEquivalentEntries(List<ApprovalEntry> entries)
+    {
+        var distinct = new List<ApprovalEntry>(entries.Count);
+        foreach (var entry in entries)
+        {
+            if (!distinct.Any(existing => ToolApprovalEntryComparer.Equals(existing, entry)))
+                distinct.Add(entry);
+        }
+
+        return distinct;
     }
 
     internal static ToolApprovalData ConvertVersion2(
         JsonElement root,
         ApprovalStoreMigrationContext? context,
+        string? homeDirectory,
         out int omittedEntries)
     {
         var members = ReadRoot(root);
@@ -69,7 +98,9 @@ internal static class ApprovalStoreCodec
                 entry,
                 toolName,
                 context,
-                omitted),
+                omitted) is { } converted
+                ? ShellProgramPath.NormalizeGrant(converted, homeDirectory)
+                : null,
             data);
         omittedEntries = omitted[0];
         return data;

@@ -235,11 +235,23 @@ public static class ApprovalPatternMatching
 
         if (entry.Shell is not { } entryShell
             || candidate.Shell != entryShell
-            || candidate.VerbTokens is not { Count: > 0 }
-            || candidate.VerbTokens.Any(static token =>
+            || candidate.VerbTokens is not { Count: > 0 } candidateTokens
+            || candidateTokens.Any(static token =>
                 token.Length == 0 || token.Any(char.IsWhiteSpace)))
         {
             return false;
+        }
+
+        var candidateVerb = candidate.Verb;
+        if (entryShell == ApprovalShell.Bash
+            && GetGrantProgram(entry) is { } grantProgram
+            && CoversProgramByRelativePath(entry, grantProgram, candidateTokens[0]))
+        {
+            // The grant spells this file relative to its scope. Compare the rest
+            // of the phrase with the grant's spelling in place of the file path.
+            if (candidateVerb.StartsWith(candidateTokens[0], StringComparison.Ordinal))
+                candidateVerb = grantProgram + candidateVerb[candidateTokens[0].Length..];
+            candidateTokens = [grantProgram, .. candidateTokens.Skip(1)];
         }
 
         return entry.Match switch
@@ -249,12 +261,86 @@ public static class ApprovalPatternMatching
             // It also must equal the display verb, as before, so the command
             // words never widen a legacy phrase past the older matcher.
             ApprovalMatchKind.LegacyExact =>
-                ToolApprovalEntryComparer.Equals(entry.Verb, candidate.Verb, entryShell)
-                && MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidate.VerbTokens, entryShell),
+                ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb, entryShell)
+                && MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidateTokens, entryShell),
             ApprovalMatchKind.TokenPrefix when entry.VerbTokens is { } grantTokens =>
-                MatchesChain(grantTokens, candidate.VerbTokens, entryShell),
+                MatchesChain(grantTokens, candidateTokens, entryShell),
             _ => false,
         };
+    }
+
+    private static string? GetGrantProgram(ApprovalEntry entry) => entry.Match switch
+    {
+        ApprovalMatchKind.TokenPrefix => entry.VerbTokens is { Count: > 0 } tokens ? tokens[0] : null,
+        ApprovalMatchKind.LegacyExact => entry.Verb.Split(' ', 2)[0],
+        _ => null,
+    };
+
+    /// <summary>
+    /// Returns true when a grant with a relative program path covers the file
+    /// <paramref name="candidateProgram"/>. The candidate builder gives the
+    /// absolute path of each program path (R1), and a new grant stores it, so
+    /// only these two grant forms are relative.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a repository grant stores the path below the worktree root
+    /// (<c>./scripts/build.sh</c>). It covers that file in each registered
+    /// worktree of its repository, and no file outside them. An older grant with
+    /// a relative program and no scope directory covers only the files that its
+    /// spelling could reach (see <see cref="ShellProgramPath.MatchesLegacyRelative"/>).
+    /// </remarks>
+    private static bool CoversProgramByRelativePath(
+        ApprovalEntry entry,
+        string grantProgram,
+        string candidateProgram)
+    {
+        if (!ShellProgramPath.IsLegacyRelative(grantProgram)
+            || entry.Directory is not null
+            || string.Equals(grantProgram, candidateProgram, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (entry.Repository is { } repository
+            && string.Equals(ShellProgramPath.NormalizeRelative(grantProgram), grantProgram, StringComparison.Ordinal))
+        {
+            return TryGetWorktreeProgram(candidateProgram, repository, out var worktreeProgram)
+                   && string.Equals(worktreeProgram, grantProgram, StringComparison.Ordinal);
+        }
+
+        return ShellProgramPath.MatchesLegacyRelative(grantProgram, candidateProgram);
+    }
+
+    /// <summary>
+    /// Returns the path of a program below the root of its own worktree, in the
+    /// form <c>./a/b</c>, when that worktree belongs to <paramref name="repository"/>.
+    /// The repository grant builder and the matcher use this one rule.
+    /// </summary>
+    internal static bool TryGetWorktreeProgram(
+        string programPath,
+        string repository,
+        out string worktreeProgram)
+    {
+        worktreeProgram = string.Empty;
+        if (!programPath.StartsWith('/'))
+            return false;
+
+        // The lexical path can name a file that does not exist yet. Its nearest
+        // existing directory gives the worktree.
+        var programDirectory = Path.GetDirectoryName(programPath);
+        while (programDirectory is { Length: > 0 } && !Directory.Exists(programDirectory))
+            programDirectory = Path.GetDirectoryName(programDirectory);
+
+        if (programDirectory is not { Length: > 0 }
+            || !RepositoryIdentity.TryResolve(programDirectory, cwd: null, out var identity)
+            || !ToolApprovalEntryComparer.Equals(identity!.CommonDirectory, repository)
+            || ShellProgramPath.ToWorktreeRelative(programPath, identity.WorktreeRoot) is not { } relative)
+        {
+            return false;
+        }
+
+        worktreeProgram = relative;
+        return true;
     }
 
     private static bool MatchesChain(

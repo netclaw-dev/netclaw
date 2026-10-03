@@ -289,6 +289,27 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
         Assert.DoesNotContain("explicitly sets shell_execute to Auto", result.Message);
     }
 
+    // R1: a relative program grant with no folder names no single file. Doctor
+    // names it so that the operator can grant the program file again.
+    [Theory]
+    [InlineData("""{ "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["./ilspycmd"], "directory": null, "createdAt": null }""", true)]
+    [InlineData("""{ "shell": "Bash", "match": "LegacyExact", "verb": "./prune.sh", "directory": "/opt/skills", "createdAt": null }""", false)]
+    [InlineData("""{ "shell": "Bash", "match": "TokenPrefix", "verbTokens": ["/opt/tools/ilspycmd"], "directory": null, "createdAt": null }""", false)]
+    public async Task Legacy_program_spelling_is_reported(string entry, bool reported)
+    {
+        WriteConfig(
+            """
+            { "configVersion": 1, "Tools": { "ShellMode": "HostAllowed", "AudienceProfiles": { "Personal": { "ToolsMode": "All" } } } }
+            """);
+        File.WriteAllText(
+            _paths.ToolApprovalsPath,
+            $$"""{ "version": 3, "audiences": { "personal": { "shell_execute": [ {{entry}} ] } } }""");
+
+        var result = await new ToolAudienceProfilesDoctorCheck(_paths).RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(reported, result.Message.Contains("legacy program spelling", StringComparison.Ordinal));
+    }
+
     [Fact]
     public async Task PersonalShellWithExplicitApproval_DoesNotWarnAboutAutoMode()
     {

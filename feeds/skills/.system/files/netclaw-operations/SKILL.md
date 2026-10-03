@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.76.9"
+  version: "2.77.0"
 ---
 
 # Netclaw Operations
@@ -418,6 +418,23 @@ Shell approvals store a typed phrase and a scope in `tool-approvals.json`:
   - **Cwd** when no path argument is present (`git status`, `freshdesk`).
   - **`null`** for the global wildcard ("approve this verb in any
     directory") — only set by `Always anywhere`.
+
+A program path names a file, not a spelling. When the program word has a
+slash (`./tool`, `../bin/tool`, `/opt/bin/tool`), the grant stores the
+absolute path of the file. Netclaw joins a relative path with the working
+directory of that command, after each `cd`. So `cd ~/.dotnet/tools &&
+./ilspycmd` and `/home/user/.dotnet/tools/ilspycmd` use one grant, and
+`./ilspycmd` in another folder needs its own approval. A bare name such as
+`dotnet` does not change. A program that starts with `~/` gets a correction:
+write the full path of the program instead. A `This repository` grant stores
+a repository program by its path below the worktree root
+(`./scripts/build.sh`), so it covers that file in each worktree.
+
+Older grants saved the spelling. Netclaw reads `~/x` and `/abs/x` grants as
+the absolute path, and joins a folder grant's `./x` with its folder. A `./x`
+grant with no folder keeps its old reach, and `netclaw approvals list` and
+`netclaw doctor` show it as a `legacy program spelling`. Revoke it and approve
+the program again to cover one file.
 
 `This repository` stores a distinct Git repository scope. It applies to
 registered worktrees of one repository. Netclaw derives this scope from each

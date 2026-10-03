@@ -180,8 +180,33 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
         if (AssignmentDigest is { } assignmentDigest)
             phrase += $" with assignment {assignmentDigest.Value}";
         if (Repository is not null)
-            return $"{phrase} in repository {Repository}";
-        return Directory is null ? $"{phrase} anywhere" : $"{phrase} in {Directory}";
+            phrase = $"{phrase} in repository {Repository}";
+        else
+            phrase = Directory is null ? $"{phrase} anywhere" : $"{phrase} in {Directory}";
+
+        return HasLegacyProgramSpelling ? $"{phrase} (legacy program spelling)" : phrase;
+    }
+
+    /// <summary>
+    /// True when an older version saved this Bash grant with a relative program
+    /// path and no directory to resolve it against. The grant covers each file
+    /// that the spelling can reach (see <see cref="ShellProgramPath.MatchesLegacyRelative"/>).
+    /// Grant it again to cover one file.
+    /// </summary>
+    [JsonIgnore]
+    public bool HasLegacyProgramSpelling
+    {
+        get
+        {
+            if (Shell != ApprovalShell.Bash || Directory is not null || Match is not { } match)
+                return false;
+
+            var program = match == ApprovalMatchKind.TokenPrefix
+                ? VerbTokens![0]
+                : Verb.Split(' ', 2)[0];
+            return ShellProgramPath.IsLegacyRelative(program)
+                   && (Repository is null || ShellProgramPath.NormalizeRelative(program) != program);
+        }
     }
 
     private static string FormatMatch(ApprovalMatchKind match) => match switch

@@ -107,7 +107,8 @@ internal static class GrantBuilder
         {
             var repository = repositories[index];
             grants.Add(new ToolApprovalGrant(
-                candidates[index] with { Directory = repository.ResolvedDirectory },
+                WithWorktreeProgram(candidates[index], repository.CommonDirectory)
+                    with { Directory = repository.ResolvedDirectory },
                 new GrantScope.Repository(repository.CommonDirectory))
             {
                 RepositoryWorktree = repository.WorktreeRoot,
@@ -115,5 +116,29 @@ internal static class GrantBuilder
         }
 
         return grants;
+    }
+
+    /// <summary>
+    /// Stores a program file of the repository by its path below the worktree root
+    /// (R1). The grant then covers that file in each worktree of the repository. A
+    /// program outside the worktree, such as <c>/usr/bin/make</c>, keeps its
+    /// absolute path.
+    /// </summary>
+    private static ApprovalCandidate WithWorktreeProgram(ApprovalCandidate candidate, string repository)
+    {
+        if (candidate.Shell != ApprovalShell.Bash
+            || candidate.VerbTokens is not { Count: > 0 } tokens
+            || !ApprovalPatternMatching.TryGetWorktreeProgram(tokens[0], repository, out var worktreeProgram))
+        {
+            return candidate;
+        }
+
+        return candidate with
+        {
+            Verb = candidate.Verb.StartsWith(tokens[0], StringComparison.Ordinal)
+                ? worktreeProgram + candidate.Verb[tokens[0].Length..]
+                : candidate.Verb,
+            VerbTokens = Array.AsReadOnly([worktreeProgram, .. tokens.Skip(1)]),
+        };
     }
 }

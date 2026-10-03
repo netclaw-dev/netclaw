@@ -546,6 +546,21 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   and the display verb. Policy data gives some programs a one-token chain
   (`echo`, `which`, `jq`); a bare-program grant for them also covers their
   plain words.
+- Follows: a program path names a file, not a spelling (R1). When the
+  program word has a slash, `ShellApprovalMatcher` replaces it with the
+  lexical absolute path: it joins a relative path with the occurrence working
+  directory (after each `cd`) and collapses `.` and `..`. The shared rule is
+  `ShellProgramPath` in `Netclaw.Configuration`. So `cd /opt/bin && ./tool`
+  and `/opt/bin/tool` give one grant, and `cd /tmp && ./tool` is another file.
+  A bare name keeps its `PATH` meaning. The rule is lexical, because the
+  existing `..`-after-link guard already makes such an occurrence unresolved.
+  When the working directory is not known, the word keeps its spelling. A
+  repository grant stores the path below the worktree root (`./scripts/x.sh`).
+  The store reads older `~/x`, `/abs/x`, and folder `./x` grants as absolute
+  paths at load time. A `./x` grant with no folder covers the files that the
+  spelling can reach and is shown as a legacy program spelling. A `~/x`
+  program has `Unknown` words in ShellSyntaxTree 0.4.0-beta.10, so it gets the
+  `WriteProgramPathInFull` correction.
 - Follows: `Unknown` command words mean that no grant can cover the call.
   They occur only when the verb slot holds a bare glob (`*`, `p?sh`), an
   expansion, a brace list, or word splitting (`git {push,fetch}`,

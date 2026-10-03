@@ -248,7 +248,7 @@ public sealed class ApprovalsCommandTests : IDisposable
     {
         var repository = ApprovalEntry.CreateRepositoryTokenPrefix(
             ApprovalShell.Bash, ["./scripts/bump-version.sh"], "/work/main/.git");
-        var folder = InDir("./scripts/bump-version.sh", "/work/main");
+        var folder = InDir("/work/main/scripts/bump-version.sh", "/work/main");
         _store.AddApproval(TrustAudience.Personal, "shell_execute", repository);
         _store.AddApproval(TrustAudience.Personal, "shell_execute", folder);
 

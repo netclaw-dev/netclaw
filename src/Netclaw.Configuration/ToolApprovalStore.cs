@@ -201,7 +201,8 @@ public sealed class ToolApprovalStore
             {
                 CurrentSchemaVersion => ApprovalStoreCodec.ReadVersion3(
                     document.RootElement,
-                    _migrationContext?.ShellToolName ?? "shell_execute"),
+                    _migrationContext?.ShellToolName ?? "shell_execute",
+                    LaunchHomeDirectory),
                 2 => ConvertVersion2(document.RootElement, sourceBytes),
                 1 => ConvertVersion1(sourceBytes),
                 > CurrentSchemaVersion => throw new ApprovalStoreException(
@@ -236,6 +237,7 @@ public sealed class ToolApprovalStore
         var data = ApprovalStoreCodec.ConvertVersion2(
             root,
             _migrationContext,
+            LaunchHomeDirectory,
             out var omittedEntries);
         var contents = ApprovalStoreCodec.Serialize(data);
         _fileAccess.ReplaceVersion2(
@@ -620,8 +622,13 @@ public sealed class ToolApprovalStore
             ? entry
             : entry with { Directory = directory };
         ApprovalEntryValidation.ValidateVersion3(normalized);
-        return normalized;
+        return isShellTool ? ShellProgramPath.NormalizeGrant(normalized, LaunchHomeDirectory) : normalized;
     }
+
+    // The shell launcher gives this value to HOME. A "~/x" program in an older
+    // grant named the file below it.
+    private static string LaunchHomeDirectory
+        => Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
 
     private static string? NormalizeVersion3Directory(
         string? directory,

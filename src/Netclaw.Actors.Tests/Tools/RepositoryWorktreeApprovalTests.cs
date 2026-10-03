@@ -451,6 +451,82 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
         }
     }
 
+    // R1: a repository grant stores a repository program by its path below the
+    // worktree root. It covers that file in each worktree and from each folder,
+    // and not a file with the same path in another repository.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Repository_grant_names_the_program_below_the_worktree_root()
+    {
+        var root = CreateTestRoot("netclaw-repository-program-");
+        try
+        {
+            var main = Path.Combine(root.FullName, "main");
+            var sibling = Path.Combine(root.FullName, "sibling");
+            var unrelated = Path.Combine(root.FullName, "unrelated");
+            var session = Directory.CreateDirectory(Path.Combine(root.FullName, "session"));
+            RunGit(root.FullName, "init", main);
+            RunGit(main, "worktree", "add", "--orphan", "-b", "sibling", sibling);
+            RunGit(root.FullName, "init", unrelated);
+            foreach (var worktree in new[] { main, sibling, unrelated })
+                Directory.CreateDirectory(Path.Combine(worktree, "scripts"));
+
+            await using var harness = await CreateHarnessAsync(
+                "repository-program",
+                main,
+                main,
+                session.FullName,
+                $"cd {main}/scripts && ./bump-version.sh",
+                Approvals.None);
+            var prompt = await harness.EvaluateDecisionAsync(TestContext.Current.CancellationToken);
+            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, prompt.Outcome);
+            var grants = GrantBuilder.Build(
+                prompt.ApprovalContext!.Candidates!,
+                GrantScopeKind.Repository,
+                main,
+                session.FullName,
+                prompt.ApprovalContext!.RepositoryCommonDirectory);
+            await harness.ApprovalService.RecordApprovalCandidatesAsync(
+                (ToolApprovalSessionId)"signalr/other-session",
+                TrustAudience.Personal,
+                new ToolName(ShellTool.ToolName),
+                grants,
+                TestContext.Current.CancellationToken);
+
+            var stored = harness.GetStoredShellEntries(TrustAudience.Personal);
+            var grant = Assert.Single(stored, entry => entry.Repository is not null);
+            Assert.Equal(["./scripts/bump-version.sh"], grant.VerbTokens!);
+            foreach (var covered in new[]
+                     {
+                         "./scripts/bump-version.sh",
+                         $"{sibling}/scripts/bump-version.sh",
+                         $"cd {main}/scripts && ../scripts/bump-version.sh",
+                     })
+            {
+                var decision = await harness.EvaluateShellDecisionAsync(covered, TestContext.Current.CancellationToken);
+                Assert.True(
+                    decision is { Outcome: ToolAuthorizationOutcome.Allowed, AllowReason: ToolAllowReason.StoredApproval },
+                    $"'{covered}' was {decision.Outcome}; the repository grant should cover it.");
+            }
+
+            foreach (var other in new[]
+                     {
+                         $"cd {main}/scripts && ./scripts/bump-version.sh",
+                         $"{unrelated}/scripts/bump-version.sh",
+                     })
+            {
+                var decision = await harness.EvaluateShellDecisionAsync(other, TestContext.Current.CancellationToken);
+                Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, decision.Outcome);
+            }
+        }
+        finally
+        {
+            root.Delete(recursive: true);
+        }
+    }
+
+    public static bool IsPosix => !OperatingSystem.IsWindows();
+
     [Fact]
     public async Task Separate_git_directory_does_not_offer_repository_scope()
     {

@@ -341,6 +341,17 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                         $"Persistent approvals exist for {audienceKey}.{ShellTool.ToolName} " +
                         "but shell is disabled.");
                 }
+
+                // R1: such a grant has no directory, so its relative program path
+                // names no single file. It still matches, so it adds no prompt.
+                var legacySpellings = entries.Count(static entry => entry.HasLegacyProgramSpelling);
+                if (legacySpellings > 0)
+                {
+                    warnings.Add(
+                        $"{legacySpellings} {audienceKey}.{ShellTool.ToolName} approval(s) use a legacy program spelling: " +
+                        "a relative program path with no folder. Each one covers every file that the path can reach. " +
+                        "Run 'netclaw approvals list' to see them, then revoke each one and approve the program again.");
+                }
             }
         }
         catch (Exception ex)

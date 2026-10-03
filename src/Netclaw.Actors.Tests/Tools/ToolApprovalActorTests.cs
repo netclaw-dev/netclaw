@@ -27,7 +27,7 @@ public sealed class ToolApprovalActorTests : TestKit
             if (OperatingSystem.IsWindows())
                 data.Add(@"C:\Users\petabridge\.netclaw\logs\", @"C:\Users\petabridge\.netclaw\output\", @"C:\Users\petabridge\.netclaw\output\");
             else
-                data.Add("/home/user/.netclaw/logs/", "/home/user/.netclaw/output/", "/home/user/.netclaw/output/");
+                data.Add("/home/user/.netclaw/logs", "/home/user/.netclaw/output", "/home/user/.netclaw/output");
 
             return data;
         }

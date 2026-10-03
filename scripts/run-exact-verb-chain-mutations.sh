@@ -6,6 +6,9 @@ set -euo pipefail
 # longer candidate, so a "gh" grant would cover "gh auth logout".
 # Unknown command words get a rewrite correction. A mutant that drops the
 # correction turns the call back into a prompt or a denial, so it must die.
+# R1: a program path names its file. A mutant that skips the join with the
+# working directory, or the "/" boundary of an older "./tool" grant, lets one
+# grant run another file with that name, so it must die.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 test_project="$repo_root/src/Netclaw.Actors.MutationTests"
 output_path="${1:-$repo_root/artifacts/stryker/exact-verb-chain}"
@@ -60,3 +63,15 @@ read -r correction_start correction_end < <(
   find_span 'return correction is null ? null : new ToolCorrectionCollection([correction]);' "$coordinator_file")
 run_gate Netclaw.Actors.csproj "Tools/ShellPolicyCoordinator.cs{$correction_start..$correction_end}" \
   "$output_path/actors" 3 "command-words correction"
+
+read -r program_start program_end < <(
+  find_span $'return Environment.Grammar == ShellGrammar.Bash\n               && ShellProgramPath.TryResolve(programWord, workingDirectory, out programPath)\n               && !string.Equals(programPath, programWord, StringComparison.Ordinal);' \
+  "$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs")
+run_gate Netclaw.Security.csproj "IToolApprovalMatcher.cs{$program_start..$program_end}" \
+  "$output_path/program-path" 4 "program path identity"
+
+read -r legacy_start legacy_end < <(
+  find_span 'return NormalizeAbsolute(candidateProgram).EndsWith("/" + namedSegments, StringComparison.Ordinal);' \
+  "$repo_root/src/Netclaw.Configuration/ShellProgramPath.cs")
+run_gate Netclaw.Configuration.csproj "ShellProgramPath.cs{$legacy_start..$legacy_end}" \
+  "$output_path/legacy-program" 1 "legacy program spelling"

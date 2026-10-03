@@ -164,20 +164,6 @@ public static class PathUtility
             return ExpandAndNormalize(expanded, workingDirectory);
         }
 
-        var segments = new List<string>();
-        foreach (var segment in expanded.Split('/', StringSplitOptions.RemoveEmptyEntries))
-        {
-            if (segment == "..")
-            {
-                if (segments.Count > 0)
-                    segments.RemoveAt(segments.Count - 1);
-            }
-            else if (segment != ".")
-            {
-                segments.Add(segment);
-            }
-        }
-
-        return "/" + string.Join('/', segments);
+        return ShellProgramPath.NormalizeAbsolute(expanded);
     }
 }

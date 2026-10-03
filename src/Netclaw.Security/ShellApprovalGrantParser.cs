@@ -174,6 +174,19 @@ public static class ShellApprovalGrantParser
             tokens[0] = canonicalVerb;
         }
 
+        // A Bash grant names a program file by its absolute path (R1). A
+        // relative path names a different file in each directory.
+        if (shell == ApprovalShell.Bash && ShellProgramPath.IsPath(tokens[0]))
+        {
+            if (!ShellProgramPath.TryResolve(tokens[0], workingDirectory: null, out var programPath))
+            {
+                error = "The program path must be absolute, for example /home/user/bin/tool.";
+                return false;
+            }
+
+            tokens[0] = programPath;
+        }
+
         var canonicalSource = string.Join(" ", tokens);
         if (!string.Equals(source, canonicalSource, StringComparison.Ordinal))
         {

@@ -148,7 +148,7 @@ public sealed class ApprovalEntryWireCodecTests
             StringComparison.Ordinal);
         Assert.DoesNotContain("\\u002B", json, StringComparison.Ordinal);
         using var document = JsonDocument.Parse(json);
-        var roundTrip = ApprovalStoreCodec.ReadVersion3(document.RootElement, "shell_execute");
+        var roundTrip = ApprovalStoreCodec.ReadVersion3(document.RootElement, "shell_execute", homeDirectory: null);
 
         var actualShellEntries = roundTrip.Audiences["personal"]["shell_execute"];
         Assert.Collection(

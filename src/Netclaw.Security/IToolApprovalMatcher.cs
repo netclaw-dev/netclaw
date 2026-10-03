@@ -164,6 +164,11 @@ public enum ShellCommandWordsRewrite
     /// Run each command separately, and write the words literally.
     /// </summary>
     RunCommandsSeparately = 2,
+
+    /// <summary>
+    /// A <c>~</c> starts the program path. Write the full path of the program.
+    /// </summary>
+    WriteProgramPathInFull = 3,
 }
 
 public sealed record ShellApprovalAnalysis(
@@ -350,6 +355,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         var verbTokens = GetCommandWords(occurrence);
+        if (verbTokens is not null
+            && TryResolveProgramPath(
+                verbTokens[0],
+                GetClauseWorkingDirectory(occurrence, workingDirectory, resolveUnknownPathsFromEffectiveValues),
+                out var programPath))
+        {
+            verb = ReplaceProgram(verb, clause.Verb.Tokens[0], programPath);
+            verbTokens = Array.AsReadOnly([programPath, .. verbTokens.Skip(1)]);
+        }
+
         return directories
             .Select(directory => new ApprovalCandidate(verb, directory)
             {
@@ -391,6 +406,35 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     /// <summary>
+    /// Resolves a Bash program path to the absolute path of its file (R1). A bare
+    /// name does not change, because the shell finds it through <c>PATH</c>.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a grant names a file, not a spelling. <c>./tool</c> in
+    /// <c>/opt/bin</c> and <c>/opt/bin/tool</c> are one grant, and
+    /// <c>./tool</c> in <c>/tmp</c> is another file. The base is the effective
+    /// working directory of the occurrence, after each <c>cd</c>. When it is not
+    /// known, the word keeps its spelling, as before. The rule is lexical: the
+    /// candidate has no directory when a <c>..</c> follows a link.
+    /// </remarks>
+    private bool TryResolveProgramPath(string programWord, string? workingDirectory, out string programPath)
+    {
+        programPath = string.Empty;
+        // A Bash environment always uses POSIX paths.
+        return Environment.Grammar == ShellGrammar.Bash
+               && ShellProgramPath.TryResolve(programWord, workingDirectory, out programPath)
+               && !string.Equals(programPath, programWord, StringComparison.Ordinal);
+    }
+
+    // The display verb starts with the parser's program word. A launcher value
+    // ($HOME/x) and a relative path both show the file that runs.
+    private static string ReplaceProgram(string verb, string parserProgram, string programPath)
+        => verb.StartsWith(parserProgram, StringComparison.Ordinal)
+           && (verb.Length == parserProgram.Length || verb[parserProgram.Length] == ' ')
+            ? programPath + verb[parserProgram.Length..]
+            : verb;
+
+    /// <summary>
     /// Returns the rewrite that gives a command known command words, or null
     /// when no rewrite by the model can help (for example, a dynamic program
     /// name or a PowerShell script block). Uses general parser facts only: the
@@ -423,6 +467,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (shell != ApprovalShell.Bash)
             return null;
 
+        // ShellSyntaxTree 0.4.0-beta.10 gives no launch value for a tilde in the
+        // program word, so "~/bin/tool" has no command words. The full path
+        // "/home/user/bin/tool" names the same file and has known words (R1).
+        if (clause.Elements[0].Raw.StartsWith("~/", StringComparison.Ordinal))
+            return ShellCommandWordsRewrite.WriteProgramPathInFull;
+
         if (words.Any(static element => element.Kind is ShellSyntaxTree.ArgKind.EnvVar or ShellSyntaxTree.ArgKind.DynamicSkip))
             return ShellCommandWordsRewrite.WriteWordsLiterally;
 
@@ -441,11 +491,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         var clause = occurrence.Clause;
         var directories = new List<string?>();
         var cwdAttribution = clause.Args.FirstOrDefault(static arg => arg.IsCwdAttribution);
-        var clauseWorkingDirectory = resolveUnknownPathsFromEffectiveValues
-            ? workingDirectory
-            : ExactValue(occurrence.WorkingDirectory)
-              ?? cwdAttribution?.Resolved
-              ?? (cwdAttribution is null ? workingDirectory : null);
+        var clauseWorkingDirectory = GetClauseWorkingDirectory(
+            occurrence,
+            workingDirectory,
+            resolveUnknownPathsFromEffectiveValues);
 
         // The OS follows a link before it applies "..". Every scope below is
         // lexical, so such an occurrence stays unresolved: exact consent only.
@@ -551,6 +600,25 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         }
 
         return directories.Distinct(StringComparer.Ordinal).ToList();
+    }
+
+    /// <summary>
+    /// Returns the working directory of one occurrence: the parser's exact value
+    /// after each <c>cd</c>, else the synthetic attribution, else the call's
+    /// working directory when no state change precedes the occurrence.
+    /// </summary>
+    private static string? GetClauseWorkingDirectory(
+        ShellSyntaxTree.CommandOccurrence occurrence,
+        string? workingDirectory,
+        bool resolveUnknownPathsFromEffectiveValues)
+    {
+        if (resolveUnknownPathsFromEffectiveValues)
+            return workingDirectory;
+
+        var cwdAttribution = occurrence.Clause.Args.FirstOrDefault(static arg => arg.IsCwdAttribution);
+        return ExactValue(occurrence.WorkingDirectory)
+               ?? cwdAttribution?.Resolved
+               ?? (cwdAttribution is null ? workingDirectory : null);
     }
 
     /// <summary>
