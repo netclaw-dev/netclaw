@@ -572,17 +572,29 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Version_two_omission_emits_one_bounded_actor_diagnostic()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        // The store also writes ".lock" and ".v2.bak" files next to the store
+        // file, so the test owns a whole directory and deletes all of it.
+        var storeDirectory = Directory.CreateTempSubdirectory("netclaw-approval-v2-");
         try
         {
+            var storePath = Path.Combine(storeDirectory.FullName, "tool-approvals.json");
             File.WriteAllText(
-                tempFile,
+                storePath,
                 "{\"version\":2,\"audiences\":{\"personal\":{\"shell_execute\":[{\"verb\":\" git\"}]}}}");
             var store = new ToolApprovalStore(
-                tempFile,
+                storePath,
                 timeProvider: null,
                 migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
                 lockTimeout: TimeSpan.Zero);
+
+            // The version-2 conversion writes a backup and a temporary file with
+            // forced disk flushes. On a loaded Windows CI runner these flushes
+            // took more than the 5 s ask timeout, so the conversion runs here
+            // without a deadline. ToolApprovalStoreTests covers the conversion.
+            // The asks below then read the converted file from the store cache.
+            Assert.IsType<ApprovalStoreLoadResult.Ready>(store.TryLoad());
+            Assert.Equal(1, store.LastMigrationOmittedEntryCount);
+
             var actor = Sys.ActorOf(ToolApprovalActor.CreateProps(store));
             var service = CreateService(actor);
 
@@ -607,7 +619,7 @@ public sealed class ToolApprovalActorTests : TestKit
         }
         finally
         {
-            File.Delete(tempFile);
+            storeDirectory.Delete(recursive: true);
         }
     }
 
