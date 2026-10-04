@@ -597,7 +597,7 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [InlineData("'netclaw' daemon stop &", "hard_deny_self_destructive")]
     [InlineData("bash -c \"pkill netclawd\" &", "hard_deny_self_destructive")]
     [InlineData("sudo rm -rf / &", "hard_deny_privilege_escalation")]
-    [InlineData("cat ../netclaw/config/notes.txt &", "shell_references_protected_path")]
+    [InlineData("cat ../netclaw/config/secrets.json &", "shell_references_protected_path")]
     public async Task Unresolved_command_still_meets_hard_deny_and_protected_paths(string command, string reason)
     {
         await using var harness = await CreateHarnessAsync("legacy-tokenizer");

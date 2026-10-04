@@ -275,7 +275,7 @@ public sealed class HardDenyParityCorpusTests(ShellApprovalMatrixFixture fixture
         Deny("boundary-background-quoted-head", BoundaryTests, "'netclaw' daemon stop &", SelfDestructive),
         Deny("boundary-background-wrapper", BoundaryTests, "bash -c \"pkill netclawd\" &", SelfDestructive),
         Deny("boundary-background-sudo", BoundaryTests, "sudo rm -rf / &", PrivilegeEscalation),
-        Deny("boundary-background-protected", BoundaryTests, "cat ../netclaw/config/notes.txt &", ProtectedPath),
+        Deny("boundary-background-protected", BoundaryTests, "cat ../netclaw/config/secrets.json &", ProtectedPath),
     ];
 
     public static IEnumerable<TheoryDataRow<string>> BashRows

@@ -24,17 +24,23 @@ public sealed class ToolPathPolicy
 {
     // The default-layout text hints. They apply even when an operator moves the
     // Netclaw root, so a command that names the default credential store stays
-    // denied. A credential hint denies a path token alone; every hint denies with
-    // a high-risk verb.
-    private static readonly (string Fragment, bool IsCredentialStore)[] DefaultLayoutHints =
+    // denied. A hint denies a path token alone, and any token with a high-risk
+    // verb. The config directory is not a hint: the agent may read its config
+    // (decision D6), and the write list still denies a shell write to it.
+    private static readonly string[] DefaultLayoutHints =
     [
-        (".netclaw/config", false),
-        (".netclaw/keys", true),
-        ("secrets.json", true),
+        ".netclaw/keys",
+        "secrets.json",
     ];
 
     private readonly ShellCommandAnalyzer _analyzer;
     private readonly HashSet<string> _commandIndicators;
+    private readonly HashSet<string> _guardedDirectoryMarkers;
+    private readonly IReadOnlyList<string> _guardedDirectories;
+
+    // The shell set plus each guarded directory. It applies when the parser
+    // cannot prove the whole source, so the trusted-root check may not see a path.
+    private readonly FileSystemAuthority _unprovedShell;
 
     public ToolPathPolicy(IEnumerable<string> deniedPaths)
         : this(ShellExecutionEnvironmentDefaults.Bash, deniedPaths)
@@ -50,6 +56,9 @@ public sealed class ToolPathPolicy
         var materialized = deniedPaths.ToList();
         FileSystem = new FileSystemAuthority(materialized, materialized, materialized);
         _commandIndicators = BuildCommandIndicators(materialized);
+        _guardedDirectories = GuardedDirectories(materialized, materialized);
+        _guardedDirectoryMarkers = BuildGuardedDirectoryMarkers(_guardedDirectories);
+        _unprovedShell = FileSystem;
     }
 
     public ToolPathPolicy(
@@ -72,9 +81,16 @@ public sealed class ToolPathPolicy
     {
         Environment = environment ?? throw new ArgumentNullException(nameof(environment));
         _analyzer = new ShellCommandAnalyzer(environment);
+        var writeList = writeDeniedPaths.ToList();
+        var readList = readDeniedPaths.ToList();
         var shellList = shellIndicatorPaths.ToList();
-        FileSystem = new FileSystemAuthority(writeDeniedPaths, readDeniedPaths, shellList);
+        FileSystem = new FileSystemAuthority(writeList, readList, shellList);
         _commandIndicators = BuildCommandIndicators(shellList);
+        _guardedDirectories = GuardedDirectories(writeList, readList);
+        _guardedDirectoryMarkers = BuildGuardedDirectoryMarkers(_guardedDirectories);
+        _unprovedShell = _guardedDirectories.Count == 0
+            ? FileSystem
+            : new FileSystemAuthority([], [], [.. shellList, .. _guardedDirectories]);
     }
 
     public ShellExecutionEnvironment Environment { get; }
@@ -106,6 +122,84 @@ public sealed class ToolPathPolicy
     }
 
     /// <summary>
+    /// Returns the text markers of each write-protected directory that holds a
+    /// read-protected path, for example the config directory that holds
+    /// <c>secrets.json</c>.
+    /// </summary>
+    /// <remarks>
+    /// Shell text that names such a directory stays denied, as before decision
+    /// D6. Decision D6 exempts only an exact path argument of a read-only
+    /// program that names one file below the directory
+    /// (<see cref="RemoveReadOperands"/>). Program text that names the directory
+    /// (<c>jq 'import "secrets" {search: "dir"}'</c>, <c>python3 -c</c>) stays
+    /// denied.
+    /// </remarks>
+    private static HashSet<string> BuildGuardedDirectoryMarkers(IReadOnlyList<string> guardedDirectories)
+        => BuildCommandIndicators(guardedDirectories)
+            .Where(marker => marker.Contains('/', StringComparison.Ordinal))
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+    private static List<string> GuardedDirectories(
+        IReadOnlyList<string> writeDenied,
+        IReadOnlyList<string> readDenied)
+    {
+        var readPaths = readDenied.Select(PathUtility.Normalize).ToList();
+        return writeDenied
+            .Select(PathUtility.Normalize)
+            .Where(directory => readPaths.Any(path =>
+                !string.Equals(path, directory, StringComparison.OrdinalIgnoreCase)
+                && CanonicalPath.IsWithin(path, directory, CanonicalPath.HostStyle, ignoreCase: true)))
+            .ToList();
+    }
+
+    /// <summary>
+    /// Returns the command text without each exact path argument of a
+    /// read-only program that names one file below a guarded directory.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: only such an argument leaves the text screen. A glob, a
+    /// <c>..</c> segment, the directory itself, an option value, a redirect, and
+    /// program text keep the denial. The read-only programs are policy data
+    /// (<see cref="ShellVerbPolicyData.ReadOnlyOperandVerbs"/>). The caller uses
+    /// this only for a source that the parser proves.
+    /// </remarks>
+    private string RemoveReadOperands(ShellCommandAnalysis analysis, string slashCommand)
+    {
+        var text = slashCommand;
+        foreach (var occurrence in analysis.Commands)
+        {
+            if (occurrence is not { IsComplete: true, Assignments.Count: 0, Clause.Verb: { IsDynamic: false, Tokens: [var program, ..] } }
+                || !ShellVerbPolicyData.ReadOnlyOperandVerbs.Contains(program))
+            {
+                continue;
+            }
+
+            foreach (var argument in occurrence.Arguments)
+            {
+                var raw = argument.Element.Raw.Replace('\\', '/');
+                if (argument is { Argument.IsPath: true, Argument.Kind: not ArgKind.Glob, Value: ShellValueDomain.Exact }
+                    && !raw.Split('/').Contains("..")
+                    && NamesOneFileBelowGuardedDirectory(argument.Argument.Resolved)
+                    && text.IndexOf(raw, StringComparison.Ordinal) is var at and >= 0)
+                {
+                    text = text.Remove(at, raw.Length);
+                }
+            }
+        }
+
+        return text;
+    }
+
+    // An exemption is an allow check, so it compares with ordinal case except on Windows.
+    private static readonly bool AllowIgnoresCase = OperatingSystem.IsWindows();
+
+    private bool NamesOneFileBelowGuardedDirectory(string? resolved)
+        => CanonicalPath.TryCreateHost(resolved, relativeBase: null, out var path)
+           && _guardedDirectories.Any(directory =>
+               !CanonicalPath.IsWithin(directory, path.Value, CanonicalPath.HostStyle, AllowIgnoresCase)
+               && CanonicalPath.IsWithin(path.Value, directory, CanonicalPath.HostStyle, AllowIgnoresCase));
+
+    /// <summary>
     /// Returns true when a parser-canonical shell path is protected. A path in
     /// another style than this shell cannot be checked, so it counts as protected (R5).
     /// </summary>
@@ -113,8 +207,8 @@ public sealed class ToolPathPolicy
         => path.Style != Environment.PathStyle
            || FileSystem.IsProtected(path.Value, PathOperation.Shell);
 
-    private bool IsShellDenied(string path)
-        => FileSystem.IsProtected(path, PathOperation.Shell);
+    private static bool IsShellDenied(FileSystemAuthority shell, string path)
+        => shell.IsProtected(path, PathOperation.Shell);
 
     /// <summary>
     /// Returns true if the given shell command string contains a reference to any denied path.
@@ -140,8 +234,13 @@ public sealed class ToolPathPolicy
 
         var command = analysis.Source;
         var workingDirectory = analysis.WorkingDirectory;
+        // SECURITY: the trusted-root check sees each path only when the parser
+        // proves the whole source. Without that proof, a guarded directory stays
+        // shell-denied as a whole, as before decision D6.
+        var proved = analysis.IsResolved && !analysis.HasDynamicSyntax;
+        var shell = proved ? FileSystem : _unprovedShell;
 
-        if (!string.IsNullOrWhiteSpace(workingDirectory) && IsShellDenied(workingDirectory))
+        if (!string.IsNullOrWhiteSpace(workingDirectory) && IsShellDenied(shell, workingDirectory))
             return true;
 
         var tokens = LegacyShellTextScan.Tokenize(command).ToList();
@@ -152,7 +251,15 @@ public sealed class ToolPathPolicy
                 return true;
         }
 
-        if (StructuredAnalysisReferencesDeniedPath(analysis))
+        // Each mention of a guarded directory stays denied, as when the whole
+        // config directory was a shell indicator. Only an exact read operand leaves
+        // the text (decision D6). Without a parser proof, the structured check of
+        // the operand uses the shell set plus each guarded directory.
+        var screened = RemoveReadOperands(analysis, slashCommand);
+        if (_guardedDirectoryMarkers.Any(marker => screened.Contains(marker, StringComparison.OrdinalIgnoreCase)))
+            return true;
+
+        if (StructuredAnalysisReferencesDeniedPath(analysis, shell))
         {
             return true;
         }
@@ -169,20 +276,24 @@ public sealed class ToolPathPolicy
                 token,
                 workingDirectory,
                 Environment.PathStyle);
-            if (normalized is not null && IsShellDenied(normalized))
+            if (normalized is not null && IsShellDenied(shell, normalized))
                 return true;
 
             var expanded = PathUtility.ExpandHome(token).Replace('\\', '/');
-            if (DefaultLayoutHints.Any(hint =>
-                    hint.IsCredentialStore
-                    && expanded.Contains(hint.Fragment, StringComparison.OrdinalIgnoreCase)))
+            if (DefaultLayoutHints.Any(hint => expanded.Contains(hint, StringComparison.OrdinalIgnoreCase)))
             {
                 return true;
             }
         }
 
-        if (DefaultLayoutHints.Any(hint => slashCommand.Contains(hint.Fragment, StringComparison.OrdinalIgnoreCase))
-            && tokens.Any(token => ShellVerbPolicyData.HighRiskVerbs.Contains(LegacyShellTextScan.TrimShellPunctuation(token))))
+        // The default config directory keeps its hint with a high-risk verb, also
+        // when an operator moves the Netclaw root. A read operand leaves it only
+        // when the default directory is the live one.
+        var hasHighRiskVerb = tokens.Any(token =>
+            ShellVerbPolicyData.HighRiskVerbs.Contains(LegacyShellTextScan.TrimShellPunctuation(token)));
+        if (hasHighRiskVerb
+            && (DefaultLayoutHints.Any(hint => slashCommand.Contains(hint, StringComparison.OrdinalIgnoreCase))
+                || screened.Contains(".netclaw/config", StringComparison.OrdinalIgnoreCase)))
         {
             return true;
         }
@@ -191,7 +302,8 @@ public sealed class ToolPathPolicy
     }
 
     private bool StructuredAnalysisReferencesDeniedPath(
-        ShellCommandAnalysis analysis)
+        ShellCommandAnalysis analysis,
+        FileSystemAuthority shell)
     {
         if (analysis.Failure != ShellAnalysisFailure.None)
             return false;
@@ -202,7 +314,7 @@ public sealed class ToolPathPolicy
             {
                 if (argument.IsPath
                     && !string.IsNullOrWhiteSpace(argument.Resolved)
-                    && IsShellDenied(argument.Resolved))
+                    && IsShellDenied(shell, argument.Resolved))
                 {
                     return true;
                 }
@@ -211,12 +323,12 @@ public sealed class ToolPathPolicy
             foreach (var effective in occurrence.Arguments)
             {
                 if (effective.Element.IsPath
-                    && DomainReferencesDeniedPath(effective.Value))
+                    && DomainReferencesDeniedPath(effective.Value, shell))
                 {
                     return true;
                 }
 
-                if (DomainReferencesDeniedPath(effective.AuthoredFileSystemValue))
+                if (DomainReferencesDeniedPath(effective.AuthoredFileSystemValue, shell))
                 {
                     return true;
                 }
@@ -225,7 +337,7 @@ public sealed class ToolPathPolicy
             foreach (var redirect in occurrence.Redirects)
             {
                 if (redirect is FileRedirectAnalysis file
-                    && DomainReferencesDeniedPath(file.Target))
+                    && DomainReferencesDeniedPath(file.Target, shell))
                 {
                     return true;
                 }
@@ -235,18 +347,18 @@ public sealed class ToolPathPolicy
         return false;
     }
 
-    private bool DomainReferencesDeniedPath(ShellValueDomain domain)
+    private bool DomainReferencesDeniedPath(ShellValueDomain domain, FileSystemAuthority shell)
         => domain switch
         {
             ShellValueDomain.Exact exact =>
                 !string.IsNullOrWhiteSpace(exact.Value)
-                && IsShellDenied(exact.Value),
+                && IsShellDenied(shell, exact.Value),
             ShellValueDomain.FiniteSet finite => finite.Values.Any(value =>
                 !string.IsNullOrWhiteSpace(value)
-                && IsShellDenied(value)),
+                && IsShellDenied(shell, value)),
             ShellValueDomain.PathPattern pattern =>
                 !string.IsNullOrWhiteSpace(pattern.CoveringDirectory)
-                && (IsShellDenied(pattern.CoveringDirectory) || GlobMayReachDeniedPath(pattern)),
+                && (IsShellDenied(shell, pattern.CoveringDirectory) || GlobMayReachDeniedPath(pattern, shell)),
             _ => false
         };
 
@@ -262,23 +374,23 @@ public sealed class ToolPathPolicy
     /// the directory or follow links here, so a link below the covering directory
     /// that leads to a protected path is an accepted gap.
     /// </remarks>
-    private bool GlobMayReachDeniedPath(ShellValueDomain.PathPattern pattern)
+    private bool GlobMayReachDeniedPath(ShellValueDomain.PathPattern pattern, FileSystemAuthority shell)
     {
         var glob = ShellGlobScope.AsGlobPattern(pattern);
         return glob is not null
-               && FileSystem.GetProtectedPaths(PathOperation.Shell)
+               && shell.GetProtectedPaths(PathOperation.Shell)
                    .Concat(DefaultCredentialStorePaths())
-                   .Any(target => MatchIsDenied(glob, target));
+                   .Any(target => MatchIsDenied(glob, target, shell));
     }
 
     // The match is the target itself, a directory that contains it (the glob
     // reads below it), or the ancestor of the target at the glob depth. The
     // ancestor gets the decision of that literal directory.
-    private bool MatchIsDenied(ShellValueDomain.PathPattern glob, string target)
+    private static bool MatchIsDenied(ShellValueDomain.PathPattern glob, string target, FileSystemAuthority shell)
     {
         var match = ShellGlobScope.MatchPathToward(glob, target);
         return match is not null
-               && (string.Equals(match, target, StringComparison.OrdinalIgnoreCase) || IsShellDenied(match));
+               && (string.Equals(match, target, StringComparison.OrdinalIgnoreCase) || IsShellDenied(shell, match));
     }
 
     // The default credential store of the home directory. The text hints deny these

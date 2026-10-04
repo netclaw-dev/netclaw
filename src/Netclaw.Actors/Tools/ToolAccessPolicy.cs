@@ -490,63 +490,157 @@ public sealed class ToolAccessPolicy
                 return ToolAuthorizationDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
+        var readOnly = ReadOnlyOccurrences(analysis);
         return EnforceKnownShellPaths(
             ShellPolicyPathFacts.CreateExecutionViews(analysis)
-                .SelectMany(EnumerateKnownShellPaths),
+                .SelectMany((view, index) => EnumerateKnownShellPaths(
+                    view,
+                    readOnly.Contains(analysis.Commands[index]))),
             context.Invocation);
     }
 
     /// <summary>
-    /// Applies conservative write protection to all paths in a shell policy projection.
+    /// Applies file protection to all paths in a shell policy projection: write
+    /// protection, and read protection for a read-only program (decision D6).
     /// </summary>
     /// <remarks>
     /// A causal list adds an intent view after shell preflight.
     /// The coordinator must call this method before it checks stored grants or reviewed-safe coverage.
     /// </remarks>
+    /// <param name="candidates">The path facts of each candidate, with its source occurrence.</param>
+    /// <param name="analysis">The analysis that owns the source occurrences.</param>
+    /// <param name="context">The invocation that supplies the trusted roots.</param>
     internal ToolAuthorizationDecision? EnforceProjectedShellFileProtection(
-        IReadOnlyList<ShellPolicyCandidatePathFacts> pathFacts,
+        IReadOnlyList<(ShellPolicyCandidatePathFacts PathFacts, CommandOccurrence? Occurrence)> candidates,
+        ShellCommandAnalysis? analysis,
         ToolInvocationContext context)
-        => EnforceKnownShellPaths(pathFacts.SelectMany(EnumerateKnownShellPaths), context);
+    {
+        var readOnly = analysis is null ? [] : ReadOnlyOccurrences(analysis);
+        return EnforceKnownShellPaths(
+            candidates.SelectMany(candidate => EnumerateKnownShellPaths(
+                candidate.PathFacts,
+                candidate.Occurrence is { } occurrence && readOnly.Contains(occurrence))),
+            context);
+    }
+
+    /// <summary>
+    /// Returns the occurrences of a Bash program that only reads its operands
+    /// (<see cref="ShellVerbPolicyData.ReadOnlyOperandVerbs"/>, decision D6).
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the set is empty for unresolved or dynamic syntax, because a
+    /// function or an alias can replace the program. An occurrence with an
+    /// assignment prefix or a dynamic program word is never read-only. A redirect
+    /// that writes keeps write protection for its target only. Each argument must have a bounded value, so a
+    /// glob or an unknown value cannot read a path that no check sees.
+    /// </remarks>
+    private static HashSet<CommandOccurrence> ReadOnlyOccurrences(ShellCommandAnalysis analysis)
+    {
+        var occurrences = new HashSet<CommandOccurrence>(ReferenceEqualityComparer.Instance);
+        if (analysis.Environment.Grammar != ShellGrammar.Bash
+            || !analysis.IsResolved
+            || analysis.HasDynamicSyntax)
+        {
+            return occurrences;
+        }
+
+        foreach (var occurrence in analysis.Commands)
+        {
+            var directory = occurrence.WorkingDirectory is ShellValueDomain.Exact exact
+                ? exact.Value
+                : analysis.WorkingDirectory;
+            if (occurrence is { IsComplete: true, Assignments.Count: 0, Clause.Verb: { IsDynamic: false, Tokens: [var program, ..] } }
+                && ShellVerbPolicyData.ReadOnlyOperandVerbs.Contains(program)
+                && occurrence.Arguments.All(argument => IsReadOnlyOperand(argument, directory)))
+            {
+                occurrences.Add(occurrence);
+            }
+        }
+
+        return occurrences;
+    }
+
+    // SECURITY: each value must be bounded. A path gets a path fact. A plain word
+    // must have one value that names no entry of the occurrence directory: such a
+    // word (grep -r token config) is a path that no path fact sees, and its scope
+    // is not read below, so the occurrence is not read-only.
+    private static bool IsReadOnlyOperand(AnalyzedArgument argument, string? directory)
+        => argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
+           && (argument.Argument.IsPath
+               || argument.Value is ShellValueDomain.Exact exact && !NamesEntry(exact.Value, directory));
+
+    // The one shared file-word rule of the approval matcher, the store, and the doctor.
+    private static bool NamesEntry(string word, string? directory)
+        => ShellGrantFileWords.NamesEntry(word, directory, out _);
 
     private ToolAuthorizationDecision? EnforceKnownShellPaths(
-        IEnumerable<CanonicalPath> paths,
+        IEnumerable<ShellPathAccess> paths,
         ToolInvocationContext context)
         => paths
-            .Where(static path => !ShellRedirectPolicyFacts.IsNullDevice(path))
-            .DistinctBy(static path => (path.Style, path.Value))
-            .Any(path => _pathAccessPolicy.EvaluateShellPath(path, context) is not PathAccessPolicy.PathAccessDecision.Allowed)
+            .Where(static access => !ShellRedirectPolicyFacts.IsNullDevice(access.Path))
+            .DistinctBy(static access => (access.Path.Style, access.Path.Value, access.Read))
+            .Any(access => !IsShellPathAllowed(access, context))
             ? ToolAuthorizationDecision.Deny("shell_path_outside_trust_zone")
             : null;
 
-    private static IEnumerable<CanonicalPath> EnumerateKnownShellPaths(
-        ShellPolicyCandidatePathFacts candidate)
+    // D6: a read-only program can read a write-protected path that a file tool
+    // may read. Its scopes and operands get read protection instead.
+    private bool IsShellPathAllowed(ShellPathAccess access, ToolInvocationContext context)
+        => _pathAccessPolicy.EvaluateShellPath(access.Path, context) is PathAccessPolicy.PathAccessDecision.Allowed
+           || access.Read != ShellPathRead.None
+           && _pathAccessPolicy.EvaluateShellReadPath(access.Path, context, access.Read == ShellPathRead.Operand)
+               is PathAccessPolicy.PathAccessDecision.Allowed;
+
+    private static IEnumerable<ShellPathAccess> EnumerateKnownShellPaths(
+        ShellPolicyCandidatePathFacts candidate,
+        bool readOnly)
     {
         if (candidate.RealScope.Path is { } realScope)
-            yield return realScope;
+            yield return new ShellPathAccess(realScope, readOnly ? ShellPathRead.Scope : ShellPathRead.None);
 
-        foreach (var path in EnumerateKnownShellPaths(candidate.Real))
+        foreach (var path in EnumerateKnownShellPaths(candidate.Real, readOnly))
             yield return path;
 
         if (candidate.Intent is { } intent)
         {
-            foreach (var path in EnumerateKnownShellPaths(intent))
+            foreach (var path in EnumerateKnownShellPaths(intent, readOnly))
                 yield return path;
         }
     }
 
-    private static IEnumerable<CanonicalPath> EnumerateKnownShellPaths(
-        ShellPolicyResolvedPathView view)
+    private static IEnumerable<ShellPathAccess> EnumerateKnownShellPaths(
+        ShellPolicyResolvedPathView view,
+        bool readOnly)
     {
         if (view.ResolutionBase.Path is { } resolutionBase)
-            yield return resolutionBase;
+            yield return new ShellPathAccess(resolutionBase, readOnly ? ShellPathRead.Scope : ShellPathRead.None);
 
-        foreach (var path in view.Facts
-                     .Where(static fact => fact.State == ShellPolicyPathResolutionState.Known)
-                     .SelectMany(static fact => fact.Paths))
+        foreach (var fact in view.Facts.Where(static fact => fact.State == ShellPolicyPathResolutionState.Known))
         {
-            yield return path;
+            // A redirect that writes (cat cfg > /tmp/x) keeps write protection for its target.
+            var read = readOnly
+                       && (fact.Source.Origin != ShellPolicyPathOrigin.Redirect
+                           || fact.Source.RedirectMode == FileRedirectMode.Input)
+                ? ShellPathRead.Operand
+                : ShellPathRead.None;
+            foreach (var path in fact.Paths)
+                yield return new ShellPathAccess(path, read);
         }
     }
+
+    private enum ShellPathRead
+    {
+        /// <summary>The path gets write protection only.</summary>
+        None,
+
+        /// <summary>A scope of a read-only program: the working directory or a candidate folder.</summary>
+        Scope,
+
+        /// <summary>A path that a read-only program reads.</summary>
+        Operand,
+    }
+
+    private readonly record struct ShellPathAccess(CanonicalPath Path, ShellPathRead Read);
 
     internal ToolAuthorizationDecision? PreflightStructuredPathAccess(
         INetclawTool tool,

@@ -390,7 +390,9 @@ keeps them call-local.
 
 A file tool SHALL get its filesystem authority only from a path access
 decision for its exact file operation (`Read`, `Write`, `Attach`, or
-`DeclareProjectScope`). A shell path SHALL use the `Write` operation. The
+`DeclareProjectScope`). A shell path SHALL use the `Write` operation, except
+that a Bash program that only reads its operands SHALL get `Read` protection
+for a write-protected path (owner decision D6). The
 decision SHALL apply, in order: the canonical path, the audience root catalog,
 the link check, then protection.
 
@@ -416,18 +418,29 @@ the link check, then protection.
 - A path through a link that leaves the root SHALL be denied. A path whose
   base has a link ancestor SHALL be denied, and Netclaw SHALL NOT try another
   base.
-- Protection SHALL depend on the operation. The
+- Protection SHALL depend on the operation. Each file under the config
+  directory is
   [ordinary configuration](../../../docs/spec/GLOSSARY.md#ordinary-configuration)
-  files `netclaw.json` and the grant store `tool-approvals.json` SHALL be
-  readable by a file tool (owner decision D6). Secrets (`secrets.json`), keys,
-  webhook secrets, `daemon.env`, device state, bootstrap state, the hard-deny
-  override file, the database, and process-control files SHALL be
+  and SHALL be readable by a file tool (owner decision D6), except
+  `secrets.json`. This includes `netclaw.json`, the grant store
+  `tool-approvals.json`, webhook files, `daemon.env`, device state, bootstrap
+  state, and the hard-deny override file. Secrets (`secrets.json`), keys, the
+  database, process-control files, and the tooling shadow SHALL be
   read-denied. The config directory, secrets, keys, the database, process
   control files, system skills, and server feeds SHALL be write-denied.
-- Shell text that names the config directory, secrets, webhooks, keys, the
-  database, or process-control files SHALL be denied. This includes
-  `netclaw.json` and `tool-approvals.json`, because shell text cannot show a
-  read from a write. The agent reads these files with `file_read`.
+- Shell text that names secrets, keys, the database, or process-control files
+  SHALL be denied. Shell text that names the config directory itself, a glob
+  below it, or a `..` out of it SHALL be denied. Without a parser proof of the
+  whole source, shell text that names the config directory SHALL be denied.
+- A read-only shell program SHALL be one of the policy-data programs `cat`,
+  `head`, `tail`, `wc`, `grep`, `jq`, and `diff`, with bounded argument
+  values, no assignment prefix, and no redirect that writes a file. A plain
+  argument word that names an entry of the command's directory SHALL make the
+  program not read-only. Such a program SHALL get `Read` protection only for a
+  path that the write list protects. A directory operand that holds a
+  read-denied path SHALL stay denied. Each other shell program SHALL keep
+  `Write` protection for each path, so each write to a config file stays
+  denied.
 - Owner decision D5 (option A): a shell glob word that can match a protected
   shell path, the default credential store (`~/.netclaw/keys`,
   `~/.netclaw/config/secrets.json`), or a directory that contains one, SHALL
@@ -451,9 +464,8 @@ the link check, then protection.
   paths of a shell call from the command analysis, independent of approval
   candidates, and SHALL check known causal-intent and fallback paths before
   stored or reviewed-safe coverage.
-- A readable `netclaw.json` or `tool-approvals.json` SHALL NOT imply write,
-  edit, attach, or shell authority. Secret values SHALL live only in protected
-  stores.
+- A readable config file SHALL NOT imply write, edit, attach, or other shell
+  authority. Secret values SHALL live only in protected stores.
 
 Owner: `PathAccessPolicy` owns the path access decision, and its result is
 call-local. `ToolPathPolicy` owns protection and the D5 glob match
@@ -461,12 +473,25 @@ call-local. `ToolPathPolicy` owns protection and the D5 glob match
 read, write, and shell lists come from `DaemonToolPathPolicyFactory` and are
 process-local. No state of these checks is durable.
 
+#### Scenario: Each config file but the secrets is readable
+
+- **GIVEN** an interactive Personal session
+- **WHEN** the model calls `file_read` on `netclaw.json`, `tool-approvals.json`, or `hard-deny-overrides.json`
+- **THEN** the path access decision allows the read
+- **AND** a `shell_execute` call with `cat <config dir>/hard-deny-overrides.json` is not denied
+
+#### Scenario: A shell write to a config file stays denied
+
+- **GIVEN** an interactive Personal session
+- **WHEN** the model calls `shell_execute` with `cp other.json <config dir>/hard-deny-overrides.json`, `echo x > <config dir>/netclaw.json`, or `sort -o <config dir>/netclaw.json <config dir>/netclaw.json`
+- **THEN** authorization returns `Denied`
+
 #### Scenario: Ordinary config is readable but not by shell text
 
 - **GIVEN** an interactive Personal session
 - **WHEN** the model calls `file_read` on `netclaw.json` or on `tool-approvals.json`
 - **THEN** the path access decision allows the read
-- **AND** a `shell_execute` call with `cat <config dir>/netclaw.json` is denied with `shell_references_protected_path`
+- **AND** a `shell_execute` call whose text names the whole config directory (`grep -r token <config dir>` or `cat <config dir>/*.json`) is denied
 
 #### Scenario: Secrets stay read-denied
 
@@ -485,7 +510,7 @@ process-local. No state of these checks is durable.
 - **GIVEN** an interactive Personal session with a grant for anywhere for `cat` (catalog case `glob-credential-keys-denied-as-literal`)
 - **WHEN** the model calls `shell_execute` with `cat ~/.netclaw/k*/*.xml`
 - **THEN** authorization returns `Denied` with reason `shell_references_protected_path`
-- **AND** `cat ~/.netclaw/*/secrets.json` and `cat ~/.netclaw/*/tool-approvals.json` are denied with the same reason
+- **AND** `cat ~/.netclaw/*/secrets.json` is denied with the same reason
 
 #### Scenario: A glob that cannot match a protected path is not denied
 

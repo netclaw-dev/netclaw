@@ -218,6 +218,138 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             });
     }
 
+    // D6: a read-only program can read a config file that a file tool may read.
+    // Every other form stays denied: a credential, a directory that holds one, a
+    // glob, a program that can write, a write redirect, and a path that only the
+    // write roots refuse. A mutant that widens or drops one of these rules dies.
+    [Theory]
+    [InlineData("cat '{C}/netclaw.json'", false)]
+    [InlineData("cat < '{C}/netclaw.json'", true)]
+    [InlineData("grep -n port '{C}/netclaw.json' 2>/dev/null", false)]
+    [InlineData("cat '{C}/netclaw.json' > copy.json", false)]
+    [InlineData("cat {R}/netclaw.json > {R}/copy.json", true)]
+    [InlineData("cat < {R}/netclaw.json", false)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{C}\"}; $s'", true)]
+    [InlineData("cat '{C}/secrets.json'", true)]
+    [InlineData("grep -r token '{C}'", true)]
+    [InlineData("cat '{C}'/n*.json", true)]
+    [InlineData("cat '{C}'/*.json", true)]
+    [InlineData("cat {C}/*.json", true)]
+    [InlineData("cat {C}/n*.json", true)]
+    [InlineData("sort -o '{C}/netclaw.json' '{C}/netclaw.json'", true)]
+    [InlineData("cat '{C}/netclaw.json' > '{C}/copy.json'", true)]
+    [InlineData("cat '{O}/notes.txt'", true)]
+    [InlineData("cat '{C}/../config/netclaw.json'", true)]
+    [InlineData("d='{C}'; cat \"$d/netclaw.json\"", true)]
+    [InlineData("grep -r token {R}", true)]
+    [InlineData("cd {R} && cat *.json", true)]
+    [InlineData("cat '{C}/netclaw.json' \"$X\"", true)]
+    [InlineData("cp \"$X\" '{C}/netclaw.json'", true)]
+    [InlineData("echo \"$X\" > '{C}/netclaw.json'", true)]
+    [InlineData("cp \"$X\" {R}/netclaw.json", true)]
+    public async Task Read_only_program_reads_only_a_readable_config_file(string template, bool denied)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Directory.CreateDirectory(_paths.ConfigDirectory);
+        File.WriteAllText(Path.Combine(_paths.ConfigDirectory, "netclaw.json"), "{}");
+        File.WriteAllText(_paths.SecretsPath, "{}");
+        // Outside the write roots, which hold the Netclaw home.
+        var outside = Directory.CreateDirectory(_paths.BasePath + "-outside").FullName;
+        File.WriteAllText(Path.Combine(outside, "notes.txt"), "notes");
+        // {R} names the config directory by a relative path, so no text marker sees it.
+        var command = template
+            .Replace("{R}", Path.GetRelativePath(_storage.SessionDirectory.Value, _paths.ConfigDirectory), StringComparison.Ordinal)
+            .Replace("{C}", _paths.ConfigDirectory, StringComparison.Ordinal)
+            .Replace("{O}", outside, StringComparison.Ordinal);
+        var authorizer = CreateExecutor([], [], ToolApprovalMode.Approval, logger: null, CreateConfigReadPolicy(), ConfineWrites).Authorizer;
+
+        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: true);
+        Directory.Delete(outside, recursive: true);
+
+        Assert.True(
+            denied ? decision is AuthorizationDecision.Denied : decision is AuthorizationDecision.NeedsConsent,
+            $"'{template}' gave {decision}.");
+    }
+
+    // The text screen of decision D6, which also runs again at launch. A token may
+    // name one exact config file. The directory, a glob, or a ".." out of it is denied.
+    // Without a parser proof of the whole source, any mention stays denied.
+    [Theory]
+    [InlineData("cat {C}/netclaw.json", false)]
+    [InlineData("cat {C}backup/netclaw.json", true)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{C}\"}; $s'", true)]
+    [InlineData("jq . {C}/netclaw.json", false)]
+    [InlineData("cat {C}", true)]
+    [InlineData("cp {C}/netclaw.json copy.json", true)]
+    [InlineData("cat {U}/netclaw.json", true)]
+    [InlineData("grep -r token '{C}'", true)]
+    [InlineData("grep -r token {C}/", true)]
+    [InlineData("cat {C}/n*.json", true)]
+    [InlineData("cat {C}/../config/netclaw.json", true)]
+    [InlineData("cat {C}/netclaw.json \"$(cat list)\"", true)]
+    public void Text_screen_lets_a_token_name_one_exact_config_file(string template, bool denied)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        // {U} is the config directory in upper case: another path on Linux.
+        var command = template
+            .Replace("{C}", _paths.ConfigDirectory, StringComparison.Ordinal)
+            .Replace("{U}", _paths.ConfigDirectory.ToUpperInvariant(), StringComparison.Ordinal);
+
+        Assert.Equal(denied, CreateConfigReadPolicy().CommandReferencesDeniedPath(command, _storage.SessionDirectory.Value));
+    }
+
+    // The daemon lists in small: each config file is write-denied, and only the
+    // credentials are read-denied and shell-denied. The keys directory is outside
+    // the config directory. A second guarded directory holds another credential.
+    private ToolPathPolicy CreateConfigReadPolicy()
+    {
+        var vault = Path.Join(_paths.BasePath, "vault");
+        string[] credentials = [_paths.SecretsPath, _paths.KeysDirectory, Path.Join(vault, "token")];
+        return new ToolPathPolicy(
+            NativeEnvironment,
+            writeDeniedPaths: [_paths.ConfigDirectory, vault, .. credentials],
+            readDeniedPaths: credentials,
+            shellIndicatorPaths: credentials);
+    }
+
+    // From the Netclaw home, a plain word can name the config directory. Such a
+    // word is a path that no path fact sees, so the occurrence is not read-only.
+    [Theory]
+    [InlineData("grep -r token config", true)]
+    [InlineData("grep -n port config/netclaw.json", false)]
+    [InlineData("jq . config config/netclaw.json", true)]
+    public async Task Plain_word_that_names_a_directory_is_not_a_read(string command, bool denied)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        Directory.CreateDirectory(_paths.ConfigDirectory);
+        File.WriteAllText(Path.Combine(_paths.ConfigDirectory, "netclaw.json"), "{}");
+        File.WriteAllText(_paths.SecretsPath, "{}");
+        var authorizer = CreateExecutor([], [], ToolApprovalMode.Approval, logger: null, CreateConfigReadPolicy(), ConfineWrites).Authorizer;
+
+        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: true, _paths.BasePath);
+
+        Assert.True(
+            denied ? decision is AuthorizationDecision.Denied : decision is AuthorizationDecision.NeedsConsent,
+            $"'{command}' gave {decision}.");
+    }
+
+    // The write roots hold the Netclaw home but not the outside folder, which only the read roots hold.
+    private void ConfineWrites(ToolAudienceProfile personal)
+    {
+        personal.WriteFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = [_paths.ConfigDirectory, _paths.SessionsDirectory, _paths.BasePath]
+        };
+        personal.ReadFiles = new ToolFilesystemAccessProfile { Mode = ToolFilesystemMode.All, Roots = [] };
+    }
+
     private static string ReadCommand(string path)
         => OperatingSystem.IsWindows() ? $"Get-Content '{path}'" : $"cat '{path}'";
 
@@ -251,19 +383,37 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         ToolApprovalMode shellMode = ToolApprovalMode.Approval,
         ILogger<DispatchingToolExecutor>? logger = null,
         bool boundedWrites = false)
+        // The control plane is protected, as in the daemon.
+        => CreateExecutor(
+            grantedVerbs,
+            hardDenyPatterns,
+            shellMode,
+            logger,
+            new ToolPathPolicy(NativeEnvironment, [_paths.ConfigDirectory]),
+            configurePersonal: personal =>
+            {
+                if (!boundedWrites)
+                    return;
+
+                // A bounded Personal write profile: the trusted-root rule confines
+                // every shell call to the session directory, attended or not.
+                personal.WriteFiles = new ToolFilesystemAccessProfile
+                {
+                    Mode = ToolFilesystemMode.Roots,
+                    Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+                };
+            });
+
+    private DispatchingToolExecutor CreateExecutor(
+        IReadOnlyList<string> grantedVerbs,
+        IReadOnlyList<string> hardDenyPatterns,
+        ToolApprovalMode shellMode,
+        ILogger<DispatchingToolExecutor>? logger,
+        ToolPathPolicy pathPolicy,
+        Action<ToolAudienceProfile> configurePersonal)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
-        if (boundedWrites)
-        {
-            // A bounded Personal write profile: the trusted-root rule confines
-            // every shell call to the session directory, attended or not.
-            config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
-            {
-                Mode = ToolFilesystemMode.Roots,
-                Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
-            };
-        }
-
+        configurePersonal(config.AudienceProfiles.Personal);
         foreach (var profile in new[]
                  { config.AudienceProfiles.Public, config.AudienceProfiles.Team, config.AudienceProfiles.Personal })
         {
@@ -280,8 +430,7 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             new EffectivePolicyDefaults(DeploymentPosture.Personal, TrustAudience.Personal,
                 ShellExecutionMode.HostAllowed, UsedStrictFallback: false),
             new ShellCommandPolicy(NativeEnvironment, [.. hardDenyPatterns]),
-            // The control plane is protected, as in the daemon.
-            new ToolPathPolicy(NativeEnvironment, [_paths.ConfigDirectory]));
+            pathPolicy);
         var registry = new ToolRegistry();
         registry.Register(new ShellProbeTool());
         return new DispatchingToolExecutor(registry, policy, new VerbGrantService(grantedVerbs), logger);

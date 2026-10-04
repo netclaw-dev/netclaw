@@ -40,28 +40,14 @@ internal static class DaemonToolPathPolicyFactory
             paths.ServerFeedsDirectory,
             paths.ToolingShadowDirectory,
         ];
-        // The agent may read its own configuration (netclaw.json and
-        // tool-approvals.json) with a file tool. Credentials and runtime state
-        // stay read-denied. The shell list keeps the whole config directory,
-        // because a shell command can write a file that it names.
+        // Owner decision D6: the agent may read each file under the config
+        // directory, with a file tool or a read-only shell program, except
+        // secrets.json and the webhook route files, which hold the verification
+        // secret. The keys, the database, process-control files, and the tooling
+        // shadow stay read-denied. Each config file stays write-denied.
         string[] readDenyList =
         [
             paths.SecretsPath,
-            paths.KeysDirectory,
-            paths.WebhooksDirectory,
-            paths.HardDenyOverridesPath,
-            paths.DaemonEnvironmentFilePath,
-            paths.DevicesPath,
-            paths.BootstrapStatePath,
-            sqlitePath,
-            ..sqliteSidecars,
-            ..processControlPaths,
-            paths.ToolingShadowDirectory,
-        ];
-        string[] shellIndicatorList =
-        [
-            paths.ConfigDirectory,
-            paths.SecretsPath,
             paths.WebhooksDirectory,
             paths.KeysDirectory,
             sqlitePath,
@@ -69,6 +55,9 @@ internal static class DaemonToolPathPolicyFactory
             ..processControlPaths,
             paths.ToolingShadowDirectory,
         ];
+        // Shell text that names a read-denied path is denied, whatever the
+        // program. A shell write to a config file meets the write list.
+        string[] shellIndicatorList = readDenyList;
 
         return new ToolPathPolicy(
             shellEnvironment,

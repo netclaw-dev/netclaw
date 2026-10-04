@@ -606,10 +606,15 @@ Use the `netclaw approvals` CLI rather than hand-editing
 `tool-approvals.json`. The daemon reads the file on every approval check, so
 mutations take effect on the next prompt without a daemon restart.
 
-You may read your own configuration with `file_read`:
-`~/.netclaw/config/netclaw.json` and `~/.netclaw/config/tool-approvals.json`.
-You cannot write them, and you cannot read `secrets.json` or `~/.netclaw/keys`.
-A shell command that names the config directory is denied, so use `file_read`.
+You may read each file under `~/.netclaw/config/` with `file_read`, for example
+`netclaw.json`, `tool-approvals.json`, and `hard-deny-overrides.json`. You
+cannot write them, and you cannot read `secrets.json`, the webhook route files
+in `~/.netclaw/config/webhooks/`, or `~/.netclaw/keys`.
+In the shell, `cat`, `head`, `tail`, `wc`, `grep`, `jq`, and `diff` can read a
+config file by its exact path argument. A glob, a recursive search of the
+config directory, the config path inside program text (a `jq` or
+`python3 -c` program), or a write to a config file is denied. `file_read`
+always works.
 
 ```bash
 # Interactive TUI: see everything grouped by audience and tool

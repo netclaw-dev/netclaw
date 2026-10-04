@@ -14,13 +14,18 @@ namespace Netclaw.Daemon.Tests.Configuration;
 
 public sealed class DaemonToolPathPolicyFactoryTests
 {
-    // Owner decision (approval taxonomy stack 2, PR C): the agent may read its
-    // own configuration with a file tool. A write and a shell command that
-    // names the file stay denied, because shell text cannot show a read from a write.
+    // Owner decision D6: the agent may read each file under the config
+    // directory, with a file tool and with a read-only shell program, except
+    // secrets.json and the webhook route files. The shell text screen does not deny it. A write stays
+    // denied by the write list, which the shell trusted-root check applies.
     [Theory]
     [InlineData("netclaw.json")]
     [InlineData("tool-approvals.json")]
-    public void Own_config_is_readable_but_not_writable_or_shell_accessible(string fileName)
+    [InlineData("hard-deny-overrides.json")]
+    [InlineData("daemon.env")]
+    [InlineData("devices.json")]
+    [InlineData("bootstrap-state.json")]
+    public void Config_file_is_readable_but_not_writable(string fileName)
     {
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
         var policy = DaemonToolPathPolicyFactory.Create(
@@ -30,7 +35,7 @@ public sealed class DaemonToolPathPolicyFactoryTests
 
         Assert.False(policy.FileSystem.IsProtected(configPath, PathOperation.Read));
         Assert.True(policy.FileSystem.IsProtected(configPath, PathOperation.Write));
-        Assert.True(policy.CommandReferencesDeniedPath($"cat '{configPath}'"));
+        Assert.False(policy.CommandReferencesDeniedPath($"cat '{configPath}'"));
     }
 
     [Fact]
@@ -43,12 +48,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
         string[] protectedPaths =
         [
             paths.SecretsPath,
+            Path.Combine(paths.WebhooksDirectory, "github-issues.json"),
             Path.Combine(paths.KeysDirectory, "key-1.xml"),
-            paths.WebhooksDirectory,
-            paths.HardDenyOverridesPath,
-            paths.DaemonEnvironmentFilePath,
-            paths.DevicesPath,
-            paths.BootstrapStatePath,
             paths.SqliteDbPath,
             paths.PidFilePath,
             paths.LockFilePath,
@@ -56,6 +57,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
         ];
 
         Assert.All(protectedPaths, path => Assert.True(policy.FileSystem.IsProtected(path, PathOperation.Read), path));
+        // The shell text screen denies each of them, whatever the program.
+        Assert.All(protectedPaths, path => Assert.True(policy.CommandReferencesDeniedPath($"cat '{path}'"), path));
     }
 
     [Theory]

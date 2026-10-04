@@ -331,13 +331,21 @@ Some commands and paths are always blocked, in every mode:
 | Self-destructive | `netclaw daemon stop`, `systemctl stop netclaw`, and a `kill`, `killall`, `pkill`, or `Stop-Process` whose operand names `netclaw` (for example `pkill netclawd`). Any other kill prompts, and a grant can cover it (owner decision D2). |
 | System-destructive | `rm -rf /`, `rm -rf ~/`, fork bombs, `mkfs` |
 | Privilege escalation | `sudo`, `su`, `doas`, and a PowerShell `-Verb RunAs` start |
-| Protected paths | `secrets.json`, key material, webhook secrets, the Netclaw database, and daemon lifecycle files. A write to any config file. |
+| Protected paths | `secrets.json`, webhook route files (they hold the verification secret), key material, the Netclaw database, and daemon lifecycle files. A write to any config file. |
 
-File tools can read `netclaw.json` and the grant store `tool-approvals.json`.
-They cannot write them. `secrets.json`, the `keys` directory, webhook
-secrets, `daemon.env`, `devices.json`, and `hard-deny-overrides.json` stay
-read-denied. A shell command that names the Netclaw config directory is
-denied, because shell text cannot show a read from a write.
+Owner decision D6: file tools can read each file under the config directory,
+for example `netclaw.json`, `tool-approvals.json`, and
+`hard-deny-overrides.json`. They cannot write them. Only `secrets.json`, the
+`webhooks` route files, and the `keys` directory stay read-denied. In the shell, a program that only reads its operands (`cat`,
+`head`, `tail`, `wc`, `grep`, `jq`, `diff`; policy data in
+`ShellVerbPolicyData.ReadOnlyOperandVerbs`) can read a config file by its
+exact path (decision D6). Every other shell command that names a config file
+meets write protection, because shell text cannot show a read from a write.
+A glob, an unknown path value, or a directory operand that holds a
+read-denied path keeps write protection too. Shell text that names the config
+directory in any other place, for example in a `jq` or `python3 -c` program,
+stays denied. A redirect that writes, such as `> copy.json`, gets the write
+check for its target only.
 
 Add your own command patterns with `HardDenyPatterns`. They add to the
 built-in list; they do not replace it:

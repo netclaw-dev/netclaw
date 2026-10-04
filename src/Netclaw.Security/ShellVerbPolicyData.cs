@@ -76,6 +76,23 @@ internal static class ShellVerbPolicyData
     };
 
     /// <summary>
+    /// Bash programs that only read their operands and have no option that
+    /// writes a file or runs a command. Policy data for decision D6: such a
+    /// program may read a path that is write-protected but readable, for
+    /// example <c>cat ~/.netclaw/config/netclaw.json</c>.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: a listed program must never write a file that it names. A
+    /// program with an output option (<c>sort -o</c>, <c>uniq in out</c>), a
+    /// preprocessor (<c>rg --pre</c>), or a shell escape does not belong here.
+    /// A redirect is a shell fact, not an operand, so it keeps write protection.
+    /// </remarks>
+    internal static readonly HashSet<string> ReadOnlyOperandVerbs = new(StringComparer.Ordinal)
+    {
+        "cat", "head", "tail", "wc", "grep", "jq", "diff"
+    };
+
+    /// <summary>
     /// POSIX shells that Netclaw expands when a wrapper form falls outside
     /// the ShellSyntaxTree wrapper contract, for example <c>bash -lc</c>.
     /// </summary>

@@ -241,6 +241,32 @@ internal sealed class FileSystemAuthority
     }
 
     /// <summary>
+    /// Returns true when a read-protected path is the path itself or is below
+    /// it. A program that reads below a directory can reach that path.
+    /// </summary>
+    /// <remarks>
+    /// The check compares the fully link-resolved path. The protected set holds
+    /// the lexical and the link-resolved form of each entry. A resolution failure
+    /// counts as holding a protected path.
+    /// </remarks>
+    internal bool HoldsReadProtectedPath(string path)
+    {
+        if (!PathUtility.TryNormalize(path, null, out var normalized))
+            return true;
+
+        try
+        {
+            TryResolveLinks(normalized, out var resolved);
+            return _readProtected.Any(protectedPath =>
+                CanonicalPath.IsWithin(protectedPath, resolved, CanonicalPath.HostStyle, ignoreCase: true));
+        }
+        catch (Exception ex) when (IsInspectionFailure(ex))
+        {
+            return true;
+        }
+    }
+
+    /// <summary>
     /// Resolves every link in a path, segment by segment. Returns true only when the
     /// resolved path differs from the lexical path. <paramref name="resolved"/> is set in both cases.
     /// </summary>

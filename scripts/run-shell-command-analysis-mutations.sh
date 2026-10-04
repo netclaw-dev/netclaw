@@ -276,7 +276,7 @@ read -r glob_deny_start glob_deny_end < <(
     "$path_policy_file" \
     "private bool GlobMayReachDeniedPath(" \
     "var glob = ShellGlobScope.AsGlobPattern(pattern);" \
-    "|| IsShellDenied(match));"
+    "|| IsShellDenied(shell, match));"
 )
 security_mutations+=("ToolPathPolicy.cs{$glob_deny_start..$glob_deny_end}")
 

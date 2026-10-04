@@ -259,7 +259,10 @@ internal sealed class ToolAuthorizer
     // Filesystem authority: every candidate path again, including the intent view of a causal list.
     private ToolAuthorizationDecision? ProjectedTrustedRoot(ShellCall call)
         => call.Finish(_policy.EnforceProjectedShellFileProtection(
-            call.Evaluation.CandidateStates.Select(static state => state.PathFacts).ToArray(),
+            call.Evaluation.CandidateStates
+                .Select(static state => (state.PathFacts, state.Candidate.SourceOccurrence))
+                .ToArray(),
+            call.Analysis,
             call.Context.Invocation));
 
     // Unresolved input: syntax without reusable candidates gets one exact retry, advice, or a Once-only prompt.

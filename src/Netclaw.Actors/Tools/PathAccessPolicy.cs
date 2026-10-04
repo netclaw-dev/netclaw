@@ -259,6 +259,43 @@ internal sealed class PathAccessPolicy
     }
 
     /// <summary>
+    /// Applies read protection to one path of a shell program that only reads its
+    /// operands (owner decision D6). The agent may read its own configuration,
+    /// but not its secrets.
+    /// </summary>
+    /// <remarks>
+    /// The caller uses this decision only after <see cref="EvaluateShellPath"/>
+    /// denies the path. SECURITY: it applies only to a write-protected path, so
+    /// a read never escapes the trusted roots of the shell. An operand must also
+    /// hold no read-protected path: a program can read below a directory operand
+    /// (<c>grep -r</c>). A scope, such as the working directory or the folder of
+    /// a file operand, is not read below.
+    /// </remarks>
+    /// <param name="path">The parser-canonical shell path.</param>
+    /// <param name="context">The invocation that supplies the read roots.</param>
+    /// <param name="isOperand">True for a path that the program reads, false for a scope.</param>
+    public PathAccessDecision EvaluateShellReadPath(
+        CanonicalPath path,
+        ToolInvocationContext context,
+        bool isOperand)
+    {
+        if (!path.IsHostStyle || !_fileSystem.IsProtected(path.Value, PathOperation.Write))
+        {
+            return PathAccessDecision.Deny(
+                "Error: Only a write-protected path can get read protection in the shell.",
+                PathAccessFailure.AccessDenied,
+                path.Value);
+        }
+
+        var read = Evaluate(path.Value, context, FileOperation.Read);
+        return read is PathAccessDecision.Allowed
+               && isOperand
+               && _fileSystem.HoldsReadProtectedPath(path.Value)
+            ? DenyProtected(path.Value, FileOperation.Read)
+            : read;
+    }
+
+    /// <summary>
     /// Evaluates whether one parser-resolved shell path is eligible for
     /// reviewed-safe approval coverage.
     /// </summary>

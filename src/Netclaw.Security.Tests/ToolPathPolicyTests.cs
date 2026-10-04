@@ -93,6 +93,12 @@ public sealed class ToolPathPolicyTests
     [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/*.json", true)]
     [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "jq . ~/.netclaw/config/*.json", true)]
     [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "tar czf /tmp/netclaw-config.tgz ~/.netclaw/config", true)]
+    // With no live config directory in the lists, the default layout keeps its hint with a high-risk verb.
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/netclaw.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "jq .Tools ~/.netclaw/config/tool-approvals.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/../config/secrets.json", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "grep -r token ~/.netclaw/config/", true)]
+    [InlineData(new[] { "/home/user/.netclaw/config/secrets.json" }, "cat ~/.netclaw/config/net*.json", true)]
     public void CommandReferencesDeniedPath_matches_denied_paths_in_commands(
         string[] deniedPaths,
         string command,
