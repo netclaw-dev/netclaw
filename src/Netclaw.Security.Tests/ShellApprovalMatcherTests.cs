@@ -1472,11 +1472,11 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     public void ExtractCandidates_compound_command_extracts_per_clause()
     {
         var candidates = _matcher.ExtractCandidates(new ToolName("shell_execute"),
-            Args("ls /repo && git status"));
+            Args("ls /usr/share && git status"));
 
         Assert.Equal(2, candidates.Count);
         Assert.Equal("ls", candidates[0].Verb);
-        Assert.Equal("/repo", candidates[0].Directory);
+        Assert.Equal("/usr/share", candidates[0].Directory);
         Assert.Equal("git status", candidates[1].Verb);
         Assert.Null(candidates[1].Directory);
     }
@@ -1766,7 +1766,9 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
             {
-                ["Command"] = "cd /workspace/service.repo"
+                ["Command"] = "cd /workspace/service.repo",
+                // A synthetic file system: the absent-directory probe does not apply.
+                ["WorkingDirectory"] = "/work"
             }));
 
         Assert.Equal("cd", candidate.Verb);
@@ -1795,7 +1797,9 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
             {
-                ["Command"] = "cat /workspace/service.repo/readme.md"
+                ["Command"] = "cat /workspace/service.repo/readme.md",
+                // A synthetic file system: the absent-directory probe does not apply.
+                ["WorkingDirectory"] = "/work"
             }));
 
         Assert.Equal("cat", candidate.Verb);
@@ -1838,7 +1842,9 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
             {
-                ["Command"] = "cd /a && cd /b && pwd"
+                ["Command"] = "cd /a && cd /b && pwd",
+                // A synthetic file system: the absent-directory probe does not apply.
+                ["WorkingDirectory"] = "/work"
             });
 
         Assert.Contains(candidates, c => c.Verb == "cd" && c.Directory == "/a");

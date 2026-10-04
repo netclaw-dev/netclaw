@@ -1284,6 +1284,16 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
         Case(
+            "api-route-word-uses-project-folder-grant",
+            Bash("gh api /repos/o/r/actions/jobs/1/logs"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "gh api"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:gh api")),
+        Case(
+            "absent-top-level-path-write-uses-project-scope",
+            Bash("mkdir -p /netclaw-approval-absent/output"),
+            Approvals.None,
+            ExpectedApproval.Require(["mkdir"])),
+        Case(
             "multi-line-inline-code-offers-reusable-grant",
             Bash("python3 -c \"import sys\nprint(sys.argv)\""),
             Approvals.None,
@@ -1489,7 +1499,7 @@ public static class ShellApprovalCases
             "cd-causal-list-folder-grant-outside-target-prompts",
             Bash("cd /netclaw-approval-external/cd-list && inspect; cat *.md"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "cd", "inspect", "cat"),
-            ExpectedApproval.Correct()),
+            ExpectedApproval.Correct(1, "persistent:cd")),
         // #2306: a bare glob in the verb slot gives Unknown command words, so the model gets a rewrite correction.
         Case(
             "cd-alternate-branch-prompts-for-the-other-branch",

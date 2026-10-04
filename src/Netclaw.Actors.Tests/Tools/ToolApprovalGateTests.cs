@@ -19,9 +19,10 @@ public sealed class ToolApprovalGateTests
 {
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
+    // The root is below an existing directory. A word below an absent
+    // top-level directory names no existing file, so it has no path scope.
     private static string ApprovalTestRoot { get; } = Path.Combine(
-        Path.GetPathRoot(Path.GetFullPath(AppContext.BaseDirectory))
-        ?? throw new InvalidOperationException("The test process has no filesystem root."),
+        Path.GetFullPath(Path.GetTempPath()),
         "netclaw-approval-test");
 
     private static ToolAccessPolicy CreatePolicy(ToolApprovalMode shellApprovalMode)
