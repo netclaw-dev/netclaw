@@ -439,6 +439,11 @@ Runtime skill use is logical: call `skill_load` by canonical name and
 prompt indexes or teach agents to derive `SKILL.md` paths. Direct filesystem
 inspection is reserved for explicit operator diagnostics.
 
+One exception applies. The `skill_read_resource` result starts with the
+resolved absolute path of that one resource, so an agent can run a bundled
+script by its real path. Do not put that path, or any skill root, in skill
+indexes, skill listings, or `skill_load` output.
+
 System skills in `feeds/skills/.system/files/` are the agent's operational
 guidance — they tell the running agent how to use features. When you change a
 feature area, the corresponding skill **must** be updated in the same PR.

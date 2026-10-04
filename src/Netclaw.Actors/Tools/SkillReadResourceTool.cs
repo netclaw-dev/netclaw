@@ -18,7 +18,7 @@ namespace Netclaw.Actors.Tools;
 /// Scoped to the skill's directory with path traversal prevention.
 /// </summary>
 [NetclawTool("skill_read_resource",
-    "Read a resource file from a skill directory.",
+    "Read a resource file from a skill directory. The first line of the result gives the resource's absolute path.",
     Grant = "builtin")]
 public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourceTool.Params>
 {
@@ -97,10 +97,15 @@ public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourc
             if (!scanResult.IsAllowed)
                 return $"Resource '{resourcePath}' blocked by content scan: {scanResult.Reason}";
 
+            // The first line gives the resolved absolute path, so the agent can
+            // run a bundled script by its real path and not guess a relative
+            // one. The path appears only in this result, after the scan passes.
+            // Prompt indexes and skill listings never expose skill roots.
+            var pathLine = $"path: {fullPath}";
             if (scanResult.Verdict == ScanVerdict.Warning)
-                return $":warning: Resource '{resourcePath}' triggered a content scan warning: {scanResult.Reason}\n\n{content}";
+                return $"{pathLine}\n:warning: Resource '{resourcePath}' triggered a content scan warning: {scanResult.Reason}\n\n{content}";
 
-            return content;
+            return $"{pathLine}\n{content}";
         }
         catch (IOException ex)
         {

@@ -473,7 +473,36 @@ public class SkillToolTests : IDisposable
         var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
         var result = await tool.ExecuteAsync(ToolInput.Create("SkillName", "my-skill", "ResourcePath", "references/guide.md"), PersonalCtx, TestContext.Current.CancellationToken);
 
-        Assert.Equal("# Guide Content", result);
+        var expectedPath = Path.GetFullPath(
+            Path.Combine(_paths.SkillsDirectory, "my-skill", "references", "guide.md"));
+        Assert.Equal($"path: {expectedPath}\n# Guide Content", result);
+    }
+
+    [Fact]
+    public async Task SkillReadResource_ReturnsAbsolutePathThatOpensTheBundledScript()
+    {
+        WriteSkill("my-skill", """
+            ---
+            name: my-skill
+            description: Test skill.
+            ---
+            # My Skill
+            """);
+        const string script = "#!/bin/bash\necho audit-ok";
+        WriteFile("my-skill", "scripts/audit.sh", script);
+        ScanSkills();
+
+        var tool = new SkillReadResourceTool(_registry, new NoOpSkillContentScanner());
+        var result = await tool.ExecuteAsync(ToolInput.Create("SkillName", "my-skill", "ResourcePath", "scripts/audit.sh"), PersonalCtx, TestContext.Current.CancellationToken);
+
+        // The agent runs the script by this path, so it must be absolute and
+        // must open the same file that the tool read.
+        var firstLine = result.Split('\n')[0];
+        Assert.StartsWith("path: ", firstLine, StringComparison.Ordinal);
+        var returnedPath = firstLine["path: ".Length..];
+        Assert.True(Path.IsPathFullyQualified(returnedPath), returnedPath);
+        Assert.Equal(script, File.ReadAllText(returnedPath));
+        Assert.Equal($"{firstLine}\n{script}", result);
     }
 
     [Fact]

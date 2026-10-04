@@ -168,6 +168,7 @@ and a permitted relative path. The `skill_load` tool reads `SKILL.md` instead.
 ```text
 skill_read_resource("netclaw-operations", "references/tools.md")
   -> read references/tools.md inside the netclaw-operations skill folder
+  -> return "path: <absolute path of that file>", then the file contents
 
 skill_read_resource("netclaw-operations", "SKILL.md")
   -> reject the request and direct the model to skill_load
