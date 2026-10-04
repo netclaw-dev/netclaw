@@ -331,6 +331,20 @@ public static class ShellApprovalCases
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        // Prose that a model sends as a command. The quotes join a program word
+        // with spaces, which is a normal word (#2336). Before #2336 it failed
+        // with internal_policy_failure. A chat gets a normal prompt.
+        Case(
+            "prose-quoted-program-word-prompts",
+            Bash("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?"),
+            Approvals.None,
+            ExpectedApproval.Require(["'Im speaking at Stir Trek 2026 - I fly out of IAH. Whats' the best flight"])),
+        // A Windows host reads "/" as a real path, so ApprovalContractBoundaryTests pins that result.
+        Case(
+            "powershell7-prose-quoted-program-word-prompts",
+            PowerShell7("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?"),
+            Approvals.None,
+            ExpectedApproval.Require(["'Im speaking at Stir Trek 2026 - I fly out of IAH. Whats' the best flight"])) with { ReadsOutsidePathOnWindowsHost = true },
         // Prose: the quotes join a program word with spaces, which is a normal
         // word (#2336). One grant lookup runs. A chat would prompt, so the
         // unattended run denies it (D2).
