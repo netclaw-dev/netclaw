@@ -220,7 +220,7 @@ public class ShellToolStreamingTests
         var policy = new ShellCommandPolicy(ShellEnvironment, ["kill"], []);
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy(ShellEnvironment, []), policy);
         var command = ShellEnvironment.Grammar == ShellGrammar.PowerShell
-            ? "Stop-Process -Id 1"
+            ? "Stop-Process -Name netclawd"
             : "kill -9 1";
         var args = ToolInput.Create("Command", command);
         var (activities, completion) = await CollectStreamAsync(tool, args, ct: TestContext.Current.CancellationToken);

@@ -603,7 +603,7 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("netclaw daemon stop &", "hard_deny_self_destructive")]
     [InlineData("'netclaw' daemon stop &", "hard_deny_self_destructive")]
-    [InlineData("bash -c \"kill -9 1\" &", "hard_deny_self_destructive")]
+    [InlineData("bash -c \"pkill netclawd\" &", "hard_deny_self_destructive")]
     [InlineData("sudo rm -rf / &", "hard_deny_privilege_escalation")]
     [InlineData("cat ../netclaw/config/notes.txt &", "shell_references_protected_path")]
     public async Task Unresolved_command_still_meets_hard_deny_and_protected_paths(string command, string reason)

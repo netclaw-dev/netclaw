@@ -127,7 +127,10 @@
 | powershell7-safe-command-allows | PowerShell7 | Personal | Project | Interactive | Get-ChildItem -Path . -Filter *.cs | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | powershell7-pipeline-prompts-for-unsafe-stage | PowerShell7 | Personal | Project | Interactive | Get-ChildItem \| Remove-Item | none | RequiresApproval | approval required | Remove-Item | No |
 | powershell7-stored-grant-covers-unsafe-stage | PowerShell7 | Personal | Project | Interactive | Get-ChildItem \| Remove-Item | persistent[anywhere]:Remove-Item | Allowed | StoredApproval | none | Not applicable |
-| powershell7-stop-process-hard-deny | PowerShell7 | Personal | Project | Interactive | Stop-Process -Id 42 | persistent[anywhere]:Stop-Process | Denied | hard_deny_self_destructive | none | Not applicable |
+| powershell7-stop-process-uses-grant | PowerShell7 | Personal | Project | Interactive | Stop-Process -Id 42 | persistent[anywhere]:Stop-Process | Allowed | StoredApproval | none | Not applicable |
+| kill-test-server-uses-grant | Bash | Personal | Project | Interactive | pkill -f 'http.server 8899' | persistent[anywhere]:pkill | Allowed | StoredApproval | none | Not applicable |
+| kill-process-id-prompts | Bash | Personal | Project | Interactive | kill 12345 | none | RequiresApproval | approval required | kill | No |
+| kill-daemon-stays-hard-denied | Bash | Personal | Project | Interactive | pkill -f netclawd | persistent[anywhere]:pkill | Denied | hard_deny_self_destructive | none | Not applicable |
 | powershell7-elevated-process-hard-deny | PowerShell7 | Personal | Project | Interactive | Start-Process pwsh -Verb RunAs | persistent[anywhere]:Start-Process | Denied | hard_deny_privilege_escalation | none | Not applicable |
 | powershell7-elevated-process-abbreviated-quoted-hard-deny | PowerShell7 | Personal | Project | Interactive | Start-Process pwsh -Ve 'RunAs' | persistent[anywhere]:Start-Process | Denied | hard_deny_privilege_escalation | none | Not applicable |
 | powershell7-recursive-root-removal-hard-deny | PowerShell7 | Personal | Project | Interactive | Remove-Item C:\ -Recurse -Confirm:$false | persistent[anywhere]:Remove-Item | Denied | hard_deny_system_destructive | none | Not applicable |

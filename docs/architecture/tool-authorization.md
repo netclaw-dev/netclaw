@@ -298,7 +298,9 @@ Leaks today:
   in the gate again inside the launch callback, and twice in
   `ShellProcessLaunch.CheckHardPolicies`.
 - Some deny patterns name executables (`kill`, `rm -rf /`). This is policy
-  data, which the Shell Approval Abstraction Rule permits. It must not grow
+  data, which the Shell Approval Abstraction Rule permits. Since owner
+  decision D2 (approval taxonomy PR 6), a kill is denied only when its operand
+  text names the Netclaw daemon. It must not grow
   into a parser for an executable.
 
 ### 3.5 Consent
