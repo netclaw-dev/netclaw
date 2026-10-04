@@ -150,7 +150,7 @@ that does not exist. Do not treat "not found" as proof a reminder was deleted;
 it may exist at a higher audience than the current session.
 
 Other scheduling tools: `list_reminders`, `cancel_reminder`,
-`get_reminder_history`.
+`get_reminder_history`, and `run_reminder` (see "Test a reminder in a chat").
 
 ## Proactive channel messaging
 
@@ -222,13 +222,31 @@ send_channel_message(
 ## Approval Requirements for Reminders and Webhooks
 
 Reminders and webhooks execute without a human present — they CANNOT prompt for
-tool approval. The cwd at firing time will not match any cwd a user clicked
-"Always here" for during interactive use, so folder-scoped approvals will not
-match.
+tool approval. A call that needs approval and has no saved grant is denied.
 
-**Before creating a reminder that uses shell commands**, identify the verbs the
-task will need (e.g. `freshdesk`, `curl`, `git pull`) and pre-approve them as
-global wildcards. Two paths:
+### Test a reminder in a chat (`/run-reminder`)
+
+The best way to collect the grants is to test the reminder once, attended:
+
+- In a chat, the user types `/run-reminder <id>`. From a terminal, the user runs
+  `netclaw reminder run <id>`. That command opens a normal chat with
+  `/run-reminder <id>` as its first message.
+- The `run-reminder` skill warns the user that the steps are real, then calls
+  `run_reminder`. The tool returns the reminder's exact scheduled prompt. The
+  agent carries it out in the chat. Approval prompts go to the person who
+  started the test.
+- An "Always here", "This repository", or "Always anywhere" answer saves a
+  grant for the chat's audience. The scheduled run reads it. "Once" and
+  "This chat" answers do not carry over: each scheduled run is a new session.
+  The tool result shows the choice, for example `[approval: this chat only]`.
+- The chat must have the same audience as the reminder. A wider chat would
+  pass calls that the scheduled run denies, so `run_reminder` refuses it. A
+  reminder above the chat's audience reads as not found.
+- The test does not change the schedule and writes no reminder history.
+
+**Before creating a reminder that uses shell commands**, you can also identify
+the verbs the task will need (e.g. `freshdesk`, `curl`, `git pull`) and
+pre-approve them as global wildcards. Two paths:
 
 1. **Suggest `trust-verb` from the agent.** When you (the agent) are helping the
    user set up a scheduled task, identify the verbs the task will need and ask

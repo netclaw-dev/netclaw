@@ -119,6 +119,18 @@ a prompt, set `shell_execute` to `Auto`:
 }
 ```
 
+To collect stored grants for a reminder, test it once in a chat with the
+same audience as the reminder:
+
+```bash
+netclaw reminder run <id>      # opens a chat that sends /run-reminder <id>
+```
+
+In a channel or a DM, type `/run-reminder <id>`. The agent runs the reminder's
+exact prompt in the chat. Answer each prompt with "Always here",
+"This repository", or "Always anywhere". The scheduled run reads those
+grants. "Once" and "This chat" answers do not carry over to a scheduled run.
+
 ## Answer a prompt
 
 A prompt shows the tool, the command or arguments with secrets removed, and

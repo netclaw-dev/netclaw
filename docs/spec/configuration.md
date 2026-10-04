@@ -247,7 +247,7 @@ Write only the keys that you change.
         "AllowedTools": [
           "file_read", "file_list", "file_search", "tool_output_read",
           "file_write", "file_edit", "attach_file", "web_search", "web_fetch", "skill_manage", "set_reminder",
-          "list_reminders", "cancel_reminder", "get_reminder_history",
+          "list_reminders", "cancel_reminder", "get_reminder_history", "run_reminder",
           "set_working_directory"
         ],
         "McpServersMode": "Allowlist",
