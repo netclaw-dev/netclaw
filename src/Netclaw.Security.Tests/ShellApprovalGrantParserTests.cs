@@ -18,6 +18,8 @@ public sealed class ShellApprovalGrantParserTests
     [InlineData("git show b42bf5a", "git show")]
     [InlineData("git push origin v0.4.0", "git push origin")]
     [InlineData("/opt/./tools//bin/../ilspycmd", "/opt/tools/ilspycmd")]
+    // A word with a space has one canonical form: single quotes.
+    [InlineData("\"/opt/My App/bin/tool\"", "'/opt/My App/bin/tool'")]
     public void Phrase_that_is_not_canonical_names_the_canonical_phrase(string source, string canonical)
     {
         var parsed = ShellApprovalGrantParser.TryCreateTokenPrefix(
@@ -36,6 +38,7 @@ public sealed class ShellApprovalGrantParserTests
     [InlineData(ApprovalShell.Bash, "git push origin", "git", "push", "origin")]
     [InlineData(ApprovalShell.Bash, "status-report", "status-report")]
     [InlineData(ApprovalShell.Bash, "/opt/tools/ilspycmd", "/opt/tools/ilspycmd")]
+    [InlineData(ApprovalShell.Bash, "'/opt/My App/bin/tool'", "/opt/My App/bin/tool")]
     [InlineData(ApprovalShell.PowerShell, "Get-Content", "Get-Content")]
     [InlineData(ApprovalShell.PowerShell, "curl", "curl")]
     [InlineData(ApprovalShell.PowerShell, "gerr", "gerr")]

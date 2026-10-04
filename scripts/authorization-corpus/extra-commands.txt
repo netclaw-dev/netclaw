@@ -259,3 +259,7 @@ X=1; git push
 code=auth-code client_secret=secret-value
 code=oauth-code client_secret=secret-value
 mode='one'; inspect item
+"my tool" --help
+'my tool' --version
+"/opt/My App/bin/tool" -v
+"echo x" hi

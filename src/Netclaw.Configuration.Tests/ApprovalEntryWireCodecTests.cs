@@ -175,6 +175,23 @@ public sealed class ApprovalEntryWireCodecTests
         Assert.Equal("/work/repo", entry.Directory);
     }
 
+    // A quoted program word can contain a space. The token list keeps the word,
+    // and the phrase text quotes it, so it is not the phrase of "/opt/My".
+    [Fact]
+    public void Token_with_a_space_round_trips_with_a_quoted_phrase()
+    {
+        const string Json =
+            """{"shell":"Bash","match":"TokenPrefix","verbTokens":["/opt/My App/bin/tool","run"],"directory":null,"createdAt":null}""";
+
+        var entry = ReadEntry(Json);
+
+        Assert.Equal(["/opt/My App/bin/tool", "run"], entry.VerbTokens);
+        Assert.Equal("'/opt/My App/bin/tool' run", entry.Verb);
+        Assert.False(ToolApprovalEntryComparer.Equals(
+            entry,
+            ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["/opt/My", "App/bin/tool", "run"])));
+    }
+
     [Fact]
     public void Repository_grant_round_trips_as_a_distinct_scope()
     {
@@ -200,7 +217,8 @@ public sealed class ApprovalEntryWireCodecTests
     [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":[null],"directory":null,"createdAt":null}""")]
     [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git"],"verb":"git","directory":null,"createdAt":null}""")]
     [InlineData("""{"shell":"Bash","match":"Other","verbTokens":["git"],"directory":null,"createdAt":null}""")]
-    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git push"],"directory":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git\tpush"],"directory":null,"createdAt":null}""")]
+    [InlineData("""{"shell":"Bash","match":"TokenPrefix","verbTokens":["git\npush"],"directory":null,"createdAt":null}""")]
     [InlineData("""{"verb":" git","directory":null,"createdAt":null}""")]
     [InlineData("""{"verb":null,"directory":null,"createdAt":null}""")]
     [InlineData("""{"verb":"git","directory":null,"createdAt":42}""")]

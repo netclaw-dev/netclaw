@@ -366,7 +366,7 @@
 | assignment-substitution-sudo-hard-denies | Bash52 | Personal | Project | Interactive | x=$(sudo ls) | none | Denied | hard_deny_privilege_escalation | none | Not applicable |
 | wrapper-child-after-failing-cd-hard-denies | Bash | Personal | Project | Interactive | cd sub && git fetch; bash -lc "echo \"a b\"; netclaw daemon stop" | persistent[anywhere]:cd, persistent[anywhere]:git fetch, persistent[anywhere]:bash | Denied | hard_deny_self_destructive | none | Not applicable |
 | background-wrapper-child-after-failing-cd-hard-denies | Bash52 | Personal | Project | Interactive | cd sub && git fetch; bash -lc "echo \"a b\"; netclaw daemon stop" & true | persistent[anywhere]:cd, persistent[anywhere]:git fetch, persistent[anywhere]:bash | Denied | hard_deny_self_destructive | none | Not applicable |
-| bracket-program-word-with-space-stays-unresolved | Bash52 | Personal | Project | Interactive | ["batch one"] | none | RequiresApproval | approval required | none | Yes |
+| bracket-program-word-with-space-stays-unresolved | Bash52 | Personal | Project | Interactive | ["batch one"] | none | RequiresApproval | approval required | ["batch one"] | No |
 | unattended-bracket-program-word-denies | Bash52 | Personal | Project | Non-interactive | ["ci","build"] | none | Denied | shell_unresolved_trust_zone_input | none | Not applicable |
 | unattended-brace-program-word-gets-rewrite-advice | Bash52 | Personal | Project | Non-interactive | {"b":2,"nested":{"c":3}} | none | RequiresAgentCorrection | approval required | none | Not applicable |
 | if-statement-prompts-for-each-command | Bash52 | Personal | Project | Interactive | if test -f marker; then git push; else git fetch; fi | none | RequiresApproval | approval required | test, git push, git fetch | No |

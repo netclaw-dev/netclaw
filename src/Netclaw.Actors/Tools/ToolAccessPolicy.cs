@@ -1189,7 +1189,7 @@ public sealed class ToolAccessPolicy
         && candidate.Unresolved == ShellUnresolvedPart.None
         && (ApprovalPatternMatching.IsPureSideEffect(candidate)
             || candidate.VerbTokens is { Count: > 0 } tokens
-               && tokens.All(static token => token.Length > 0 && !token.Any(char.IsWhiteSpace)));
+               && tokens.All(ShellCommandWordText.IsGrantableWord));
 
     /// <summary>
     /// Returns true when the cwd is too shallow to support a folder-scoped

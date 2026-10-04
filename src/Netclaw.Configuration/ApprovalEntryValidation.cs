@@ -69,7 +69,7 @@ internal static class ApprovalEntryValidation
                 {
                     throw new JsonException("The assignment digest is invalid.");
                 }
-                if (!string.Equals(entry.Verb, string.Join(" ", entry.VerbTokens), StringComparison.Ordinal))
+                if (!string.Equals(entry.Verb, ShellCommandWordText.FormatPhrase(entry.VerbTokens), StringComparison.Ordinal))
                 {
                     throw new JsonException("The token phrase and display verb differ.");
                 }
@@ -92,7 +92,9 @@ internal static class ApprovalEntryValidation
 
         foreach (var token in tokens)
         {
-            ValidatePersistedString(token, "verb token", allowWhitespace: false);
+            // A word can contain a space: the program "/opt/My App/bin/tool".
+            // The phrase text quotes such a word (ShellCommandWordText).
+            ValidatePersistedString(token, "verb token", allowWhitespace: true);
             if (token.Length == 0)
             {
                 throw new JsonException("A verb token must not be empty.");
@@ -199,6 +201,20 @@ internal static class ApprovalEntryValidation
         string fieldName,
         bool allowWhitespace)
     {
+        switch (FindPersistenceFault(value, allowWhitespace))
+        {
+            case PersistenceFault.InvalidUnicode:
+                throw new JsonException($"The {fieldName} has invalid Unicode.");
+            case PersistenceFault.ProhibitedCharacter:
+                throw new JsonException($"The {fieldName} has a prohibited character.");
+        }
+    }
+
+    internal static bool IsPersistable(string value, bool allowWhitespace)
+        => FindPersistenceFault(value, allowWhitespace) == PersistenceFault.None;
+
+    private static PersistenceFault FindPersistenceFault(string value, bool allowWhitespace)
+    {
         for (var index = 0; index < value.Length; index++)
         {
             var character = value[index];
@@ -206,7 +222,7 @@ internal static class ApprovalEntryValidation
             {
                 if (index + 1 >= value.Length || !char.IsLowSurrogate(value[index + 1]))
                 {
-                    throw new JsonException($"The {fieldName} has invalid Unicode.");
+                    return PersistenceFault.InvalidUnicode;
                 }
 
                 index++;
@@ -215,15 +231,24 @@ internal static class ApprovalEntryValidation
 
             if (char.IsLowSurrogate(character))
             {
-                throw new JsonException($"The {fieldName} has invalid Unicode.");
+                return PersistenceFault.InvalidUnicode;
             }
 
             if (char.IsControl(character) || IsBidiControl(character) ||
                 !allowWhitespace && char.IsWhiteSpace(character))
             {
-                throw new JsonException($"The {fieldName} has a prohibited character.");
+                return PersistenceFault.ProhibitedCharacter;
             }
         }
+
+        return PersistenceFault.None;
+    }
+
+    private enum PersistenceFault
+    {
+        None,
+        InvalidUnicode,
+        ProhibitedCharacter,
     }
 
     private static bool IsBidiControl(char character) =>

@@ -587,6 +587,14 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   spelling can reach and is shown as a legacy program spelling. A `~/x`
   program has `Unknown` words in ShellSyntaxTree 0.4.0-beta.10, so it gets the
   `WriteProgramPathInFull` correction.
+- Follows: a command word is its static value after quote removal. A program
+  word can contain a space: `"my tool"`, `'my tool'`, and `my\ tool` are one
+  word, and `"/opt/My App/bin/tool"` is that path (R1). The grant stores the
+  word list. `ShellCommandWordText` in `Netclaw.Configuration` quotes a word
+  with whitespace in the phrase text, so the prompt shows `'my tool'`. The
+  phrase text is also a policy input: the program `"echo x"` has the phrase
+  `'echo x'`, so it is not the approval-exempt verb `echo`. Unquoted, `my tool`
+  is the program `my` and its word `tool`, which is another grant.
 - Follows: `Unknown` command words mean that no grant can cover the call.
   They occur only when the verb slot holds a bare glob (`*`, `p?sh`), an
   expansion, a brace list, or word splitting (`git {push,fetch}`,

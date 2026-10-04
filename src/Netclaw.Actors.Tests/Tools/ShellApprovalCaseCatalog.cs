@@ -325,13 +325,14 @@ public static class ShellApprovalCases
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
             Approvals.None,
             ExpectedApproval.Deny("shell_working_directory_outside_trust_zone", approvalChecks: 1)),
-        // Prose with a path outside the trusted roots has no valid verb facts, so no
-        // grant lookup runs and the trusted-root denial stays.
+        // Prose with a path outside the trusted roots: the quotes join a program
+        // word with spaces. It is a normal word, so one grant lookup runs. No
+        // grant covers it, so the trusted-root denial stays.
         Case(
             "unattended-prose-outside-path-denies-without-lookup",
             Bash("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?", interactive: false),
             Approvals.None,
-            ExpectedApproval.Deny("shell_path_outside_trust_zone")),
+            ExpectedApproval.Deny("shell_path_outside_trust_zone", approvalChecks: 1)),
         // The directory proof of a ";" or "||" list screens each slice. A stored grant
         // decides there too, after hard deny and protected text (PR 6e).
         Case(
@@ -2335,12 +2336,14 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("cd", "git fetch", "bash"),
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         // A bracket pattern in the program word names no fixed program, so the
-        // command stays unresolved.
+        // command stays unresolved. A word with a space is a normal word, so the
+        // command gets its exact candidate ("Once" only), as other unresolved
+        // commands do.
         Case(
             "bracket-program-word-with-space-stays-unresolved",
             Bash52("[\"batch one\"]"),
             Approvals.None,
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["[\"batch one\"]"])),
         Case(
             "unattended-bracket-program-word-denies",
             Bash52("[\"ci\",\"build\"]", interactive: false),

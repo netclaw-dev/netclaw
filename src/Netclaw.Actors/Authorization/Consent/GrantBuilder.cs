@@ -133,10 +133,12 @@ internal static class GrantBuilder
             return candidate;
         }
 
+        // The display verb quotes a word with whitespace (ShellCommandWordText).
+        var program = ShellCommandWordText.Quote(tokens[0]);
         return candidate with
         {
-            Verb = candidate.Verb.StartsWith(tokens[0], StringComparison.Ordinal)
-                ? worktreeProgram + candidate.Verb[tokens[0].Length..]
+            Verb = candidate.Verb.StartsWith(program, StringComparison.Ordinal)
+                ? ShellCommandWordText.Quote(worktreeProgram) + candidate.Verb[program.Length..]
                 : candidate.Verb,
             VerbTokens = Array.AsReadOnly([worktreeProgram, .. tokens.Skip(1)]),
         };

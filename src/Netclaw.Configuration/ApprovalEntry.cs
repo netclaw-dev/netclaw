@@ -117,7 +117,7 @@ public sealed record ApprovalEntry([property: JsonPropertyName("verb")] string V
     {
         ArgumentNullException.ThrowIfNull(verbTokens);
         ApprovalEntryValidation.ValidateTokens(verbTokens);
-        return new ApprovalEntry(string.Join(" ", verbTokens))
+        return new ApprovalEntry(ShellCommandWordText.FormatPhrase(verbTokens))
         {
             Shell = shell,
             Match = ApprovalMatchKind.TokenPrefix,

@@ -392,8 +392,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellUnresolvedPart part)
     {
         var parserTokens = occurrence.Clause.Verb.Tokens;
-        if (parserTokens.Count == 0
-            || parserTokens.Any(static token => token.Length == 0 || token.Any(char.IsWhiteSpace)))
+        if (parserTokens.Count == 0 || !parserTokens.All(ShellCommandWordText.IsGrantableWord))
         {
             return null;
         }
@@ -467,8 +466,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (clause.Verb.IsDynamic)
             return null;
 
+        // SECURITY: the phrase quotes a word with whitespace, so the program
+        // "echo x" never reads as the side-effect verb echo.
         var parsedVerb = clause.Verb.CanonicalVerb
-            ?? string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens));
+            ?? ShellCommandWordText.FormatPhrase(TrimTrailingValueTokens(clause.Verb.Tokens));
         var verb = ShellVerbPolicyData.ApplyVerbShortCircuit(parsedVerb);
         if (string.IsNullOrEmpty(verb))
             return null;
@@ -509,7 +510,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 clauseWorkingDirectory,
                 out var programPath))
         {
-            verb = ReplaceProgram(verb, clause.Verb.Tokens[0], programPath);
+            verb = ReplaceProgram(
+                verb,
+                ShellCommandWordText.Quote(clause.Verb.Tokens[0]),
+                ShellCommandWordText.Quote(programPath));
             verbTokens = Array.AsReadOnly([programPath, .. verbTokens.Skip(1)]);
         }
 
@@ -1890,7 +1894,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     {
         var clause = occurrence.Clause;
         var parsedVerb = clause.Verb.CanonicalVerb
-            ?? string.Join(" ", TrimTrailingValueTokens(clause.Verb.Tokens));
+            ?? ShellCommandWordText.FormatPhrase(TrimTrailingValueTokens(clause.Verb.Tokens));
         return ShellVerbPolicyData.ApplyVerbShortCircuit(parsedVerb);
     }
 
