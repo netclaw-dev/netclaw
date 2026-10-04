@@ -853,20 +853,19 @@ public sealed record ShellCommandAnalysis
             : ShellUnresolvedPart.None;
     }
 
-    // ShellSyntaxTree gives no command words for a bracket pattern in the
-    // program word, such as ["ci","build"], but it reports the word as literal.
-    // Bash expands the pattern, so the program is not fixed. With no other word,
-    // only the program word can make the words unknown, so the command stays
-    // unresolved. A tilde program word on a host with no launch facts keeps its
-    // rewrite advice (R1).
+    // ShellSyntaxTree 0.4.0-beta.17 gives no command words for a bracket
+    // pattern in the program word, such as ["ci","build"], but it reports the
+    // word as literal. Bash expands the pattern, so the program is not fixed.
+    // With no other word, only the program word can make the words unknown, so
+    // the command stays unresolved, as it was with beta.10. Other program words
+    // with unknown words (a brace text, a tilde path) keep their decision.
     private static bool HasDynamicProgramWord(CommandOccurrence command)
     {
         var elements = command.Clause.Elements;
         return command.CommandWords is ShellCommandWords.Unknown
-               && command.Clause.Verb.Tokens is [{ Length: > 0 }]
                && elements.Count > 0
                && elements[0] is { Role: ClauseElementRole.Verb, Kind: ArgKind.Literal }
-               && !elements[0].Raw.StartsWith('~')
+               && elements[0].Value.Contains('[', StringComparison.Ordinal)
                && elements.Skip(1).All(static element => element.Role == ClauseElementRole.Redirect);
     }
 

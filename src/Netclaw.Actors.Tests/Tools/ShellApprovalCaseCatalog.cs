@@ -2346,6 +2346,13 @@ public static class ShellApprovalCases
             Bash52("[\"ci\",\"build\"]", interactive: false),
             Approvals.None,
             ExpectedApproval.Deny("shell_unresolved_trust_zone_input")),
+        // A brace text in the program word keeps the rewrite advice that it got
+        // with ShellSyntaxTree 0.4.0-beta.10.
+        Case(
+            "unattended-brace-program-word-gets-rewrite-advice",
+            Bash52("{\"b\":2,\"nested\":{\"c\":3}}", interactive: false),
+            Approvals.None,
+            ExpectedApproval.Correct()),
         // ShellSyntaxTree 0.4.0-beta.13 and beta.14: while, until, if, case, and a
         // background list. Each command inside them gets its own decision.
         Case(
