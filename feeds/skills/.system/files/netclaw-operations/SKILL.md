@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.88.0"
+  version: "2.89.0"
 ---
 
 # Netclaw Operations
@@ -153,7 +153,8 @@ it needs first with `netclaw approvals trust-verb <verb>`, or test it with
 `/run-reminder <id>` (the `run-reminder` skill and the `run_reminder` tool). The
 test runs the reminder's exact prompt in the chat, so the user can answer each
 prompt with an "Always" grant that the scheduled run reads. The CLI form is
-`netclaw reminder run <id>`. Background shell: set
+`netclaw reminder run <id>`. The test runs only in a chat at the reminder's
+audience, and a CLI chat is Personal (#2330). Background shell: set
 `_background: true` on `shell_execute` (max 5 concurrent; cancel servers/watchers
 when done; background jobs are killed when the session passivates).
 

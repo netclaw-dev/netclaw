@@ -242,6 +242,10 @@ The best way to collect the grants is to test the reminder once, attended:
 - The chat must have the same audience as the reminder. A wider chat would
   pass calls that the scheduled run denies, so `run_reminder` refuses it. A
   reminder above the chat's audience reads as not found.
+- Limitation (#2330): `run_reminder` runs only in a chat at the reminder's
+  audience. A CLI chat is Personal, so `netclaw reminder run` tests only
+  Personal reminders. A bot with a disposition below Personal may have no chat
+  where some of its reminders can be tested.
 - The test does not change the schedule and writes no reminder history.
 
 **Before creating a reminder that uses shell commands**, you can also identify

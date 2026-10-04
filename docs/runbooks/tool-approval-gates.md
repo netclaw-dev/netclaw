@@ -131,6 +131,12 @@ exact prompt in the chat. Answer each prompt with "Always here",
 "This repository", or "Always anywhere". The scheduled run reads those
 grants. "Once" and "This chat" answers do not carry over to a scheduled run.
 
+Limitation ([#2330](https://github.com/netclaw-dev/netclaw/issues/2330)):
+`run_reminder` runs only in a chat at the reminder's audience. A CLI chat is
+Personal, so `netclaw reminder run` tests only Personal reminders. A bot with a
+disposition below Personal may have no chat where some of its reminders can be
+tested.
+
 ## Answer a prompt
 
 A prompt shows the tool, the command or arguments with secrets removed, and
