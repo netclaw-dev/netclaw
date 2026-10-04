@@ -675,24 +675,11 @@ internal sealed class SessionToolExecutionPipeline
                     : null,
                 ManagedTemporaryCorrectionUpdate: delivery.ManagedTemporaryStateChange);
         }
-        catch (ToolApprovalRequiredException approvalEx)
+        // A call without an approval bridge never needs consent: the authorizer
+        // denies it (approval_required_unattended, D2). If one arrives anyway,
+        // it is not caught here and fails loudly as a tool error.
+        catch (ToolApprovalRequiredException approvalEx) when (approvalBridge is not null)
         {
-            if (approvalBridge is null)
-            {
-                sw.Stop();
-                resultText = $"Tool requires approval but no interactive approval requester is available: {approvalEx.ApprovalContext.ToolName}";
-
-                return new ToolCallResult(new SerializableChatMessage
-                {
-                    Role = Protocol.ChatRole.Tool,
-                    Content = resultText,
-                    ToolCallId = new ToolCallId(tc.CallId),
-                    Name = tc.Name
-                }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
-                    authorizationAttemptId,
-                    Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
-            }
-
             // Mid-turn approval pause: the session's consent prompt emits the
             // request and waits for the answer.
             var ctx = approvalEx.ApprovalContext;

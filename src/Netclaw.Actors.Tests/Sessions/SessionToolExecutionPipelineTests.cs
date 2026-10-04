@@ -200,45 +200,6 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         Assert.Equal("ran-with-bypass\n[approval: always in this folder]", result.Content);
     }
 
-    [Fact]
-    public async Task Source_less_approval_required_turn_fails_closed_without_prompt()
-    {
-        var executor = new ApprovalThenSuccessExecutor();
-        var approvalChannel = new ApprovalChannel();
-        var probe = CreateTestProbe("source-less-approval-probe");
-        var approvals = new List<ToolInteractionRequest>();
-
-        var toolCalls = new List<FunctionCallContent>
-        {
-            new("call-no-source", "shell_execute", new Dictionary<string, object?>
-            {
-                ["command"] = "git push origin dev"
-            })
-        };
-
-        var pipelineTask = new SessionToolPipelineTestFixture(
-                executor, toolCalls, new SessionId("D1/source-less-approval-test"), probe.Ref)
-            .WithTimeout(TimeSpan.FromSeconds(1))
-            .WithApprovals(
-                approvalChannel,
-                request => approvals.Add(request.Request),
-                Timeout.InfiniteTimeSpan)
-            .ExecuteAsync(TestContext.Current.CancellationToken);
-
-        var completed = await probe.ExpectMsgAsync<ToolExecutionCompleted>(
-            TimeSpan.FromSeconds(3),
-            cancellationToken: TestContext.Current.CancellationToken);
-
-        await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
-
-        var result = Assert.Single(completed.ToolResults);
-        Assert.Contains("no interactive approval requester is available", result.Content);
-        Assert.Empty(approvals);
-        Assert.True(AuthorizationAttemptId.TryParse(
-            completed.AuthorizationAttemptIds["call-no-source"].Value,
-            out _));
-    }
-
     [Theory]
     [InlineData(false, false)]
     [InlineData(true, false)]

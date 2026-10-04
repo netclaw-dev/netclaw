@@ -1538,13 +1538,15 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                             ? new ToolExposureRequest(nativeTool)
                             : null);
                 }
-                catch (ToolApprovalRequiredException approvalEx)
+                // A child without an approval bridge never needs consent: the
+                // authorizer denies the call (approval_required_unattended, D2).
+                catch (ToolApprovalRequiredException approvalEx) when (approvalBridge is not null)
                 {
                     var ctx = approvalEx.ApprovalContext;
                     if (approvalBridge is not IParentConsentBridge consentBridge)
                     {
                         throw new ParentApprovalUnavailableException(
-                            $"Tool '{tc.Name}' requires interactive approval, but no parent approval bridge is available.");
+                            $"Tool '{tc.Name}' requires interactive approval, but the parent approval bridge cannot ask for consent.");
                     }
 
                     // Signal the actor that an approval wait is starting BEFORE

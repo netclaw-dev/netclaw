@@ -407,9 +407,10 @@ the link check, then protection.
   NOT cover the parent directory, an adjacent file, or a project declaration.
   A storage ancestor that Netclaw reads for a link check SHALL NOT grant
   directory authority.
-- Interactive `Personal` with mode `All` SHALL skip root checks. An unattended
-  run SHALL be confined to its trusted roots and SHALL fail closed without
-  them. Consent SHALL NOT widen an explicit `Roots` or `None` profile.
+- `Personal` with mode `All` SHALL skip root checks, attended or unattended
+  (decision D2). Only a `DeclareProjectScope` decision SHALL stay inside the
+  trusted roots. Consent SHALL NOT widen an explicit `Roots` or `None` profile,
+  and a bounded profile SHALL confine attended and unattended runs alike.
 - A relative path SHALL resolve against the project directory, else the
   session directory. File tools SHALL NOT expand `~`; `~/x` is a relative path.
 - A path through a link that leaves the root SHALL be denied. A path whose
@@ -443,14 +444,8 @@ the link check, then protection.
 - Allow checks SHALL compare paths with ordinal case except on Windows. Deny
   checks SHALL ignore case.
 - A path access denial SHALL be terminal and SHALL NOT reveal root paths to a
-  Public session. One exception applies to an unattended `shell_execute` call
-  in Approval mode: a stored grant for every candidate SHALL replace a denial
-  of a working directory or a path that is only outside the trusted roots.
-  A protected path, a path through a link, and a path that the host cannot
-  inspect SHALL stay denied. Auto mode SHALL NOT use this exception.
-- When an unattended shell call stays denied outside the trusted roots, the
-  denial SHALL name each candidate without a stored grant: its verb, its
-  folder, and the scopes that can cover it.
+  Public session. No grant SHALL replace a path access denial, attended or
+  unattended.
 - Tool capability and shell command policy SHALL run before file protection.
   File authority SHALL NOT enable shell. Netclaw SHALL derive the known real
   paths of a shell call from the command analysis, independent of approval
@@ -512,17 +507,30 @@ process-local. No state of these checks is durable.
 
 #### Scenario: A stored grant decides outside the trusted roots in an unattended run
 
-- **GIVEN** an unattended Personal run in Approval mode
-- **AND** a folder grant for `git ls-tree` in an external directory
-- **WHEN** the model calls `shell_execute` with `git ls-tree feature` in that directory
-- **THEN** the call is allowed by the stored grant
+- **GIVEN** an unattended Personal run in Approval mode and the default Personal profile
+- **AND** a folder grant for `make` in an external directory
+- **WHEN** the model calls `shell_execute` with `make` in that directory
+- **THEN** the call is allowed by the stored grant, as in a chat
 
 #### Scenario: An unattended run without a grant stays denied
 
 - **GIVEN** an unattended Personal run in Approval mode and no grant
-- **WHEN** the model calls `shell_execute` with `git ls-tree feature` in an external directory
+- **WHEN** the model calls `shell_execute` with `make` in an external directory
+- **THEN** the call is denied with `approval_required_unattended`
+- **AND** a chat of the same audience would prompt for the same call
+
+#### Scenario: An unattended run has the file reach of a chat
+
+- **GIVEN** an unattended Personal run and the default Personal profile
+- **WHEN** the model calls `file_read` on a file outside the session and project
+- **THEN** the path access decision is the same as for an interactive Personal session
+
+#### Scenario: A bounded profile confines an unattended run
+
+- **GIVEN** a Personal profile with `WriteFiles` mode `Roots` and an unattended run
+- **WHEN** the model calls `shell_execute` with a working directory outside those roots
 - **THEN** the call is denied with `shell_working_directory_outside_trust_zone`
-- **AND** the denial names `git ls-tree` and the scopes that can cover it
+- **AND** a covering stored grant does not change the denial
 
 #### Scenario: A grant never opens a protected path
 
@@ -605,9 +613,9 @@ have their glossary meaning.
 - An unresolved command (a dynamic command name, an unknown value, an
   unresolved path or redirect, a command after an unproved directory change
   such as `cd "$x"`, `pushd`, `popd`, or a failed `cd`) SHALL produce one
-  exact candidate: its source text, with no reusable grant. In an interactive
-  Bash session, each other command of the call SHALL keep its own candidates
-  and coverage.
+  exact candidate: its source text, with no reusable grant. In a Bash session,
+  attended or not, each other command of the call SHALL keep its own
+  candidates and coverage.
 - Bracket-word rule: a program word that is a literal bracket pattern (for
   example `["ci","build"]`), with no command words and no other word except a
   redirect, SHALL be unresolved, because Bash expands the pattern. Brace text
@@ -619,20 +627,18 @@ have their glossary meaning.
   command-resolution mutation such as `alias` or `hash`, `&&` under Windows
   PowerShell 5.1, unresolved PowerShell syntax) SHALL allow only a one-time
   consent for the whole call.
-- Unresolved syntax SHALL be denied in a non-interactive session with
-  `shell_unresolved_trust_zone_input`.
 - Data-position rule: in Bash, a dynamic operand of an output command
   (`echo`, `printf`, `:`, `true`, `false`) SHALL be data, not unresolved
   syntax. A `printf` operand SHALL be data only after a literal format, and
   `printf -v` SHALL stay unresolved. A command substitution inside the operand
   SHALL be its own command with its own candidate, and a redirect target SHALL
   keep its own check. PowerShell SHALL keep only the bare `$?` rule.
-- Owner decision D1: in an interactive session, a command whose command words
-  are known and whose only unknown part is an operand value SHALL be covered
-  by a reviewed safe phrase or by a grant for anywhere. A folder, repository,
-  or chat grant SHALL NOT cover it. An unknown program word, an unknown
-  redirect target, and a link SHALL keep the prompt. An unattended call SHALL
-  keep the unresolved-input denial.
+- Owner decision D1: a command whose command words are known and whose only
+  unknown part is an operand value SHALL be covered by a reviewed safe phrase
+  or by a grant for anywhere, attended or unattended (D2). A folder,
+  repository, or chat grant SHALL NOT cover it. An unknown program word, an
+  unknown redirect target, and a link SHALL keep the prompt; an unattended
+  run SHALL deny it with `approval_required_unattended`.
 - Accepted D1 gap: an unknown operand value can name a path that the
   protected-path text screen cannot see. A grant for anywhere already lets a
   literal operand name any readable path, so the gap adds only this case.
@@ -707,11 +713,11 @@ call-local. The analysis keeps no state between calls.
 
 #### Scenario: D1 applies to a glob with a wildcard directory segment
 
-- **GIVEN** an interactive Personal session (catalog cases `glob-that-may-add-option-uses-global-grant`, `glob-that-may-add-option-prompts-with-folder-grant`, and `glob-that-may-add-option-unattended-denies`)
+- **GIVEN** an interactive Personal session (catalog cases `glob-that-may-add-option-uses-global-grant`, `glob-that-may-add-option-prompts-with-folder-grant`, and `glob-that-may-add-option-unattended-uses-global-grant`)
 - **WHEN** the model calls `shell_execute` with `rm */stale.tmp`
 - **THEN** a grant for anywhere for `rm` allows the call
 - **AND** a folder grant for `rm` gives a prompt with the exact candidate `rm */stale.tmp`
-- **AND** an unattended call with the grant for anywhere is denied with `shell_unresolved_trust_zone_input`
+- **AND** an unattended call with the grant for anywhere is allowed, as in a chat (D2)
 
 #### Scenario: A run-time value gets a one-time prompt
 
@@ -736,7 +742,7 @@ call-local. The analysis keeps no state between calls.
 
 - **GIVEN** an unattended Personal session with no grants (catalog case `unattended-bracket-program-word-denies`)
 - **WHEN** the model calls `shell_execute` with `["ci","build"]`
-- **THEN** authorization returns `Denied` with reason `shell_unresolved_trust_zone_input`
+- **THEN** authorization returns `Denied` with reason `approval_required_unattended`
 - **AND** in an interactive session, `["batch one"]` gives a prompt with only `Once` and `Deny` (catalog case `bracket-program-word-with-space-stays-unresolved`)
 
 #### Scenario: A brace program word keeps its rewrite advice
@@ -750,7 +756,7 @@ call-local. The analysis keeps no state between calls.
 
 - **GIVEN** a headless Personal session with `shell_execute` in `Approval` mode
 - **WHEN** the model calls `shell_execute` with `cat "$FILE"`
-- **THEN** authorization returns `Denied` with reason `shell_unresolved_trust_zone_input`
+- **THEN** authorization returns `Denied` with reason `approval_required_unattended`
 - **AND** no prompt is shown
 
 ### Requirement: TA-8 Every candidate needs coverage
@@ -769,20 +775,20 @@ SHALL be:
   only for a catalog phrase, and only when the path rule below permits every
   known path. Under decision D1 it also covers an unknown operand value;
 - under decision D1, a grant for anywhere for an exact candidate whose only
-  unknown part is an operand, in an interactive session;
+  unknown part is an operand;
 - an approval-exempt output command (`echo`, `printf`, `:`, `true`, `false`)
   with no directory scope and no assignment digest, while the store is
   available.
 
-The path rule for reviewed-safe policy SHALL depend on the run:
+The path rule for reviewed-safe policy SHALL NOT depend on the run (D2):
 
-- In an interactive run, a known path SHALL qualify when the audience profile
-  lets a file tool read it (`ReadFiles`). The path SHALL be a host path of the
-  shell's own style. Netclaw SHALL apply protection to the lexical path and to
-  the link-resolved path, and a protected path SHALL never qualify. An
-  interactive run SHALL NOT need a project declaration for a reviewed phrase.
-- In an unattended run, a known path SHALL qualify only inside the session
-  and project roots.
+- A known path SHALL qualify when the audience profile lets a file tool read
+  it (`ReadFiles`). The path SHALL be a host path of the shell's own style.
+  Netclaw SHALL apply protection to the lexical path and to the link-resolved
+  path, and a protected path SHALL never qualify. Such a path SHALL NOT need
+  a project declaration for a reviewed phrase.
+- Otherwise a known path SHALL qualify only inside the session and project
+  roots.
 
 A grant SHALL apply only to the audience and the tool that it names. A grant
 for `shell_execute` SHALL NOT authorize another tool. A chat grant of one
@@ -805,7 +811,7 @@ checkout that uses `--separate-git-dir`.
 A non-shell tool SHALL have one candidate: its tool name, or a path-scoped
 name for a control-plane write.
 
-Owner: `ReviewedSafeShellPolicy` and `PathAccessPolicy.IsReadableInInteractiveRun`
+Owner: `ReviewedSafeShellPolicy` and `PathAccessPolicy.IsReadableByAudience`
 own the reviewed-safe path rule; their result is call-local.
 `ApprovalPatternMatching` owns the grant match, including the legacy rule; its
 result is call-local. `ToolApprovalActor` holds chat grants (actor-local).
@@ -825,9 +831,10 @@ result is call-local. `ToolApprovalActor` holds chat grants (actor-local).
 
 #### Scenario: A safe phrase does not leave the trusted roots in an unattended run
 
-- **GIVEN** an unattended Personal run in Approval mode and no grant (catalog case `unattended-external-without-grant-denies`)
-- **WHEN** the model calls `shell_execute` with `git ls-tree feature` in an external directory
-- **THEN** authorization returns `Denied` with reason `shell_working_directory_outside_trust_zone`
+- **GIVEN** an unattended Personal run in Approval mode and no grant (catalog case `unattended-external-reviewed-safe-allows`)
+- **WHEN** the model calls `shell_execute` with `git ls-tree feature` in an external directory that the profile may read
+- **THEN** authorization returns `Allowed` with allow reason `ReviewedSafePolicy`, as in a chat (D2)
+- **AND** under a bounded profile that cannot read the directory, the call is denied
 
 #### Scenario: A legacy grant covers its own command words
 
@@ -869,9 +876,9 @@ and pass every check again.
 
 - A shell call that runs one exact native-tool executable SHALL receive a
   native-tool correction before stored grants.
-- An interactive Personal call that authors a write under the platform
-  temporary root SHALL receive a managed temporary directory correction when
-  the ordinary result would ask for consent. Team and Public SHALL NOT receive
+- A Personal call, attended or unattended, that authors a write under the
+  platform temporary root SHALL receive a managed temporary directory
+  correction when the ordinary result would ask for consent. Team and Public SHALL NOT receive
   the managed path.
 - An exact leading Bash directory change for project work SHALL receive a
   one-call working-directory correction that does not rewrite the command.
@@ -944,11 +951,13 @@ and labels:
 - A channel type that supports interactive approval (Slack, Discord,
   Mattermost, TUI, SignalR) SHALL render the options and a text fallback. A
   channel that cannot post a prompt SHALL answer `Deny` for that call.
-- A call that needs consent in a turn that cannot ask (no interactive channel
-  or no requester) SHALL return the tool result
-  `Tool requires approval but no interactive approval requester is available: <tool>`
-  and SHALL NOT prompt. No reason code `channel_does_not_support_approval`
-  exists.
+- Decision D2: when nobody can answer (headless chat, a reminder, a webhook,
+  or a sub-agent with no approval bridge), the authorizer SHALL turn a consent
+  request into the denial `approval_required_unattended` and SHALL NOT
+  prompt. The tool result SHALL say that nobody can answer a prompt in an
+  unattended run and SHALL tell the agent to save an "Always" grant in a chat
+  with the same audience. A stored grant that covers the call SHALL still
+  allow it. No reason code `channel_does_not_support_approval` exists.
 - After a person approves a prompt, the tool result that the model reads
   SHALL end with one line that names the
   [consent answer](../../../docs/spec/GLOSSARY.md#consent-answer):
@@ -981,7 +990,8 @@ answer (durable).
 
 - **GIVEN** a headless Personal session with `shell_execute` in `Approval` mode
 - **WHEN** the model calls `shell_execute` with an uncovered command
-- **THEN** the tool result is `Tool requires approval but no interactive approval requester is available: shell_execute`
+- **THEN** authorization returns `Denied` with reason `approval_required_unattended`
+- **AND** the same command with a covering stored grant is allowed
 
 #### Scenario: MCP tool prompt has no folder option
 
