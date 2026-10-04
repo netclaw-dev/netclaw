@@ -79,7 +79,6 @@ public sealed class ReminderPreflightGrantTests : LlmSessionTestBase
         _registry.WithFirstPartyTools(policy);
         _store = new ToolApprovalStore(
             _paths.ToolApprovalsPath,
-            ApprovalScopeFacts.Instance,
             TimeProvider.System,
             new ApprovalStoreMigrationContext(
                 _environment.Grammar == ShellGrammar.Bash ? ApprovalShell.Bash : ApprovalShell.PowerShell),

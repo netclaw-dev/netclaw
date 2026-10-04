@@ -7,7 +7,6 @@ using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Approvals;
 using Netclaw.Configuration;
-using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -33,7 +32,6 @@ public sealed class ApprovalsCommandTests : IDisposable
         _paths.EnsureDirectoriesExist();
         _store = new ToolApprovalStore(
             _paths.ToolApprovalsPath,
-            ApprovalScopeFacts.Instance,
             _time,
             new ApprovalStoreMigrationContext(ApprovalShell.Bash),
             TimeSpan.Zero);

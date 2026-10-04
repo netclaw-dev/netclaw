@@ -2649,7 +2649,6 @@ public partial class DispatchingToolExecutorTests
             File.Delete(tempFile);
             var store = new ToolApprovalStore(
                 tempFile,
-                ApprovalScopeFacts.Instance,
                 timeProvider: null,
                 migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
                 lockTimeout: TimeSpan.Zero);

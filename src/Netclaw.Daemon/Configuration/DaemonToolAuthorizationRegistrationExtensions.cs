@@ -75,7 +75,6 @@ internal static class DaemonToolAuthorizationRegistrationExtensions
         };
         var toolApprovalStore = new ToolApprovalStore(
             paths.ToolApprovalsPath,
-            ApprovalScopeFacts.Instance,
             timeProvider,
             new ApprovalStoreMigrationContext(approvalShell));
         services.AddSingleton(toolApprovalStore);

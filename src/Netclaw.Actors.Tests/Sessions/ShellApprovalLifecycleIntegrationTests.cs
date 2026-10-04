@@ -78,7 +78,6 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
             : ApprovalShell.PowerShell;
         _store = new ToolApprovalStore(
             _paths.ToolApprovalsPath,
-            ApprovalScopeFacts.Instance,
             TimeProvider.System,
             new ApprovalStoreMigrationContext(approvalShell),
             lockTimeout: TimeSpan.Zero);

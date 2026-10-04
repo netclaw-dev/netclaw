@@ -544,7 +544,6 @@ public sealed class ToolApprovalActorTests : TestKit
             File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
             var store = new ToolApprovalStore(
                 tempFile,
-                ApprovalScopeFacts.Instance,
                 timeProvider: null,
                 migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
                 lockTimeout: TimeSpan.Zero);
@@ -584,7 +583,6 @@ public sealed class ToolApprovalActorTests : TestKit
                 "{\"version\":2,\"audiences\":{\"personal\":{\"shell_execute\":[{\"verb\":\" git\"}]}}}");
             var store = new ToolApprovalStore(
                 storePath,
-                ApprovalScopeFacts.Instance,
                 timeProvider: null,
                 migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
                 lockTimeout: TimeSpan.Zero);
@@ -635,7 +633,6 @@ public sealed class ToolApprovalActorTests : TestKit
             File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
             var store = new ToolApprovalStore(
                 tempFile,
-                ApprovalScopeFacts.Instance,
                 timeProvider: null,
                 migrationContext: new ApprovalStoreMigrationContext(ApprovalShell.Bash),
                 lockTimeout: TimeSpan.Zero);
@@ -895,7 +892,6 @@ public sealed class ToolApprovalActorTests : TestKit
             File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
             var store = new ToolApprovalStore(
                 tempFile,
-                ApprovalScopeFacts.Instance,
                 timeProvider: null,
                 migrationContext: new ApprovalStoreMigrationContext(NativeShell),
                 lockTimeout: TimeSpan.Zero);
@@ -950,7 +946,6 @@ public sealed class ToolApprovalActorTests : TestKit
             File.Delete(tempFile);
             var store = new ToolApprovalStore(
                 tempFile,
-                ApprovalScopeFacts.Instance,
                 new FakeTimeProvider(grantTimestamp),
                 new ApprovalStoreMigrationContext(NativeShell),
                 TimeSpan.Zero);
@@ -1000,7 +995,6 @@ public sealed class ToolApprovalActorTests : TestKit
             var otherDirectory = Path.Combine(Path.GetTempPath(), "netclaw-trace", "other");
             var store = new ToolApprovalStore(
                 tempFile,
-                ApprovalScopeFacts.Instance,
                 new FakeTimeProvider(grantTimestamp),
                 new ApprovalStoreMigrationContext(NativeShell),
                 TimeSpan.Zero);
@@ -1069,7 +1063,6 @@ public sealed class ToolApprovalActorTests : TestKit
         File.Delete(path);
         return new ToolApprovalStore(
             path,
-            ApprovalScopeFacts.Instance,
             timeProvider: null,
             migrationContext: new ApprovalStoreMigrationContext(NativeShell),
             lockTimeout: TimeSpan.Zero);

@@ -277,8 +277,8 @@ internal static class ApprovalsCommand
             }
         }
 
-        // A grant names a command, not a file. The store refuses a file word in
-        // the operator's directory, so say why before the store does.
+        // A grant names a command, not a file. The operator's directory is the
+        // directory of the command that the phrase describes.
         var commandDirectory = Environment.CurrentDirectory;
         if (ApprovalGrantHygiene.FileWords(entry, commandDirectory) is { Count: > 0 } fileWords)
         {
@@ -289,7 +289,7 @@ internal static class ApprovalsCommand
         }
 
         var store = CreateStore(paths, clock);
-        var change = store.TryAddApprovals(opts.Audience, canonicalTool, [new ApprovalAddition(entry, commandDirectory)]);
+        var change = store.TryAddApproval(opts.Audience, canonicalTool, entry);
         if (change is ApprovalStoreChangeResult.Unavailable unavailable)
         {
             WriteStoreError(unavailable.Failure, store, writer);
@@ -600,7 +600,6 @@ internal static class ApprovalsCommand
     private static ToolApprovalStore CreateStore(NetclawPaths paths, TimeProvider clock) =>
         new(
             paths.ToolApprovalsPath,
-            ApprovalScopeFacts.Instance,
             clock,
             new ApprovalStoreMigrationContext(NativeShell));
 

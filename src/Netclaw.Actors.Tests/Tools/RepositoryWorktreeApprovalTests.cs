@@ -68,9 +68,8 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
             Assert.True(ToolApprovalActor.TryCreateEntries(
                 new ToolName(ShellTool.ToolName),
                 [repositoryGrant],
-                out var additions,
+                out var entries,
                 out _));
-            var entries = additions.Select(static addition => addition.Entry).ToArray();
             var entry = Assert.Single(entries);
             Assert.Equal(promptCandidate.AssignmentDigest, entry.AssignmentDigest);
             Assert.Equal(((GrantScope.Repository)repositoryGrant.Scope).CommonDirectory, entry.Repository);

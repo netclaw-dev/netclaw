@@ -4,7 +4,6 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using Netclaw.Configuration;
-using Netclaw.Security;
 
 namespace Netclaw.Cli.Doctor;
 
@@ -51,7 +50,6 @@ public sealed class ToolApprovalHygieneDoctorCheck(NetclawPaths paths) : IDoctor
     internal static ToolApprovalStore CreateStore(NetclawPaths paths)
         => new(
             paths.ToolApprovalsPath,
-            ApprovalScopeFacts.Instance,
             timeProvider: null,
             new ApprovalStoreMigrationContext(OperatingSystem.IsWindows() ? ApprovalShell.PowerShell : ApprovalShell.Bash));
 

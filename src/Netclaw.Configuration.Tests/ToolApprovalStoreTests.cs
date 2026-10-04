@@ -21,7 +21,6 @@ public sealed class ToolApprovalStoreTests : IDisposable
         _file = Path.Combine(Path.GetTempPath(), $"netclaw-approvals-{Guid.NewGuid():N}.json");
         _store = new ToolApprovalStore(
             _file,
-            TestApprovalScopeFacts.None,
             _time,
             new ApprovalStoreMigrationContext(NativeShell),
             TimeSpan.Zero);
@@ -274,7 +273,6 @@ public sealed class ToolApprovalStoreTests : IDisposable
 
         var reloaded = new ToolApprovalStore(
             _file,
-            TestApprovalScopeFacts.None,
             timeProvider: null,
             migrationContext: new ApprovalStoreMigrationContext(NativeShell),
             lockTimeout: TimeSpan.Zero).GetApprovedEntries(TrustAudience.Personal, "shell_execute");
@@ -313,7 +311,6 @@ public sealed class ToolApprovalStoreTests : IDisposable
         _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb("git status"));
         var reloaded = new ToolApprovalStore(
             _file,
-            TestApprovalScopeFacts.None,
             timeProvider: null,
             migrationContext: new ApprovalStoreMigrationContext(NativeShell),
             lockTimeout: TimeSpan.Zero).GetApprovedEntries(TrustAudience.Personal, "shell_execute");
@@ -683,7 +680,6 @@ public sealed class ToolApprovalStoreTests : IDisposable
         const string ShellToolName = "native_shell";
         var store = new ToolApprovalStore(
             _file,
-            TestApprovalScopeFacts.None,
             _time,
             new ApprovalStoreMigrationContext(ApprovalShell.Bash, ShellToolName),
             TimeSpan.Zero);
@@ -694,7 +690,6 @@ public sealed class ToolApprovalStoreTests : IDisposable
 
         var reloaded = new ToolApprovalStore(
             _file,
-            TestApprovalScopeFacts.None,
             _time,
             new ApprovalStoreMigrationContext(ApprovalShell.Bash, ShellToolName),
             TimeSpan.Zero);
@@ -827,7 +822,6 @@ public sealed class ToolApprovalStoreTests : IDisposable
 
     private ToolApprovalStore CreateStore(IApprovalStoreFileAccess fileAccess) => new(
         _file,
-        TestApprovalScopeFacts.None,
         _time,
         new ApprovalStoreMigrationContext(NativeShell),
         TimeSpan.Zero,
