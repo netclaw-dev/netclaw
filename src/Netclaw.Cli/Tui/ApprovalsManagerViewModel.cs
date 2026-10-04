@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Netclaw.Cli.Approvals;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using R3;
 using Termina.Reactive;
 
@@ -48,6 +49,7 @@ public sealed class ApprovalsManagerViewModel : ReactiveViewModel
             : ApprovalShell.Bash;
         _store = new ToolApprovalStore(
             paths.ToolApprovalsPath,
+            ApprovalScopeFacts.Instance,
             timeProvider,
             new ApprovalStoreMigrationContext(nativeShell));
     }

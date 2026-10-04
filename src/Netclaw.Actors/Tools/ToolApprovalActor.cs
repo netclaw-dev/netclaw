@@ -280,10 +280,10 @@ internal sealed class ToolApprovalActor : ReceiveActor
     internal static bool TryCreateEntries(
         ToolName toolName,
         IReadOnlyList<ToolApprovalGrant> grants,
-        out IReadOnlyList<ApprovalEntry> persistentEntries,
+        out IReadOnlyList<ApprovalAddition> persistentEntries,
         out IReadOnlyList<ApprovalEntry> sessionEntries)
     {
-        var persisted = new List<ApprovalEntry>(grants.Count);
+        var persisted = new List<ApprovalAddition>(grants.Count);
         var session = new List<ApprovalEntry>(grants.Count);
         persistentEntries = [];
         sessionEntries = [];
@@ -294,8 +294,9 @@ internal sealed class ToolApprovalActor : ReceiveActor
                 if (!TryCreateEntry(toolName, grant, out var entry))
                     return false;
 
+                // The store applies the file-word rule in the candidate's directory.
                 if (grant.Scope.IsPersistent)
-                    persisted.Add(entry);
+                    persisted.Add(new ApprovalAddition(entry, grant.Candidate.Directory));
 
                 // A session match ignores the folder, so the session copy of a
                 // folder grant drops it. A repository grant keeps its repository.

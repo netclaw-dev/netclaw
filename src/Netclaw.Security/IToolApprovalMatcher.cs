@@ -581,28 +581,19 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         CommandOccurrence occurrence,
         string? occurrenceDirectory)
     {
-        const int firstOperandWord = 2;
         var words = GetCommandWords(occurrence);
         if (words is null)
             return new CommandWordProjection(null, []);
 
-        var kept = words.Take(firstOperandWord).ToList();
+        // A directory in another host style is not a full host path, so it names no entry.
+        var kept = words.Take(ShellGrantFileWords.FirstOperandWord).ToList();
         var fileWords = new List<CommandFileWord>();
-        foreach (var word in words.Skip(firstOperandWord))
+        foreach (var word in words.Skip(ShellGrantFileWords.FirstOperandWord))
         {
-            // An unknown directory gives no path, and a path in another host
-            // style never exists here, so the word stays. ShellSyntaxTree
-            // classifies a word with a separator or a dot segment as a path,
-            // so a command word names one entry of the directory.
-            if (CanonicalPath.TryCreate(word, occurrenceDirectory, Environment.PathStyle, out var path)
-                && FileSystemAuthority.IsExistingEntryWithoutLink(path))
-            {
-                fileWords.Add(new CommandFileWord(word, path.Value));
-            }
+            if (ShellGrantFileWords.NamesEntry(word, occurrenceDirectory, out var path))
+                fileWords.Add(new CommandFileWord(word, path));
             else
-            {
                 kept.Add(word);
-            }
         }
 
         return new CommandWordProjection(kept.AsReadOnly(), fileWords);

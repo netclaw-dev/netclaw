@@ -105,6 +105,41 @@ public sealed class ExactVerbChainMutationTests
         }
     }
 
+    // The store and the doctor apply the same rule to any stored phrase, so the
+    // rule itself refuses a word that is not one entry of the directory.
+    [Fact]
+    public void File_word_names_one_entry_of_its_directory()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var directory = Directory.CreateTempSubdirectory("netclaw-file-entry-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "Phobos.slnx"), string.Empty);
+            Directory.CreateDirectory(Path.Combine(directory, "sub"));
+            File.WriteAllText(Path.Combine(directory, "sub", "x"), string.Empty);
+            File.CreateSymbolicLink(Path.Combine(directory, "Linked.slnx"), Path.Combine(directory, "Phobos.slnx"));
+            var relative = Path.GetRelativePath(Environment.CurrentDirectory, directory);
+
+            Assert.True(ShellGrantFileWords.NamesEntry("Phobos.slnx", directory, out var path));
+            Assert.Equal(Path.Combine(directory, "Phobos.slnx"), path);
+            Assert.True(ShellGrantFileWords.NamesEntry("sub", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry("sub/x", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry("..", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry(".", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry("", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry("Linked.slnx", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry("missing", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry("Phobos.slnx", null, out _));
+            Assert.False(ShellGrantFileWords.NamesEntry("Phobos.slnx", relative, out _));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static IReadOnlyList<string> CommandWords(string command, string? workingDirectory)
         => Assert.Single(Candidates(command, workingDirectory)
                 .Select(static candidate => string.Join(' ', candidate.VerbTokens!))

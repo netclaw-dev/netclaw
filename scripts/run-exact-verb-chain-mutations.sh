@@ -103,10 +103,10 @@ read -r file_word_start file_word_end < <(
   'return new CommandWordProjection(kept.AsReadOnly(), fileWords);' \
   "$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs")
 run_gate Netclaw.Security.csproj "IToolApprovalMatcher.cs{$file_word_start..$file_word_end}" \
-  "$output_path/file-word" 7 "file word operand"
+  "$output_path/file-word" 6 "file word operand"
 
 read -r link_start link_end < <(
-  find_span 'return (File.GetAttributes(path.Value) & FileAttributes.ReparsePoint) == 0;' \
-  "$repo_root/src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs")
-run_gate Netclaw.Security.csproj "**/FileSystemAuthority.cs{$link_start..$link_end}" \
-  "$output_path/file-word-link" 2 "file word link"
+  find_range 'if (string.IsNullOrEmpty(directory)' 'FileAttributes.ReparsePoint) == 0;' \
+  "$repo_root/src/Netclaw.Configuration/ShellGrantFileWords.cs")
+run_gate Netclaw.Configuration.csproj "ShellGrantFileWords.cs{$link_start..$link_end}" \
+  "$output_path/file-word-entry" 16 "file word entry"

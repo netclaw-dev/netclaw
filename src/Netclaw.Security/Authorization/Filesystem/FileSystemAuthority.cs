@@ -439,27 +439,6 @@ internal sealed class FileSystemAuthority
         }
     }
 
-    /// <summary>
-    /// Returns true when a file or a directory exists at the host path and the
-    /// entry itself is not a link. One attribute read answers both questions.
-    /// A missing entry, a link (also a dangling link), and an inspection
-    /// failure all return false.
-    /// </summary>
-    internal static bool IsExistingEntryWithoutLink(CanonicalPath path)
-    {
-        if (!path.IsHostStyle)
-            return false;
-
-        try
-        {
-            return (File.GetAttributes(path.Value) & FileAttributes.ReparsePoint) == 0;
-        }
-        catch (Exception ex) when (IsInspectionFailure(ex))
-        {
-            return false;
-        }
-    }
-
     internal static bool IsInspectionFailure(Exception ex)
         => ex is ArgumentException
             or IOException

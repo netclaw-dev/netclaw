@@ -190,12 +190,13 @@ public sealed class ConsentWireCompatibilityTests
             grants,
             out var persistent,
             out _));
-        return persistent;
+        return persistent.Select(static addition => addition.Entry).ToArray();
     }
 
     private static ToolApprovalStore CreateStore(string path)
         => new(
             path,
+            ApprovalScopeFacts.Instance,
             new FakeTimeProvider(GrantTime),
             new ApprovalStoreMigrationContext(ApprovalShell.Bash),
             lockTimeout: TimeSpan.Zero);

@@ -7,6 +7,7 @@ using System.Text.Json;
 using Microsoft.Extensions.Time.Testing;
 using Netclaw.Cli.Approvals;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -32,6 +33,7 @@ public sealed class ApprovalsCommandTests : IDisposable
         _paths.EnsureDirectoriesExist();
         _store = new ToolApprovalStore(
             _paths.ToolApprovalsPath,
+            ApprovalScopeFacts.Instance,
             _time,
             new ApprovalStoreMigrationContext(ApprovalShell.Bash),
             TimeSpan.Zero);
@@ -603,14 +605,18 @@ public sealed class ApprovalsCommandTests : IDisposable
     [Fact]
     public async Task Revoke_old_scope_rejects_ambiguous_typed_phrases()
     {
-        _store.AddApproval(
-            TrustAudience.Personal,
-            "shell_execute",
-            ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"]));
-        _store.AddApproval(
-            TrustAudience.Personal,
-            "shell_execute",
-            ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "git push"));
+        // The store no longer saves a grant that another grant covers, so an
+        // older store file holds the two equal phrases.
+        Directory.CreateDirectory(Path.GetDirectoryName(_paths.ToolApprovalsPath)!);
+        await File.WriteAllTextAsync(
+            _paths.ToolApprovalsPath,
+            """
+            {"version":3,"audiences":{"personal":{"shell_execute":[
+              {"shell":"Bash","match":"TokenPrefix","verbTokens":["git","push"],"directory":null,"createdAt":null},
+              {"shell":"Bash","match":"LegacyExact","verb":"git push","directory":null,"createdAt":null}
+            ]}}}
+            """,
+            TestContext.Current.CancellationToken);
 
         var exit = await ApprovalsCommand.RunAsync(
             ["approvals", "revoke", "git push anywhere"],

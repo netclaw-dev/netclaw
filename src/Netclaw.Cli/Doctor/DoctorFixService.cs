@@ -44,6 +44,7 @@ public sealed class DoctorFixService
         // evaluated even when the app config file is absent, so it runs before the
         // config-file early-return below.
         TryAddDaemonPathEnvironmentFix(fixes);
+        TryAddToolApprovalHygieneFix(fixes);
 
         if (!File.Exists(_paths.NetclawConfigPath))
             return Task.FromResult(new DoctorFixPlan(fixes));
@@ -303,10 +304,56 @@ public sealed class DoctorFixService
             UpdatedText: updated));
     }
 
+    // Removes the grants that add nothing. The store text of the plan comes from
+    // the store itself, and the apply step writes it only when the store did not
+    // change in between.
+    private void TryAddToolApprovalHygieneFix(List<DoctorFileFix> fixes)
+    {
+        if (!File.Exists(_paths.ToolApprovalsPath))
+            return;
+
+        ApprovalHygieneReport report;
+        try
+        {
+            report = ToolApprovalHygieneDoctorCheck.CreateStore(_paths).AnalyzeHygiene();
+        }
+        catch (Exception)
+        {
+            // The hygiene check reports an unreadable store. The fix plan has nothing to change.
+            return;
+        }
+
+        if (report is { OriginalText: { } original, UpdatedText: { } updated })
+        {
+            fixes.Add(new DoctorFileFix(
+                _paths.ToolApprovalsPath,
+                $"{ToolApprovalHygieneFixName}: remove {report.Findings.Count(static finding => finding.Removable)} grant(s) "
+                + "that name a file or that another grant covers.",
+                original,
+                updated));
+        }
+    }
+
+    internal const string ToolApprovalHygieneFixName = "tool approval grants";
+
     public Task ApplyAsync(DoctorFixPlan plan, CancellationToken cancellationToken = default)
     {
         foreach (var fix in plan.Fixes)
         {
+            // The grant store has its own lock. The write fails when the store changed after the plan.
+            if (string.Equals(fix.FilePath, _paths.ToolApprovalsPath, StringComparison.Ordinal))
+            {
+                var change = ToolApprovalHygieneDoctorCheck.CreateStore(_paths).TryApplyHygiene(
+                    new ApprovalHygieneReport([], fix.OriginalText, fix.UpdatedText));
+                if (change is ApprovalStoreChangeResult.Unavailable unavailable)
+                {
+                    throw new InvalidOperationException(
+                        $"The grant store changed or is unavailable ({unavailable.Failure}). Run `netclaw doctor --fix` again.");
+                }
+
+                continue;
+            }
+
             // Ensure the parent directory exists before writing. The daemon-PATH fix can
             // target ~/.netclaw/config even after that directory has been removed, so a bare
             // File.WriteAllTextAsync would throw DirectoryNotFoundException and abort the run.

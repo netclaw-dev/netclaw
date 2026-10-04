@@ -286,6 +286,18 @@ netclaw approvals revoke --tool shell_execute --all --audience personal
 The daemon does not watch this file. A change to it does not restart the
 daemon.
 
+The store keeps itself clean when it saves a grant:
+
+- It refuses a shell grant whose words name an existing file or folder after
+  the verb slot, in the grant's folder or in the command's directory. The
+  grant `dotnet build Phobos.slnx` is refused; `dotnet build` covers the call.
+- It does not save a grant that a stored grant already covers. A grant
+  covers another one when the tool, the shell, the words, and the assignment
+  digest are equal and its scope holds the other scope: "anywhere" holds each
+  scope, a repository holds a folder in it, and a folder holds a folder below
+  it with no link between them.
+- A saved grant removes each stored grant that it covers.
+
 ### Upgrade, rollback, and repair
 
 - On the first load of a version 2 file, Netclaw writes a byte-identical
@@ -362,6 +374,16 @@ rejects the message), the channel answers `Deny` for that call.
   setting has no effect.
 - Saved shell grants exist, but shell is disabled.
 - Personal sets `shell_execute` to `Auto` while the host shell is enabled.
+- "Tool approval grants" lists each stored grant that adds nothing: a grant
+  whose words name a file, and a grant that another grant covers.
+  `netclaw doctor --fix` removes them. The fix writes only when the store did
+  not change after the check.
+- A grant without a folder does not record where its command ran. For such a
+  grant, the doctor looks for the word as a file with content in the folders
+  that the store names. A folder or a device with the name of a subcommand
+  does not count.
+- A grant whose folder no longer exists is reported and kept. The doctor does
+  not guess what it covered.
 
 ### Daemon log lines
 

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.90.0"
+  version: "2.91.0"
 ---
 
 # Netclaw Operations
@@ -448,7 +448,10 @@ the program again to cover one file.
 A word that names an existing file or folder in the command's directory is
 not a command word, unless it is the program or the first word after it. So
 `dotnet build Phobos.slnx` uses the `dotnet build` grant, and a new grant
-never stores a file name.
+never stores a file name. The store also skips a grant that a saved grant
+already covers, and removes the narrower grants that a new grant covers.
+`netclaw doctor` lists stored grants that name a file or that another grant
+covers; `netclaw doctor --fix` removes them. A grant whose folder is gone stays.
 An older exact-phrase grant covers a call whose command words equal its
 phrase. The grant `dotnet list package` covers
 `dotnet list package --vulnerable`, even when the prompt shows `dotnet list`.

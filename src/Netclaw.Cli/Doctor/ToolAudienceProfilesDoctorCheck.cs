@@ -324,6 +324,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
                 : ApprovalShell.Bash;
             var store = new ToolApprovalStore(
                 approvalsPath,
+                ApprovalScopeFacts.Instance,
                 timeProvider: null,
                 migrationContext: new ApprovalStoreMigrationContext(nativeShell));
             var data = store.Load();

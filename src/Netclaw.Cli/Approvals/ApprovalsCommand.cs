@@ -277,8 +277,19 @@ internal static class ApprovalsCommand
             }
         }
 
+        // A grant names a command, not a file. The store refuses a file word in
+        // the operator's directory, so say why before the store does.
+        var commandDirectory = Environment.CurrentDirectory;
+        if (ApprovalGrantHygiene.FileWords(entry, commandDirectory) is { Count: > 0 } fileWords)
+        {
+            writer.WriteLine(
+                $"Error: {string.Join(", ", fileWords)} names a file or directory here. "
+                + "A grant holds the command words only. Leave out the file name.");
+            return 1;
+        }
+
         var store = CreateStore(paths, clock);
-        var change = store.TryAddApproval(opts.Audience, canonicalTool, entry);
+        var change = store.TryAddApprovals(opts.Audience, canonicalTool, [new ApprovalAddition(entry, commandDirectory)]);
         if (change is ApprovalStoreChangeResult.Unavailable unavailable)
         {
             WriteStoreError(unavailable.Failure, store, writer);
@@ -589,6 +600,7 @@ internal static class ApprovalsCommand
     private static ToolApprovalStore CreateStore(NetclawPaths paths, TimeProvider clock) =>
         new(
             paths.ToolApprovalsPath,
+            ApprovalScopeFacts.Instance,
             clock,
             new ApprovalStoreMigrationContext(NativeShell));
 

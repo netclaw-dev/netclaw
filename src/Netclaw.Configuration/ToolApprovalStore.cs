@@ -34,6 +34,7 @@ public sealed class ToolApprovalStore
     private readonly ApprovalStoreMigrationContext? _migrationContext;
     private readonly TimeSpan _lockTimeout;
     private readonly IApprovalStoreFileAccess _fileAccess;
+    private readonly IApprovalScopeFacts _scopeFacts;
     private readonly object _lock = new();
 
     // Cache state is guarded by _lock. The byte snapshot prevents stale
@@ -65,13 +66,14 @@ public sealed class ToolApprovalStore
     public string LockPath => _filePath + ".lock";
 
     /// <param name="filePath">Path to <c>tool-approvals.json</c>.</param>
+    /// <param name="scopeFacts">The folder and repository facts that grant hygiene compares.</param>
     /// <param name="timeProvider">
     /// Clock used to stamp <see cref="ApprovalEntry.CreatedAt"/> on newly
     /// added grants. Defaults to <see cref="TimeProvider.System"/> in
     /// production; tests pass a fake to assert on timestamps.
     /// </param>
-    public ToolApprovalStore(string filePath, TimeProvider? timeProvider = null)
-        : this(filePath, timeProvider, migrationContext: null, lockTimeout: null)
+    public ToolApprovalStore(string filePath, IApprovalScopeFacts scopeFacts, TimeProvider? timeProvider = null)
+        : this(filePath, scopeFacts, timeProvider, migrationContext: null, lockTimeout: null)
     {
     }
 
@@ -81,11 +83,13 @@ public sealed class ToolApprovalStore
     /// </summary>
     public ToolApprovalStore(
         string filePath,
+        IApprovalScopeFacts scopeFacts,
         TimeProvider? timeProvider,
         ApprovalStoreMigrationContext? migrationContext,
         TimeSpan? lockTimeout = null)
         : this(
             filePath,
+            scopeFacts,
             timeProvider,
             migrationContext,
             lockTimeout,
@@ -95,12 +99,14 @@ public sealed class ToolApprovalStore
 
     internal ToolApprovalStore(
         string filePath,
+        IApprovalScopeFacts scopeFacts,
         TimeProvider? timeProvider,
         ApprovalStoreMigrationContext? migrationContext,
         TimeSpan? lockTimeout,
         IApprovalStoreFileAccess fileAccess)
     {
         _filePath = filePath;
+        _scopeFacts = scopeFacts ?? throw new ArgumentNullException(nameof(scopeFacts));
         _timeProvider = timeProvider ?? TimeProvider.System;
         _migrationContext = migrationContext;
         _lockTimeout = lockTimeout ?? TimeSpan.FromSeconds(2);
@@ -319,7 +325,8 @@ public sealed class ToolApprovalStore
         => AddApprovals(audience, toolName, [entry]) > 0;
 
     /// <summary>
-    /// Adds one reviewed batch under one lock and one atomic file replace.
+    /// Adds one reviewed batch under one lock and one atomic file replace. A
+    /// folder grant applies the file-word rule in its own folder.
     /// </summary>
     public int AddApprovals(
         TrustAudience audience,
@@ -327,9 +334,49 @@ public sealed class ToolApprovalStore
         IReadOnlyList<ApprovalEntry> entriesToAdd)
     {
         ArgumentNullException.ThrowIfNull(entriesToAdd);
+        return AddApprovals(
+            audience,
+            toolName,
+            entriesToAdd.Select(static entry => new ApprovalAddition(entry, CommandDirectory: null)).ToArray());
+    }
+
+    /// <summary>
+    /// Adds one reviewed batch under one lock and one atomic file replace.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY and hygiene, under the lock, for each grant:
+    /// <list type="bullet">
+    ///   <item>A shell grant with a file word is refused, and the batch fails
+    ///   (<see cref="ShellGrantFileWords"/>). The rule reads the grant's folder,
+    ///   or else the command directory of the addition.</item>
+    ///   <item>A grant that a stored grant already covers is not saved.</item>
+    ///   <item>A saved grant removes each stored grant that it covers.</item>
+    /// </list>
+    /// Each rule compares only grants of the same audience and tool
+    /// (<see cref="ApprovalGrantHygiene.Covers"/>).
+    /// </remarks>
+    /// <returns>The count of saved grants.</returns>
+    public int AddApprovals(
+        TrustAudience audience,
+        string toolName,
+        IReadOnlyList<ApprovalAddition> additions)
+    {
+        ArgumentNullException.ThrowIfNull(additions);
         ApprovalStoreCodec.ValidateToolName(toolName);
-        var normalizedEntries = entriesToAdd
-            .Select(entry => NormalizeForVersion3(toolName, entry))
+        var normalizedEntries = additions
+            .Select(addition =>
+            {
+                var normalized = NormalizeForVersion3(toolName, addition.Entry);
+                var fileWords = ApprovalGrantHygiene.FileWords(normalized, addition.CommandDirectory);
+                if (fileWords.Count > 0)
+                {
+                    throw new ApprovalStoreException(
+                        ApprovalStoreFailure.InvalidData,
+                        "A shell grant must not name a file or directory after its verb slot.");
+                }
+
+                return normalized;
+            })
             .ToArray();
 
         lock (_lock)
@@ -351,12 +398,16 @@ public sealed class ToolApprovalStore
             }
 
             var added = 0;
+            var removed = 0;
             foreach (var normalized in normalizedEntries)
             {
-                if (entries.Any(existing => ToolApprovalEntryComparer.Equals(existing, normalized)))
+                if (entries.Any(existing => ToolApprovalEntryComparer.Equals(existing, normalized)
+                                            || ApprovalGrantHygiene.Covers(existing, normalized, _scopeFacts)))
                 {
                     continue;
                 }
+
+                removed += entries.RemoveAll(existing => ApprovalGrantHygiene.Covers(normalized, existing, _scopeFacts));
 
                 // Stamp creation time on a new grant only. An equivalent grant
                 // keeps its original CreatedAt.
@@ -368,7 +419,7 @@ public sealed class ToolApprovalStore
                 added++;
             }
 
-            if (added > 0)
+            if (added > 0 || removed > 0)
             {
                 SaveLocked(data);
             }
@@ -390,6 +441,68 @@ public sealed class ToolApprovalStore
         string toolName,
         IReadOnlyList<ApprovalEntry> entries) => TryChange(
         () => AddApprovals(audience, toolName, entries));
+
+    /// <summary>Adds one reviewed batch and returns a typed store status.</summary>
+    public ApprovalStoreChangeResult TryAddApprovals(
+        TrustAudience audience,
+        string toolName,
+        IReadOnlyList<ApprovalAddition> additions) => TryChange(
+        () => AddApprovals(audience, toolName, additions));
+
+    /// <summary>
+    /// Returns the grants that <c>netclaw doctor</c> reports, and the store text
+    /// without the removable ones. The store does not change.
+    /// </summary>
+    public ApprovalHygieneReport AnalyzeHygiene()
+    {
+        lock (_lock)
+        {
+            using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+            var data = CloneData(LoadLocked());
+            var findings = new List<ApprovalHygieneFinding>();
+            foreach (var (audience, tools) in data.Audiences)
+            foreach (var (toolName, entries) in tools)
+                findings.AddRange(ApprovalGrantHygiene.Analyze(audience, toolName, entries, _scopeFacts));
+
+            var removable = findings.Where(static finding => finding.Removable).ToArray();
+            if (removable.Length == 0 || !File.Exists(_filePath))
+                return new ApprovalHygieneReport(findings, OriginalText: null, UpdatedText: null);
+
+            foreach (var finding in removable)
+                data.Audiences[finding.Audience][finding.ToolName].Remove(finding.Entry);
+
+            foreach (var finding in removable)
+                CleanupEmptySections(data, finding.Audience, finding.ToolName);
+
+            return new ApprovalHygieneReport(
+                findings,
+                Encoding.UTF8.GetString(_fileAccess.ReadAllBytes(_filePath)),
+                ApprovalStoreCodec.Serialize(data));
+        }
+    }
+
+    /// <summary>
+    /// Writes the cleaned store text of <see cref="AnalyzeHygiene"/>. The write
+    /// fails when the store changed after the analysis.
+    /// </summary>
+    public ApprovalStoreChangeResult TryApplyHygiene(ApprovalHygieneReport report)
+    {
+        ArgumentNullException.ThrowIfNull(report);
+        if (report.OriginalText is null || report.UpdatedText is null)
+            return new ApprovalStoreChangeResult.Completed(0);
+
+        return TryChange(() =>
+        {
+            lock (_lock)
+            {
+                using var lease = _fileAccess.AcquireLock(LockPath, _lockTimeout);
+                _fileAccess.WriteAtomic(_filePath, report.UpdatedText, Encoding.UTF8.GetBytes(report.OriginalText));
+                _cachedData = null;
+                _cachedSourceBytes = null;
+                return report.Findings.Count(static finding => finding.Removable);
+            }
+        });
+    }
 
     /// <summary>
     /// Returns the approved entries for a specific tool and audience.
