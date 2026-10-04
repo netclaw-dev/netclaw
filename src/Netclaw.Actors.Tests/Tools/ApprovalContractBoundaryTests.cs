@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using System.Text.Json;
+using Netclaw.Actors.Authorization;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -204,39 +205,68 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     // ── 3. Unattended and Public path authority for file tools ──
     // Old coverage: UnattendedPathAccessTests, PublicAudienceFileAccessPolicyTests.
 
-    private const string UnattendedRootsMessage = "Error: unattended session may only access files inside trusted roots.";
-
+    // D2: an unattended Personal call gets the decision of a Personal chat. A
+    // call that would prompt in the chat is denied, because nobody can answer.
     [Fact]
-    public async Task Unattended_personal_file_tools_stay_inside_trusted_roots()
+    public async Task Unattended_personal_file_tools_get_the_attended_decision()
     {
-        await using var harness = await CreateHarnessAsync(
-            "unattended-file-roots",
+        await using var attended = await CreateHarnessAsync(
+            "attended-file-reach",
+            new ShellApprovalInvocation("true", Interactive: true));
+        await using var unattended = await CreateHarnessAsync(
+            "unattended-file-reach",
             new ShellApprovalInvocation("true", Interactive: false));
-        var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
-        await File.WriteAllTextAsync(outside, "outside data", Ct);
 
-        var identity = await harness.EvaluateToolAsync(
+        foreach (var harness in new[] { attended, unattended })
+        {
+            var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
+            await File.WriteAllTextAsync(outside, "outside data", Ct);
+        }
+
+        foreach (var call in FileCalls())
+        {
+            var expected = await call(attended);
+            var actual = await call(unattended);
+            if (expected.Outcome == ApprovalOutcome.RequiresApproval)
+            {
+                Assert.Equal(ApprovalOutcome.Denied, actual.Outcome);
+                Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, actual.DenyReason);
+                continue;
+            }
+
+            Assert.Equal(expected.Outcome, actual.Outcome);
+            Assert.Equal(expected.DenyReason, actual.DenyReason);
+        }
+
+        var secrets = await unattended.EvaluateToolAsync(
+            "file_read",
+            ToolInput.Create("Path", Path.Combine(unattended.Paths.ConfigDirectory, "secrets.json")),
+            Ct);
+        Assert.Equal(ApprovalOutcome.Denied, secrets.Outcome);
+    }
+
+    private static IEnumerable<Func<ShellApprovalHarness, Task<ApprovalObservation>>> FileCalls()
+    {
+        yield return harness => harness.EvaluateToolAsync(
             "file_write",
             ToolInput.Create("Path", Path.Combine(harness.Paths.IdentityDirectory, "SOUL.md"), "Content", "x"),
             Ct);
-        var skills = await harness.EvaluateToolAsync(
+        yield return harness => harness.EvaluateToolAsync(
             "file_write",
             ToolInput.Create("Path", Path.Combine(harness.Paths.SkillsDirectory, "added", "SKILL.md"), "Content", "x"),
             Ct);
-        var read = await harness.EvaluateToolAsync("file_read", ToolInput.Create("Path", outside), Ct);
-        var session = await harness.EvaluateToolAsync(
+        yield return harness => harness.EvaluateToolAsync(
+            "file_read",
+            ToolInput.Create("Path", Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt")),
+            Ct);
+        yield return harness => harness.EvaluateToolAsync(
             "file_write",
             ToolInput.Create("Path", Path.Combine(harness.SessionDirectory, "notes.txt"), "Content", "x"),
             Ct);
-
-        foreach (var denied in new[] { identity, skills, read })
-        {
-            Assert.Equal(ApprovalOutcome.Denied, denied.Outcome);
-            Assert.Equal("path_access_denied", denied.DenyReason);
-            Assert.Equal(UnattendedRootsMessage, denied.DenyMessage);
-        }
-
-        Assert.Equal(ApprovalOutcome.Allowed, session.Outcome);
+        yield return harness => harness.EvaluateToolAsync(
+            "file_read",
+            ToolInput.Create("Path", Path.Combine(harness.Paths.ConfigDirectory, "secrets.json")),
+            Ct);
     }
 
     [Fact]
@@ -386,61 +416,6 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
         Assert.Equal(ApprovalOutcome.Denied, denied.Outcome);
         Assert.Equal("path_access_denied", denied.DenyReason);
         Assert.False(Directory.Exists(Path.Combine(home, folder)));
-    }
-
-    [Fact]
-    public async Task Unattended_session_can_write_a_configured_custom_workspaces_directory()
-    {
-        var custom = ApprovalTestGit.CreateRoot("netclaw-custom-workspaces-");
-        try
-        {
-            await using var harness = await CreateHarnessAsync(
-                "custom-workspaces",
-                new ShellApprovalInvocation("true", Interactive: false),
-                policy: new ShellApprovalHarnessPolicy { WorkspacesDirectory = custom.FullName });
-            var defaultLocation = Path.Combine(harness.Paths.BasePath, "workspaces", "state.json");
-
-            var customWrite = await harness.EvaluateToolAsync(
-                "file_write",
-                ToolInput.Create("Path", Path.Combine(custom.FullName, "state.json"), "Content", "x"),
-                Ct);
-            var defaultWrite = await harness.EvaluateToolAsync(
-                "file_write",
-                ToolInput.Create("Path", defaultLocation, "Content", "x"),
-                Ct);
-
-            Assert.Equal(ApprovalOutcome.Allowed, customWrite.Outcome);
-            Assert.Equal(ApprovalOutcome.Denied, defaultWrite.Outcome);
-            Assert.Equal(UnattendedRootsMessage, defaultWrite.DenyMessage);
-        }
-        finally
-        {
-            custom.Delete(recursive: true);
-        }
-    }
-
-    // Without a bound session or a project, an unattended Personal call keeps
-    // only the shared session roots and the global roots. A path outside them
-    // is denied. The "no trusted roots" branch cannot be reached here: the
-    // production paths always supply the shared session and workspaces roots.
-    [Fact]
-    public async Task Unattended_call_without_a_session_or_project_stays_inside_shared_roots()
-    {
-        await using var harness = await CreateHarnessAsync(
-            "no-trusted-roots",
-            new ShellApprovalInvocation("true", Interactive: false),
-            policy: new ShellApprovalHarnessPolicy { Sessionless = true });
-        var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
-
-        var write = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", outside, "Content", "x"), Ct);
-        var read = await harness.EvaluateToolAsync("file_read", ToolInput.Create("Path", outside), Ct);
-
-        Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
-        Assert.Equal("path_access_denied", write.DenyReason);
-        Assert.Equal(UnattendedRootsMessage, write.DenyMessage);
-        Assert.Equal(ApprovalOutcome.Denied, read.Outcome);
-        Assert.Equal("path_access_denied", read.DenyReason);
-        Assert.Equal(UnattendedRootsMessage, read.DenyMessage);
     }
 
     // ── 5 (continued). Nested secrets and the display size bound ──

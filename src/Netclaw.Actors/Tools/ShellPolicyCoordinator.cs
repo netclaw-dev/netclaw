@@ -217,10 +217,8 @@ internal sealed class ShellPolicyCoordinator(
         }
         cancellationToken.ThrowIfCancellationRequested();
 
-        if (projection.InteractiveApproval is InteractiveApprovalCapability.Available)
-        {
-            ApplyReviewedSafeCoverage(evaluation, policy, context.Invocation);
-        }
+        // Reviewed-safe coverage applies to attended and unattended runs alike (D2).
+        ApplyReviewedSafeCoverage(evaluation, policy, context.Invocation);
         cancellationToken.ThrowIfCancellationRequested();
     }
 
@@ -233,8 +231,8 @@ internal sealed class ShellPolicyCoordinator(
     /// so an unknown operand adds no new reach. A folder, repository, or chat
     /// grant would stretch its meaning to text that Netclaw cannot read, so it
     /// does not cover an exact candidate. An unknown program word, structure,
-    /// working directory, or redirect never gets a grant. Only an interactive
-    /// call has exact candidates; an unattended call keeps its denial.
+    /// working directory, or redirect never gets a grant. Attended and
+    /// unattended calls get the same exact candidates (D2).
     /// </remarks>
     private static ShellApprovalMatchResult KeepUnknownOperandGlobalGrants(
         ShellApprovalMatchResult result,
@@ -433,7 +431,6 @@ internal sealed class ShellPolicyCoordinator(
     /// <param name="cancellationToken">The call cancellation.</param>
     internal static ToolAuthorizationDecision CompleteCovered(
         ShellPolicyEvaluation evaluation,
-        bool grantReplacedTrustedRoot,
         CancellationToken cancellationToken)
     {
         var approvalMatches = evaluation.ApprovalMatches;
@@ -442,11 +439,7 @@ internal sealed class ShellPolicyCoordinator(
         if (approvalMatches.Count > 0)
         {
             return evaluation.Complete(
-                ToolAuthorizationDecision.Allow(
-                    grantReplacedTrustedRoot
-                        ? ToolAllowReason.StoredApprovalOutsideTrustedRoots
-                        : ToolAllowReason.StoredApproval,
-                    approvalMatches));
+                ToolAuthorizationDecision.Allow(ToolAllowReason.StoredApproval, approvalMatches));
         }
 
         return evaluation.Complete(

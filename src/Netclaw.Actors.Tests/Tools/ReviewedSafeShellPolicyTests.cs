@@ -78,6 +78,20 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
                 _paths,
                 new ToolPathPolicy([])));
 
+    // R12 (session and project roots only) holds when the audience profile
+    // cannot read the path. A Personal profile with no read roots shows it. It
+    // applies to attended and unattended runs alike (D2).
+    private ReviewedSafeShellPolicy CreateBoundedPolicy(SafeVerbList safeVerbs)
+    {
+        var config = new ToolConfig();
+        config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+        {
+            Mode = ToolFilesystemMode.Roots,
+            Roots = []
+        };
+        return new(safeVerbs, new PathAccessPolicy(config, _paths, new ToolPathPolicy([])));
+    }
+
     private static ApprovalCandidate Candidate(
         string verb,
         string? directory = null,
@@ -133,8 +147,6 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
             ProjectDirectory = projectDir
         }).Invocation;
 
-    // R12 (session and project roots only) holds for an unattended run. An
-    // interactive run uses the read authority of the audience instead.
     private ToolInvocationContext UnattendedPersonalContext(string? projectDir = null)
         => TestToolExecutionContext.CreateBound("session-1", _sessionDir, new TestToolExecutionContextOptions
         {
@@ -255,9 +267,9 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
-    public void Unattended_reviewed_verb_outside_trusted_roots_falls_through_to_prompt()
+    public void Bounded_reviewed_verb_outside_trusted_roots_falls_through_to_prompt()
     {
-        var policy = CreatePolicy(VerbList("grep"));
+        var policy = CreateBoundedPolicy(VerbList("grep"));
         var ctx = UnattendedPersonalContext(projectDir: _projectDir);
 
         Assert.False(ShortCircuits(policy, "grep", _outsideDir, ctx));
@@ -287,7 +299,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
-    public void Unattended_symlink_segment_in_cwd_breaks_short_circuit()
+    public void Bounded_symlink_segment_in_cwd_breaks_short_circuit()
     {
         // Skip on Windows where directory symlink creation is privilege-gated.
         if (OperatingSystem.IsWindows())
@@ -299,7 +311,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         {
             Directory.CreateSymbolicLink(symlinkPath, leakTarget);
 
-            var policy = CreatePolicy(VerbList("cat"));
+            var policy = CreateBoundedPolicy(VerbList("cat"));
             var ctx = UnattendedPersonalContext(projectDir: _projectDir);
 
             Assert.False(ShortCircuits(policy, "cat", symlinkPath, ctx));
@@ -338,9 +350,9 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
-    public void Unattended_null_cwd_does_not_short_circuit()
+    public void Bounded_null_cwd_does_not_short_circuit()
     {
-        var policy = CreatePolicy(VerbList("grep"));
+        var policy = CreateBoundedPolicy(VerbList("grep"));
         var ctx = UnattendedPersonalContext(projectDir: _projectDir);
 
         Assert.False(ShortCircuits(policy, "grep", null, ctx));
@@ -358,7 +370,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
 
         Assert.True(ShortCircuits(policy, "whoami", _sessionDir, ctx));
         Assert.True(ShortCircuits(policy, "gh run list", _projectDir, ctx));
-        Assert.False(ShortCircuits(policy, "whoami", _outsideDir, UnattendedPersonalContext(projectDir: _projectDir)));
+        Assert.False(ShortCircuits(CreateBoundedPolicy(VerbList("whoami")), "whoami", _outsideDir, UnattendedPersonalContext(projectDir: _projectDir)));
     }
 
     [Fact]
@@ -417,11 +429,11 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     [InlineData("wc --files0-from=/external/list", "wc")]
     [InlineData("du --exclude-from=/external/patterns ./data", "du")]
     [InlineData("realpath --relative-to=/external ./data", "realpath")]
-    public void Unattended_path_shaped_option_operand_outside_trusted_roots_stays_strict(
+    public void Bounded_path_shaped_option_operand_outside_trusted_roots_stays_strict(
         string command,
         string phrase)
     {
-        var policy = CreatePolicy(VerbList(phrase));
+        var policy = CreateBoundedPolicy(VerbList(phrase));
         var ctx = UnattendedPersonalContext(projectDir: _projectDir);
         var matcher = new ShellApprovalMatcher(ShellExecutionEnvironmentDefaults.Bash);
         var candidates = matcher.ExtractCandidates(
@@ -531,7 +543,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
-    public void Unattended_dotted_symlink_directory_does_not_short_circuit()
+    public void Bounded_dotted_symlink_directory_does_not_short_circuit()
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -541,7 +553,7 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         try
         {
             Directory.CreateSymbolicLink(link, target);
-            var policy = CreatePolicy(VerbList("find"));
+            var policy = CreateBoundedPolicy(VerbList("find"));
             var ctx = UnattendedPersonalContext(projectDir: _projectDir);
             var candidate = Candidate("find", link);
 
@@ -601,34 +613,22 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
-    public void Global_read_root_allows_a_file_read_but_not_reviewed_safe_coverage()
+    public void Global_read_root_gets_the_same_reviewed_safe_coverage_attended_and_unattended()
     {
-        // R12: reviewed-safe roots are only the session and the project. A global
-        // read root (skills, identity, workspaces) lets file tools read. It must
-        // not let a safe verb run there without a prompt.
+        // D2: a reviewed phrase covers each path that the audience profile lets
+        // a file tool read, attended or not. A global read root is such a path.
         var skillDirectory = Path.Combine(_paths.SkillsDirectory, "example");
         Directory.CreateDirectory(skillDirectory);
-        var unattended = TestToolExecutionContext.CreateBound("session-1", _sessionDir, new TestToolExecutionContextOptions
-        {
-            Audience = TrustAudience.Personal,
-            ProjectDirectory = _projectDir,
-            InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
-        }).Invocation;
-        var pathPolicy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([]));
         var policy = CreatePolicy(VerbList("cat"));
 
-        Assert.IsType<PathAccessPolicy.PathAccessDecision.Allowed>(pathPolicy.Evaluate(
-            Path.Combine(skillDirectory, "SKILL.md"),
-            unattended,
-            PathAccessPolicy.FileOperation.Read));
-        Assert.False(AllShortCircuit(policy, [Candidate("cat", skillDirectory)], skillDirectory, unattended));
-        Assert.True(AllShortCircuit(policy, [Candidate("cat", _projectDir)], _projectDir, unattended));
+        Assert.True(AllShortCircuit(policy, [Candidate("cat", skillDirectory)], skillDirectory, PersonalContext(projectDir: _projectDir)));
+        Assert.True(AllShortCircuit(policy, [Candidate("cat", skillDirectory)], skillDirectory, UnattendedPersonalContext(projectDir: _projectDir)));
     }
 
     [Fact]
-    public void Unattended_candidate_path_outside_trusted_roots_falls_through_to_prompt()
+    public void Bounded_candidate_path_outside_trusted_roots_falls_through_to_prompt()
     {
-        var policy = CreatePolicy(VerbList("cat"));
+        var policy = CreateBoundedPolicy(VerbList("cat"));
         var ctx = UnattendedPersonalContext(projectDir: _projectDir);
         var candidates = new[] { Candidate("cat", _outsideDir) };
 
@@ -636,33 +636,32 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     }
 
     [Fact]
-    public void Reviewed_safe_work_under_cwd_requests_project_declaration_only_when_unattended()
+    public void Reviewed_safe_work_under_a_readable_cwd_needs_no_project_declaration()
     {
-        var nested = Path.Combine(_undeclaredProjectDir, "src");
-        Directory.CreateDirectory(nested);
-        var policy = CreatePolicy(VerbList("head", "wc"));
-        var candidates = new[]
-        {
-            Candidate("head", nested),
-            Candidate("wc", _undeclaredProjectDir)
-        };
-
-        Assert.True(policy.CanShortCircuitAfterProjectDeclaration(
-            candidates,
-            _undeclaredProjectDir,
-            UnattendedPersonalContext(projectDir: _projectDir)));
-
         // The Bash candidates use POSIX paths, which the read decision can
         // judge only on a POSIX host.
         if (OperatingSystem.IsWindows())
             return;
 
-        // An interactive run may read the cwd, so the reviewed phrase covers the
-        // call with no declaration.
+        var nested = Path.Combine(_undeclaredProjectDir, "src");
+        Directory.CreateDirectory(nested);
+        var candidates = new[]
+        {
+            Candidate("head", nested),
+            Candidate("wc", _undeclaredProjectDir)
+        };
+        var policy = CreatePolicy(VerbList("head", "wc"));
+
+        // The default Personal profile may read the cwd, attended or not (D2),
+        // so the reviewed phrase covers the call with no declaration.
         Assert.False(policy.CanShortCircuitAfterProjectDeclaration(
             candidates,
             _undeclaredProjectDir,
             PersonalContext(projectDir: _projectDir)));
+        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(
+            candidates,
+            _undeclaredProjectDir,
+            UnattendedPersonalContext(projectDir: _projectDir)));
     }
 
     [Fact]
@@ -722,9 +721,9 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     [InlineData(ReadReach.AllFiles, "protected", false)]
     [InlineData(ReadReach.ProjectRootOnly, "outside", false)]
     [InlineData(ReadReach.ProjectRootOnly, "project", true)]
-    [InlineData(ReadReach.Unattended, "outside", false)]
+    [InlineData(ReadReach.Unattended, "outside", true)]
     [InlineData(ReadReach.PublicAudience, "outside", false)]
-    public void Interactive_reviewed_phrase_covers_each_path_the_audience_may_read(
+    public void Reviewed_phrase_covers_each_path_the_audience_may_read(
         ReadReach reach,
         string target,
         bool expected)

@@ -9,8 +9,8 @@ using Akka.Pattern;
 using System.Globalization;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
-using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
@@ -46,8 +46,7 @@ internal enum ApprovalAllowReason
     ReviewedSafePolicy,
     ApprovalExemptShellCandidates,
     StoredApproval,
-    OneTimeApproval,
-    StoredApprovalOutsideTrustedRoots
+    OneTimeApproval
 }
 
 internal enum ApprovalCorrection
@@ -737,7 +736,6 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ToolAllowReason.ApprovalExemptShellCandidates => ApprovalAllowReason.ApprovalExemptShellCandidates,
             ToolAllowReason.StoredApproval => ApprovalAllowReason.StoredApproval,
             ToolAllowReason.OneTimeApproval => ApprovalAllowReason.OneTimeApproval,
-            ToolAllowReason.StoredApprovalOutsideTrustedRoots => ApprovalAllowReason.StoredApprovalOutsideTrustedRoots,
             _ => throw new ArgumentOutOfRangeException(nameof(reason), reason, "Unknown allow reason.")
         };
 

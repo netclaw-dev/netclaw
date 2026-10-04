@@ -1256,7 +1256,7 @@ public partial class DispatchingToolExecutorTests
 
     [SlopwatchSuppress("SW001", "This test pins Bash causal approval intent on POSIX hosts.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only shell directory semantics")]
-    public async Task Causal_intent_does_not_grant_reviewed_safe_authority_to_headless_runs()
+    public async Task Causal_intent_decides_a_headless_run_as_a_chat()
     {
         var approvalService = GrantEveryShellCandidate();
         var executor = CreateApprovalGatedShellExecutor(
@@ -1273,26 +1273,24 @@ public partial class DispatchingToolExecutorTests
                 "cd /tmp && inspect; head result.log",
                 "WorkingDirectory",
                 "/work"));
-        var context = TestToolExecutionContext.CreateBound(
-            "webhook/causal-intent-headless",
+        ToolExecutionContext Context(bool interactive) => TestToolExecutionContext.CreateBound(
+            interactive ? "signalr/causal-intent" : "webhook/causal-intent-headless",
             null,
             new TestToolExecutionContextOptions
             {
                 Audience = TrustAudience.Personal,
-                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false)
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(interactive)
             });
 
-        var decision = await executor.EvaluateAuthorizationAsync(
-            call,
-            context,
-            TestContext.Current.CancellationToken);
+        var attended = await executor.EvaluateAuthorizationAsync(call, Context(true), TestContext.Current.CancellationToken);
+        var headless = await executor.EvaluateAuthorizationAsync(call, Context(false), TestContext.Current.CancellationToken);
 
-        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
-        Assert.Equal("shell_unresolved_trust_zone_input", decision.DenyReason);
-        Assert.Null(approvalService.LastRequest);
-        Assert.DoesNotContain(
-            decision.ShellPolicyTrace.Rows,
-            row => row.ScopeRelation == ShellScopeRelation.UnderIntentRoot);
+        // D2: a headless run uses the audience policy of a chat.
+        Assert.Equal(attended.Outcome, headless.Outcome);
+        Assert.Equal(attended.AllowReason, headless.AllowReason);
+        Assert.Equal(
+            attended.ShellPolicyTrace.Rows.Select(static row => row.ScopeRelation),
+            headless.ShellPolicyTrace.Rows.Select(static row => row.ScopeRelation));
     }
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX causal-directory semantics.")]
@@ -3564,14 +3562,14 @@ public partial class DispatchingToolExecutorTests
         Assert.Empty(context.Outputs.FileAttachments);
     }
 
-    // An interactive run may read the directory, so the reviewed phrase runs
-    // with no declaration. Only an unattended run asks for one.
+    // The Personal profile may read the directory, attended or not (D2), so the
+    // reviewed phrase runs with no project declaration.
     [Theory]
     [InlineData(ToolApprovalMode.Auto, true)]
     [InlineData(ToolApprovalMode.Auto, false)]
     [InlineData(ToolApprovalMode.Approval, true)]
     [InlineData(ToolApprovalMode.Approval, false)]
-    public async Task Coordinator_selects_project_correction_from_registry_without_caller_advice(
+    public async Task Coordinator_runs_a_readable_reviewed_phrase_without_project_correction(
         ToolApprovalMode mode, bool interactive)
     {
         var directory = Path.GetFullPath(AppContext.BaseDirectory);
@@ -3596,15 +3594,8 @@ public partial class DispatchingToolExecutorTests
 
         Assert.Null(result.ApprovalContext);
         Assert.Null(context.Receipt);
-        if (interactive)
-        {
-            Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Outcome);
-            Assert.Null(result.AgentCorrections);
-            return;
-        }
-
-        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Outcome);
-        Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.AgentCorrection).Directory);
+        Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Outcome);
+        Assert.Null(result.AgentCorrections);
     }
 
     [Theory]

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Diagnostics;
 using Netclaw.Actors.Authorization.Consent;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
@@ -381,7 +382,9 @@ public sealed class RepositoryWorktreeApprovalTests(ShellApprovalMatrixFixture f
                 { RepositoryGrantWorktree = main });
             var headlessOtherVerbDecision = await headlessOtherVerbHarness.EvaluateDecisionAsync(
                 TestContext.Current.CancellationToken);
-            Assert.Equal(ToolAuthorizationOutcome.RequiresApproval, headlessOtherVerbDecision.Outcome);
+            // A headless call that would prompt is denied (D2).
+            Assert.Equal(ToolAuthorizationOutcome.Denied, headlessOtherVerbDecision.Outcome);
+            Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, headlessOtherVerbDecision.DenyReason);
 
             await using var hardDenyHarness = await CreateHarnessAsync(
                 "repository-hard-deny",

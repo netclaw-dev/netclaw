@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -79,12 +80,13 @@ public sealed class ShellWrapperAssignmentTests(ShellApprovalMatrixFixture fixtu
         Assert.Equal(ApprovalAllowReason.PolicyAuto, autoInteractive.AllowReason);
         Assert.Empty(autoInteractive.ApprovalMatches);
 
-        // Unattended: no operator can give exact consent in either mode.
-        foreach (var unattended in new[] { approvalUnattended, autoUnattended })
-        {
-            Assert.Equal(ApprovalOutcome.Denied, unattended.Outcome);
-            Assert.Equal("shell_unresolved_trust_zone_input", unattended.DenyReason);
-        }
+        // Unattended (D2): Approval mode would prompt, and nobody can answer,
+        // so the call is denied. Auto mode decides as in a chat.
+        Assert.Equal(ApprovalOutcome.Denied, approvalUnattended.Outcome);
+        Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, approvalUnattended.DenyReason);
+        Assert.Equal(ApprovalOutcome.Allowed, autoUnattended.Outcome);
+        Assert.Equal(ApprovalAllowReason.PolicyAuto, autoUnattended.AllowReason);
+        Assert.Empty(autoUnattended.ApprovalMatches);
     }
 
     // The unresolved result must not hide a hard denial in the child.

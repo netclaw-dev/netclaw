@@ -101,18 +101,17 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
     }
 
     // A child shell can read startup files (bash -l reads the login profile),
-    // so the child gets no launch facts and its $TMPDIR is an unknown value. In
-    // an interactive run, decision D1 lets a safe phrase or a grant for
-    // anywhere cover an unknown operand. An unattended run has no D1, so the
-    // cat grant covers only the literal twin.
+    // so the child gets no launch facts and its $TMPDIR is an unknown value.
+    // Decision D1 lets only a safe phrase or a grant for anywhere cover an
+    // unknown operand, so a folder grant covers only the literal twin.
     [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
     public async Task Child_shell_gets_no_launch_facts()
     {
-        await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere("cat"), interactive: false);
+        await using var harness = await CreateHarnessAsync(Approvals.PersistentHere(ApprovalDirectoryShape.Session, "touch"));
 
-        var literal = await harness.EvaluateShellAsync(Expand("bash -lc 'cat {T}/notes.txt'", harness), Ct);
-        var observed = await harness.EvaluateShellAsync("bash -lc 'cat \"$TMPDIR/notes.txt\"'", Ct);
+        var literal = await harness.EvaluateShellAsync(Expand("bash -lc 'touch {T}/notes.txt'", harness), Ct);
+        var observed = await harness.EvaluateShellAsync("bash -lc 'touch \"$TMPDIR/notes.txt\"'", Ct);
 
         Assert.Equal(ApprovalOutcome.Allowed, literal.Outcome);
         Assert.NotEqual(ApprovalOutcome.Allowed, observed.Outcome);

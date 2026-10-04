@@ -92,16 +92,20 @@ Netclaw has no sandbox backend.
 ### Headless and unattended runs
 
 Headless chat (`netclaw chat -p "prompt"`), reminders, and webhooks cannot show
-a prompt. Netclaw still applies hard deny, path checks, and stored grants. If a
-call still needs a prompt, the tool result is:
+a prompt. They use the same audience policy as a chat of the same audience
+(decision D2): the same file reach, hard deny, protected paths, reviewed-safe
+catalog, stored grants, and approval modes. The one difference: a call that
+would prompt in a chat is denied, because nobody can answer. The deny reason is
+`approval_required_unattended`, and the tool result says:
 
 ```text
-Tool requires approval but no interactive approval requester is available: <tool>
+Tool access denied: <tool> needs approval, and nobody can answer a prompt in an unattended run. ...
 ```
 
-The reviewed-safe catalog does not cover a call in these runs. Output commands
-such as `echo` still pass. To let a headless script run shell commands without
-a prompt, set `shell_execute` to `Auto`:
+To allow that call, save an "Always" grant for it in a chat with the same
+audience (for a reminder, use `/run-reminder <id>`). A "Once" or "This chat"
+answer does not carry over. To let a headless script run shell commands
+without any prompt, set `shell_execute` to `Auto`:
 
 ```json
 {
@@ -215,12 +219,12 @@ covered:
   command can write or run a program, for example `sort -o`, `rg --pre`, or
   `git branch -D`. Each path argument must still be a path that the audience
   may read.
-- In an interactive session, a command whose only unknown part is an operand
-  value (for example `kubectl get pods -l "app=$(whoami)"`) runs when a safe
-  phrase or an `Always anywhere` grant covers its command words (owner
-  decision D1). A folder, repository, or chat grant does not cover it. An
-  unknown program word, an unknown redirect target, and an unattended run keep
-  the prompt or the denial.
+- A command whose only unknown part is an operand value (for example
+  `kubectl get pods -l "app=$(whoami)"`) runs when a safe phrase or an
+  `Always anywhere` grant covers its command words (owner decision D1). This
+  applies to attended and unattended runs alike. A folder, repository, or chat
+  grant does not cover it. An unknown program word and an unknown redirect
+  target keep the prompt (an unattended run denies it).
 - On a Linux host (Bash 5.2), a glob word reaches each path below its
   covering directory, to the depth of its segments. The covering directory is
   its scope, for a grant and for the catalog. For example,
@@ -252,10 +256,9 @@ it. Netclaw checks each command in each directory where it can run. For
 original directory when `cd` fails, so it needs coverage in both. The prompt
 offers reusable grants, and an `Always here` grant uses that directory, not
 the session directory. A reviewed diagnostic after `cd dir && action;` is
-covered inside `dir` in an interactive session. A dynamic target (`cd "$X"`),
+covered inside `dir`, attended or not. A dynamic target (`cd "$X"`),
 `cd -`, `pushd`, a `cd` in a subshell, function, or pipeline, and a linked
-target directory still offer only `Once` and `Deny`. An unattended run denies
-the `cd dir && action; diagnostic` shape as unresolved input.
+target directory still offer only `Once` and `Deny`.
 
 ## Manage saved grants
 

@@ -20,9 +20,10 @@ namespace Netclaw.Actors.MutationTests;
 /// <summary>
 /// Proves the boundary of per-command judgment (approval taxonomy PR 5). An
 /// unresolved command is one exact candidate. Only owner decision D1 covers it:
-/// an interactive call, an unknown operand only, and a safe phrase or a grant
-/// for "anywhere". A folder or chat grant, an unknown redirect target or
-/// directory, a glob scope, and an unattended call keep the prompt or the denial.
+/// an unknown operand only, and a safe phrase or a grant for "anywhere". A
+/// folder or chat grant, an unknown redirect target or directory, and a glob
+/// scope keep the prompt. An unattended call gets the same decision (D2); it is
+/// denied where a chat would prompt.
 /// </summary>
 public sealed class PerCommandJudgmentMutationTests : IDisposable
 {
@@ -77,9 +78,12 @@ public sealed class PerCommandJudgmentMutationTests : IDisposable
         AssertExactPrompt(decision, UnknownOperand);
     }
 
-    // D1 applies to interactive calls only. An unattended call keeps its denial.
-    [Fact]
-    public async Task An_unattended_call_keeps_the_unresolved_denial()
+    // D2: D1 applies to an unattended call too. A grant for anywhere covers it;
+    // a folder grant leaves the exact prompt, which nobody can answer.
+    [Theory]
+    [InlineData(GrantKind.Everywhere, true)]
+    [InlineData(GrantKind.Folder, false)]
+    public async Task An_unattended_call_gets_the_decision_of_a_chat(GrantKind kind, bool allowed)
     {
         if (OperatingSystem.IsWindows())
             return;
@@ -87,13 +91,15 @@ public sealed class PerCommandJudgmentMutationTests : IDisposable
         var decision = await AuthorizeAsync(
             UnknownOperand,
             interactive: false,
-            grants: new Dictionary<string, GrantKind>
-            {
-                ["kubectl get pods"] = GrantKind.Everywhere,
-                ["whoami"] = GrantKind.Everywhere
-            });
+            grants: new Dictionary<string, GrantKind> { ["kubectl get pods"] = kind, ["whoami"] = kind });
 
-        Assert.Equal("shell_unresolved_trust_zone_input", Assert.IsType<AuthorizationDecision.Denied>(decision).Reason);
+        if (allowed)
+        {
+            Assert.IsType<AuthorizationDecision.Allowed>(decision);
+            return;
+        }
+
+        Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, Assert.IsType<AuthorizationDecision.Denied>(decision).Reason);
     }
 
     // An unknown redirect target, a glob scope, and a command after an unproved

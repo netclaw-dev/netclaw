@@ -629,9 +629,10 @@ public class SubAgentActorTests : TestKit
             },
             TimeSpan.FromSeconds(5), TestContext.Current.CancellationToken);
 
-        Assert.False(result.Success);
+        // D2: a child with no approval bridge cannot ask, so the call that needs
+        // approval is denied and never runs. The child gets the denial as a tool result.
         Assert.False(fakeTool.WasCalled);
-        Assert.Contains("approval bridge", result.Output, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("nobody can answer a prompt", GetLastToolResult(fakeClient, "call-approval"), StringComparison.Ordinal);
         var context = fakeClient.LastReceivedMessages![1].Text;
         Assert.Contains($"session_dir: {sessionDirectory}", context);
         Assert.Contains($"worktree_dir: {Path.Combine(sessionDirectory, "worktrees")}", context);
@@ -784,36 +785,8 @@ public class SubAgentActorTests : TestKit
             GetLastToolResult(fakeClient, "call-native-temporary-correction"));
     }
 
-    // Only an unattended child asks for a declaration. An interactive child may
-    // read the worktree, so the reviewed phrase runs with no prompt (see
-    // Subagent_interactive_reviewed_phrase_in_readable_worktree_needs_no_prompt).
-    [Fact]
-    public async Task Subagent_reviewed_safe_external_cwd_receives_project_scope_correction_before_bridge()
-    {
-        const string callId = "call-project-scope-correction";
-        var fakeShell = new FakeNetclawTool(ShellTool.ToolName, "should not run");
-        var scenario = await RunProjectScopeScenarioAsync(
-            fakeShell,
-            callId,
-            ProjectScopeCorrectionCommand,
-            includeScopeTool: true,
-            scopeToolAccepts: true,
-            approvalBridge: null);
-
-        Assert.True(scenario.Result.Success, scenario.Result.Output);
-        Assert.False(fakeShell.WasCalled);
-        var correction = GetLastToolResult(scenario.Client, callId);
-        Assert.Equal(
-            "Tool execution deferred: working_directory_not_declared\n" +
-            $"Project directory: '{scenario.Worktree}'.\n" +
-            "Next action: call set_working_directory with an allowed project directory for this task, then retry the failed tool call.",
-            correction);
-        var preservedCall = scenario.Client.LastReceivedMessages!
-            .SelectMany(message => message.Contents.OfType<FunctionCallContent>())
-            .Single(call => call.CallId == callId);
-        Assert.Equal(ProjectScopeCorrectionCommand, preservedCall.Arguments!["Command"]);
-    }
-
+    // A child may read the worktree, attended or not (D2), so the reviewed
+    // phrase runs with no project declaration and no prompt.
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]
@@ -928,14 +901,12 @@ public class SubAgentActorTests : TestKit
             ApprovalAskTimeout,
             TestContext.Current.CancellationToken);
 
-        Assert.Equal(supportsApproval, result.Success);
-        if (supportsApproval)
-        {
-            Assert.Contains(
-                worktree,
-                GetLastToolResult(client.LastReceivedMessages, retryCallId),
-                StringComparison.Ordinal);
-        }
+        // D2: an attended and an unattended child get the same result.
+        Assert.True(result.Success, result.Output);
+        Assert.Contains(
+            worktree,
+            GetLastToolResult(client.LastReceivedMessages, retryCallId),
+            StringComparison.Ordinal);
         Assert.Equal(0, approvalBridge?.RequestCount ?? 0);
         Assert.Contains(
             projectGuidance,

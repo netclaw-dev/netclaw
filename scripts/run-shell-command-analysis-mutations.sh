@@ -433,7 +433,7 @@ read -r split_use_start split_use_end < <(
     "$tool_policy_file" \
     "internal static ShellApprovalAnalysis WithCommandCandidates(" \
     "=> approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }" \
-    "&& context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available"
+    "=> approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }"
 )
 actor_mutations+=("Tools/ToolAccessPolicy.cs{$split_use_start..$split_use_end}")
 
@@ -476,5 +476,5 @@ actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_call_start..$d1_call_end
 run_group \
   "stryker-config.json" \
   "$output_path/actors" \
-  28 \
+  27 \
   "${actor_mutations[@]}"

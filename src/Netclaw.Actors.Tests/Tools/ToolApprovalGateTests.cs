@@ -214,22 +214,28 @@ public sealed class ToolApprovalGateTests
     }
 
     [Theory]
-    [InlineData(ToolApprovalMode.Auto, "shell_path_outside_trust_zone")]
-    [InlineData(ToolApprovalMode.Deny, "shell_path_outside_trust_zone")]
-    public void Shell_approval_mode_preserves_unattended_path_authorization(
+    [InlineData(ToolApprovalMode.Auto, true)]
+    [InlineData(ToolApprovalMode.Auto, false)]
+    [InlineData(ToolApprovalMode.Deny, true)]
+    [InlineData(ToolApprovalMode.Deny, false)]
+    public void Shell_approval_mode_preserves_audience_path_authorization(
         ToolApprovalMode mode,
-        string expectedDenyReason)
+        bool supportsApproval)
     {
-        var policy = CreatePolicy(mode);
-        var context = PersonalContext(supportsApproval: false);
+        using var dir = new DisposableTempDir();
+        var policy = CreatePolicyWithTrustedRoot(
+            CreateTrustedRoot(dir.Path),
+            writeFilesMode: ToolFilesystemMode.Roots,
+            approvalMode: mode);
+        var context = PersonalContext(supportsApproval);
 
         var decision = policy.GetShellPreflightDecision(
             ShellTool(),
             context,
-            ToolInput.Create("Command", "cat /external/data.txt"));
+            ToolInput.Create("Command", TestShellEnvironment.ReadFileCommand(Path.Combine(dir.Path, "outside", "data.txt"))));
 
         Assert.False(decision.Allowed);
-        Assert.Equal(expectedDenyReason, decision.DenyReason);
+        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
         Assert.False(decision.NeedsApproval);
     }
 
@@ -1061,13 +1067,13 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_path_outside_trusted_roots_is_denied()
+    public void Roots_profile_shell_with_path_outside_trusted_roots_is_denied()
     {
         using var dir = new DisposableTempDir();
         var trustedRoot = CreateTrustedRoot(dir.Path);
         var outsidePath = Path.Combine(dir.Path, "outside", "secrets.txt");
 
-        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot, writeFilesMode: ToolFilesystemMode.Roots);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -1298,13 +1304,13 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_nested_shell_path_outside_trusted_roots_is_denied()
+    public void Roots_profile_shell_with_nested_shell_path_outside_trusted_roots_is_denied()
     {
         using var dir = new DisposableTempDir();
         var trustedRoot = CreateTrustedRoot(dir.Path);
         var outsidePath = Path.Combine(dir.Path, "outside", "shadow.txt");
 
-        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot, writeFilesMode: ToolFilesystemMode.Roots);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -1314,23 +1320,26 @@ public sealed class ToolApprovalGateTests
         var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?> { ["command"] = command });
 
+        // Windows keeps a nested PowerShell command unresolved, so it asks for exact consent.
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.True(decision.NeedsApproval);
+            return;
+        }
+
         Assert.False(decision.Allowed);
-        Assert.Equal(
-            OperatingSystem.IsWindows()
-                ? "shell_unresolved_trust_zone_input"
-                : "shell_path_outside_trust_zone",
-            decision.DenyReason);
+        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
     }
 
     [Fact]
-    public void Non_interactive_shell_with_working_directory_outside_trusted_roots_is_denied()
+    public void Roots_profile_shell_with_working_directory_outside_trusted_roots_is_denied()
     {
         using var dir = new DisposableTempDir();
         var trustedRoot = CreateTrustedRoot(dir.Path);
         var outsideDir = Path.Combine(dir.Path, "outside");
         Directory.CreateDirectory(outsideDir);
 
-        var policy = CreatePolicyWithTrustedRoot(trustedRoot);
+        var policy = CreatePolicyWithTrustedRoot(trustedRoot, writeFilesMode: ToolFilesystemMode.Roots);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
 
@@ -1368,10 +1377,10 @@ public sealed class ToolApprovalGateTests
     }
 
     [Fact]
-    public void Non_interactive_shell_with_path_outside_default_trusted_roots_is_denied()
+    public void Non_interactive_shell_with_path_outside_default_trusted_roots_proceeds_to_approval()
     {
-        // The mandatory path policy contains Netclaw's default trusted roots,
-        // but an unrelated system path remains outside them.
+        // D2: the default Personal profile reaches every path, attended or not.
+        // The call needs approval, as in a chat.
         var policy = CreatePolicy(ToolApprovalMode.Approval);
         var tool = ShellTool();
         var ctx = PersonalContext(supportsApproval: false);
@@ -1379,12 +1388,12 @@ public sealed class ToolApprovalGateTests
         var decision = policy.GetShellPreflightDecision(tool, ctx,
             new Dictionary<string, object?> { ["command"] = "cat /etc/passwd" });
 
-        Assert.False(decision.Allowed);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.True(decision.NeedsApproval);
+        Assert.Null(decision.DenyReason);
     }
 
     [Fact]
-    public void Non_interactive_shell_with_working_directory_outside_default_trusted_roots_is_denied()
+    public void Non_interactive_shell_with_working_directory_outside_default_trusted_roots_proceeds_to_approval()
     {
         using var dir = new DisposableTempDir();
         var policy = CreatePolicy(ToolApprovalMode.Approval);
@@ -1398,8 +1407,9 @@ public sealed class ToolApprovalGateTests
                 ["workingDirectory"] = dir.Path
             });
 
-        Assert.False(decision.Allowed);
-        Assert.Equal("shell_working_directory_outside_trust_zone", decision.DenyReason);
+        // D2: the default Personal profile reaches every path, attended or not.
+        Assert.True(decision.NeedsApproval);
+        Assert.Null(decision.DenyReason);
     }
 
     [Fact]

@@ -519,6 +519,82 @@
       "reason": "Owner decision D2: a kill that does not name the Netclaw daemon is an ordinary command that a grant can cover. A kill that names the daemon stays hard-denied.",
       "negativeControl": "powershell51-stop-process-hard-deny",
       "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D2, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-grant-allows",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the unattended-only trust zone. The Personal profile may read the external folder, so the reviewed phrase covers 'git ls-tree feature', as it does in a chat.",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-reviewed-safe-allows",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the unattended-only trust zone. The reviewed phrase covers a path that the Personal profile may read, as in a chat. The old ID said 'denies'.",
+      "renamedFrom": "unattended-external-without-grant-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-external-grant-with-exempt-command-allows",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the unattended-only trust zone. The reviewed phrase and the approval-exempt echo cover the call, as in a chat. The old ID said 'denies'.",
+      "renamedFrom": "unattended-external-grant-with-exempt-command-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-prose-denies",
+      "from": "Denied",
+      "to": "Denied",
+      "reason": "The outcome does not change. Without the unattended-only trust zone, the prose gets the decision of a chat: a quoted program word with spaces is a normal word (#2336), and the call would prompt, so the unattended run denies it with approval_required_unattended.",
+      "renamedFrom": "unattended-prose-outside-path-denies-without-lookup"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unknown-operand-unattended-uses-global-grant",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the attended-only condition of decision D1. A grant for anywhere covers a command whose only unknown part is an operand, as in a chat (see unknown-operand-global-grant-allows).",
+      "renamedFrom": "unknown-operand-unattended-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "noninteractive-unapproved-denies",
+      "from": "RequiresApproval",
+      "to": "Denied",
+      "reason": "D2: the authorizer denies a consent request that nobody can answer (approval_required_unattended). Before, the session denied the same request at run time, so the call never ran in either version.",
+      "renamedFrom": "noninteractive-unapproved-requires-approval",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "glob-that-may-add-option-unattended-uses-global-grant",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the attended-only condition of decision D1. A grant for anywhere covers the glob operand, as in a chat (see glob-that-may-add-option-uses-global-grant).",
+      "renamedFrom": "glob-that-may-add-option-unattended-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unassigned-operand-unattended-uses-global-grant",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "D2 removes the attended-only condition of decision D1. A grant for anywhere covers the unassigned operand, as in a chat (see unassigned-operand-uses-global-grant).",
+      "renamedFrom": "unassigned-operand-unattended-denies",
+      "negativeControl": "unattended-cd-semicolon-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
     }
   ]
 }

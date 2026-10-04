@@ -494,7 +494,8 @@ public sealed class ChatPageTests
                         "test-session")),
                 Audience = TrustAudience.Personal,
                 InlineOutputBudget = InlineOutputBudget.Default,
-                InteractiveApproval = new InteractiveApprovalCapability.Unavailable()
+                // A chat can answer the prompt. An unattended run would deny the call (D2).
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             },
             ToolExecutionTimeout.Default);
         var registry = new ToolRegistry();

@@ -59,7 +59,6 @@ internal enum ShellPolicyTraceReason
     AgentCorrection = 23,
     PersistentRepositoryGrant = 24,
     AssignmentMismatch = 25,
-    StoredGrantOutsideTrustedRoots = 26,
 }
 
 /// <summary>
@@ -352,7 +351,6 @@ internal sealed class ShellPolicyDecisionTraceBuilder
         ToolAllowReason.ApprovalExemptShellCandidates => ShellPolicyTraceReason.ApprovalExemptShellCandidates,
         ToolAllowReason.StoredApproval or ToolAllowReason.OneTimeApproval =>
             ShellPolicyTraceReason.AllCandidatesCovered,
-        ToolAllowReason.StoredApprovalOutsideTrustedRoots => ShellPolicyTraceReason.StoredGrantOutsideTrustedRoots,
         _ => ShellPolicyTraceReason.InternalPolicyFailure,
     };
 

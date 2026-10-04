@@ -23,12 +23,12 @@ read -r span_start span_end < <(
   ' "$source_file"
 )
 
-# The interactive read branch of the reviewed-safe path check: only an
-# interactive run, and only a host path of the shell's own style, can use the
-# read authority of the audience.
+# The read branch of the reviewed-safe path check: only a host path of the
+# shell's own style can use the read authority of the audience. Attended and
+# unattended runs use the same branch (D2).
 read -r read_start read_end < <(
   perl -Mopen=:std,:encoding\(UTF-8\) -0777 -ne '
-    $start_marker = "=> context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available";
+    $start_marker = "=> CanonicalPath.IsHostPathStyle(pathStyle)";
     $end_marker = "is PathAccessDecision.Allowed;";
     $start = index($_, $start_marker);
     die "The read-branch start marker is missing or duplicated.\n"
@@ -55,7 +55,7 @@ tested_count="$(
 )"
 killed_count="$(jq '[.files[].mutants[] | select(.status == "Killed")] | length' "$report")"
 
-if [[ "$tested_count" -ne 5 || "$killed_count" -ne 5 ]]; then
-  echo "Expected five killed path-access mutants. Found $killed_count killed from $tested_count tested." >&2
+if [[ "$tested_count" -ne 4 || "$killed_count" -ne 4 ]]; then
+  echo "Expected four killed path-access mutants. Found $killed_count killed from $tested_count tested." >&2
   exit 1
 fi

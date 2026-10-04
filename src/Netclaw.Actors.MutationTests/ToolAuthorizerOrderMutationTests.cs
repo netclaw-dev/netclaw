@@ -70,14 +70,13 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         Assert.Equal("tool_not_allowed_for_audience_profile", denied.Reason);
     }
 
-    // PR 6e: a stored grant decides for an unattended call in Approval mode,
-    // also outside every trusted root. That allow has its own reason in the log
-    // and the trace. The interactive control uses the same grant and keeps the
-    // ordinary stored-grant reason, because no trusted-root rule denied it.
+    // D2: an attended and an unattended call get the same rules. With the
+    // default Personal profile, a stored grant covers a path outside the
+    // project in both, with the ordinary stored-grant reason.
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task A_stored_grant_decides_outside_the_trusted_roots(bool interactive)
+    public async Task A_stored_grant_decides_a_readable_path_outside_the_project(bool interactive)
     {
         var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
         var logger = new AuthorizationReasonLogger();
@@ -88,24 +87,44 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             CreateContext(TrustAudience.Personal, interactive),
             CancellationToken.None);
 
-        AssertStoredGrantAllow(decision, logger, replacedTrustedRootDenial: !interactive);
+        AssertStoredGrantAllow(decision, logger);
     }
 
-    // Negative control: without a grant the unattended call stays denied, and
-    // the denial names the missing grant.
-    [Fact]
-    public async Task An_unattended_call_without_a_grant_stays_denied_and_names_the_grant()
+    // The trusted-root rule precedes the covering grant. A bounded profile
+    // confines attended and unattended calls alike, and a grant cannot open a
+    // working directory outside its roots.
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Trusted_root_denial_precedes_a_covering_grant(bool interactive)
     {
-        var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
-        var verbs = await PromptVerbsAsync(command);
-        var authorizer = CreateAuthorizer([], hardDenyPatterns: []);
+        var authorizer = CreateAuthorizer(
+            await PromptVerbsAsync("git status", _outsideDirectory),
+            hardDenyPatterns: [],
+            boundedWrites: true);
 
-        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
+        var decision = await AuthorizeAsync(
+            authorizer, "git status", TrustAudience.Personal, interactive, _outsideDirectory);
 
         var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
-        Assert.Equal("shell_path_outside_trust_zone", denied.Reason);
-        Assert.Contains($"\"{verbs[0]}\"", denied.Message, StringComparison.Ordinal);
-        Assert.Contains("scope: this chat, this folder, or everywhere", denied.Message, StringComparison.Ordinal);
+        Assert.Equal("shell_working_directory_outside_trust_zone", denied.Reason);
+    }
+
+    // D2: the one difference. Without a covering grant, a call that would
+    // prompt in a chat is denied in an unattended run, because nobody can answer.
+    [Fact]
+    public async Task An_unattended_call_without_a_grant_is_denied()
+    {
+        var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
+        var authorizer = CreateAuthorizer([], hardDenyPatterns: []);
+
+        var attended = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: true);
+        var unattended = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
+
+        Assert.IsType<AuthorizationDecision.NeedsConsent>(attended);
+        var denied = Assert.IsType<AuthorizationDecision.Denied>(unattended);
+        Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, denied.Reason);
+        Assert.Contains("nobody can answer a prompt", denied.Message, StringComparison.Ordinal);
     }
 
     // Negative control: Auto mode never reads grants, so the trusted-root rule still decides.
@@ -113,7 +132,8 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     public async Task Auto_mode_keeps_the_trusted_root_denial()
     {
         var command = ReadCommand(Path.Combine(_outsideDirectory, "secret.txt"));
-        var authorizer = CreateAuthorizer(await PromptVerbsAsync(command), hardDenyPatterns: [], ToolApprovalMode.Auto);
+        var authorizer = CreateAuthorizer(
+            await PromptVerbsAsync(command), hardDenyPatterns: [], ToolApprovalMode.Auto, boundedWrites: true);
 
         var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
 
@@ -123,25 +143,27 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     }
 
     // Negative control: a grant never opens a protected path. The control plane stays closed.
-    [Fact]
-    public async Task A_stored_grant_never_opens_a_protected_path()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task A_stored_grant_never_opens_a_protected_path(bool interactive)
     {
         // The grant names the same verb. The read verb takes its phrase from an unprotected file.
         var grants = await PromptVerbsAsync(ReadCommand(Path.Combine(_outsideDirectory, "secret.txt")));
         var command = ReadCommand(Path.Combine(_paths.ConfigDirectory, "netclaw.json"));
         var authorizer = CreateAuthorizer(grants, hardDenyPatterns: []);
 
-        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
+        var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive);
 
         var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
         Assert.Null(denied.Message);
     }
 
-    // The same rule for the working directory: a folder grant decides.
+    // The same rule for the working directory: a folder grant decides, attended or not (D2).
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task A_stored_grant_decides_for_a_working_directory_outside_the_trusted_roots(bool interactive)
+    public async Task A_stored_grant_decides_for_a_working_directory_outside_the_project(bool interactive)
     {
         var logger = new AuthorizationReasonLogger();
         var executor = CreateExecutor(
@@ -154,28 +176,21 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
             CreateContext(TrustAudience.Personal, interactive),
             CancellationToken.None);
 
-        AssertStoredGrantAllow(decision, logger, replacedTrustedRootDenial: !interactive);
+        AssertStoredGrantAllow(decision, logger);
     }
 
-    // A grant that replaced a trusted-root denial keeps the outcome and the grants
-    // of an ordinary stored-grant allow. Only the reason in the decision, the
-    // trace completion row, and the "Tool authorization evaluated" line differ.
     private static void AssertStoredGrantAllow(
         AuthorizationDecision decision,
-        AuthorizationReasonLogger logger,
-        bool replacedTrustedRootDenial)
+        AuthorizationReasonLogger logger)
     {
         var allowed = Assert.IsType<AuthorizationDecision.Allowed>(decision);
         Assert.NotEmpty(allowed.Matches);
-        var (reason, traceReason) = replacedTrustedRootDenial
-            ? (ToolAllowReason.StoredApprovalOutsideTrustedRoots, ShellPolicyTraceReason.StoredGrantOutsideTrustedRoots)
-            : (ToolAllowReason.StoredApproval, ShellPolicyTraceReason.AllCandidatesCovered);
-        Assert.Equal(reason, allowed.Reason);
+        Assert.Equal(ToolAllowReason.StoredApproval, allowed.Reason);
         var completion = allowed.Trace.Rows[^1];
         Assert.Equal(ShellPolicyTraceStage.Completion, completion.Stage);
         Assert.Equal(ShellPolicyTraceOutcome.Allow, completion.Outcome);
-        Assert.Equal(traceReason, completion.Reason);
-        Assert.Equal(reason.ToString(), Assert.Single(logger.AuthorizationReasons));
+        Assert.Equal(ShellPolicyTraceReason.AllCandidatesCovered, completion.Reason);
+        Assert.Equal(ToolAllowReason.StoredApproval.ToString(), Assert.Single(logger.AuthorizationReasons));
     }
 
     // #2306: a bare glob gives Unknown command words, so no grant can cover the
@@ -226,16 +241,29 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     private ToolAuthorizer CreateAuthorizer(
         IReadOnlyList<string> grantedVerbs,
         IReadOnlyList<string> hardDenyPatterns,
-        ToolApprovalMode shellMode = ToolApprovalMode.Approval)
-        => CreateExecutor(grantedVerbs, hardDenyPatterns, shellMode, logger: null).Authorizer;
+        ToolApprovalMode shellMode = ToolApprovalMode.Approval,
+        bool boundedWrites = false)
+        => CreateExecutor(grantedVerbs, hardDenyPatterns, shellMode, logger: null, boundedWrites).Authorizer;
 
     private DispatchingToolExecutor CreateExecutor(
         IReadOnlyList<string> grantedVerbs,
         IReadOnlyList<string> hardDenyPatterns,
         ToolApprovalMode shellMode = ToolApprovalMode.Approval,
-        ILogger<DispatchingToolExecutor>? logger = null)
+        ILogger<DispatchingToolExecutor>? logger = null,
+        bool boundedWrites = false)
     {
         var config = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
+        if (boundedWrites)
+        {
+            // A bounded Personal write profile: the trusted-root rule confines
+            // every shell call to the session directory, attended or not.
+            config.AudienceProfiles.Personal.WriteFiles = new ToolFilesystemAccessProfile
+            {
+                Mode = ToolFilesystemMode.Roots,
+                Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+            };
+        }
+
         foreach (var profile in new[]
                  { config.AudienceProfiles.Public, config.AudienceProfiles.Team, config.AudienceProfiles.Personal })
         {

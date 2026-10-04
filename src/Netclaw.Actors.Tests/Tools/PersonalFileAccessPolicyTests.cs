@@ -67,11 +67,11 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
     public static TheoryData<TrustAudience, bool, bool, bool, bool> ReadReachCases => new()
     {
         // audience, interactive, outsideRoots, hardenedPersonalRoots, expectedAllow
-        // Default Personal (Mode.All): blanket interactive grant, autonomous clamp.
+        // Default Personal (Mode.All): the same blanket grant attended and unattended (D2).
         { TrustAudience.Personal, true, false, false, true },
         { TrustAudience.Personal, true, true, false, true },
         { TrustAudience.Personal, false, false, false, true },
-        { TrustAudience.Personal, false, true, false, false },
+        { TrustAudience.Personal, false, true, false, true },
         // Explicit Personal roots remain authoritative in every run scope.
         { TrustAudience.Personal, true, false, true, true },
         { TrustAudience.Personal, true, true, true, false },
@@ -147,7 +147,7 @@ public sealed class PersonalFileAccessPolicyTests : IDisposable
     {
         // audience, interactive, expectedAttached
         { TrustAudience.Personal, true, true },
-        { TrustAudience.Personal, false, false },
+        { TrustAudience.Personal, false, true },
         { TrustAudience.Team, true, false },
         { TrustAudience.Public, true, false },
     };

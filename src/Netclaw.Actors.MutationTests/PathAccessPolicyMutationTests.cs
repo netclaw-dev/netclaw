@@ -53,16 +53,16 @@ public sealed class PathAccessPolicyMutationTests : IDisposable
         Assert.Contains(_paths.SessionLogsDirectory, roots);
     }
 
-    // An interactive reviewed phrase may read each path that the audience may
-    // read. An unattended one keeps the session and project roots, and a
-    // protected path never qualifies.
+    // A reviewed phrase may read each path that the audience may read,
+    // attended or not (D2). A protected path and a relative path never qualify.
     [Theory]
     [InlineData(true, "outside", true)]
-    [InlineData(false, "outside", false)]
+    [InlineData(false, "outside", true)]
     [InlineData(true, "protected", false)]
+    [InlineData(false, "protected", false)]
     [InlineData(true, "relative", false)]
-    [InlineData(false, "skills", false)]
-    public void Reviewed_shell_path_uses_read_authority_only_when_interactive(
+    [InlineData(false, "skills", true)]
+    public void Reviewed_shell_path_uses_the_read_authority_of_the_audience(
         bool interactive,
         string target,
         bool allowed)
@@ -73,8 +73,6 @@ public sealed class PathAccessPolicyMutationTests : IDisposable
         Directory.CreateDirectory(protectedDirectory);
         var policy = new PathAccessPolicy(new ToolConfig(), _paths, new ToolPathPolicy([protectedDirectory]));
         var context = CreateContext(TrustAudience.Personal, interactive);
-        // An unattended run may read a global read root (skills) with a file
-        // tool, but a reviewed phrase there still needs the project or session.
         var path = target switch
         {
             "protected" => protectedDirectory,

@@ -174,30 +174,27 @@ shell rules, in order:
 2. Prohibition: hard deny, then protected shell text.
 3. Filesystem authority: a `..` in the working directory, then each slice of a
    `cd` directory proof.
-4. Unresolved input when no operator can answer.
-5. Filesystem authority: the working directory and the known paths must be in
-   a trusted root. For an unattended call in Approval mode, a stored grant for
-   every candidate replaces a denial of a path that is only outside the trusted
-   roots (consolidation PR 6e). A protected path stays denied.
-6. Admission: a Deny consent mode.
-7. Advice: a native tool, then Auto mode with its directory advice.
-8. A call without command text, the projected trusted-root check, and unresolved
+4. Filesystem authority: the working directory and the known paths must be in
+   a trusted root of the audience profile. A protected path stays denied.
+5. Admission: a Deny consent mode.
+6. Advice: a native tool, then Auto mode with its directory advice.
+7. A call without command text, the projected trusted-root check, and unresolved
    input: one-time consent or a Once-only request. Since approval taxonomy
-   PR 5, an interactive Bash call splits an unresolved source into commands:
-   each unresolved command is one exact candidate, and the other commands go
-   to rule 9 with their own candidates. Decision D1 lets a safe phrase or a
-   grant for anywhere cover an exact candidate whose only unknown part is an
-   operand. An unattended call keeps the unresolved-input denial (rule 4).
-9. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
+   PR 5, a Bash call splits an unresolved source into commands: each
+   unresolved command is one exact candidate, and the other commands go to
+   rule 8 with their own candidates. Decision D1 lets a safe phrase or a grant
+   for anywhere cover an exact candidate whose only unknown part is an operand.
+8. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
    policy), then the uncovered candidates.
 
-Consolidation PR 6d deleted the old gate. By owner decision, PR 6e lets a
-stored grant decide ahead of both trusted-root checks for unattended Approval
-mode. A denial that stays names each missing grant. An allow of this type has
-its own reason, `StoredApprovalOutsideTrustedRoots`, in the "Tool
-authorization evaluated" log line. The trace completion row has the reason
-`StoredGrantOutsideTrustedRoots`. The outcome and the matched grants are the
-same as for `StoredApproval`, and no rule reads the reason.
+Decision D2 (October 2026): an attended and an unattended call use the same
+rules above. The file reach of an unattended call is the reach of its audience
+profile, as in a chat. The one difference comes after rule 8: when nobody can
+answer (headless chat, a reminder, a webhook, a sub-agent with no approval
+bridge), the authorizer turns a consent request into the denial
+`approval_required_unattended`. D2 removed the unattended-only trust zone, the
+unattended unresolved-input denial, and the PR 6e rule that let a stored grant
+replace a trusted-root denial for an unattended call.
 
 Each context below lists its question, the classes that answer it today, its
 published contract today, what it must not know, and where its data lives.
@@ -400,11 +397,13 @@ sequenceDiagram
     G->>G: admit, analyze, hard deny, path checks
     G->>T: match candidates (one batched Ask)
     T-->>G: coverage evidence
-    G-->>X: RequiresApproval + options
-    X-->>P: ToolApprovalRequiredException
     alt no operator can answer (headless, reminder, webhook)
-        P-->>S: "Tool requires approval but no interactive approval requester is available: ..."
+        G-->>X: Denied approval_required_unattended
+        X-->>P: ToolAccessDeniedException
+        P-->>S: "Tool access denied: ... nobody can answer a prompt in an unattended run ..."
     else interactive
+        G-->>X: RequiresApproval + options
+        X-->>P: ToolApprovalRequiredException
         P->>S: request dispatch
         S->>S: journal ToolApprovalRequested
         S->>C: ToolInteractionRequest
@@ -604,8 +603,8 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   rewrite_shell_command_words"): the call does not run and does not prompt,
   and the rewritten call passes normal approval. A bare glob is correctable in
   both shells; the other causes are correctable in Bash only. A dynamic program
-  name or a PowerShell script block keeps the one-time prompt, or the denial
-  in an unattended run.
+  name or a PowerShell script block keeps the one-time prompt (an unattended
+  run denies it).
 - Breaks: `ResolveAuthorizationScope` treats the first operand of `find` and
   `cd` as a directory. That is private grammar of two executables.
 
@@ -707,8 +706,8 @@ B), a store round trip in `ToolApprovalActorTests`, a rehydration case in
    root, or links from the filesystem root.
 3. Protected paths still win.
 
-Tests: `UnattendedPathAccessTests` and `PublicAudienceFileAccessPolicyTests`
-style cases for each audience, a link escape case, a protected path case, and a
+Tests: `UnattendedPathAccessTests` (attended and unattended reach are equal)
+and `PublicAudienceFileAccessPolicyTests` style cases for each audience, a link escape case, a protected path case, and a
 review of the path-access mutation target.
 
 ### 7.4 Add a deny rule

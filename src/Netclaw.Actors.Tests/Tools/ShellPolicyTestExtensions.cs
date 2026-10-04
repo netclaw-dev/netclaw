@@ -104,7 +104,7 @@ internal static class ShellPolicyTestExtensions
         var approval = analysis is null ? null : policy.AnalyzeShellApproval(toolName, arguments, workingDirectory, analysis);
         BashDirectoryScopeProjection? directoryScopes = null;
         if (analysis is not null && approval is not null
-            && policy.TryProveDirectoryScopes(analysis, approval, context, out var proof))
+            && policy.TryProveDirectoryScopes(analysis, approval, out var proof))
         {
             if (policy.ScreenDirectoryScopes(proof, context) is { } scopedDenial)
                 return Stop(scopedDenial);
@@ -114,8 +114,7 @@ internal static class ShellPolicyTestExtensions
         }
 
         if (analysis is not null
-            && (ToolAccessPolicy.ScreenUnresolvedShellInput(approval!, context)
-                ?? policy.ScreenShellTrustZone(analysis, workingDirectory, context)) is { } fileDenial)
+            && policy.ScreenShellTrustZone(analysis, workingDirectory, context) is { } fileDenial)
         {
             return Stop(fileDenial);
         }

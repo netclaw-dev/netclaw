@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -70,9 +71,9 @@ public sealed class LinkParentSegmentApprovalTests(ShellApprovalMatrixFixture fi
 
         var decision = await harness.EvaluateShellAsync("touch lnk/../notes.txt", Ct);
 
-        // No operator can give exact consent to an unattended call.
+        // No operator can give exact consent to an unattended call (D2).
         Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
-        Assert.Equal("shell_unresolved_trust_zone_input", decision.DenyReason);
+        Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, decision.DenyReason);
     }
 
     [SlopwatchSuppress("SW001", "The repository uses POSIX paths, a POSIX symbolic link, and the git CLI.")]

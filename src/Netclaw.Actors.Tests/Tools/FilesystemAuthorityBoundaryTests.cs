@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
 
@@ -18,17 +19,25 @@ public sealed class FilesystemAuthorityBoundaryTests(ShellApprovalMatrixFixture 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // R1: only the file-tool root source can make a path boundary unrestricted.
-    // The widest shell grant, "always everywhere", must not widen an unattended
-    // file read. The control shows that the grant is live for the shell.
+    // The widest shell grant, "always everywhere", must not widen a file read
+    // of a bounded profile. The control shows that the grant is live for the shell.
     [Fact]
-    public async Task Everywhere_shell_grant_does_not_widen_unattended_file_reads()
+    public async Task Everywhere_shell_grant_does_not_widen_bounded_file_reads()
     {
         await using var harness = await ShellApprovalHarness.CreateAsync(
             "everywhere-grant-file-read",
             new ShellApprovalInvocation("true", Interactive: false),
             Approvals.PersistentAnywhere("cat"),
             fixture.ActorSystem,
-            Ct);
+            Ct,
+            policy: new ShellApprovalHarnessPolicy
+            {
+                ConfigureTools = tools => tools.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                {
+                    Mode = ToolFilesystemMode.Roots,
+                    Roots = [ToolAudienceProfileDefaults.SessionDirectoryToken]
+                }
+            });
         var outside = Path.Combine(Path.GetDirectoryName(harness.ProjectDirectory)!, "workspaces", "external", "notes.txt");
         await File.WriteAllTextAsync(outside, "outside data", Ct);
         await File.WriteAllTextAsync(Path.Combine(harness.SessionDirectory, "notes.txt"), "session data", Ct);

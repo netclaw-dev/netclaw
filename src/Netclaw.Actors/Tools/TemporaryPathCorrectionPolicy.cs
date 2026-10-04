@@ -340,8 +340,7 @@ internal sealed class TemporaryPathCorrectionPolicy
         out string managedTemporaryDirectory)
     {
         managedTemporaryDirectory = string.Empty;
-        if (context.RunScope.InteractiveApproval is not InteractiveApprovalCapability.Available
-            || context.Audience != TrustAudience.Personal
+        if (context.Audience != TrustAudience.Personal
             || !TryNormalizePath(
                 context.SessionStorage?.ManagedTemporary.Directory.Value,
                 out var normalized)

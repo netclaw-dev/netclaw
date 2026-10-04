@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Frozen;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -226,8 +227,7 @@ internal sealed record ExpectedApproval(
             approvalChecks,
             approvalMatches);
 
-    // A denial makes no grant lookup, except the trusted-root denial of an
-    // unattended call in Approval mode: there a stored grant can decide (PR 6e).
+    // A denial makes no grant lookup, except an unattended consent request.
     public static ExpectedApproval Deny(string reason, int approvalChecks = 0)
         => new(
             ApprovalOutcome.Denied,
@@ -237,6 +237,11 @@ internal sealed record ExpectedApproval(
             null,
             approvalChecks,
             []);
+
+    // D2: an unattended call that would prompt in a chat is denied. The grant
+    // lookup runs first, because a saved grant can still allow the call.
+    public static ExpectedApproval DenyUnattended(int approvalChecks = 1)
+        => Deny(ToolAuthorizer.UnattendedApprovalRequired, approvalChecks);
 }
 
 internal sealed record ShellApprovalCase(
@@ -313,59 +318,61 @@ public static class ShellApprovalCases
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
-        // PR 6e: in an unattended run, a stored grant decides outside the trusted roots.
+        // D2: an unattended run uses the audience policy of a chat. The reviewed
+        // phrase covers a path that the Personal profile may read, as in a chat.
         // #2306: the command words are "git ls-tree feature", so a "git ls-tree" grant does not cover them.
         Case(
             "unattended-external-grant-allows",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Deny("shell_working_directory_outside_trust_zone", approvalChecks: 1)),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
-            "unattended-external-without-grant-denies",
+            "unattended-external-reviewed-safe-allows",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
             Approvals.None,
-            ExpectedApproval.Deny("shell_working_directory_outside_trust_zone", approvalChecks: 1)),
-        // Prose with a path outside the trusted roots: the quotes join a program
-        // word with spaces. It is a normal word, so one grant lookup runs. No
-        // grant covers it, so the trusted-root denial stays.
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        // Prose: the quotes join a program word with spaces, which is a normal
+        // word (#2336). One grant lookup runs. A chat would prompt, so the
+        // unattended run denies it (D2).
         Case(
-            "unattended-prose-outside-path-denies-without-lookup",
+            "unattended-prose-denies",
             Bash("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?", interactive: false),
             Approvals.None,
-            ExpectedApproval.Deny("shell_path_outside_trust_zone", approvalChecks: 1)),
-        // The directory proof of a ";" or "||" list screens each slice. A stored grant
-        // decides there too, after hard deny and protected text (PR 6e).
+            ExpectedApproval.DenyUnattended()),
+        // The directory proof of a ";" or "||" list screens each slice. Stored grants
+        // decide there, after hard deny and protected text. Without them, the
+        // call would prompt in a chat, so the unattended run denies it (D2).
         Case(
             "unattended-cd-semicolon-grant-allows",
             Bash("cd /netclaw-approval-external/cd-list; make", interactive: false),
             Approvals.PersistentAnywhere("cd", "make"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApprovalOutsideTrustedRoots, 1, "persistent:cd", "persistent:make", "persistent:make")),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:make", "persistent:make")),
         Case(
             "unattended-cd-or-exit-grant-allows",
             Bash("cd /netclaw-approval-external/cd-list || exit 1; make", interactive: false),
             Approvals.PersistentAnywhere("cd", "exit", "make"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApprovalOutsideTrustedRoots, 1, "persistent:cd", "persistent:exit", "persistent:make", "persistent:make")),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:exit", "persistent:make", "persistent:make")),
         Case(
             "unattended-cd-semicolon-without-grant-denies",
             Bash("cd /netclaw-approval-external/cd-list; make", interactive: false),
             Approvals.None,
-            ExpectedApproval.Deny("shell_path_outside_trust_zone", approvalChecks: 1)),
+            ExpectedApproval.DenyUnattended()),
         Case(
             "unattended-cd-or-exit-without-grant-denies",
             Bash("cd /netclaw-approval-external/cd-list || exit 1; make", interactive: false),
             Approvals.None,
-            ExpectedApproval.Deny("shell_path_outside_trust_zone", approvalChecks: 1)),
+            ExpectedApproval.DenyUnattended()),
         Case(
             "unattended-cd-semicolon-protected-slice-denies",
             Bash("cd /netclaw-approval-external/cd-list; cat ~/.netclaw/config/secrets.json", interactive: false),
             Approvals.PersistentAnywhere("cd", "cat"),
             ExpectedApproval.Deny("shell_references_protected_path")),
-        // An approval-exempt command has no grant, so the call stays denied.
+        // The reviewed phrase and the approval-exempt command cover the call, as in a chat (D2).
         Case(
-            "unattended-external-grant-with-exempt-command-denies",
+            "unattended-external-grant-with-exempt-command-allows",
             Bash("git ls-tree feature; echo done", ApprovalDirectoryShape.External, interactive: false),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Deny("shell_working_directory_outside_trust_zone", approvalChecks: 1)),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "safe-verb-context-project-fallback-allows",
             Bash("cat src/readme.txt", ApprovalDirectoryShape.None),
@@ -1311,10 +1318,10 @@ public static class ShellApprovalCases
             Bash("mkdir -p /netclaw-approval-absent/output"),
             Approvals.None,
             ExpectedApproval.Require(["mkdir"])),
-        // Owner decision D1: in an interactive call, a safe phrase or a global
-        // grant covers a command whose only unknown part is an operand. A
-        // folder grant, an unknown redirect target, and an unattended call keep
-        // the exact prompt or the denial.
+        // Owner decision D1: a safe phrase or a global grant covers a command
+        // whose only unknown part is an operand. A folder grant and an unknown
+        // redirect target keep the exact prompt. An unattended call gets the
+        // same decision (D2); it is denied only where a chat would prompt.
         Case(
             "unknown-operand-global-grant-allows",
             Bash("kubectl get pods -l \"app=$(whoami)\""),
@@ -1326,10 +1333,10 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "kubectl get pods"),
             ExpectedApproval.Require(["kubectl get pods -l \"app=$(whoami)\""])),
         Case(
-            "unknown-operand-unattended-denies",
+            "unknown-operand-unattended-uses-global-grant",
             Bash("kubectl get pods -l \"app=$(whoami)\"", interactive: false),
             Approvals.PersistentAnywhere("kubectl get pods"),
-            ExpectedApproval.Deny("shell_unresolved_trust_zone_input")),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:kubectl get pods -l \"app=$(whoami)\"")),
         Case(
             "multi-line-inline-code-offers-reusable-grant",
             Bash("python3 -c \"import sys\nprint(sys.argv)\""),
@@ -2222,10 +2229,10 @@ public static class ShellApprovalCases
                 "persistent:gh pr merge")),
 
         Case(
-            "noninteractive-unapproved-requires-approval",
+            "noninteractive-unapproved-denies",
             Bash("git push", interactive: false),
             Approvals.None,
-            ExpectedApproval.Require(["git push"])),
+            ExpectedApproval.DenyUnattended()),
         Case(
             "noninteractive-persistent-grant-allows",
             Bash("git push", interactive: false),
@@ -2293,10 +2300,10 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
             ExpectedApproval.Require(["rm */stale.tmp"])),
         Case(
-            "glob-that-may-add-option-unattended-denies",
+            "glob-that-may-add-option-unattended-uses-global-grant",
             Bash52("rm */stale.tmp", interactive: false),
             Approvals.PersistentAnywhere("rm"),
-            ExpectedApproval.Deny("shell_unresolved_trust_zone_input")),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:rm */stale.tmp")),
         // A cd that can fail gives the next statement two possible directories.
         // The glob in the cd branch keeps its glob fact in each slice.
         Case(
@@ -2348,7 +2355,7 @@ public static class ShellApprovalCases
             "unattended-bracket-program-word-denies",
             Bash52("[\"ci\",\"build\"]", interactive: false),
             Approvals.None,
-            ExpectedApproval.Deny("shell_unresolved_trust_zone_input")),
+            ExpectedApproval.DenyUnattended()),
         // A brace text in the program word keeps the rewrite advice that it got
         // with ShellSyntaxTree 0.4.0-beta.10.
         Case(
@@ -2389,10 +2396,10 @@ public static class ShellApprovalCases
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
             ExpectedApproval.Require(["rm -rf \"$BUILD_DIR/out\""])),
         Case(
-            "unassigned-operand-unattended-denies",
+            "unassigned-operand-unattended-uses-global-grant",
             Bash52("rm -rf \"$BUILD_DIR/out\"", interactive: false),
             Approvals.PersistentAnywhere("rm"),
-            ExpectedApproval.Deny("shell_unresolved_trust_zone_input"))
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:rm -rf \"$BUILD_DIR/out\""))
     ];
 
     private static readonly FrozenDictionary<string, ShellApprovalCase> CasesById =

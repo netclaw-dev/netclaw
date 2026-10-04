@@ -42,13 +42,13 @@ coverage. They do not replace positive and negative behavior tests.
 
 | Target | Protected claim | Expected mutants | Command |
 |--------|-----------------|------------------|---------|
-| `PathAccessPolicy.AddSessionRoots` and `PathAccessPolicy.IsReadableInInteractiveRun` | Only a Personal context receives shared session roots; only an interactive run lets a reviewed phrase use the read authority of the audience, and only for a host path of the shell's own style | 5 killed | `./scripts/run-path-access-mutations.sh` |
+| `PathAccessPolicy.AddSessionRoots` and `PathAccessPolicy.IsReadableByAudience` | Only a Personal context receives shared session roots; a reviewed phrase uses the read authority of the audience, attended or not (D2), only for a fully qualified host path of the shell's own style that is not protected | 4 killed | `./scripts/run-path-access-mutations.sh` |
 | `ToolAccessPolicy.AdmitMcpAudience` | Server and tool audience grants precede approval | 2 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAccessPolicy.ScreenHardDeny` | A shell hard denial precedes approval | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
-| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an interactive unknown operand with a safe phrase or a grant for anywhere) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin | 194 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an unknown operand with a safe phrase or a grant for anywhere, attended or not) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin | 193 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -63,11 +63,12 @@ Run the path-access check locally:
 ./scripts/run-path-access-mutations.sh
 ```
 
-The script tests two mutants in the shared session-root boundary and three
-mutants in the interactive read branch of the reviewed-safe path check.
-`Reviewed_shell_path_uses_read_authority_only_when_interactive` kills the
-branch mutants: an unattended read of a global read root, a relative path, and
-a protected path must not qualify. The job fails unless all five mutants die.
+The script tests two mutants in the shared session-root boundary and two
+mutants in the read branch of the reviewed-safe path check.
+`Reviewed_shell_path_uses_the_read_authority_of_the_audience` kills the
+branch mutants: a relative path and a protected path must not qualify, and an
+attended and an unattended read get the same decision (D2). The job fails
+unless all four mutants die.
 The approval taxonomy PR 1 run took 3 minutes after package restore.
 The local prototype took 1 minute 28 seconds after package restore.
 A cold CI runner should take two to four minutes.
@@ -155,11 +156,12 @@ every case:
 - A hard-denied phrase stays denied. A control with a granted phrase is allowed.
 - A Team audience stays denied. No later rule can clear an admission denial.
 
-Since authorization PR 6e, the same class also pins the grant-first rule for an
-unattended call in Approval mode. A stored grant decides for a path or a working
-directory outside every trusted root. The negative controls stay denied: a call
-without a grant (the denial names the missing grant), Auto mode, and a protected
-path with a grant.
+The same class pins decision D2. A stored grant covers a readable path outside
+the project, attended or not, with the ordinary stored-grant reason. A bounded
+(`Roots`) write profile keeps the trusted-root denial ahead of a covering grant
+for both run kinds. Without a grant, an unattended call is denied with
+`approval_required_unattended`. The negative controls stay denied: Auto mode
+under a bounded profile, and a protected path with a grant.
 
 The tests pick the host shell and a temporary root without links, so they also
 pass in the normal Windows and macOS test jobs. The local run took about
@@ -347,7 +349,7 @@ Run the shell analysis gate:
 ./scripts/run-shell-command-analysis-mutations.sh
 ```
 
-The script tests 194 mutants across execution-region accounting, denial-only
+The script tests 193 mutants across execution-region accounting, denial-only
 matching, tree traversal and root correspondence, bounded non-filesystem
 values, data operands of output commands, candidate extraction, approval
 mode, path facts, and reviewed-safe policy. The job fails unless every mutant
@@ -412,6 +414,12 @@ targets. `GlobPolicyMutationTests` kills them on the Bash 5.2 host:
   A loop variable checks each combination, and more than 256 combinations deny.
 
 The gate now kills 166 Security and 28 Actors mutants.
+
+Decision D2 (an unattended run uses the audience policy of a chat) removes the
+attended-only condition of `ToolAccessPolicy.WithCommandCandidates`, and with it
+one Actors mutant. `PerCommandJudgmentMutationTests` now shows that an
+unattended call gets the D1 decision of a chat, and is denied where a chat
+would prompt. The gate now kills 166 Security and 27 Actors mutants.
 
 The script groups targets by source project. Stryker analyzes each source project once.
 The local run on 2026-09-24 took under four minutes.

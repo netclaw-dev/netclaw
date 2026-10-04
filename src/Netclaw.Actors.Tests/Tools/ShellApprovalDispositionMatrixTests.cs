@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -114,12 +115,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     }
 
     [Fact]
-    public Task Noninteractive_reviewed_safe_candidate_stays_uncovered()
+    public Task Noninteractive_reviewed_safe_candidate_uses_reviewed_policy()
         => AssertApprovalContract(new ShellApprovalCase(
-            "noninteractive-reviewed-safe-requires-approval",
+            "noninteractive-reviewed-safe-allows",
             new ShellApprovalInvocation("git status", Interactive: false),
             Approvals.None,
-            ExpectedApproval.Require(["git status"])));
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
 
     [Fact]
     public Task Noninteractive_candidate_can_use_an_explicit_persistent_grant()
@@ -438,8 +439,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             var cases = new[]
             {
                 (Name: "current", Grants: Approvals.Session("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.Allowed),
-                (Name: "other", Grants: Approvals.SessionForOtherSession("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.RequiresApproval),
-                (Name: "audience", Grants: Approvals.PersistentForOtherAudience("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.RequiresApproval)
+                // An unattended call that would prompt is denied (D2).
+                (Name: "other", Grants: Approvals.SessionForOtherSession("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.Denied),
+                (Name: "audience", Grants: Approvals.PersistentForOtherAudience("cd", "cat", "sed", "touch"), Expected: ApprovalOutcome.Denied)
             };
             foreach (var testCase in cases)
             {
@@ -636,8 +638,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     [SlopwatchSuppress("SW001", "This regression requires POSIX glob, symlink, and Bash authorization behavior.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The project glob regression defines POSIX behavior.")]
     // A bare glob gets a rewrite correction (#2306), so the cases use the path glob ./*.md.
-    // The interactive read is a reviewed diagnostic; the next test covers it.
-    [InlineData("grep -rn \"Mode B\" docs/ ./*.md 2>/dev/null | head -20", false, "grep|head")]
+    // The read is a reviewed diagnostic, attended or not (D2); the next test covers it.
     [InlineData("rm ./*.md", true, "rm")]
     [InlineData("rm ./*.md", false, "rm")]
     public async Task Project_glob_with_in_root_file_alias_remains_approval_gated(
@@ -661,10 +662,18 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
         var observed = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
+        Assert.Equal(1, observed.ApprovalChecks);
+        if (!interactive)
+        {
+            // Nobody can answer the prompt in an unattended run (D2).
+            Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+            Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, observed.DenyReason);
+            return;
+        }
+
         Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
         Assert.Equal(expectedCandidates.Split('|'), observed.Prompt?.CandidateVerbs);
         Assert.False(observed.Prompt?.IsMessy);
-        Assert.Equal(1, observed.ApprovalChecks);
     }
 
     // The in-root alias only keeps the analysis complete. The reviewed catalog
@@ -760,14 +769,12 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     }
 
     [Fact]
-    public Task Noninteractive_safe_candidate_does_not_fill_a_partial_grant_gap()
+    public Task Noninteractive_safe_candidate_fills_the_gap_of_a_partial_grant()
         => AssertApprovalContract(new ShellApprovalCase(
-            "noninteractive-partial-grant-keeps-safe-candidate-uncovered",
+            "noninteractive-partial-grant-and-safe-candidate-allow",
             new ShellApprovalInvocation("git push && git status", Interactive: false),
             Approvals.PersistentAnywhere("git push"),
-            ExpectedApproval.Require(
-                ["git status"],
-                approvalMatches: ["persistent:git push"])));
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git push")));
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX symlink and Bash authorization behavior.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The symlink retry regression defines Bash authorization behavior.")]

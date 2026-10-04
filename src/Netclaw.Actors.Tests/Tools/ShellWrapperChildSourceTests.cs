@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -191,7 +192,7 @@ public sealed class ShellWrapperChildSourceTests(ShellApprovalMatrixFixture fixt
         Assert.Empty(interactive.Prompt.CandidateVerbs);
         Assert.Equal(["approve_once", "deny"], interactive.Prompt.OptionKeys);
         Assert.Equal(ApprovalOutcome.Denied, unattended.Outcome);
-        Assert.Equal("shell_unresolved_trust_zone_input", unattended.DenyReason);
+        Assert.Equal(ToolAuthorizer.UnattendedApprovalRequired, unattended.DenyReason);
     }
 
     private Task<ApprovalObservation> EvaluateAsync(string command, bool interactive)

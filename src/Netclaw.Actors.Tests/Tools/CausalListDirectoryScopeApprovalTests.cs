@@ -146,20 +146,20 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
-    public async Task Unattended_causal_list_stays_denied_as_unresolved_input()
+    public async Task Unattended_causal_list_uses_the_same_grants_as_a_chat()
     {
         var grants = Approvals.PersistentAnywhere("cd", "inspect", "cat");
         await using var unattended = await CreateHarnessAsync("causal-list-unattended", grants, interactive: false);
         await using var interactive = await CreateHarnessAsync("causal-list-interactive", grants);
         // Each harness owns its external directory, so the glob reads no shared entries.
-        var denied = await unattended.EvaluateShellAsync($"cd {ExternalDirectory(unattended)} && inspect; cat ./*.md", Ct);
-        var allowed = await interactive.EvaluateShellAsync($"cd {ExternalDirectory(interactive)} && inspect; cat ./*.md", Ct);
+        var unattendedResult = await unattended.EvaluateShellAsync($"cd {ExternalDirectory(unattended)} && inspect; cat ./*.md", Ct);
+        var interactiveResult = await interactive.EvaluateShellAsync($"cd {ExternalDirectory(interactive)} && inspect; cat ./*.md", Ct);
 
-        // The same grants allow the call in an interactive session. A headless run keeps
-        // the unresolved-input gate that it had before causal lists used the directory proof.
-        Assert.Equal(ApprovalOutcome.Denied, denied.Outcome);
-        Assert.Equal("shell_unresolved_trust_zone_input", denied.DenyReason);
-        Assert.Equal(ApprovalOutcome.Allowed, allowed.Outcome);
+        // D2: the directory proof and the stored grants decide an unattended
+        // call as they decide the same call in a chat.
+        Assert.Equal(ApprovalOutcome.Allowed, interactiveResult.Outcome);
+        Assert.Equal(ApprovalOutcome.Allowed, unattendedResult.Outcome);
+        Assert.Equal(interactiveResult.AllowReason, unattendedResult.AllowReason);
     }
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]

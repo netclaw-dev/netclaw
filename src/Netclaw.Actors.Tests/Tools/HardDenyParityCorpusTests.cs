@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Actors.Authorization;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -294,7 +295,7 @@ public sealed class HardDenyParityCorpusTests(ShellApprovalMatrixFixture fixture
             .Where(static testCase => testCase.Expected.DenyReason
                 is not ("shell_working_directory_outside_trust_zone"
                     or "shell_path_outside_trust_zone"
-                    or "shell_unresolved_trust_zone_input"))
+                    or ToolAuthorizer.UnattendedApprovalRequired))
             .Where(static testCase => IsPosix || testCase.Invocation.Host is not (ShellApprovalHost.Bash or ShellApprovalHost.Bash52))
             .Select(static testCase => new TheoryDataRow<string>(testCase.Id));
 

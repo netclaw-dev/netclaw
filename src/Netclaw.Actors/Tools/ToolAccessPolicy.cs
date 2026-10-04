@@ -333,15 +333,13 @@ public sealed class ToolAccessPolicy
     /// unresolved compound its own directory.
     /// </summary>
     /// <remarks>
-    /// A complete directory proof clears the unresolved-input gate. An
-    /// unattended causal list keeps that gate, as it did before causal lists
-    /// used this proof. The caller must screen each slice before it uses the
-    /// proof candidates.
+    /// A complete directory proof clears the unresolved-input gate. Attended
+    /// and unattended calls use the same proof (D2). The caller must screen
+    /// each slice before it uses the proof candidates.
     /// </remarks>
     internal bool TryProveDirectoryScopes(
         ShellCommandAnalysis analysis,
         ShellApprovalAnalysis approval,
-        ToolExecutionContext context,
         [NotNullWhen(true)] out BashDirectoryScopeProjection? proof)
     {
         proof = null;
@@ -351,8 +349,6 @@ public sealed class ToolAccessPolicy
                 _shellCommandPolicy,
                 _shellApprovalMatcher,
                 out var projection)
-            || (projection.IsCausalList
-                && context.RunScope.InteractiveApproval is not InteractiveApprovalCapability.Available)
             || !projection.Slices.All(slice => IsDirectoryScopeEligible(slice.WorkingDirectory)))
         {
             return false;
@@ -367,64 +363,27 @@ public sealed class ToolAccessPolicy
     internal ToolAuthorizationDecision? ScreenDirectoryScopes(
         BashDirectoryScopeProjection proof,
         ToolExecutionContext context)
-        => ScreenDirectoryScopes(proof, context, out _);
-
-    /// <inheritdoc cref="ScreenDirectoryScopes(BashDirectoryScopeProjection, ToolExecutionContext)"/>
-    /// <param name="outsideOnly">
-    /// True when every slice denial is a path that is only outside the trusted
-    /// roots of an unattended run (PR 6e). A hard deny, protected text,
-    /// unresolved input, or a protected, link, or uninspectable path in any
-    /// slice makes it false. Every slice is screened, so a later slice can
-    /// still keep the call from a stored grant.
-    /// </param>
-    internal ToolAuthorizationDecision? ScreenDirectoryScopes(
-        BashDirectoryScopeProjection proof,
-        ToolExecutionContext context,
-        out bool outsideOnly)
     {
-        ToolAuthorizationDecision? firstDenial = null;
-        outsideOnly = true;
         foreach (var slice in proof.Slices)
         {
-            var hardDenial = ScreenHardDeny(slice.Analysis)
+            var denial = ScreenHardDeny(slice.Analysis)
                 ?? ScreenProtectedShellText(slice.Analysis)
-                ?? ScreenUnresolvedShellInput(slice.Approval, context);
-            if (hardDenial is not null)
-            {
-                outsideOnly = false;
-                return firstDenial ?? hardDenial;
-            }
-
-            var trustDenial = ScreenShellTrustZone(
-                slice.Analysis,
-                slice.WorkingDirectory,
-                context,
-                out var sliceOutsideOnly);
-            if (trustDenial is null)
-                continue;
-
-            firstDenial ??= trustDenial;
-            outsideOnly &= sliceOutsideOnly;
+                ?? ScreenShellTrustZone(slice.Analysis, slice.WorkingDirectory, context);
+            if (denial is not null)
+                return denial;
         }
 
-        outsideOnly &= firstDenial is not null;
-        return firstDenial;
+        return null;
     }
 
     /// <summary>
-    /// Gives an interactive call with an unresolved command the candidates of
-    /// each command. The unresolved command becomes one exact candidate, so the
-    /// other commands get their normal decisions.
+    /// Gives a call with an unresolved command the candidates of each command.
+    /// The unresolved command becomes one exact candidate, so the other
+    /// commands get their normal decisions. Attended and unattended calls get
+    /// the same candidates (D2).
     /// </summary>
-    /// <remarks>
-    /// An unattended call keeps the unresolved analysis, so
-    /// <see cref="ScreenUnresolvedShellInput"/> still denies it as before.
-    /// </remarks>
-    internal static ShellApprovalAnalysis WithCommandCandidates(
-        ShellApprovalAnalysis approval,
-        ToolExecutionContext context)
+    internal static ShellApprovalAnalysis WithCommandCandidates(ShellApprovalAnalysis approval)
         => approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }
-           && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available
             ? approval with
             {
                 Candidates = approval.CommandCandidates,
@@ -508,26 +467,6 @@ public sealed class ToolAccessPolicy
 
     internal ShellApprovalMatcher ShellApprovalMatcher => _shellApprovalMatcher;
 
-    /// <summary>Denies unresolved shell syntax when no operator can answer a prompt.</summary>
-    /// <remarks>
-    /// Unattended runs cannot send unresolved path syntax to a user. An
-    /// interactive run keeps the existing one-shot approval path for that
-    /// syntax. Known paths still pass Write protection in <see cref="ScreenShellTrustZone"/>.
-    /// </remarks>
-    internal static ToolAuthorizationDecision? ScreenUnresolvedShellInput(
-        ShellApprovalAnalysis approval,
-        ToolExecutionContext context)
-    {
-        if (approval.IsMessy
-            && context.RunScope.InteractiveApproval
-            is InteractiveApprovalCapability.Unavailable)
-        {
-            return ToolAuthorizationDecision.Deny("shell_unresolved_trust_zone_input");
-        }
-
-        return null;
-    }
-
     /// <summary>
     /// Requires the working directory and every known path of the command to be
     /// inside a trusted root for Write.
@@ -536,53 +475,25 @@ public sealed class ToolAccessPolicy
         ShellCommandAnalysis analysis,
         string? workingDirectory,
         ToolExecutionContext context)
-        => ScreenShellTrustZone(analysis, workingDirectory, context, out _);
-
-    /// <inheritdoc cref="ScreenShellTrustZone(ShellCommandAnalysis, string?, ToolExecutionContext)"/>
-    /// <param name="outsideOnly">
-    /// True when every failed check is a path outside the trusted roots of an
-    /// unattended run. Only then can a stored grant decide instead (PR 6e). A
-    /// protected path, a link, or a path that the host cannot inspect is never
-    /// only outside.
-    /// </param>
-    internal ToolAuthorizationDecision? ScreenShellTrustZone(
-        ShellCommandAnalysis analysis,
-        string? workingDirectory,
-        ToolExecutionContext context,
-        out bool outsideOnly)
     {
-        ToolAuthorizationDecision? workingDirectoryDenial = null;
-        var workingDirectoryOutsideOnly = true;
         if (!string.IsNullOrWhiteSpace(workingDirectory))
         {
             var expandedWorkingDirectory = PathUtility.ExpandAndNormalize(workingDirectory, workingDirectory: null);
             if (expandedWorkingDirectory is null)
-            {
-                outsideOnly = false;
                 return ToolAuthorizationDecision.Deny("shell_invalid_working_directory");
-            }
 
             var workingDirectoryAccess = _pathAccessPolicy.Evaluate(
                 expandedWorkingDirectory,
                 context.Invocation,
                 PathAccessPolicy.FileOperation.Write);
             if (workingDirectoryAccess is not PathAccessPolicy.PathAccessDecision.Allowed)
-            {
-                workingDirectoryDenial = ToolAuthorizationDecision.Deny("shell_working_directory_outside_trust_zone");
-                workingDirectoryOutsideOnly = workingDirectoryAccess
-                    is PathAccessPolicy.PathAccessDecision.Denied { OutsideTrustedRoots: true };
-            }
+                return ToolAuthorizationDecision.Deny("shell_working_directory_outside_trust_zone");
         }
 
-        // The known paths are checked also after a working-directory denial, so
-        // that a protected path keeps the whole call from a stored grant.
-        var pathDenial = EnforceKnownShellPaths(
+        return EnforceKnownShellPaths(
             ShellPolicyPathFacts.CreateExecutionViews(analysis)
                 .SelectMany(EnumerateKnownShellPaths),
-            context.Invocation,
-            out var pathsOutsideOnly);
-        outsideOnly = workingDirectoryOutsideOnly && (pathDenial is null || pathsOutsideOnly);
-        return workingDirectoryDenial ?? pathDenial;
+            context.Invocation);
     }
 
     /// <summary>
@@ -595,44 +506,17 @@ public sealed class ToolAccessPolicy
     internal ToolAuthorizationDecision? EnforceProjectedShellFileProtection(
         IReadOnlyList<ShellPolicyCandidatePathFacts> pathFacts,
         ToolInvocationContext context)
-        => EnforceProjectedShellFileProtection(pathFacts, context, out _);
-
-    /// <inheritdoc cref="EnforceProjectedShellFileProtection(IReadOnlyList{ShellPolicyCandidatePathFacts}, ToolInvocationContext)"/>
-    /// <param name="outsideOnly">True when every denied path is only outside the trusted roots of an unattended run.</param>
-    internal ToolAuthorizationDecision? EnforceProjectedShellFileProtection(
-        IReadOnlyList<ShellPolicyCandidatePathFacts> pathFacts,
-        ToolInvocationContext context,
-        out bool outsideOnly)
-        => EnforceKnownShellPaths(
-            pathFacts.SelectMany(EnumerateKnownShellPaths),
-            context,
-            out outsideOnly);
+        => EnforceKnownShellPaths(pathFacts.SelectMany(EnumerateKnownShellPaths), context);
 
     private ToolAuthorizationDecision? EnforceKnownShellPaths(
         IEnumerable<CanonicalPath> paths,
-        ToolInvocationContext context,
-        out bool outsideOnly)
-    {
-        ToolAuthorizationDecision? denial = null;
-        outsideOnly = true;
-        foreach (var path in paths
-                     .Where(static path => !ShellRedirectPolicyFacts.IsNullDevice(path))
-                     .DistinctBy(static path => (path.Style, path.Value)))
-        {
-            var access = _pathAccessPolicy.EvaluateShellPath(path, context);
-            if (access is PathAccessPolicy.PathAccessDecision.Allowed)
-                continue;
-
-            denial ??= ToolAuthorizationDecision.Deny("shell_path_outside_trust_zone");
-            if (access is not PathAccessPolicy.PathAccessDecision.Denied { OutsideTrustedRoots: true })
-            {
-                outsideOnly = false;
-                break;
-            }
-        }
-
-        return denial;
-    }
+        ToolInvocationContext context)
+        => paths
+            .Where(static path => !ShellRedirectPolicyFacts.IsNullDevice(path))
+            .DistinctBy(static path => (path.Style, path.Value))
+            .Any(path => _pathAccessPolicy.EvaluateShellPath(path, context) is not PathAccessPolicy.PathAccessDecision.Allowed)
+            ? ToolAuthorizationDecision.Deny("shell_path_outside_trust_zone")
+            : null;
 
     private static IEnumerable<CanonicalPath> EnumerateKnownShellPaths(
         ShellPolicyCandidatePathFacts candidate)

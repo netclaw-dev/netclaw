@@ -57,21 +57,17 @@ internal sealed record ShellPolicyProjection
 {
     private ShellPolicyProjection(
         ShellExecutionEnvironment environment,
-        InteractiveApprovalCapability interactiveApproval,
         ToolApprovalContext approvalContext,
         IReadOnlyList<ShellPolicyCandidate> candidates,
         OneTimeConsent? oneTimeConsent)
     {
         Environment = environment;
-        InteractiveApproval = interactiveApproval;
         ApprovalContext = approvalContext;
         Candidates = candidates;
         OneTimeConsent = oneTimeConsent;
     }
 
     internal ShellExecutionEnvironment Environment { get; }
-
-    internal InteractiveApprovalCapability InteractiveApproval { get; }
 
     internal ToolApprovalContext ApprovalContext { get; }
 
@@ -167,7 +163,6 @@ internal sealed record ShellPolicyProjection
         var candidateView = Array.AsReadOnly(candidates);
         return new ShellPolicyProjection(
             environment,
-            context.RunScope.InteractiveApproval,
             contextCopy,
             candidateView,
             context.Approval.OneTimeConsent);

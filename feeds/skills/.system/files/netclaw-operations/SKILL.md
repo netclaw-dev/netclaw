@@ -655,13 +655,13 @@ Example dialogue when the user asks you to schedule a daily Freshdesk report:
 On confirmation, run the trust-verb command via `shell_execute`, then create
 the reminder. The grant persists across daemon restarts.
 
-An unattended task can also work in a folder outside its trusted roots, but
-only when a stored grant covers every command of the call. If such a call is
-denied with `shell_path_outside_trust_zone` or
-`shell_working_directory_outside_trust_zone`, the denial names each missing
-grant: its verb, its folder, and the scopes that can cover it. Suggest that
-grant to the user. A grant never opens a protected path (the config directory,
-secrets, or keys), and Auto mode does not use grants.
+An unattended task uses the same rules as a chat of the same audience: the
+same file reach, reviewed-safe catalog, and grants. The one difference: a call
+that would prompt in a chat is denied with `approval_required_unattended`,
+because nobody can answer. Suggest an "Always" grant for that call in a chat
+with the same audience (for a reminder, `/run-reminder <id>`). A grant never
+opens a protected path (the config directory, secrets, or keys), and Auto mode
+does not use grants.
 
 ### Last-resort recovery
 

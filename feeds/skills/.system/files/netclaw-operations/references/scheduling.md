@@ -271,28 +271,23 @@ If the user has already trusted the verb in a previous session, no action is
 needed — `(verb, null)` grants persist in `tool-approvals.json` across daemon
 restarts.
 
-**Path restrictions:** A trusted verb runs wherever the creating audience's
-file-access policy allows — the same scoping `file_write` uses. Reminders and
-webhooks run autonomously (no live human approver), so even a Personal one is
-confined to an *autonomous zone* rather than the blanket access an interactive
-Personal session gets. Inside that zone it can **read** its session directory,
-the current project, and the shared read roots (skills, identity, workspaces),
-and can **write** to its session directory, the current project, and the
-**workspaces** directory — the designated working area for persisted state, so a
-reminder can keep a dedup/state file there across runs. It cannot write outside
-those — notably not to the system-managed skills or identity trees. A Team or
-Public reminder/webhook is confined to its session directory and cannot run
-`shell_execute` at all, since shell is Personal-only. Protected paths —
-`secrets.json`, `.netclaw/keys`, `config/webhooks` — are always denied regardless
-of audience or pre-approval.
+**Path restrictions:** A reminder or webhook uses the file-access policy of its
+audience, the same as a chat of that audience (decision D2). A Personal one has
+the reach of a Personal chat. A Team or Public reminder/webhook is confined to
+its session directory and cannot run `shell_execute` at all, since shell is
+Personal-only. A bounded (`Roots`) profile confines attended and unattended
+runs alike. Protected paths — `secrets.json`, `.netclaw/keys`,
+`config/webhooks` — are always denied regardless of audience or pre-approval.
 
-**If a reminder fails with `command_not_pre_approved`:** The verb is not in the
-approval store as a global wildcard. Run
-`netclaw approvals trust-verb <verb>` and the next firing succeeds.
+**If a reminder fails with `approval_required_unattended`:** The call needs
+approval, and no stored grant covers it. Test the reminder with
+`/run-reminder <id>` in a chat with the same audience and answer the prompt
+with an "Always" option, or run `netclaw approvals trust-verb <verb>`.
 
-**If a reminder fails with `path_outside_trust_zone`:** The command targets a
-path outside the allowed roots. Either move the target into a workspace, or ask
-the user to add the path to trusted roots in config.
+**If a reminder fails with `shell_path_outside_trust_zone`:** The audience
+profile is bounded (`Roots`) and the command targets a path outside its roots.
+Either move the target into those roots, or ask the user to add the path to the
+profile. A grant cannot open it.
 
 ## Background Jobs
 
