@@ -135,6 +135,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
         await ExpectCompletedAsync(journey.Subscriber);
         Assert.Equal("x", ReadMarker(project));
         Assert.Empty(ReadPersistentEntries());
+        AssertModelSawApprovalNote(journey, "[approval: once]");
 
         var later = await EvaluateOutcomeAsync(
             "approval-lifecycle/once",
@@ -168,6 +169,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
         await ExpectCompletedAsync(journey.Subscriber);
         Assert.Equal("x", ReadMarker(project));
         Assert.Empty(ReadPersistentEntries());
+        AssertModelSawApprovalNote(journey, "[approval: this chat only]");
         Assert.Equal(
             ApprovalOutcome.Allowed,
             await EvaluateOutcomeAsync(journey.SessionId.Value, outside));
@@ -199,6 +201,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
         Assert.Equal("x", ReadMarker(project));
         var entry = Assert.Single(ReadPersistentEntries());
         Assert.True(PathUtility.AreEquivalentPaths(project, entry.Directory!));
+        AssertModelSawApprovalNote(journey, "[approval: always in this folder]");
         Assert.Equal(
             ApprovalOutcome.Allowed,
             await EvaluateOutcomeAsync("approval-lifecycle/folder-other", child));
@@ -230,6 +233,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
         Assert.True(PathUtility.AreEquivalentPaths(
             Path.Combine(main, ".git"),
             entry.Repository!));
+        AssertModelSawApprovalNote(journey, "[approval: always in this repo]");
         Assert.Equal(
             ApprovalOutcome.Allowed,
             await EvaluateOutcomeAsync("approval-lifecycle/repository-other", main));
@@ -258,6 +262,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
         var entry = Assert.Single(ReadPersistentEntries());
         Assert.Null(entry.Directory);
         Assert.Null(entry.Repository);
+        AssertModelSawApprovalNote(journey, "[approval: always anywhere]");
         Assert.Equal(
             ApprovalOutcome.Allowed,
             await EvaluateOutcomeAsync("approval-lifecycle/global-other", outside));
@@ -288,6 +293,7 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
             TimeSpan.FromSeconds(10),
             cancellationToken: TestContext.Current.CancellationToken);
         Assert.Equal(TurnOutcome.Completed, completed.Outcome);
+        Assert.DoesNotContain("[approval:", ModelToolResult(journey), StringComparison.Ordinal);
         Assert.False(File.Exists(MarkerPath(project)));
         Assert.Empty(ReadPersistentEntries());
         Assert.Equal(
@@ -480,6 +486,28 @@ public sealed class ShellApprovalLifecycleIntegrationTests : LlmSessionTestBase
             context,
             TestContext.Current.CancellationToken);
         return ShellApprovalHarness.ObserveOutcome(decision);
+    }
+
+    /// <summary>
+    /// Reads the tool result that the model received on its next call. The
+    /// note must reach the model, not only the channel output, because the
+    /// model uses it to tell the person whether the approval carries over.
+    /// </summary>
+    private string ModelToolResult(ApprovalJourney journey)
+    {
+        var callId = journey.Request.CallId.Value;
+        var result = _chatClient.ReceivedMessages
+            .SelectMany(messages => messages)
+            .SelectMany(message => message.Contents.OfType<FunctionResultContent>())
+            .Last(content => content.CallId == callId);
+        return result.Result?.ToString() ?? string.Empty;
+    }
+
+    private void AssertModelSawApprovalNote(ApprovalJourney journey, string note)
+    {
+        var lines = ModelToolResult(journey).Split('\n');
+        Assert.Equal(note, lines[^1]);
+        Assert.Single(lines, line => line.StartsWith("[approval:", StringComparison.Ordinal));
     }
 
     private IReadOnlyList<ApprovalEntry> ReadPersistentEntries()

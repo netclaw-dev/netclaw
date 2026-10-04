@@ -1582,7 +1582,7 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                         var result = await executor.ExecuteAsync(tc, retryContext, ct);
                         return BuildToolResult(
                             cleanedTc,
-                            result,
+                            ConsentAnswerCodec.AppendResultNote(result, step.Answer),
                             retryContext,
                             modelInputBudget,
                             consumedManagedTemporaryKey is { } approvedConsumed

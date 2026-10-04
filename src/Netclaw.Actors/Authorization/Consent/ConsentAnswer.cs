@@ -121,6 +121,27 @@ internal static class ConsentAnswerCodec
             _ => ConsentAnswer.Denied,
         };
 
+    /// <summary>
+    /// Adds one line to an approved tool result. The line tells the model
+    /// which approval the person gave, so the model can tell the person that
+    /// "once" and "this chat only" do not carry over to a later session, for
+    /// example a scheduled reminder run. A refusal adds no line, because the
+    /// refusal result already states the reason.
+    /// </summary>
+    public static string AppendResultNote(string resultText, ConsentAnswer answer)
+    {
+        var note = answer switch
+        {
+            ConsentAnswer.Once => "[approval: once]",
+            ConsentAnswer.Grant { Scope: GrantScopeKind.Session } => "[approval: this chat only]",
+            ConsentAnswer.Grant { Scope: GrantScopeKind.Folder } => "[approval: always in this folder]",
+            ConsentAnswer.Grant { Scope: GrantScopeKind.Repository } => "[approval: always in this repo]",
+            ConsentAnswer.Grant { Scope: GrantScopeKind.Everywhere } => "[approval: always anywhere]",
+            _ => null,
+        };
+        return note is null ? resultText : $"{resultText}\n{note}";
+    }
+
     /// <summary>Formats an answer as its journal text.</summary>
     public static string ToJournalText(ConsentAnswer answer) => answer switch
     {

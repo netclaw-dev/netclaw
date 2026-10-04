@@ -149,7 +149,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         Assert.Single(completed.ToolResults);
-        Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
+        Assert.Equal("approved-and-ran\n[approval: once]", completed.ToolResults[0].Content);
         Assert.True(AuthorizationAttemptId.TryParse(approvalRequest.AuthorizationAttemptId, out var attemptId));
         Assert.Equal(attemptId, completed.AuthorizationAttemptIds["call-1"]);
         Assert.Equal([attemptId, attemptId], executor.AttemptIds);
@@ -197,7 +197,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         var result = Assert.Single(completed.ToolResults);
-        Assert.Equal("ran-with-bypass", result.Content);
+        Assert.Equal("ran-with-bypass\n[approval: always in this folder]", result.Content);
     }
 
     [Fact]
@@ -844,7 +844,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         await pipelineTask.WaitAsync(TimeSpan.FromSeconds(3), TestContext.Current.CancellationToken);
 
         Assert.Single(completed.ToolResults);
-        Assert.Equal("approved-and-ran", completed.ToolResults[0].Content);
+        Assert.Equal("approved-and-ran\n[approval: once]", completed.ToolResults[0].Content);
         Assert.Single(approvals);
     }
 

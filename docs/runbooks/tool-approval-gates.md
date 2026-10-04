@@ -133,6 +133,12 @@ the options that are safe for this call:
 | Always anywhere | `approve_everywhere` | Netclaw saves a global grant. For an MCP tool, the label is "Always allow this tool". |
 | Deny | `deny` | This call does not run. Netclaw does not ban the phrase. |
 
+After an approved call, Netclaw adds one line to the tool result that the
+model reads. The line names the choice: `[approval: once]`,
+`[approval: this chat only]`, `[approval: always in this folder]`,
+`[approval: always in this repo]`, or `[approval: always anywhere]`. A call
+that a saved grant or a policy allows gets no line. A denied call gets no line.
+
 The prompt offers fewer options when a broader grant is not safe:
 
 - Only `Once` and `Deny` appear when the shell parser cannot prove a reusable
