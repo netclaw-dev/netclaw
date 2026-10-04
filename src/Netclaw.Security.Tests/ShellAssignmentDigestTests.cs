@@ -71,6 +71,20 @@ public sealed class ShellAssignmentDigestTests
         Assert.Equal(4, digests.Count);
     }
 
+    // ShellSyntaxTree 0.4.0-beta.12 proves a reassignment. The command sees
+    // only the live value, so the digest is the digest of that value.
+    [Fact]
+    public void Reassignment_uses_the_digest_of_the_live_value()
+    {
+        var reassigned = ExtractSingle(BashMatcher, "mode='one'; mode='two'; inspect item", "/work");
+        var live = ExtractSingle(BashMatcher, "mode='two'; inspect item", "/work");
+        var first = ExtractSingle(BashMatcher, "mode='one'; inspect item", "/work");
+
+        Assert.NotNull(reassigned.AssignmentDigest);
+        Assert.Equal(live.AssignmentDigest, reassigned.AssignmentDigest);
+        Assert.NotEqual(first.AssignmentDigest, reassigned.AssignmentDigest);
+    }
+
     [Theory]
     [InlineData(PwshDialect.PowerShell7, "C:\\PowerShell\\7\\pwsh.exe")]
     [InlineData(
@@ -328,7 +342,6 @@ public sealed class ShellAssignmentDigestTests
     [Theory]
     [InlineData("mode=$other; inspect item")]
     [InlineData("PATH=/other inspect item")]
-    [InlineData("mode='one'; mode='two'; inspect item")]
     public void Unsupported_assignment_forms_keep_the_call_one_time(string command)
     {
         var analysis = BashMatcher.AnalyzeInvocation(

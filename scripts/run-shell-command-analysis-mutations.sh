@@ -267,10 +267,123 @@ read -r messy_start messy_end < <(
 )
 security_mutations+=("IToolApprovalMatcher.cs{$messy_start..$messy_end}")
 
+# ShellSyntaxTree 0.4.0-beta.17 facts. Decision D5 (option A): a glob word gets
+# the decision of each literal path that its segments can match.
+path_policy_file="$repo_root/src/Netclaw.Security/ToolPathPolicy.cs"
+glob_file="$repo_root/src/Netclaw.Security/ShellGlobScope.cs"
+read -r glob_deny_start glob_deny_end < <(
+  find_span \
+    "$path_policy_file" \
+    "private bool GlobMayReachDeniedPath(" \
+    "var glob = ShellGlobScope.AsGlobPattern(pattern);" \
+    "|| IsShellDenied(match));"
+)
+security_mutations+=("ToolPathPolicy.cs{$glob_deny_start..$glob_deny_end}")
+
+read -r credential_start credential_end < <(
+  find_span \
+    "$path_policy_file" \
+    "private IEnumerable<string> DefaultCredentialStorePaths()" \
+    "var home = Environment.HomeDirectory;" \
+    '"config", "secrets.json"))'
+)
+security_mutations+=("ToolPathPolicy.cs{$credential_start..$credential_end}")
+
+read -r glob_fact_start glob_fact_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static ShellValueDomain.PathPattern? AsGlobPattern(" \
+    "=> domain is ShellValueDomain.PathPattern" \
+    ": null;"
+)
+security_mutations+=("ShellGlobScope.cs{$glob_fact_start..$glob_fact_end}")
+
+read -r segment_start segment_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static bool SegmentMayMatch(" \
+    "if (!segment.IsPattern)" \
+    "ignoreCase: true);"
+)
+security_mutations+=("ShellGlobScope.cs{$segment_start..$segment_end}")
+
+read -r toward_start toward_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static string? MatchPathToward(" \
+    "var glob = pattern.Glob!;" \
+    "return prefix + string.Join(separator, relative[..reach]);"
+)
+security_mutations+=("ShellGlobScope.cs{$toward_start..$toward_end}")
+
+read -r bracket_start bracket_end < <(
+  find_span \
+    "$glob_file" \
+    "private static string ToSimpleExpression(" \
+    "=> text.Contains('[', StringComparison.Ordinal)" \
+    '? "*" : text;'
+)
+security_mutations+=("ShellGlobScope.cs{$bracket_start..$bracket_end}")
+
+read -r walk_start walk_end < <(
+  find_span \
+    "$glob_file" \
+    "internal static bool IsLinkContained(" \
+    "if (!Directory.Exists(coveringDirectory.Value))" \
+    "return current.All(HasOnlyContainedLinkEntries);"
+)
+security_mutations+=("ShellGlobScope.cs{$walk_start..$walk_end}")
+
+read -r glob_part_start glob_part_end < <(
+  find_span \
+    "$analysis_file" \
+    "var globMayAddOption = false;" \
+    "var globMayAddOption = false;" \
+    "globMayAddOption |= pattern.Glob!.MayStartWithDash;"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$glob_part_start..$glob_part_end}")
+
+# A bound value gets the hard-deny decision of its literal twin.
+read -r effective_use_start effective_use_end < <(
+  find_span \
+    "$policy_file" \
+    "private ShellCommandDecision EvaluateStructuralAnalysis(" \
+    "if (Environment.Grammar == ShellGrammar.Bash)" \
+    "if (!decision.Allowed)"
+)
+security_mutations+=("ShellCommandPolicy.cs{$effective_use_start..$effective_use_end}")
+
+read -r effective_start effective_end < <(
+  find_span \
+    "$policy_file" \
+    "private ShellCommandDecision EvaluateEffectiveValues(" \
+    "var choices = new List<IReadOnlyList<string>>();" \
+    "return ShellCommandDecision.Allow();"
+)
+security_mutations+=("ShellCommandPolicy.cs{$effective_start..$effective_end}")
+
+read -r proved_start proved_end < <(
+  find_span \
+    "$policy_file" \
+    "private static IReadOnlyList<string>? ProvedValues(" \
+    "foreach (var argument in occurrence.Arguments)" \
+    "_ => null"
+)
+security_mutations+=("ShellCommandPolicy.cs{$proved_start..$proved_end}")
+
+read -r combine_start combine_end < <(
+  find_span \
+    "$policy_file" \
+    "private static IEnumerable<IReadOnlyList<string>> Combine(" \
+    "IEnumerable<IReadOnlyList<string>> combinations = [[]];" \
+    "return combinations;"
+)
+security_mutations+=("ShellCommandPolicy.cs{$combine_start..$combine_end}")
+
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  92 \
+  166 \
   "${security_mutations[@]}"
 
 actor_mutations=()

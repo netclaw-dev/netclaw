@@ -207,10 +207,19 @@ public sealed class ShellAssignmentMutationTests
         Assert.True(unknownState.Evaluate(
             "X=1 inspect item",
             "/work").Allowed);
-        // The parser rejects a background list, so only the per-element
-        // screen sees the denied command.
+        // A cd that can fail leaves the bash -lc child without a directory, so
+        // the parse stops there. Each list element is screened again, and the
+        // child meets the hard-deny list.
         Assert.False(unknownState.Evaluate(
-            "echo ok & netclaw daemon stop",
+            "cd /work/sub && git fetch; bash -lc \"echo \\\"a b\\\"; netclaw daemon stop\"",
+            "/work").Allowed);
+        Assert.True(unknownState.Evaluate(
+            "cd /work/sub && git fetch; bash -lc \"echo \\\"a b\\\"; git status\"",
+            "/work").Allowed);
+        // The parser rejects arithmetic expansion, so only the per-element
+        // screen sees the denied command after the background operator.
+        Assert.False(unknownState.Evaluate(
+            "echo $((1 + 1)) & netclaw daemon stop",
             "/work").Allowed);
     }
 

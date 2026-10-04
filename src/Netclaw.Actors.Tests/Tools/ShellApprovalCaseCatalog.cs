@@ -1438,7 +1438,7 @@ public static class ShellApprovalCases
             "background-list-prompts-for-mutating-tail",
             Bash("git status & git push"),
             Approvals.None,
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["git push"])),
         Case(
             "unbalanced-quote-fails-closed",
             Bash("git push \"unterminated"),
@@ -2234,7 +2234,155 @@ public static class ShellApprovalCases
             "noninteractive-exempt-allows",
             Bash("echo hello", interactive: false),
             Approvals.None,
-            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates))
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        // ShellSyntaxTree 0.4.0-beta.11 to beta.17 on the Bash 5.2 host. A glob word
+        // has a covering directory and a segment depth. Decision D5 (option A): a
+        // glob that can match a protected path gets the decision of that literal path.
+        Case(
+            "glob-config-file-denied-as-literal",
+            Bash52("cat ~/.netclaw/*/tool-approvals.json"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        Case(
+            "glob-credential-secrets-denied-as-literal",
+            Bash52("cat ~/.netclaw/*/secrets.json"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        Case(
+            "glob-credential-keys-denied-as-literal",
+            Bash52("cat ~/.netclaw/k*/*.xml"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        Case(
+            "glob-link-to-credential-keys-denied-as-literal",
+            Bash52("ln -s ~/.netclaw/k* keys-link"),
+            Approvals.PersistentAnywhere("ln"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        Case(
+            "literal-link-to-credential-keys-denies",
+            Bash52("ln -s ~/.netclaw/keys keys-link"),
+            Approvals.PersistentAnywhere("ln"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        Case(
+            "glob-in-directory-segment-uses-global-grant",
+            Bash52("ls -d ~/repositories/*/akka*"),
+            Approvals.PersistentAnywhere("ls"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:ls")),
+        Case(
+            "glob-dot-entries-use-global-grant",
+            Bash52("du -sh ~/repositories/akka.net/.*"),
+            Approvals.PersistentAnywhere("du"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:du")),
+        Case(
+            "glob-leaf-in-project-uses-reviewed-phrase",
+            Bash52("ls src/*.cs"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        // A glob with a wildcard first segment can expand to an option word, so
+        // decision D1 applies: only a safe phrase or a grant for anywhere covers it,
+        // in an interactive run.
+        Case(
+            "glob-that-may-add-option-uses-global-grant",
+            Bash52("rm */stale.tmp"),
+            Approvals.PersistentAnywhere("rm"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:rm */stale.tmp")),
+        Case(
+            "glob-that-may-add-option-prompts-with-folder-grant",
+            Bash52("rm */stale.tmp"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
+            ExpectedApproval.Require(["rm */stale.tmp"])),
+        Case(
+            "glob-that-may-add-option-unattended-denies",
+            Bash52("rm */stale.tmp", interactive: false),
+            Approvals.PersistentAnywhere("rm"),
+            ExpectedApproval.Deny("shell_unresolved_trust_zone_input")),
+        // A cd that can fail gives the next statement two possible directories.
+        // The glob in the cd branch keeps its glob fact in each slice.
+        Case(
+            "glob-after-cd-keeps-directory-proof",
+            Bash52("cd src && ls *.cs; dotnet --list-sdks"),
+            Approvals.PersistentAnywhere("cd", "dotnet"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:dotnet", "persistent:dotnet")),
+        // ShellSyntaxTree 0.4.0-beta.17 publishes the effective value of a binding.
+        Case(
+            "assigned-credential-path-denied-as-literal",
+            Bash52("x=~/.netclaw/config/secrets.json; cat \"$x\""),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        Case(
+            "assigned-branch-is-not-covered-by-another-branch-grant",
+            Bash52("b=main; git push origin \"$b\""),
+            Approvals.PersistentAnywhere("git push origin feature-x"),
+            ExpectedApproval.Require(["git push origin"])),
+        // ShellSyntaxTree 0.4.0-beta.12 shows the command inside an assignment
+        // substitution, so the hard-deny list sees it.
+        Case(
+            "assignment-substitution-sudo-hard-denies",
+            Bash52("x=$(sudo ls)"),
+            Approvals.None,
+            ExpectedApproval.Deny("hard_deny_privilege_escalation")),
+        // A cd that can fail leaves a bash -lc child without a directory. The
+        // hard-deny screen then checks each list element, so the child cannot
+        // hide a denied command.
+        Case(
+            "wrapper-child-after-failing-cd-hard-denies",
+            Bash("cd sub && git fetch; bash -lc \"echo \\\"a b\\\"; netclaw daemon stop\""),
+            Approvals.PersistentAnywhere("cd", "git fetch", "bash"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        Case(
+            "background-wrapper-child-after-failing-cd-hard-denies",
+            Bash52("cd sub && git fetch; bash -lc \"echo \\\"a b\\\"; netclaw daemon stop\" & true"),
+            Approvals.PersistentAnywhere("cd", "git fetch", "bash"),
+            ExpectedApproval.Deny("hard_deny_self_destructive")),
+        // A bracket pattern in the program word names no fixed program, so the
+        // command stays unresolved.
+        Case(
+            "bracket-program-word-with-space-stays-unresolved",
+            Bash52("[\"batch one\"]"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "unattended-bracket-program-word-denies",
+            Bash52("[\"ci\",\"build\"]", interactive: false),
+            Approvals.None,
+            ExpectedApproval.Deny("shell_unresolved_trust_zone_input")),
+        // ShellSyntaxTree 0.4.0-beta.13 and beta.14: while, until, if, case, and a
+        // background list. Each command inside them gets its own decision.
+        Case(
+            "if-statement-prompts-for-each-command",
+            Bash52("if test -f marker; then git push; else git fetch; fi"),
+            Approvals.None,
+            ExpectedApproval.Require(["test", "git push", "git fetch"])),
+        Case(
+            "case-statement-uses-reviewed-phrases",
+            Bash52("case x in a) cat a.txt ;; *) cat b.txt ;; esac"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "until-loop-prompts-for-each-command",
+            Bash52("until test -f marker; do sleep 1; done"),
+            Approvals.None,
+            ExpectedApproval.Require(["test", "sleep"])),
+        Case(
+            "background-process-id-kill-prompts",
+            Bash52("server & PID=$!; kill \"$PID\""),
+            Approvals.PersistentAnywhere("kill"),
+            ExpectedApproval.Require(["server", "kill \"$PID\""])),
+        Case(
+            "unassigned-operand-uses-global-grant",
+            Bash52("rm -rf \"$BUILD_DIR/out\""),
+            Approvals.PersistentAnywhere("rm"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:rm -rf \"$BUILD_DIR/out\"")),
+        Case(
+            "unassigned-operand-prompts-with-folder-grant",
+            Bash52("rm -rf \"$BUILD_DIR/out\""),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "rm"),
+            ExpectedApproval.Require(["rm -rf \"$BUILD_DIR/out\""])),
+        Case(
+            "unassigned-operand-unattended-denies",
+            Bash52("rm -rf \"$BUILD_DIR/out\"", interactive: false),
+            Approvals.PersistentAnywhere("rm"),
+            ExpectedApproval.Deny("shell_unresolved_trust_zone_input"))
     ];
 
     private static readonly FrozenDictionary<string, ShellApprovalCase> CasesById =
@@ -2300,6 +2448,13 @@ public static class ShellApprovalCases
         TrustAudience audience = TrustAudience.Personal,
         bool interactive = true)
         => new(command, workingDirectory, audience, interactive);
+
+    // The Bash 5.2 host runs the no-startup shell, so the parser gives the glob,
+    // binding, and launch facts that a production Linux host gets.
+    private static ShellApprovalInvocation Bash52(
+        string command,
+        bool interactive = true)
+        => new(command, ApprovalDirectoryShape.Project, TrustAudience.Personal, interactive, ShellApprovalHost.Bash52);
 
     private static ShellApprovalInvocation PowerShell7(
         string command,

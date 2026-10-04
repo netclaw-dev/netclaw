@@ -226,9 +226,107 @@ public sealed class ShellCommandPolicy
             var decision = EvaluateClause(occurrence.Clause);
             if (!decision.Allowed)
                 return decision;
+
+            if (Environment.Grammar == ShellGrammar.Bash)
+            {
+                decision = EvaluateEffectiveValues(occurrence);
+                if (!decision.Allowed)
+                    return decision;
+            }
         }
 
         return ShellCommandDecision.Allow();
+    }
+
+    // The bound on the value combinations of one command. Two loop variables
+    // with 16 values each fit.
+    private const int MaximumEffectiveTokenLists = 256;
+
+    private const string TooManyValueCombinations =
+        "Too many value combinations to check against the deny list";
+
+    /// <summary>
+    /// Applies the deny list to the values that the parser proves for each word.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: ShellSyntaxTree 0.4.0-beta.17 publishes the effective value of a
+    /// word that reads a binding, so <c>x=/; rm -rf "$x"</c> has the value
+    /// <c>/</c>, and a grant can cover the call. The authored text <c>"$x"</c>
+    /// matches no deny rule, so the screen also checks the proved values. A
+    /// finite set (a loop variable) checks each combination. More combinations
+    /// than the bound deny the call, because the screen cannot check them all.
+    /// </remarks>
+    private ShellCommandDecision EvaluateEffectiveValues(ShellSyntaxTree.CommandOccurrence occurrence)
+    {
+        var choices = new List<IReadOnlyList<string>>();
+        foreach (var arg in occurrence.Clause.Args)
+        {
+            if (!arg.IsCwdAttribution)
+                choices.Add(ProvedValues(occurrence, arg) ?? [arg.Raw]);
+        }
+
+        var combinations = 1L;
+        foreach (var choice in choices)
+        {
+            combinations *= choice.Count;
+            if (combinations > MaximumEffectiveTokenLists)
+                return ShellCommandDecision.Deny(TooManyValueCombinations, DenyCategory.Unknown);
+        }
+
+        var verbTokens = CreateVerbTokens(occurrence.Clause);
+        foreach (var combination in Combine(choices))
+        {
+            var tokens = verbTokens
+                .Concat(combination.Select(static token => DenyToken.Known(token)))
+                .ToList();
+            foreach (var pattern in _denyPatterns)
+            {
+                if (pattern.Matches(tokens))
+                    return ShellCommandDecision.Deny(pattern.Reason, pattern.Category);
+            }
+        }
+
+        return ShellCommandDecision.Allow();
+    }
+
+    // Only an expansion gets a value that its text does not show. The text
+    // check already judges a literal, glob, or tilde word, so its unquoted
+    // value adds nothing, and the punctuation rules of the text check would
+    // misread it ('/;' is a file name, not "/").
+    private static IReadOnlyList<string>? ProvedValues(
+        ShellSyntaxTree.CommandOccurrence occurrence,
+        ShellSyntaxTree.Arg arg)
+    {
+        if (arg.Kind is not (ShellSyntaxTree.ArgKind.EnvVar or ShellSyntaxTree.ArgKind.DynamicSkip))
+            return null;
+
+        foreach (var argument in occurrence.Arguments)
+        {
+            if (!ReferenceEquals(argument.Argument, arg))
+                continue;
+
+            return argument.Value switch
+            {
+                ShellSyntaxTree.ShellValueDomain.Exact exact => [exact.Value],
+                ShellSyntaxTree.ShellValueDomain.FiniteSet finite => finite.Values,
+                _ => null
+            };
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<IReadOnlyList<string>> Combine(IReadOnlyList<IReadOnlyList<string>> choices)
+    {
+        IEnumerable<IReadOnlyList<string>> combinations = [[]];
+        foreach (var choice in choices)
+        {
+            var values = choice;
+            combinations = combinations.SelectMany(
+                prefix => values.Select(value => (IReadOnlyList<string>)[.. prefix, value]));
+        }
+
+        return combinations;
     }
 
     internal ShellCommandDecision EvaluateDenyOnlyClauses(
@@ -286,10 +384,11 @@ public sealed class ShellCommandPolicy
         return ShellCommandDecision.Allow();
     }
 
-    private ShellCommandDecision EvaluateClause(ShellSyntaxTree.Clause clause)
+    // The program word: the canonical verb when the parser gives one (a path
+    // such as /usr/bin/kill gives kill), then the other verb tokens.
+    private static List<DenyToken> CreateVerbTokens(ShellSyntaxTree.Clause clause)
     {
-        var tokens = new List<DenyToken>(
-            clause.Verb.Tokens.Count + clause.Args.Count + clause.Redirects.Count);
+        var tokens = new List<DenyToken>(clause.Verb.Tokens.Count);
         if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
         {
             tokens.Add(DenyToken.Known(canonicalVerb));
@@ -301,6 +400,13 @@ public sealed class ShellCommandPolicy
             tokens.AddRange(clause.Verb.Tokens
                 .Select(static token => DenyToken.Known(token)));
         }
+
+        return tokens;
+    }
+
+    private ShellCommandDecision EvaluateClause(ShellSyntaxTree.Clause clause)
+    {
+        var tokens = CreateVerbTokens(clause);
         if (Environment.Grammar == ShellGrammar.PowerShell
             && clause.Elements.Count > 0)
         {
@@ -336,19 +442,7 @@ public sealed class ShellCommandPolicy
 
     private ShellCommandDecision EvaluateDenyOnlyClause(ShellSyntaxTree.Clause clause)
     {
-        var tokens = new List<DenyToken>(
-            clause.Verb.Tokens.Count + clause.Elements.Count);
-        if (clause.Verb.CanonicalVerb is { Length: > 0 } canonicalVerb)
-        {
-            tokens.Add(DenyToken.Known(canonicalVerb));
-            tokens.AddRange(clause.Verb.Tokens.Skip(1)
-                .Select(static token => DenyToken.Known(token)));
-        }
-        else
-        {
-            tokens.AddRange(clause.Verb.Tokens
-                .Select(static token => DenyToken.Known(token)));
-        }
+        var tokens = CreateVerbTokens(clause);
         tokens.AddRange(clause.Elements
             .Where(static element =>
                 element.Role == ShellSyntaxTree.ClauseElementRole.Argument)

@@ -357,8 +357,22 @@ internal sealed record BashDirectoryScopeProjection(
         (ShellValueDomain.Concatenation a, ShellValueDomain.Concatenation b) =>
             a.Parts.Count == b.Parts.Count
             && a.Parts.Zip(b.Parts).All(static part => HasSameValue(part.First, part.Second)),
+        (ShellValueDomain.PathPattern a, ShellValueDomain.PathPattern b) =>
+            string.Equals(a.Pattern, b.Pattern, StringComparison.Ordinal)
+            && string.Equals(a.CoveringDirectory, b.CoveringDirectory, StringComparison.Ordinal)
+            && HasSameGlob(a.Glob, b.Glob),
         _ => Equals(first, second)
     };
+
+    private static bool HasSameGlob(ShellGlobExpansion? first, ShellGlobExpansion? second)
+        => (first, second) switch
+        {
+            (null, null) => true,
+            ({ } a, { } b) => a.SegmentDepth == b.SegmentDepth
+                && a.MayStartWithDash == b.MayStartWithDash
+                && a.Segments.SequenceEqual(b.Segments),
+            _ => false
+        };
 
     private static bool HasSameAuthoredElements(Clause first, Clause second)
         => first.Elements.Count == second.Elements.Count

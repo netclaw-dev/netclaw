@@ -353,7 +353,8 @@ internal sealed class ReviewedSafeShellPolicy
 
             var validDomain = fact.Source.Origin == ShellPolicyPathOrigin.FileSystemTreeRoot
                 ? fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.PathPattern
-                : fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet;
+                : fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
+                  || IsLinkContainedGlob(fact.Source.Domain, pathStyle);
             // The parser's Windows shape is lexical: a backslash, a leading
             // "//", or a drive prefix. A backslash is a separator only under
             // Windows path rules. Under POSIX rules it is an ordinary file-name
@@ -381,6 +382,14 @@ internal sealed class ReviewedSafeShellPolicy
 
         return true;
     }
+
+    // A glob word reads below its covering directory, to the segment depth. The
+    // read check then uses the covering directory, and a link must not take a
+    // match out of it.
+    private static bool IsLinkContainedGlob(ShellValueDomain domain, ShellPathStyle pathStyle)
+        => ShellGlobScope.AsGlobPattern(domain) is { } pattern
+           && CanonicalPath.TryCreate(pattern.CoveringDirectory, relativeBase: null, pathStyle, out var covering)
+           && ShellGlobScope.IsLinkContained(covering, pattern.Glob!);
 
     private static bool AllPathsStayWithinIntent(
         ShellPolicyResolvedPathView? resolvedPaths,

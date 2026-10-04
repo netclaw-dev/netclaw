@@ -190,6 +190,17 @@ internal sealed class FileSystemAuthority
         return PathDecision.Outside;
     }
 
+    /// <summary>Gets the normalized protected paths of an operation.</summary>
+    /// <remarks>A glob word has no single path, so the shell screen compares its segments with each entry.</remarks>
+    internal IReadOnlyCollection<string> GetProtectedPaths(PathOperation operation)
+        => operation switch
+        {
+            PathOperation.Read => _readProtected,
+            PathOperation.Write => _writeProtected,
+            PathOperation.Shell => _shellProtected,
+            _ => throw new ArgumentOutOfRangeException(nameof(operation), operation, null)
+        };
+
     /// <summary>Returns true when a path is protected for an operation.</summary>
     /// <remarks>
     /// Protected sets compare without case on every host (R4). The check compares

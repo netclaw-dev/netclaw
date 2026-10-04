@@ -246,9 +246,55 @@ public sealed class ToolPathPolicy
                 && IsShellDenied(value)),
             ShellValueDomain.PathPattern pattern =>
                 !string.IsNullOrWhiteSpace(pattern.CoveringDirectory)
-                && IsShellDenied(pattern.CoveringDirectory),
+                && (IsShellDenied(pattern.CoveringDirectory) || GlobMayReachDeniedPath(pattern)),
             _ => false
         };
+
+    /// <summary>
+    /// Returns true when a glob word can reach a protected path or the default
+    /// credential store.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY (decision D5, option A): a glob word reaches each path below its
+    /// covering directory that its segments can match. When the segments can match
+    /// a protected path, or a directory that contains one, the word gets the
+    /// decision of that literal path. The match is lexical. Netclaw does not list
+    /// the directory or follow links here, so a link below the covering directory
+    /// that leads to a protected path is an accepted gap.
+    /// </remarks>
+    private bool GlobMayReachDeniedPath(ShellValueDomain.PathPattern pattern)
+    {
+        var glob = ShellGlobScope.AsGlobPattern(pattern);
+        return glob is not null
+               && FileSystem.GetProtectedPaths(PathOperation.Shell)
+                   .Concat(DefaultCredentialStorePaths())
+                   .Any(target => MatchIsDenied(glob, target));
+    }
+
+    // The match is the target itself, a directory that contains it (the glob
+    // reads below it), or the ancestor of the target at the glob depth. The
+    // ancestor gets the decision of that literal directory.
+    private bool MatchIsDenied(ShellValueDomain.PathPattern glob, string target)
+    {
+        var match = ShellGlobScope.MatchPathToward(glob, target);
+        return match is not null
+               && (string.Equals(match, target, StringComparison.OrdinalIgnoreCase) || IsShellDenied(match));
+    }
+
+    // The default credential store of the home directory. The text hints deny these
+    // paths even when an operator moves the Netclaw root, so a glob gets the same rule.
+    private IEnumerable<string> DefaultCredentialStorePaths()
+    {
+        var home = Environment.HomeDirectory;
+        if (string.IsNullOrEmpty(home))
+            return [];
+
+        return
+        [
+            PathUtility.Normalize(Path.Combine(home, ".netclaw", "keys")),
+            PathUtility.Normalize(Path.Combine(home, ".netclaw", "config", "secrets.json"))
+        ];
+    }
 
     private static bool LooksLikePath(string token)
     {

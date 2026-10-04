@@ -110,16 +110,18 @@ internal sealed class ShellCommandAnalyzer
         return clauses;
     }
 
+    // SECURITY: a parse can stop part way, for example at a bash -lc child whose
+    // directory is unknown after a cd that can fail. Its commands so far still
+    // meet the screen, but the rest of the source is not seen. Only a complete
+    // parse ends the search; otherwise each list element is screened again.
     private bool TryCollectScreenClauses(string source, string? workingDirectory, List<Clause> clauses)
     {
         foreach (var state in ScreenStates)
         {
             var screened = new ShellCommandAnalyzer(_environment, state).Analyze(source, workingDirectory);
-            if (screened.Commands.Count == 0)
-                continue;
-
             clauses.AddRange(screened.Commands.Select(static occurrence => occurrence.Clause));
-            return true;
+            if (screened.Failure == ShellAnalysisFailure.None)
+                return true;
         }
 
         return false;
@@ -136,13 +138,6 @@ internal sealed class ShellCommandAnalyzer
         ref bool syntaxProofComplete)
     {
         if (depth > MaxWrapperDepth)
-            return ShellAnalysisFailure.Unresolved;
-
-        // Stable v0.3 excludes background lists. Keep this guard until the
-        // parser exposes their concurrency and shell-state boundaries.
-        if (_environment.Grammar == ShellGrammar.Bash
-            && _screenState is null
-            && FindListOperators(command).Any(static list => list.IsBackground))
             return ShellAnalysisFailure.Unresolved;
 
         ParsedCommand parsed;
@@ -432,9 +427,9 @@ internal sealed class ShellCommandAnalyzer
         return elements;
     }
 
-    private static List<(int Index, int Length, bool IsBackground)> FindListOperators(string command)
+    private static List<(int Index, int Length)> FindListOperators(string command)
     {
-        var operators = new List<(int Index, int Length, bool IsBackground)>();
+        var operators = new List<(int Index, int Length)>();
         char? quote = null;
         var escaped = false;
 
@@ -470,16 +465,16 @@ internal sealed class ShellCommandAnalyzer
             var next = i + 1 < command.Length ? command[i + 1] : '\0';
             if (ch == ';')
             {
-                operators.Add((i, 1, false));
+                operators.Add((i, 1));
             }
             else if (ch is '&' or '|' && next == ch)
             {
-                operators.Add((i, 2, false));
+                operators.Add((i, 2));
                 i++;
             }
             else if (ch == '&' && previous is not ('&' or '>') && next != '>')
             {
-                operators.Add((i, 1, true));
+                operators.Add((i, 1));
             }
         }
 
@@ -684,6 +679,24 @@ public sealed record ShellCommandAnalysis
                 CollectSourceAuthenticDenyOnlyClauses(loop.IteratorCommands, source, clauses, seen);
                 CollectSourceAuthenticDenyOnlyClauses(loop.Body, source, clauses, seen);
                 break;
+            case ConditionLoopSyntax loop:
+                CollectSourceAuthenticDenyOnlyClauses(loop.Condition, source, clauses, seen);
+                CollectSourceAuthenticDenyOnlyClauses(loop.Body, source, clauses, seen);
+                break;
+            case ConditionalSyntax conditional:
+                foreach (var branch in conditional.Branches)
+                {
+                    CollectSourceAuthenticDenyOnlyClauses(branch.Condition, source, clauses, seen);
+                    CollectSourceAuthenticDenyOnlyClauses(branch.Body, source, clauses, seen);
+                }
+
+                if (conditional.Else is { } otherwise)
+                    CollectSourceAuthenticDenyOnlyClauses(otherwise, source, clauses, seen);
+                break;
+            case CaseSyntax caseStatement:
+                foreach (var item in caseStatement.Items)
+                    CollectSourceAuthenticDenyOnlyClauses(item.Body, source, clauses, seen);
+                break;
             case CommandSubstitutionSyntax substitution:
                 CollectSourceAuthenticDenyOnlyClauses(substitution.Body, source, clauses, seen);
                 break;
@@ -810,23 +823,51 @@ public sealed record ShellCommandAnalysis
                 || frame.Region == CommandAncestryRegion.Unknown)
             || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
             || command.Clause.Verb.IsDynamic
+            || HasDynamicProgramWord(command)
             || HasUnresolvedRedirect(command))
         {
             return ShellUnresolvedPart.Command;
         }
 
-        // A glob in a directory segment can hide traversal or a symlink.
-        // Only a leaf glob has a fixed directory scope.
-        if (command.Clause.Args.Any(arg =>
-                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle)))
+        // A glob in a directory segment can hide traversal or a symlink. It has
+        // a fixed reach only with the parser glob fact (ShellSyntaxTree
+        // 0.4.0-beta.11): the covering directory, to the segment depth.
+        // SECURITY: when such a glob can expand to a word that starts with "-",
+        // the expansion can add an option. Decision D1 then applies: the word is
+        // an unknown operand. A leaf glob keeps its earlier scope rule.
+        var globMayAddOption = false;
+        foreach (var arg in command.Clause.Args)
         {
-            return ShellUnresolvedPart.Command;
+            if (!ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
+                continue;
+
+            if (ShellGlobScope.FindGlobPattern(command, arg) is not { } pattern)
+                return ShellUnresolvedPart.Command;
+
+            globMayAddOption |= pattern.Glob!.MayStartWithDash;
         }
 
         return !HasOnlyDataOperands(command)
-               && HasUnresolvedOperand(command, accountedRegionArguments)
+               && (globMayAddOption || HasUnresolvedOperand(command, accountedRegionArguments))
             ? ShellUnresolvedPart.Operand
             : ShellUnresolvedPart.None;
+    }
+
+    // ShellSyntaxTree gives no command words for a bracket pattern in the
+    // program word, such as ["ci","build"], but it reports the word as literal.
+    // Bash expands the pattern, so the program is not fixed. With no other word,
+    // only the program word can make the words unknown, so the command stays
+    // unresolved. A tilde program word on a host with no launch facts keeps its
+    // rewrite advice (R1).
+    private static bool HasDynamicProgramWord(CommandOccurrence command)
+    {
+        var elements = command.Clause.Elements;
+        return command.CommandWords is ShellCommandWords.Unknown
+               && command.Clause.Verb.Tokens is [{ Length: > 0 }]
+               && elements.Count > 0
+               && elements[0] is { Role: ClauseElementRole.Verb, Kind: ArgKind.Literal }
+               && !elements[0].Raw.StartsWith('~')
+               && elements.Skip(1).All(static element => element.Role == ClauseElementRole.Redirect);
     }
 
     private static bool HasUnresolvedOperand(
@@ -882,6 +923,18 @@ public sealed record ShellCommandAnalysis
                     arguments,
                     assignmentSyntax)
                 && TryCollectKnownExecutionRegionArguments(loop.Body, arguments, assignmentSyntax),
+            ConditionLoopSyntax loop => Enum.IsDefined(loop.LoopKind)
+                && loop.LoopKind != ConditionLoopKind.Unknown
+                && TryCollectKnownExecutionRegionArguments(loop.Condition, arguments, assignmentSyntax)
+                && TryCollectKnownExecutionRegionArguments(loop.Body, arguments, assignmentSyntax),
+            ConditionalSyntax conditional => conditional.Branches.Count > 0
+                && conditional.Branches.All(branch =>
+                    TryCollectKnownExecutionRegionArguments(branch.Condition, arguments, assignmentSyntax)
+                    && TryCollectKnownExecutionRegionArguments(branch.Body, arguments, assignmentSyntax))
+                && (conditional.Else is null
+                    || TryCollectKnownExecutionRegionArguments(conditional.Else, arguments, assignmentSyntax)),
+            CaseSyntax caseStatement => caseStatement.Items.All(item =>
+                TryCollectKnownExecutionRegionArguments(item.Body, arguments, assignmentSyntax)),
             CommandSubstitutionSyntax substitution => TryCollectKnownExecutionRegionArguments(
                 substitution.Body,
                 arguments,
@@ -1085,13 +1138,27 @@ public sealed record ShellCommandAnalysis
         => list.Values.Count is >= 2 and <= 32
            && list.Values.All(static value => value is not null);
 
+    // ShellSyntaxTree 0.4.0-beta.13 adds while, until, if, and case nodes, and
+    // beta.14 adds the background group. The state pass joins the facts of each
+    // path, so a command inside them has the same proof as a command at the top
+    // level. An unknown node or group kind still fails closed.
     private static bool IsKnownAncestor(ShellSyntaxNode ancestor)
         => ancestor is ShellBlockSyntax
             or SimpleCommandSyntax
             or PipelineSyntax
             or CommandListSyntax
             or GroupSyntax
+            {
+                GroupKind: ShellGroupKind.CurrentScope
+                    or ShellGroupKind.IsolatedScope
+                    or ShellGroupKind.Background
+            }
             or ForEachSyntax
+            or ConditionLoopSyntax { LoopKind: ConditionLoopKind.While or ConditionLoopKind.Until }
+            or ConditionalSyntax
+            or ConditionalBranchSyntax
+            or CaseSyntax
+            or CaseItemSyntax
             or CommandSubstitutionSyntax
             or ExecutionRegionSyntax;
 

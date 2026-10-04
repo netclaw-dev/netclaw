@@ -606,11 +606,22 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (shell != ApprovalShell.Bash)
             return null;
 
-        // ShellSyntaxTree 0.4.0-beta.10 gives no launch value for a tilde in the
-        // program word, so "~/bin/tool" has no command words. The full path
-        // "/home/user/bin/tool" names the same file and has known words (R1).
+        // Without launch facts (a Bash host other than 5.2 or 5.3), ShellSyntaxTree
+        // gives no value for a tilde in the program word, so "~/bin/tool" has no
+        // command words. The full path "/home/user/bin/tool" names the same file
+        // and has known words (R1).
         if (clause.Elements[0].Raw.StartsWith("~/", StringComparison.Ordinal))
             return ShellCommandWordsRewrite.WriteProgramPathInFull;
+
+        // A name that the source assigns a runtime value ($!, $(...), or read)
+        // has no literal spelling, so the model cannot write the word. The
+        // command keeps its one-time prompt.
+        if (occurrence.Assignments.Any(static assignment =>
+                assignment.Scope == ShellSyntaxTree.ShellVariableAssignmentScope.ShellState
+                && assignment.EffectiveValue is ShellSyntaxTree.ShellValueDomain.Unknown))
+        {
+            return null;
+        }
 
         if (words.Any(static element => element.Kind is ShellSyntaxTree.ArgKind.EnvVar or ShellSyntaxTree.ArgKind.DynamicSkip))
             return ShellCommandWordsRewrite.WriteWordsLiterally;
@@ -656,6 +667,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 if (arg.Kind == ShellSyntaxTree.ArgKind.Glob)
                 {
                     var coveringDirectory = ResolveGlobCoveringDirectory(
+                        occurrence,
                         arg,
                         clauseWorkingDirectory,
                         pathStyle);
@@ -1029,10 +1041,27 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     }
 
     private static string? ResolveGlobCoveringDirectory(
+        ShellSyntaxTree.CommandOccurrence occurrence,
         ShellSyntaxTree.Arg arg,
         string? workingDirectory,
         ShellPathStyle pathStyle)
     {
+        // With the parser glob fact, the scope is the covering directory, and each
+        // match is below it to the segment depth (ShellSyntaxTree 0.4.0-beta.11).
+        if (ShellGlobScope.FindGlobPattern(occurrence, arg) is { } pattern)
+        {
+            return CanonicalPath.TryCreate(
+                       pattern.CoveringDirectory,
+                       relativeBase: null,
+                       pathStyle,
+                       out var covering)
+                   && ShellGlobScope.IsLinkContained(covering, pattern.Glob!)
+                ? covering.Value
+                : null;
+        }
+
+        // Without the fact (PowerShell, or a Bash host with no proved glob
+        // options), only a leaf glob has a fixed scope.
         if (ShellGlobPath.HasUnresolvedDescendantScope(arg, pathStyle))
             return null;
 
@@ -1284,10 +1313,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (file.Target is ShellSyntaxTree.ShellValueDomain.PathPattern pattern)
         {
             var coveringDirectory = pattern.CoveringDirectory;
-            return !CanonicalPath.TryCreate(coveringDirectory, relativeBase: null, pathStyle, out var covering)
-                || !FileSystemAuthority.HasOnlyContainedLinkEntries(covering)
-                ? null
-                : [coveringDirectory];
+            var contained = CanonicalPath.TryCreate(coveringDirectory, relativeBase: null, pathStyle, out var covering)
+                && (ShellGlobScope.AsGlobPattern(pattern) is { } glob
+                    ? ShellGlobScope.IsLinkContained(covering, glob.Glob!)
+                    : FileSystemAuthority.HasOnlyContainedLinkEntries(covering));
+            return contained ? [coveringDirectory] : null;
         }
 
         IReadOnlyList<string> targets = file.Target switch
@@ -1695,13 +1725,13 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return true;
         }
 
-        if (analysis.Commands
-            .SelectMany(static command => command.Clause.Args)
-            .Where(static arg => arg.IsPath && arg.Kind == ShellSyntaxTree.ArgKind.Glob)
-            .Any(arg => ResolveGlobCoveringDirectory(
-                arg,
-                workingDirectory,
-                Environment.PathStyle) is null))
+        if (analysis.Commands.Any(command => command.Clause.Args
+                .Where(static arg => arg.IsPath && arg.Kind == ShellSyntaxTree.ArgKind.Glob)
+                .Any(arg => ResolveGlobCoveringDirectory(
+                    command,
+                    arg,
+                    workingDirectory,
+                    Environment.PathStyle) is null)))
         {
             return true;
         }

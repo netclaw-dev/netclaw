@@ -158,7 +158,7 @@ read -r screen_start screen_end screen_start_line screen_start_column screen_end
     "$analysis_file" \
     "private bool TryCollectScreenClauses" \
     "foreach (var state in ScreenStates)" \
-    "clauses.AddRange(screened.Commands.Select(static occurrence => occurrence.Clause));"
+    "if (screened.Failure == ShellAnalysisFailure.None)"
 )
 security_patterns+=("ShellCommandAnalysis.cs{$screen_start..$screen_end}")
 

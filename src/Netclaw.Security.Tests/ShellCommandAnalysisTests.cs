@@ -523,13 +523,18 @@ public sealed class ShellCommandAnalysisTests
             || analysis.HasDynamicSyntax);
     }
 
+    // ShellSyntaxTree 0.4.0-beta.14 parses a background list as a group, so
+    // each command in it and after it has its own facts.
     [Fact]
-    public void Background_list_fails_closed_when_parser_omits_its_tail()
+    public void Background_list_exposes_each_command()
     {
-        var analysis = _analyzer.Analyze("git status & git push");
+        var analysis = _analyzer.Analyze("git status & git push", "/work");
 
-        Assert.Equal(ShellAnalysisFailure.Unresolved, analysis.Failure);
-        Assert.Empty(analysis.Commands);
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.False(analysis.HasDynamicSyntax);
+        Assert.Equal(
+            ["git status", "git push"],
+            analysis.Commands.Select(static command => string.Join(' ', command.Clause.Verb.Tokens)));
     }
 
     [Fact]

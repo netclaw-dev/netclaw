@@ -302,6 +302,15 @@ Leaks today:
   decision D2 (approval taxonomy PR 6), a kill is denied only when its operand
   text names the Netclaw daemon. It must not grow
   into a parser for an executable.
+- Since ShellSyntaxTree 0.4.0-beta.17, the parser proves the value of a word
+  that reads a binding (`x=/; rm -rf "$x"`). The hard-deny list also checks
+  each proved value, and each value of a loop variable, so the bound form gets
+  the decision of its literal twin. More than 256 value combinations deny.
+- Owner decision D5 (option A): a glob word gets the decision of each literal
+  protected path that its segments can match, or of a directory that contains
+  one (`ToolPathPolicy.GlobMayReachDeniedPath`). The match is lexical: Netclaw
+  does not list directories or follow links for this check. A link below the
+  covering directory that leads to a protected path is an accepted gap.
 
 ### 3.5 Consent
 

@@ -217,7 +217,7 @@
 | numeric-source-project-redirect-safe-verb-prompts | Bash | Personal | Project | Interactive | git status 3> result.log | none | RequiresApproval | approval required | git status | No |
 | fd-dup-redirect-mutating-no-grant-prompts-not-messy | Bash | Personal | Project | Interactive | git push origin dev 2>&1 \| tail -2 | none | RequiresApproval | approval required | git push origin dev | No |
 | dynamic-fd-redirect-fails-closed | Bash | Personal | Project | Interactive | git status 2>&$FD | none | RequiresApproval | approval required | none | Yes |
-| background-list-prompts-for-mutating-tail | Bash | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | none | Yes |
+| background-list-prompts-for-mutating-tail | Bash | Personal | Project | Interactive | git status & git push | none | RequiresApproval | approval required | git push | No |
 | unbalanced-quote-fails-closed | Bash | Personal | Project | Interactive | git push "unterminated | none | RequiresApproval | approval required | none | Yes |
 | multiline-argument-prompts | Bash | Personal | Project | Interactive | gh issue comment 123 --body "first line\nsecond line" | none | RequiresApproval | approval required | gh issue comment | No |
 | approved-pipeline-head-does-not-cover-tail | Bash | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push | RequiresApproval | approval required | curl | No |
@@ -349,3 +349,29 @@
 | noninteractive-unapproved-requires-approval | Bash | Personal | Project | Non-interactive | git push | none | RequiresApproval | approval required | git push | No |
 | noninteractive-persistent-grant-allows | Bash | Personal | Project | Non-interactive | git push | persistent[anywhere]:git push | Allowed | StoredApproval | none | Not applicable |
 | noninteractive-exempt-allows | Bash | Personal | Project | Non-interactive | echo hello | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| glob-config-file-denied-as-literal | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/*/tool-approvals.json | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
+| glob-credential-secrets-denied-as-literal | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/*/secrets.json | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
+| glob-credential-keys-denied-as-literal | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/k*/*.xml | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
+| glob-link-to-credential-keys-denied-as-literal | Bash52 | Personal | Project | Interactive | ln -s ~/.netclaw/k* keys-link | persistent[anywhere]:ln | Denied | shell_references_protected_path | none | Not applicable |
+| literal-link-to-credential-keys-denies | Bash52 | Personal | Project | Interactive | ln -s ~/.netclaw/keys keys-link | persistent[anywhere]:ln | Denied | shell_references_protected_path | none | Not applicable |
+| glob-in-directory-segment-uses-global-grant | Bash52 | Personal | Project | Interactive | ls -d ~/repositories/*/akka* | persistent[anywhere]:ls | Allowed | StoredApproval | none | Not applicable |
+| glob-dot-entries-use-global-grant | Bash52 | Personal | Project | Interactive | du -sh ~/repositories/akka.net/.* | persistent[anywhere]:du | Allowed | StoredApproval | none | Not applicable |
+| glob-leaf-in-project-uses-reviewed-phrase | Bash52 | Personal | Project | Interactive | ls src/*.cs | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| glob-that-may-add-option-uses-global-grant | Bash52 | Personal | Project | Interactive | rm */stale.tmp | persistent[anywhere]:rm | Allowed | StoredApproval | none | Not applicable |
+| glob-that-may-add-option-prompts-with-folder-grant | Bash52 | Personal | Project | Interactive | rm */stale.tmp | persistent[project]:rm | RequiresApproval | approval required | rm */stale.tmp | No |
+| glob-that-may-add-option-unattended-denies | Bash52 | Personal | Project | Non-interactive | rm */stale.tmp | persistent[anywhere]:rm | Denied | shell_unresolved_trust_zone_input | none | Not applicable |
+| glob-after-cd-keeps-directory-proof | Bash52 | Personal | Project | Interactive | cd src && ls *.cs; dotnet --list-sdks | persistent[anywhere]:cd, persistent[anywhere]:dotnet | Allowed | StoredApproval | none | Not applicable |
+| assigned-credential-path-denied-as-literal | Bash52 | Personal | Project | Interactive | x=~/.netclaw/config/secrets.json; cat "$x" | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
+| assigned-branch-is-not-covered-by-another-branch-grant | Bash52 | Personal | Project | Interactive | b=main; git push origin "$b" | persistent[anywhere]:git push origin feature-x | RequiresApproval | approval required | git push origin | No |
+| assignment-substitution-sudo-hard-denies | Bash52 | Personal | Project | Interactive | x=$(sudo ls) | none | Denied | hard_deny_privilege_escalation | none | Not applicable |
+| wrapper-child-after-failing-cd-hard-denies | Bash | Personal | Project | Interactive | cd sub && git fetch; bash -lc "echo \"a b\"; netclaw daemon stop" | persistent[anywhere]:cd, persistent[anywhere]:git fetch, persistent[anywhere]:bash | Denied | hard_deny_self_destructive | none | Not applicable |
+| background-wrapper-child-after-failing-cd-hard-denies | Bash52 | Personal | Project | Interactive | cd sub && git fetch; bash -lc "echo \"a b\"; netclaw daemon stop" & true | persistent[anywhere]:cd, persistent[anywhere]:git fetch, persistent[anywhere]:bash | Denied | hard_deny_self_destructive | none | Not applicable |
+| bracket-program-word-with-space-stays-unresolved | Bash52 | Personal | Project | Interactive | ["batch one"] | none | RequiresApproval | approval required | none | Yes |
+| unattended-bracket-program-word-denies | Bash52 | Personal | Project | Non-interactive | ["ci","build"] | none | Denied | shell_unresolved_trust_zone_input | none | Not applicable |
+| if-statement-prompts-for-each-command | Bash52 | Personal | Project | Interactive | if test -f marker; then git push; else git fetch; fi | none | RequiresApproval | approval required | test, git push, git fetch | No |
+| case-statement-uses-reviewed-phrases | Bash52 | Personal | Project | Interactive | case x in a) cat a.txt ;; *) cat b.txt ;; esac | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| until-loop-prompts-for-each-command | Bash52 | Personal | Project | Interactive | until test -f marker; do sleep 1; done | none | RequiresApproval | approval required | test, sleep | No |
+| background-process-id-kill-prompts | Bash52 | Personal | Project | Interactive | server & PID=$!; kill "$PID" | persistent[anywhere]:kill | RequiresApproval | approval required | server, kill "$PID" | No |
+| unassigned-operand-uses-global-grant | Bash52 | Personal | Project | Interactive | rm -rf "$BUILD_DIR/out" | persistent[anywhere]:rm | Allowed | StoredApproval | none | Not applicable |
+| unassigned-operand-prompts-with-folder-grant | Bash52 | Personal | Project | Interactive | rm -rf "$BUILD_DIR/out" | persistent[project]:rm | RequiresApproval | approval required | rm -rf "$BUILD_DIR/out" | No |
+| unassigned-operand-unattended-denies | Bash52 | Personal | Project | Non-interactive | rm -rf "$BUILD_DIR/out" | persistent[anywhere]:rm | Denied | shell_unresolved_trust_zone_input | none | Not applicable |

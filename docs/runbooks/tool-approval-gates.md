@@ -26,7 +26,12 @@ These checks run first and cannot be overridden by an approval:
 - The audience profile must allow the tool.
 - Shell calls need the Personal audience and a shell mode that allows the host
   shell.
-- A hard-deny rule or a protected path denies the call.
+- A hard-deny rule or a protected path denies the call. A glob word that can
+  match a protected path or the credential store (`~/.netclaw/keys`,
+  `~/.netclaw/config/secrets.json`), such as `cat ~/.netclaw/k*/*.xml`, is
+  denied as the literal path is (owner decision D5). The check compares the
+  glob segments with the protected paths. It does not list directories or
+  follow links.
 
 ## Approval modes
 
@@ -190,8 +195,21 @@ covered:
   value (for example `kubectl get pods -l "app=$(whoami)"`) runs when a safe
   phrase or an `Always anywhere` grant covers its command words (owner
   decision D1). A folder, repository, or chat grant does not cover it. An
-  unknown program word, an unknown redirect target, a glob with a wildcard in
-  a directory part, and an unattended run keep the prompt or the denial.
+  unknown program word, an unknown redirect target, and an unattended run keep
+  the prompt or the denial.
+- On a Linux host (Bash 5.2), a glob word reaches each path below its
+  covering directory, to the depth of its segments. The covering directory is
+  its scope, for a grant and for the catalog. For example,
+  `ls -d ~/repositories/*/akka*` has the scope `~/repositories`. A link that
+  leaves the covering directory keeps `Once` and `Deny`. A glob whose first
+  segment is a wildcard, such as `*/notes.md`, can expand to an option word,
+  so decision D1 applies to it.
+- A word that reads a bound value, such as `x=/etc/app.conf; cat "$x"`, gets
+  the decision of the literal value. A name with a run-time value (`PID=$!`,
+  `x=$(cmd)`, `read x`) is unknown. A command that reads it as a word gets
+  `Once` and `Deny`.
+- Each command inside `if`, `case`, `while`, `until`, or a background list
+  (`server &`) gets its own decision.
 - A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,
   so it does not stop the catalog coverage. A redirect to any other file does.
 - An absolute word whose top-level directory does not exist on the host, such

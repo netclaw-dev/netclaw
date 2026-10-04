@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.83.0"
+  version: "2.84.0"
 ---
 
 # Netclaw Operations
@@ -463,6 +463,20 @@ A changed assignment needs a separate approval.
 An unqualified grant cannot cover an assignment-qualified command.
 The reviewed-safe list does not cover an assignment-qualified command.
 An incomplete assignment gets only `Once` and `Deny`.
+A name with a run-time value (`PID=$!`, `x=$(cmd)`, `read x`) is unknown, so a
+command that reads it as a word gets only `Once` and `Deny`.
+A word that reads a bound value (`x=/etc/app.conf; cat "$x"`) gets the
+decision of the literal value, so a protected path or a hard-deny form stays
+denied.
+
+On Linux, a glob word (`ls -d ~/repositories/*/akka*`) reaches the paths below
+its covering directory, and that directory is its scope. A glob that can match
+a protected path or the credential store (`~/.netclaw/keys`,
+`~/.netclaw/config/secrets.json`) is denied, as the literal path is. A glob
+whose first segment is a wildcard (`*/notes.md`) can expand to an option, so
+only a safe phrase or an `Always anywhere` grant covers it. Commands inside
+`if`, `case`, `while`, `until`, and a background list (`server &`) each get
+their own decision.
 
 The approval gate runs three layers in order:
 

@@ -89,13 +89,30 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
     [InlineData("read -r TMPDIR; cat \"$TMPDIR/notes.txt\"")]
     [InlineData("source ./env.sh; cat \"$TMPDIR/notes.txt\"")]
     [InlineData("export HOME=/etc; cd /etc && cat \"$HOME/passwd\"")]
-    [InlineData("bash -lc 'cat \"$TMPDIR/notes.txt\"'")]
     public async Task Changed_launch_variable_is_not_trusted(string command)
     {
         await using var harness = await CreateHarnessAsync(Approvals.None);
 
         var literal = await harness.EvaluateShellAsync(Expand("cat {T}/notes.txt", harness), Ct);
         var observed = await harness.EvaluateShellAsync(command, Ct);
+
+        Assert.Equal(ApprovalOutcome.Allowed, literal.Outcome);
+        Assert.NotEqual(ApprovalOutcome.Allowed, observed.Outcome);
+    }
+
+    // A child shell can read startup files (bash -l reads the login profile),
+    // so the child gets no launch facts and its $TMPDIR is an unknown value. In
+    // an interactive run, decision D1 lets a safe phrase or a grant for
+    // anywhere cover an unknown operand. An unattended run has no D1, so the
+    // cat grant covers only the literal twin.
+    [SlopwatchSuppress("SW001", "The launch facts apply to the POSIX Bash host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "Launch facts apply to the POSIX Bash host.")]
+    public async Task Child_shell_gets_no_launch_facts()
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere("cat"), interactive: false);
+
+        var literal = await harness.EvaluateShellAsync(Expand("bash -lc 'cat {T}/notes.txt'", harness), Ct);
+        var observed = await harness.EvaluateShellAsync("bash -lc 'cat \"$TMPDIR/notes.txt\"'", Ct);
 
         Assert.Equal(ApprovalOutcome.Allowed, literal.Outcome);
         Assert.NotEqual(ApprovalOutcome.Allowed, observed.Outcome);
@@ -188,10 +205,10 @@ public sealed class ShellLaunchEnvironmentApprovalTests(ShellApprovalMatrixFixtu
         Assert.Equal(expected, output.Split('\n', StringSplitOptions.RemoveEmptyEntries));
     }
 
-    private Task<ShellApprovalHarness> CreateHarnessAsync(ApprovalState approvals)
+    private Task<ShellApprovalHarness> CreateHarnessAsync(ApprovalState approvals, bool interactive = true)
         => ShellApprovalHarness.CreateAsync(
             "launch-facts",
-            new ShellApprovalInvocation("true", Host: ShellApprovalHost.Bash52),
+            new ShellApprovalInvocation("true", Interactive: interactive, Host: ShellApprovalHost.Bash52),
             approvals,
             fixture.ActorSystem,
             Ct);
