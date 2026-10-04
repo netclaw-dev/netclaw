@@ -75,6 +75,8 @@ internal static class ReminderCommand
             "show" => await RunShowAsync(daemonApi, args),
             "history" => await RunHistoryAsync(daemonApi, args),
             "status" => await RunStatusAsync(daemonApi, args),
+            // Program.cs opens a chat for `reminder run <id>`. Other forms are a usage error.
+            "run" => WriteRunUsage(error),
             _ => WriteHelp(output)
         };
     }
@@ -667,6 +669,19 @@ internal static class ReminderCommand
         string? LastFailureReason,
         string CompletionStatus);
 
+    /// <summary>
+    /// Returns the reminder ID of <c>netclaw reminder run &lt;id&gt;</c>, or null for any other
+    /// form. Program.cs opens a chat with <c>/run-reminder &lt;id&gt;</c> for that ID.
+    /// </summary>
+    internal static string? GetRunReminderId(string[] args)
+        => args is [_, "run", var id] && !CliArgsParser.IsHelpToken(id) ? id : null;
+
+    private static int WriteRunUsage(TextWriter error)
+    {
+        error.WriteLine("Usage: netclaw reminder run <id>");
+        return 1;
+    }
+
     private static int WriteHelp(TextWriter output)
     {
         output.WriteLine("Usage: netclaw reminder <subcommand>");
@@ -683,6 +698,7 @@ internal static class ReminderCommand
         output.WriteLine("  show <id>                                     Show reminder details");
         output.WriteLine("  history <id>                                  Show recent execution history (default: 20)");
         output.WriteLine("  status <id>                                   Show execution, retry, terminal, and history status");
+        output.WriteLine("  run <id>                                      Test a reminder now in a new chat (/run-reminder <id>)");
         output.WriteLine();
         output.WriteLine("Create options:");
         output.WriteLine("  --name <title>           Human-readable title (defaults to <id>)");

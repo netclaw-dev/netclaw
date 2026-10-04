@@ -1393,6 +1393,13 @@ assert_skill_activation_soft_memory() {
         && stdout_no_skill_file_read_called
 }
 
+# A request to test a reminder loads run-reminder or calls run_reminder.
+assert_skill_activation_run_reminder() {
+    { daemon_log_skill_loaded_via_skill_tool 'run-reminder' \
+        || stdout_tool_called 'run_reminder'; } \
+        && stdout_no_skill_file_read_called
+}
+
 assert_skill_activation_subagent_authoring() {
     daemon_log_skill_loaded_via_skill_tool 'subagent-authoring' \
         && stdout_no_skill_file_read_called
@@ -2851,6 +2858,11 @@ run_all() {
         "What did we discuss last time about the API redesign?" \
         "Do you remember what database we decided to use?" \
         "What do you know about my project preferences?"
+
+    run_case skill_activation_run_reminder "skill loaded or run_reminder called" \
+        "Test my disk-cleanup-weekly reminder now so I can approve its commands." \
+        "Run the disk-cleanup-weekly reminder once here before it fires on its schedule." \
+        "I want to try the weekly cleanup reminder and save approvals for it."
 
     run_case skill_activation_subagent_authoring "skill loaded" \
         "How do I create a custom subagent in Netclaw?" \

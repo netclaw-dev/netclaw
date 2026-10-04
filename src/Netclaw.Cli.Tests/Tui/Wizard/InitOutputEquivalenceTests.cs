@@ -70,7 +70,10 @@ public sealed class InitOutputEquivalenceTests : WizardStepTestBase
         Assert.Equal(before.Defaults, after.Defaults);
         Assert.Equal(JsonSerializer.Serialize(before.Security), JsonSerializer.Serialize(after.Security));
         Assert.Equal(JsonSerializer.Serialize(before.Tools), JsonSerializer.Serialize(after.Tools));
-        Assert.Equal(before.ToolWarnings, after.ToolWarnings);
+        // The old output stores a copy of the Team default list. A later default makes that
+        // copy an old list, so the binder warns about it. The new output stores no list.
+        Assert.All(before.ToolWarnings, warning =>
+            Assert.StartsWith("Tools.AudienceProfiles.Team.AllowedTools is an old", warning, StringComparison.Ordinal));
         Assert.Empty(after.ToolWarnings);
     }
 
