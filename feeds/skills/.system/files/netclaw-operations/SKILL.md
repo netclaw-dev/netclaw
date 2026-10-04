@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.86.0"
+  version: "2.87.0"
 ---
 
 # Netclaw Operations
@@ -406,6 +406,11 @@ directory-scoped, so these prompts omit the misleading `Always here` option and
 label the persistent choice `Always allow this tool` rather than the
 shell-oriented `Always anywhere`. Other non-shell tools also omit `Always here`
 because their approval matchers do not consume directory scope.
+
+After a person approves a prompt, the tool result ends with one line that
+names the choice, for example `[approval: once]` or
+`[approval: always in this folder]`. `once` and `this chat only` do not carry
+over to another session. A scheduled reminder run is another session.
 
 Shell approvals store a typed phrase and a scope in `tool-approvals.json`:
 

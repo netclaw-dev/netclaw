@@ -733,6 +733,11 @@ internal sealed class SessionToolExecutionPipeline
                         meta.TimeoutHintSeconds ?? 0);
                     return backgroundResult with
                     {
+                        Message = backgroundResult.Message with
+                        {
+                            Content = ConsentAnswerCodec.AppendResultNote(
+                                backgroundResult.Message.Content, step.Answer)
+                        },
                         ManagedTemporaryCorrectionUpdate = consumedManagedTemporaryKey is { } backgroundConsumed
                             ? new ManagedTemporaryCorrectionChange.Consume(backgroundConsumed)
                             : null
@@ -741,6 +746,7 @@ internal sealed class SessionToolExecutionPipeline
 
                 resultText = await ExecuteToolAttemptAsync(
                     _executor, originalToolCall, context, timeout, _timeProvider, batch.CancellationToken);
+                resultText = ConsentAnswerCodec.AppendResultNote(resultText, step.Answer);
                 sw.Stop();
 
             }
