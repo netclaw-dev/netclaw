@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.84.0"
+  version: "2.85.0"
 ---
 
 # Netclaw Operations
@@ -435,6 +435,9 @@ the absolute path, and joins a folder grant's `./x` with its folder. A `./x`
 grant with no folder keeps its old reach, and `netclaw approvals list` and
 `netclaw doctor` show it as a `legacy program spelling`. Revoke it and approve
 the program again to cover one file.
+An older exact-phrase grant covers a call whose command words equal its
+phrase. The grant `dotnet list package` covers
+`dotnet list package --vulnerable`, even when the prompt shows `dotnet list`.
 
 `This repository` stores a distinct Git repository scope. It applies to
 registered worktrees of one repository. Netclaw derives this scope from each

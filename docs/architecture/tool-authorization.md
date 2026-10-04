@@ -558,8 +558,10 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   `gh pr update-branch $n` gives `gh pr update-branch`. Known limit: a plain
   word after a flag that takes no value is also skipped (`git push -f origin
   main` gives `git push main`). The stored match kind keeps the name
-  `TokenPrefix`, so the version-3 store does not change. A legacy phrase must also equal the words
-  and the display verb. Policy data gives some programs a one-token chain
+  `TokenPrefix`, so the version-3 store does not change. A legacy phrase must also equal the words.
+  Since approval taxonomy fix 5, the display verb does not count: the legacy
+  phrase `dotnet list package` covers `dotnet list package --vulnerable`, whose
+  prompt shows `dotnet list`. Policy data gives some programs a one-token chain
   (`echo`, `which`, `jq`); a bare-program grant for them also covers their
   plain words.
 - Follows: a program path names a file, not a spelling (R1). When the

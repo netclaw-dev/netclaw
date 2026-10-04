@@ -263,7 +263,9 @@ daemon.
 
 - On the first load of a version 2 file, Netclaw writes a byte-identical
   `tool-approvals.json.v2.bak` and converts the file. Old shell entries become
-  exact-phrase (`LegacyExact`) grants, so an upgrade adds no authority.
+  exact-phrase (`LegacyExact`) grants, so an upgrade adds no authority. A
+  legacy grant covers a call whose command words equal its phrase, as a new
+  grant for those words does. The text in the prompt does not count.
 - To recover the old file: stop the daemon, copy the backup over the active
   file, and start the current daemon. Do not run a version 2 daemon against a
   version 3 file.

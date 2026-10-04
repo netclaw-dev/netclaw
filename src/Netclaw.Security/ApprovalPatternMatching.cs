@@ -242,15 +242,12 @@ public static class ApprovalPatternMatching
             return false;
         }
 
-        var candidateVerb = candidate.Verb;
         if (entryShell == ApprovalShell.Bash
             && GetGrantProgram(entry) is { } grantProgram
             && CoversProgramByRelativePath(entry, grantProgram, candidateTokens[0]))
         {
             // The grant spells this file relative to its scope. Compare the rest
             // of the phrase with the grant's spelling in place of the file path.
-            if (candidateVerb.StartsWith(candidateTokens[0], StringComparison.Ordinal))
-                candidateVerb = grantProgram + candidateVerb[candidateTokens[0].Length..];
             candidateTokens = [grantProgram, .. candidateTokens.Skip(1)];
         }
 
@@ -258,11 +255,12 @@ public static class ApprovalPatternMatching
         {
             // The legacy phrase is the space-joined command words, and it must
             // equal all of them: "git push origin" does not cover "git push origin main".
-            // It also must equal the display verb, as before, so the command
-            // words never widen a legacy phrase past the older matcher.
+            // The display verb does not count. "dotnet list package --vulnerable"
+            // shows "dotnet list", but its words are "dotnet list package", so the
+            // legacy phrase "dotnet list package" covers it, as a new grant for
+            // those words does (approval taxonomy fix 5).
             ApprovalMatchKind.LegacyExact =>
-                ToolApprovalEntryComparer.Equals(entry.Verb, candidateVerb, entryShell)
-                && MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidateTokens, entryShell),
+                MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidateTokens, entryShell),
             ApprovalMatchKind.TokenPrefix when entry.VerbTokens is { } grantTokens =>
                 MatchesChain(grantTokens, candidateTokens, entryShell),
             _ => false,

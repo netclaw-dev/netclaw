@@ -184,6 +184,28 @@ public sealed class ApprovalPatternV3Tests
             [grant]));
     }
 
+    // A legacy phrase is its command words. The display verb does not count:
+    // "dotnet list package --vulnerable" shows "dotnet list".
+    [Theory]
+    [InlineData("dotnet list", new[] { "dotnet", "list", "package" }, true)]
+    [InlineData("dotnet list package --vulnerable", new[] { "dotnet", "list", "package" }, true)]
+    [InlineData("dotnet list", new[] { "dotnet", "list", "reference" }, false)]
+    [InlineData("dotnet list", new[] { "dotnet", "list" }, false)]
+    public void Legacy_exact_matches_its_own_words_whatever_the_display(
+        string display,
+        string[] tokens,
+        bool expected)
+    {
+        var grant = ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "dotnet list package");
+        var candidate = new ApprovalCandidate(display, Directory: null)
+        {
+            VerbTokens = Array.AsReadOnly(tokens),
+            Shell = ApprovalShell.Bash,
+        };
+
+        Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [grant]));
+    }
+
     [Fact]
     public void Legacy_exact_does_not_match_a_longer_candidate()
     {

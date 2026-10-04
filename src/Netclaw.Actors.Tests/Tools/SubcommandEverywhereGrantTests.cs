@@ -157,6 +157,24 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
         await AssertNeedsApprovalAsync(harness, "git push origin main --force", stored);
     }
 
+    // A legacy phrase covers the calls whose command words equal it, whatever
+    // the prompt shows. Other words still need approval.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData("dotnet list package", "dotnet list package --vulnerable --include-transitive", "dotnet list reference")]
+    [InlineData("git merge-base", "git merge-base --is-ancestor 0c1265b origin/master", "git merge-base dev")]
+    public async Task Legacy_exact_grant_covers_its_own_words(string grant, string covered, string other)
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.None);
+        harness.AddStoredShellEntry(
+            TrustAudience.Personal,
+            ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, grant));
+        var stored = harness.GetStoredShellEntries(TrustAudience.Personal);
+
+        await AssertAllowedByStoredGrantAsync(harness, covered);
+        await AssertNeedsApprovalAsync(harness, other, stored);
+    }
+
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     public async Task Single_token_program_grant_covers_its_options()
