@@ -277,17 +277,6 @@ internal static class ApprovalsCommand
             }
         }
 
-        // A grant names a command, not a file. The operator's directory is the
-        // directory of the command that the phrase describes.
-        var commandDirectory = Environment.CurrentDirectory;
-        if (ApprovalGrantHygiene.FileWords(entry, commandDirectory) is { Count: > 0 } fileWords)
-        {
-            writer.WriteLine(
-                $"Error: {string.Join(", ", fileWords)} names a file or directory here. "
-                + "A grant holds the command words only. Leave out the file name.");
-            return 1;
-        }
-
         var store = CreateStore(paths, clock);
         var change = store.TryAddApproval(opts.Audience, canonicalTool, entry);
         if (change is ApprovalStoreChangeResult.Unavailable unavailable)

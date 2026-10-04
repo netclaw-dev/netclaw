@@ -8,7 +8,10 @@ namespace Netclaw.Configuration;
 /// <summary>Why <c>netclaw doctor</c> reports a stored grant.</summary>
 public enum ApprovalHygieneIssue
 {
-    /// <summary>A folder grant has a command word after the verb slot that names an entry of its folder.</summary>
+    /// <summary>
+    /// A folder grant has a command word after the verb slot that names an entry
+    /// of its folder. The grant stays: it still covers the call in a subfolder.
+    /// </summary>
     FileWord = 0,
 
     /// <summary>Another grant with the same words covers each call that this grant covers.</summary>
@@ -26,8 +29,8 @@ public sealed record ApprovalHygieneFinding(
     ApprovalHygieneIssue Issue,
     string Detail)
 {
-    /// <summary>True when <c>netclaw doctor --fix</c> removes the grant.</summary>
-    public bool Removable => Issue != ApprovalHygieneIssue.MissingFolder;
+    /// <summary>True when <c>netclaw doctor --fix</c> removes the grant: only a covered grant.</summary>
+    public bool Removable => Issue == ApprovalHygieneIssue.Covered;
 }
 
 /// <summary>
@@ -112,12 +115,14 @@ public static class ApprovalGrantHygiene
 
     /// <summary>
     /// Returns the findings of one grant list. A grant that another grant covers
-    /// is a finding, but only one of two grants that cover each other is.
+    /// is a finding. Of two grants that cover each other, the legacy phrase is the
+    /// finding, or else the later grant, so the canonical grant stays.
     /// </summary>
     /// <remarks>
-    /// Only a folder grant gets the file-word rule, in its own folder. A grant
-    /// without a folder does not record where its command ran, so a file word
-    /// in it is never a finding: the word can be a command word elsewhere.
+    /// Only a covered grant is removable. A folder grant with a file word of its
+    /// own folder is reported and kept: the word is a command word in a subfolder,
+    /// where the grant still covers the call. A grant without a folder does not
+    /// record where its command ran, so a file word in it is never a finding.
     /// </remarks>
     public static IReadOnlyList<ApprovalHygieneFinding> Analyze(
         string audience,
@@ -129,37 +134,50 @@ public static class ApprovalGrantHygiene
         for (var index = 0; index < entries.Count; index++)
         {
             var entry = entries[index];
-            if (entry is { Repository: null, Directory: { } folder })
+            if (entry is { Repository: null, Directory: { } folder } && !Directory.Exists(folder))
             {
-                if (!Directory.Exists(folder))
-                {
-                    findings.Add(new(audience, toolName, entry, ApprovalHygieneIssue.MissingFolder, folder));
-                    continue;
-                }
-
-                if (FileWords(entry, folder) is { Count: > 0 } fileWords)
-                {
-                    findings.Add(new(audience, toolName, entry, ApprovalHygieneIssue.FileWord, string.Join(", ", fileWords)));
-                    removed.Add(index);
-                    continue;
-                }
+                findings.Add(new(audience, toolName, entry, ApprovalHygieneIssue.MissingFolder, folder));
+                continue;
             }
 
-            for (var other = 0; other < entries.Count; other++)
+            if (FindCoveringGrant(entries, index, removed) is { } covering)
             {
-                if (other == index || removed.Contains(other) || !Covers(entries[other], entry))
-                    continue;
-
-                // Of two grants that cover each other, the later one is the finding.
-                if (Covers(entry, entries[other]) && other > index)
-                    continue;
-
-                findings.Add(new(audience, toolName, entry, ApprovalHygieneIssue.Covered, entries[other].FormatScope()));
+                findings.Add(new(audience, toolName, entry, ApprovalHygieneIssue.Covered, covering.FormatScope()));
                 removed.Add(index);
-                break;
+                continue;
             }
+
+            if (entry is { Repository: null, Directory: { } own } && FileWords(entry, own) is { Count: > 0 } fileWords)
+                findings.Add(new(audience, toolName, entry, ApprovalHygieneIssue.FileWord, string.Join(", ", fileWords)));
         }
 
         return findings;
+    }
+
+    private static ApprovalEntry? FindCoveringGrant(IReadOnlyList<ApprovalEntry> entries, int index, HashSet<int> removed)
+    {
+        var entry = entries[index];
+        for (var other = 0; other < entries.Count; other++)
+        {
+            if (other == index || removed.Contains(other) || !Covers(entries[other], entry))
+                continue;
+
+            // Of two grants that cover each other, keep the canonical one.
+            if (Covers(entry, entries[other]) && KeepsOver(entry, entries[other], index, other))
+                continue;
+
+            return entries[other];
+        }
+
+        return null;
+    }
+
+    // True when the first grant stays and the second goes: a token-prefix grant
+    // stays over a legacy phrase, and else the earlier grant stays.
+    private static bool KeepsOver(ApprovalEntry first, ApprovalEntry second, int firstIndex, int secondIndex)
+    {
+        var firstLegacy = first.Match == ApprovalMatchKind.LegacyExact;
+        var secondLegacy = second.Match == ApprovalMatchKind.LegacyExact;
+        return firstLegacy == secondLegacy ? firstIndex < secondIndex : secondLegacy;
     }
 }

@@ -291,8 +291,8 @@ The store keeps itself clean when it saves a grant:
 - It refuses a shell folder grant whose words name an existing file or
   folder of that folder after the verb slot. In that folder the grant
   `dotnet build Phobos.slnx` is refused; `dotnet build` covers the call.
-  `netclaw approvals trust-verb` applies the same rule in the current
-  directory.
+  `netclaw approvals trust-verb` saves an "anywhere" grant with the exact
+  phrase that the operator typed.
 - It does not save a grant that a stored grant already covers. A grant
   covers another one when the tool, the shell, the words, and the assignment
   digest are equal, and it applies "anywhere" or has the same scope. A folder
@@ -377,10 +377,12 @@ rejects the message), the channel answers `Deny` for that call.
   setting has no effect.
 - Saved shell grants exist, but shell is disabled.
 - Personal sets `shell_execute` to `Auto` while the host shell is enabled.
-- "Tool approval grants" lists each stored grant that adds nothing: a folder
-  grant whose words name an entry of its folder, and a grant that another
-  grant covers. `netclaw doctor --fix` removes them. The fix writes only when
-  the store did not change after the check.
+- "Tool approval grants" lists each grant that another grant covers, and
+  `netclaw doctor --fix` removes it. Of two equal grants, the token-prefix
+  grant stays and the legacy phrase goes. The fix writes only when the store
+  did not change after the check.
+- It also lists a folder grant whose words name an entry of its folder, and
+  keeps it: a subfolder can still use the grant.
 - An "anywhere" or repository grant does not record where its command ran.
   The doctor never removes one for a file-like word: the word can be a
   command word in another folder.

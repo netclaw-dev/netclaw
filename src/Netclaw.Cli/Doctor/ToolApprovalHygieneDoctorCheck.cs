@@ -8,10 +8,11 @@ using Netclaw.Configuration;
 namespace Netclaw.Cli.Doctor;
 
 /// <summary>
-/// Reports stored grants that add nothing: a grant whose words name a file,
-/// and a grant that another grant covers. <c>netclaw doctor --fix</c> removes
-/// them (<see cref="DoctorFixService"/>). A grant whose folder no longer exists
-/// is reported and kept, because the doctor cannot tell what it covered.
+/// Reports stored grants that need attention. <c>netclaw doctor --fix</c>
+/// removes only a grant that another grant covers (<see cref="DoctorFixService"/>).
+/// A folder grant whose words name a file of its folder, and a grant whose
+/// folder no longer exists, are reported and kept: the doctor cannot tell what
+/// they still cover.
 /// </summary>
 public sealed class ToolApprovalHygieneDoctorCheck(NetclawPaths paths) : IDoctorCheck
 {
@@ -43,8 +44,8 @@ public sealed class ToolApprovalHygieneDoctorCheck(NetclawPaths paths) : IDoctor
             CheckName,
             $"{report.Findings.Count} stored grant(s) need attention:\n  " + string.Join("\n  ", lines),
             removable > 0
-                ? $"Run `netclaw doctor --fix` to remove {removable} grant(s) that add nothing. A grant with a missing folder stays."
-                : "Revoke a grant with a missing folder with `netclaw approvals` when you no longer need it."));
+                ? $"Run `netclaw doctor --fix` to remove {removable} grant(s) that another grant covers. The other grants stay."
+                : "Revoke a reported grant with `netclaw approvals` when you no longer need it."));
     }
 
     internal static ToolApprovalStore CreateStore(NetclawPaths paths)
@@ -55,7 +56,7 @@ public sealed class ToolApprovalHygieneDoctorCheck(NetclawPaths paths) : IDoctor
 
     private static string Describe(ApprovalHygieneFinding finding) => finding.Issue switch
     {
-        ApprovalHygieneIssue.FileWord => $"names a file ({finding.Detail})",
+        ApprovalHygieneIssue.FileWord => $"names a file of its folder ({finding.Detail}); kept, because a subfolder can use it",
         ApprovalHygieneIssue.Covered => $"covered by {finding.Detail}",
         ApprovalHygieneIssue.MissingFolder => "the folder does not exist; kept",
         _ => finding.Issue.ToString()

@@ -15,11 +15,11 @@ using Xunit;
 namespace Netclaw.Cli.Tests.Doctor;
 
 /// <summary>
-/// <c>netclaw doctor --fix</c> on a messy store shaped like real stores: folder
-/// grants that name a solution file, and folder grants that an "anywhere"
-/// grant covers. Only meaningful grants remain, and each call that the old
-/// store allowed is still allowed: an "anywhere" grant with a file-like word
-/// stays, and a folder grant with a nested repository below it stays.
+/// <c>netclaw doctor --fix</c> on a messy store shaped like real stores. It
+/// removes only grants that another grant covers. Each call that the old store
+/// allowed is still allowed: an "anywhere" grant with a file-like word stays, a
+/// folder grant with a file word stays for its subfolders, and a folder grant
+/// above a nested repository stays.
 /// </summary>
 public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
 {
@@ -35,6 +35,10 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
     {
         var phobos = Directory.CreateDirectory(Path.Combine(_root, "phobos")).FullName;
         var tools = Directory.CreateDirectory(Path.Combine(_root, "tools")).FullName;
+        // A folder grant whose word names a folder entry still covers a subfolder.
+        var node = Directory.CreateDirectory(Path.Combine(_root, "node")).FullName;
+        Directory.CreateDirectory(Path.Combine(node, "test"));
+        var package = Directory.CreateDirectory(Path.Combine(node, "packages", "a")).FullName;
         var repository = Directory.CreateDirectory(Path.Combine(_root, "repo")).FullName;
         var sub = Directory.CreateDirectory(Path.Combine(repository, "sub")).FullName;
         var nested = Directory.CreateDirectory(Path.Combine(sub, "nested")).FullName;
@@ -53,7 +57,9 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
             Grant(["dotnet", "test"], phobos),
             Grant(["dotnet", "test"], null),
             Legacy("git push", null),
+            Grant(["git", "push"], null),
             Grant(["git", "push"], phobos),
+            Grant(["npm", "run", "test"], node),
             Grant(["npm", "run", "build"], null),
             Grant(["ls"], tools),
             Repository(["git", "status"], Path.Combine(repository, ".git")),
@@ -67,6 +73,7 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
             ("dotnet test", phobos),
             ("git push", phobos),
             ("npm run build", phobos),
+            ("npm run test", package),
             ("ls", tools),
             ("git status", repository),
             ("git status", nested),
@@ -82,23 +89,26 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Warning, check.Severity);
         var after = Load(paths);
-        // An "anywhere" grant with a file name stays: its directory is unknown.
-        // A repository grant never covers a folder grant: the nested repository
-        // needs the folder grant.
+        // Only covered grants go. An "anywhere" grant with a file name stays: its
+        // directory is unknown. A folder grant with a file word stays: a subfolder
+        // uses it. A repository grant never covers a folder grant: the nested
+        // repository needs the folder grant. Of two equal grants, the canonical
+        // token-prefix grant stays and the legacy phrase goes.
         Assert.Equal(
             [
-                "dotnet build anywhere",
-                "dotnet build Phobos.slnx anywhere",
-                "dotnet test anywhere",
-                "git push anywhere",
-                "npm run build anywhere",
-                $"ls in {tools}",
-                $"git status in repository {Path.Combine(repository, ".git")}",
-                $"git status in {sub}",
-                $"docker compose in {missing}",
-                "git fetch upstream dev master anywhere",
+                "TokenPrefix dotnet build anywhere",
+                "TokenPrefix dotnet build Phobos.slnx anywhere",
+                "TokenPrefix dotnet test anywhere",
+                "TokenPrefix git push anywhere",
+                $"TokenPrefix npm run test in {node}",
+                "TokenPrefix npm run build anywhere",
+                $"TokenPrefix ls in {tools}",
+                $"TokenPrefix git status in repository {Path.Combine(repository, ".git")}",
+                $"TokenPrefix git status in {sub}",
+                $"TokenPrefix docker compose in {missing}",
+                "TokenPrefix git fetch upstream dev master anywhere",
             ],
-            after.Select(static entry => $"{entry.Verb} {(entry.Repository is { } common ? $"in repository {common}" : entry.Directory is { } directory ? $"in {directory}" : "anywhere")}"));
+            after.Select(static entry => $"{entry.Match} {entry.Verb} {(entry.Repository is { } common ? $"in repository {common}" : entry.Directory is { } directory ? $"in {directory}" : "anywhere")}"));
         Assert.True(
             calls.Length == allowedBefore.Length,
             "Allowed before: " + string.Join("; ", allowedBefore.Select(static call => $"{call.Command} in {call.Directory}")));
@@ -107,6 +117,7 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
             $"'{call.Command}' in {call.Directory} was allowed before the fix."));
         var recheck = await new ToolApprovalHygieneDoctorCheck(paths).RunAsync(TestContext.Current.CancellationToken);
         Assert.Contains("the folder does not exist; kept", recheck.Message, StringComparison.Ordinal);
+        Assert.Contains("npm run test", recheck.Message, StringComparison.Ordinal);
     }
 
     private static void RunGit(string directory, params string[] arguments)

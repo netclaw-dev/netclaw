@@ -328,7 +328,7 @@ public sealed class DoctorFixService
             fixes.Add(new DoctorFileFix(
                 _paths.ToolApprovalsPath,
                 $"{ToolApprovalHygieneFixName}: remove {report.Findings.Count(static finding => finding.Removable)} grant(s) "
-                + "that name a file or that another grant covers.",
+                + "that another grant covers.",
                 original,
                 updated));
         }
