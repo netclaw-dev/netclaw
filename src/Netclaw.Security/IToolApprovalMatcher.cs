@@ -401,6 +401,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         // A proved command whose scope still failed (a glob, a link, an
         // assignment) is unresolved as a whole. The command words stay, so the
         // grant filter of the coordinator can apply decision D1.
+        // SECURITY: an exact candidate has no directory scope, so a file word
+        // stays in its command words. A word that left the words here would
+        // escape the path checks that a normal candidate gets.
         var unresolved = part == ShellUnresolvedPart.None ? ShellUnresolvedPart.Command : part;
         return new ApprovalCandidate(ExactCommandText(source, occurrence), Directory: null)
         {
@@ -471,6 +474,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return null;
 
         var isSideEffectVerb = ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(verb);
+        var clauseWorkingDirectory = GetClauseWorkingDirectory(
+            occurrence,
+            workingDirectory,
+            resolveUnknownPathsFromEffectiveValues);
+        var commandWords = ProjectCommandWords(occurrence, clauseWorkingDirectory);
         var directories = ResolveCommandDirectories(
             occurrence,
             verb,
@@ -478,7 +486,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             workingDirectory,
             Environment.PathStyle,
             resolveUnknownPathsFromEffectiveValues,
-            hostLinks);
+            hostLinks,
+            commandWords.FileWords);
         if (directories is null)
             return null;
 
@@ -493,11 +502,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             return null;
         }
 
-        var verbTokens = GetCommandWords(occurrence);
+        var verbTokens = commandWords.Words;
         if (verbTokens is not null
             && TryResolveProgramPath(
                 verbTokens[0],
-                GetClauseWorkingDirectory(occurrence, workingDirectory, resolveUnknownPathsFromEffectiveValues),
+                clauseWorkingDirectory,
                 out var programPath))
         {
             verb = ReplaceProgram(verb, clause.Verb.Tokens[0], programPath);
@@ -543,6 +552,67 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         return Array.AsReadOnly(tokens);
     }
+
+    /// <summary>
+    /// Returns the grant identity of a command and the file words that left it.
+    /// A command word after the verb slot that names an existing file or
+    /// directory in the occurrence directory is an operand, not a command word.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// ShellSyntaxTree is lexical, so <c>Phobos.slnx</c> in
+    /// <c>dotnet build Phobos.slnx</c> looks like a plain word. A grant must not
+    /// name a file: <c>dotnet build</c> covers each solution. The rule reads the
+    /// disk once for each word. It uses no name shape, so <c>nginx.service</c>
+    /// stays a command word when no such file exists.
+    /// </para>
+    /// <para>
+    /// SECURITY: the rule never drops the program word or the verb slot. The
+    /// verb slot can name what runs: a subcommand (<c>git push</c>) or a script
+    /// (<c>bash deploy.sh</c>). A planted file named <c>push</c> must not change
+    /// the identity of <c>git push</c>, and an interpreter grant must not cover
+    /// each script. A link keeps its word, because the link target can be a
+    /// protected path. Each dropped word becomes a path scope of the candidate,
+    /// the same as <c>./Phobos.slnx</c>, so the trusted-root and protected-path
+    /// checks see it. When the occurrence directory is not known, no word drops.
+    /// </para>
+    /// </remarks>
+    private CommandWordProjection ProjectCommandWords(
+        CommandOccurrence occurrence,
+        string? occurrenceDirectory)
+    {
+        const int firstOperandWord = 2;
+        var words = GetCommandWords(occurrence);
+        if (words is null)
+            return new CommandWordProjection(null, []);
+
+        var kept = words.Take(firstOperandWord).ToList();
+        var fileWords = new List<CommandFileWord>();
+        foreach (var word in words.Skip(firstOperandWord))
+        {
+            // An unknown directory gives no path, and a path in another host
+            // style never exists here, so the word stays. ShellSyntaxTree
+            // classifies a word with a separator or a dot segment as a path,
+            // so a command word names one entry of the directory.
+            if (CanonicalPath.TryCreate(word, occurrenceDirectory, Environment.PathStyle, out var path)
+                && FileSystemAuthority.IsExistingEntryWithoutLink(path))
+            {
+                fileWords.Add(new CommandFileWord(word, path.Value));
+            }
+            else
+            {
+                kept.Add(word);
+            }
+        }
+
+        return new CommandWordProjection(kept.AsReadOnly(), fileWords);
+    }
+
+    private sealed record CommandWordProjection(
+        IReadOnlyList<string>? Words,
+        IReadOnlyList<CommandFileWord> FileWords);
+
+    private sealed record CommandFileWord(string Word, string Path);
 
     /// <summary>
     /// Resolves a Bash program path to the absolute path of its file (R1). A bare
@@ -636,7 +706,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         string? workingDirectory,
         ShellPathStyle pathStyle,
         bool resolveUnknownPathsFromEffectiveValues,
-        LinkRule hostLinks)
+        LinkRule hostLinks,
+        IReadOnlyList<CommandFileWord> fileWords)
     {
         var clause = occurrence.Clause;
         var directories = new List<string?>();
@@ -696,6 +767,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 directories.AddRange(resolvedPaths.Select(resolved =>
                     ResolveAuthorizationScope(verb, arg, resolved, pathStyle)));
             }
+
+            // A file word that left the command words is a path operand.
+            foreach (var fileWord in fileWords)
+                directories.Add(ResolveAuthorizationScope(verb, fileWord.Word, fileWord.Path, pathStyle));
 
             foreach (var argument in occurrence.Arguments)
             {
@@ -993,8 +1068,15 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellSyntaxTree.Arg arg,
         string resolved,
         ShellPathStyle pathStyle)
+        => ResolveAuthorizationScope(verb, arg.Raw, resolved, pathStyle);
+
+    private static string ResolveAuthorizationScope(
+        string verb,
+        string authored,
+        string resolved,
+        ShellPathStyle pathStyle)
     {
-        var raw = arg.Raw.Trim();
+        var raw = authored.Trim();
         if (raw.Length >= 2 && raw[0] is '\'' or '"' && raw[^1] == raw[0])
             raw = raw[1..^1];
 
@@ -1744,7 +1826,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     workingDirectory,
                     Environment.PathStyle,
                     resolveUnknownPathsFromEffectiveValues: false,
-                    hostLinks) is null))
+                    hostLinks,
+                    // A file word adds a known scope. It never makes a scope unresolved.
+                    fileWords: []) is null))
         {
             return true;
         }

@@ -72,6 +72,59 @@ public sealed class ExactVerbChainMutationTests
         Assert.False(ShellProgramPath.MatchesLegacyRelative("../bin/tool", "/opt/sbin/tool"));
     }
 
+    // A word after the verb slot that names an existing file or directory is an
+    // operand. A mutant that keeps it stores a file name in a grant. A mutant
+    // that drops the verb slot, a link, or a word without a file widens a grant.
+    [Fact]
+    public void File_word_after_the_verb_slot_leaves_the_command_words()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var directory = Directory.CreateTempSubdirectory("netclaw-file-word-").FullName;
+        try
+        {
+            File.WriteAllText(Path.Combine(directory, "Phobos.slnx"), string.Empty);
+            File.WriteAllText(Path.Combine(directory, "push"), string.Empty);
+            Directory.CreateDirectory(Path.Combine(directory, "src"));
+            File.CreateSymbolicLink(Path.Combine(directory, "Linked.slnx"), Path.Combine(directory, "Phobos.slnx"));
+
+            Assert.Equal(["dotnet", "build"], CommandWords("dotnet build Phobos.slnx -c Release", directory));
+            Assert.Equal(["dotnet", "list", "package"], CommandWords("dotnet list Phobos.slnx package", directory));
+            Assert.Equal(["dotnet", "build"], CommandWords("dotnet build src", directory));
+            // The dropped word is a path operand, so the path checks see its scope.
+            Assert.Contains(Path.Combine(directory, "src"), Directories("dotnet build src", directory));
+            Assert.Equal(["git", "push", "origin", "main"], CommandWords("git push origin main", directory));
+            Assert.Equal(["git", "push", "origin", "main"], CommandWords("git push origin main", workingDirectory: null));
+            Assert.Equal(["dotnet", "build", "Linked.slnx"], CommandWords("dotnet build Linked.slnx", directory));
+            Assert.Equal(["dotnet", "build", "Phobos.slnx"], CommandWords("dotnet build Phobos.slnx", workingDirectory: null));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static IReadOnlyList<string> CommandWords(string command, string? workingDirectory)
+        => Assert.Single(Candidates(command, workingDirectory)
+                .Select(static candidate => string.Join(' ', candidate.VerbTokens!))
+                .Distinct(StringComparer.Ordinal))
+            .Split(' ');
+
+    private static IReadOnlyList<string?> Directories(string command, string workingDirectory)
+        => Candidates(command, workingDirectory).Select(static candidate => candidate.Directory).ToArray();
+
+    private static IReadOnlyList<ApprovalCandidate> Candidates(string command, string? workingDirectory)
+        => new ShellApprovalMatcher(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux))
+            .AnalyzeInvocation(
+                new ToolName(ShellTool.ToolName),
+                new Dictionary<string, object?>
+                {
+                    ["Command"] = command,
+                    ["WorkingDirectory"] = workingDirectory,
+                })
+            .Candidates;
+
     private static string ProgramWord(string command)
     {
         var analysis = new ShellApprovalMatcher(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux))

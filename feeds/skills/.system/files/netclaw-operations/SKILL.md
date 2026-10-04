@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.89.0"
+  version: "2.90.0"
 ---
 
 # Netclaw Operations
@@ -445,6 +445,10 @@ the absolute path, and joins a folder grant's `./x` with its folder. A `./x`
 grant with no folder keeps its old reach, and `netclaw approvals list` and
 `netclaw doctor` show it as a `legacy program spelling`. Revoke it and approve
 the program again to cover one file.
+A word that names an existing file or folder in the command's directory is
+not a command word, unless it is the program or the first word after it. So
+`dotnet build Phobos.slnx` uses the `dotnet build` grant, and a new grant
+never stores a file name.
 An older exact-phrase grant covers a call whose command words equal its
 phrase. The grant `dotnet list package` covers
 `dotnet list package --vulnerable`, even when the prompt shows `dotnet list`.

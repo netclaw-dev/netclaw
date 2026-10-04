@@ -557,7 +557,15 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   `dotnet build -c Release` gives `dotnet build`, and
   `gh pr update-branch $n` gives `gh pr update-branch`. Known limit: a plain
   word after a flag that takes no value is also skipped (`git push -f origin
-  main` gives `git push main`). The stored match kind keeps the name
+  main` gives `git push main`). A word after the verb slot that names an
+  existing file or directory (not a link) in the occurrence directory is a
+  path operand, not a command word: with `Phobos.slnx` on disk,
+  `dotnet build Phobos.slnx` gives `dotnet build`, and the file gets a path
+  scope for the trusted-root and protected-path checks. The program word and
+  the verb slot never drop, so a file named `push` does not change `git push`.
+  ShellSyntaxTree is lexical, so `ShellApprovalMatcher.ProjectCommandWords`
+  reads the disk once per word. An unknown occurrence directory drops no word,
+  and an exact candidate keeps its words. The stored match kind keeps the name
   `TokenPrefix`, so the version-3 store does not change. A legacy phrase must also equal the words.
   Since approval taxonomy fix 5, the display verb does not count: the legacy
   phrase `dotnet list package` covers `dotnet list package --vulnerable`, whose

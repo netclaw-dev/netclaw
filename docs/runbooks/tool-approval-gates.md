@@ -290,6 +290,11 @@ daemon.
   exact-phrase (`LegacyExact`) grants, so an upgrade adds no authority. A
   legacy grant covers a call whose command words equal its phrase, as a new
   grant for those words does. The text in the prompt does not count.
+- A word after the verb slot that names an existing file or folder in the
+  command's directory is not a command word. A grant such as
+  `dotnet build Phobos.slnx` from an earlier version stays in the store, but
+  the call now matches `dotnet build`. Revoke the old grant when you no
+  longer want it.
 - To recover the old file: stop the daemon, copy the backup over the active
   file, and start the current daemon. Do not run a version 2 daemon against a
   version 3 file.
