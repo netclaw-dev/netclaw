@@ -18,7 +18,7 @@ namespace Netclaw.Actors.Tools;
 /// Scoped to the skill's directory with path traversal prevention.
 /// </summary>
 [NetclawTool("skill_read_resource",
-    "Read a resource file from a skill directory. The first line of the result gives the resource's absolute path.",
+    "Read a resource file from a skill directory.",
     Grant = "builtin")]
 public sealed partial class SkillReadResourceTool : NetclawTool<SkillReadResourceTool.Params>
 {
