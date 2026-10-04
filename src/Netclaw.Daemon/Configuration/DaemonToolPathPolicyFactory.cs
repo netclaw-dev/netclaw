@@ -40,12 +40,15 @@ internal static class DaemonToolPathPolicyFactory
             paths.ServerFeedsDirectory,
             paths.ToolingShadowDirectory,
         ];
+        // The agent may read its own configuration (netclaw.json and
+        // tool-approvals.json) with a file tool. Credentials and runtime state
+        // stay read-denied. The shell list keeps the whole config directory,
+        // because a shell command can write a file that it names.
         string[] readDenyList =
         [
             paths.SecretsPath,
             paths.KeysDirectory,
             paths.WebhooksDirectory,
-            paths.ToolApprovalsPath,
             paths.HardDenyOverridesPath,
             paths.DaemonEnvironmentFilePath,
             paths.DevicesPath,

@@ -284,10 +284,13 @@ Some commands and paths are always blocked, in every mode:
 | Self-destructive | `netclaw daemon stop`, `systemctl stop netclaw`, and a `kill`, `killall`, `pkill`, or `Stop-Process` whose operand names `netclaw` (for example `pkill netclawd`). Any other kill prompts, and a grant can cover it (owner decision D2). |
 | System-destructive | `rm -rf /`, `rm -rf ~/`, fork bombs, `mkfs` |
 | Privilege escalation | `sudo`, `su`, `doas`, and a PowerShell `-Verb RunAs` start |
-| Protected paths | `secrets.json`, key material, webhook secrets, the grant store, the Netclaw database, and daemon lifecycle files |
+| Protected paths | `secrets.json`, key material, webhook secrets, the Netclaw database, and daemon lifecycle files. A write to any config file. |
 
-File tools can read ordinary `netclaw.json`. A shell command that names the
-Netclaw config directory is denied.
+File tools can read `netclaw.json` and the grant store `tool-approvals.json`.
+They cannot write them. `secrets.json`, the `keys` directory, webhook
+secrets, `daemon.env`, `devices.json`, and `hard-deny-overrides.json` stay
+read-denied. A shell command that names the Netclaw config directory is
+denied, because shell text cannot show a read from a write.
 
 Add your own command patterns with `HardDenyPatterns`. They add to the
 built-in list; they do not replace it:

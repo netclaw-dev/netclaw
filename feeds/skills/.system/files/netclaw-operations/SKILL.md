@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.85.0"
+  version: "2.86.0"
 ---
 
 # Netclaw Operations
@@ -587,6 +587,11 @@ holds raw paths or arguments.
 Use the `netclaw approvals` CLI rather than hand-editing
 `tool-approvals.json`. The daemon reads the file on every approval check, so
 mutations take effect on the next prompt without a daemon restart.
+
+You may read your own configuration with `file_read`:
+`~/.netclaw/config/netclaw.json` and `~/.netclaw/config/tool-approvals.json`.
+You cannot write them, and you cannot read `secrets.json` or `~/.netclaw/keys`.
+A shell command that names the config directory is denied, so use `file_read`.
 
 ```bash
 # Interactive TUI: see everything grouped by audience and tool

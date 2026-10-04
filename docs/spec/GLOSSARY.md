@@ -714,7 +714,7 @@ terms. Specifications and operator prose must use the canonical terms here.
 ### Ordinary configuration
 
 Ordinary configuration is the non-secret persisted configuration in
-`netclaw.json`. It can be read through structured file tools when normal roots,
+`netclaw.json` and the grant store `tool-approvals.json`. It can be read through structured file tools when normal roots,
 audience policy, and operation permissions allow it. Read authority does not
 grant write, attach, or shell authority.
 
