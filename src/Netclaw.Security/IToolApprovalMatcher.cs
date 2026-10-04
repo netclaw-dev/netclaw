@@ -392,7 +392,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellUnresolvedPart part)
     {
         var parserTokens = occurrence.Clause.Verb.Tokens;
-        if (parserTokens.Count == 0 || !parserTokens.All(ShellCommandWordText.IsGrantableWord))
+        if (parserTokens.Count == 0 || parserTokens.Any(static token => token.Length == 0))
         {
             return null;
         }
@@ -466,11 +466,10 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (clause.Verb.IsDynamic)
             return null;
 
-        // SECURITY: the phrase quotes a word with whitespace, so the program
-        // "echo x" never reads as the side-effect verb echo.
-        var parsedVerb = clause.Verb.CanonicalVerb
-            ?? ShellCommandWordText.FormatPhrase(TrimTrailingValueTokens(clause.Verb.Tokens));
-        var verb = ShellVerbPolicyData.ApplyVerbShortCircuit(parsedVerb);
+        var shell = Environment.Grammar == ShellGrammar.Bash
+            ? ApprovalShell.Bash
+            : ApprovalShell.PowerShell;
+        var verb = NormalizedVerb(occurrence, shell);
         if (string.IsNullOrEmpty(verb))
             return null;
 
@@ -492,9 +491,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (directories is null)
             return null;
 
-        var shell = Environment.Grammar == ShellGrammar.Bash
-            ? ApprovalShell.Bash
-            : ApprovalShell.PowerShell;
         if (!ShellAssignmentDigestFactory.TryCreate(
                 shell,
                 occurrence.Assignments,
@@ -512,8 +508,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         {
             verb = ReplaceProgram(
                 verb,
-                ShellCommandWordText.Quote(clause.Verb.Tokens[0]),
-                ShellCommandWordText.Quote(programPath));
+                ShellCommandWordText.Quote(shell, clause.Verb.Tokens[0]),
+                ShellCommandWordText.Quote(shell, programPath));
             verbTokens = Array.AsReadOnly([programPath, .. verbTokens.Skip(1)]);
         }
 
@@ -1825,8 +1821,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (analysis.Commands.Any(command =>
                 ResolveCommandDirectories(
                     command,
-                    NormalizedVerb(command),
-                    IsSideEffectCommand(command),
+                    NormalizedVerb(command, shell),
+                    IsSideEffectCommand(command, shell),
                     workingDirectory,
                     Environment.PathStyle,
                     resolveUnknownPathsFromEffectiveValues: false,
@@ -1887,14 +1883,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         return true;
     }
 
-    private static bool IsSideEffectCommand(ShellSyntaxTree.CommandOccurrence occurrence)
-        => ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(NormalizedVerb(occurrence));
+    private static bool IsSideEffectCommand(ShellSyntaxTree.CommandOccurrence occurrence, ApprovalShell shell)
+        => ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(NormalizedVerb(occurrence, shell));
 
-    private static string NormalizedVerb(ShellSyntaxTree.CommandOccurrence occurrence)
+    // SECURITY: the phrase quotes a word with whitespace, so the program
+    // "echo x" never reads as the side-effect verb echo.
+    private static string NormalizedVerb(ShellSyntaxTree.CommandOccurrence occurrence, ApprovalShell shell)
     {
         var clause = occurrence.Clause;
         var parsedVerb = clause.Verb.CanonicalVerb
-            ?? ShellCommandWordText.FormatPhrase(TrimTrailingValueTokens(clause.Verb.Tokens));
+            ?? ShellCommandWordText.FormatPhrase(shell, TrimTrailingValueTokens(clause.Verb.Tokens));
         return ShellVerbPolicyData.ApplyVerbShortCircuit(parsedVerb);
     }
 

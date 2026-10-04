@@ -236,7 +236,7 @@ public static class ApprovalPatternMatching
         if (entry.Shell is not { } entryShell
             || candidate.Shell != entryShell
             || candidate.VerbTokens is not { Count: > 0 } candidateTokens
-            || !candidateTokens.All(ShellCommandWordText.IsGrantableWord))
+            || candidateTokens.Any(static token => token.Length == 0))
         {
             return false;
         }

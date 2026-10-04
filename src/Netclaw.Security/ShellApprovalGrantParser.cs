@@ -187,7 +187,7 @@ public static class ShellApprovalGrantParser
             tokens[0] = programPath;
         }
 
-        var canonicalSource = ShellCommandWordText.FormatPhrase(tokens);
+        var canonicalSource = ShellCommandWordText.FormatPhrase(shell, tokens);
         if (!string.Equals(source, canonicalSource, StringComparison.Ordinal))
         {
             error = $"The shell phrase must equal its canonical form: {canonicalSource}";

@@ -6,13 +6,13 @@
 namespace Netclaw.Configuration;
 
 /// <summary>
-/// The canonical text of shell command words. A grant and a call use this one
-/// rule.
+/// The canonical phrase text of shell command words. A grant and a call use
+/// this one rule.
 /// </summary>
 /// <remarks>
 /// <para>
 /// A command word is the static value of a word after shell quote removal. So
-/// <c>"my tool"</c>, <c>'my tool'</c>, and <c>my\ tool</c> give one word,
+/// <c>"my tool"</c>, <c>'my tool'</c>, and <c>my\ tool</c> give one Bash word,
 /// <c>my tool</c>. A word can contain a space, for example the path
 /// <c>/opt/My App/bin/tool</c>. A grant compares the word list, not a text.
 /// </para>
@@ -33,31 +33,31 @@ namespace Netclaw.Configuration;
 public static class ShellCommandWordText
 {
     /// <summary>
-    /// Returns true when <paramref name="word"/> can be a command word of a
-    /// grant: it is not empty and it has no control or direction character.
+    /// Returns the text of one word in <paramref name="shell"/>. A word with
+    /// whitespace is in single quotes. Other words do not change.
     /// </summary>
-    public static bool IsGrantableWord(string word)
+    public static string Quote(ApprovalShell shell, string word)
     {
         ArgumentNullException.ThrowIfNull(word);
-        return word.Length > 0 && ApprovalEntryValidation.IsPersistable(word, allowWhitespace: true);
+        if (!word.Any(char.IsWhiteSpace))
+            return word;
+
+        var escapedQuote = shell switch
+        {
+            ApprovalShell.Bash => "'\\''",
+            ApprovalShell.PowerShell => "''",
+            _ => throw new ArgumentOutOfRangeException(nameof(shell), shell, "Unknown shell."),
+        };
+        return "'" + word.Replace("'", escapedQuote, StringComparison.Ordinal) + "'";
     }
 
     /// <summary>
-    /// Returns the Bash text of one word. A word with whitespace is in single
-    /// quotes. Other words do not change.
+    /// Returns the phrase text of a word list: each word in the text of
+    /// <paramref name="shell"/>, with one space between.
     /// </summary>
-    public static string Quote(string word)
-    {
-        ArgumentNullException.ThrowIfNull(word);
-        return word.Any(char.IsWhiteSpace)
-            ? "'" + word.Replace("'", "'\\''", StringComparison.Ordinal) + "'"
-            : word;
-    }
-
-    /// <summary>Returns the phrase text of a word list: each word in Bash text, with one space between.</summary>
-    public static string FormatPhrase(IEnumerable<string> words)
+    public static string FormatPhrase(ApprovalShell shell, IEnumerable<string> words)
     {
         ArgumentNullException.ThrowIfNull(words);
-        return string.Join(' ', words.Select(Quote));
+        return string.Join(' ', words.Select(word => Quote(shell, word)));
     }
 }
