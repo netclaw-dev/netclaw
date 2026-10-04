@@ -83,6 +83,15 @@ internal sealed class ToolAuthorizer
         return DenyConsentWhenUnattended(decision, context);
     }
 
+    /// <summary>
+    /// The tool result for a consent request that reaches a run with no approval
+    /// bridge. The authorizer denies such a request first, so this is a defect.
+    /// The call does not run, and the result is not retryable.
+    /// </summary>
+    internal static string ConsentWithoutBridgeResult(string toolName)
+        => $"Tool access denied: {toolName} asked for consent in a run with no approval bridge. "
+           + "The call did not run. This is a Netclaw defect: the authorizer must deny this call first.";
+
     // The one difference between an attended and an unattended run (decision D2).
     // Both use the same rules above. Nobody can answer a consent request in an
     // unattended run, so the request becomes a denial. A saved grant that covers

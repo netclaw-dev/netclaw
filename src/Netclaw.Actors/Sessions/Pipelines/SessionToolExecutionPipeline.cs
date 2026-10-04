@@ -8,6 +8,7 @@ using System.Collections.Frozen;
 using Akka.Actor;
 using Akka.Event;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Authorization;
 using Netclaw.Actors.Authorization.Consent;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Jobs;
@@ -676,8 +677,25 @@ internal sealed class SessionToolExecutionPipeline
                 ManagedTemporaryCorrectionUpdate: delivery.ManagedTemporaryStateChange);
         }
         // A call without an approval bridge never needs consent: the authorizer
-        // denies it (approval_required_unattended, D2). If one arrives anyway,
-        // it is not caught here and fails loudly as a tool error.
+        // denies it first (approval_required_unattended, D2). A request here is
+        // a defect: log it and deny the call. Never retry it.
+        catch (ToolApprovalRequiredException) when (approvalBridge is null)
+        {
+            sw.Stop();
+            _logger.Error(
+                "Tool {0} asked for consent with no approval bridge in session {1}; denied as a defect.",
+                tc.Name,
+                batch.SessionId.Value);
+            return new ToolCallResult(new SerializableChatMessage
+            {
+                Role = Protocol.ChatRole.Tool,
+                Content = ToolAuthorizer.ConsentWithoutBridgeResult(tc.Name),
+                ToolCallId = new ToolCallId(tc.CallId),
+                Name = tc.Name
+            }, [], context.Outputs.FileAttachments, completedRuns, acceptedFindings,
+                authorizationAttemptId,
+                Receipt: new ToolInvocationReceipt.OtherOutcome(ToolInvocationOutcomeCategory.AccessDenied));
+        }
         catch (ToolApprovalRequiredException approvalEx) when (approvalBridge is not null)
         {
             // Mid-turn approval pause: the session's consent prompt emits the
