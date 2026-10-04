@@ -509,6 +509,16 @@
       "from": "RequiresApproval",
       "to": "RequiresAgentCorrection",
       "reason": "Each command gets its own decision. A command with unknown command words gets the rewrite correction. The call does not run."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "powershell7-stop-process-uses-grant",
+      "renamedFrom": "powershell7-stop-process-hard-deny",
+      "from": "Denied",
+      "to": "Allowed",
+      "reason": "Owner decision D2: a kill that does not name the Netclaw daemon is an ordinary command that a grant can cover. A kill that names the daemon stays hard-denied.",
+      "negativeControl": "powershell51-stop-process-hard-deny",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy decision D2, 2026-10-03"
     }
   ]
 }

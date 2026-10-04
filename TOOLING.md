@@ -48,7 +48,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
-| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an interactive unknown operand with a safe phrase or a grant for anywhere) covers it | 117 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an interactive unknown operand with a safe phrase or a grant for anywhere) covers it | 120 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -347,7 +347,7 @@ Run the shell analysis gate:
 ./scripts/run-shell-command-analysis-mutations.sh
 ```
 
-The script tests 117 mutants across execution-region accounting, denial-only
+The script tests 120 mutants across execution-region accounting, denial-only
 matching, tree traversal and root correspondence, bounded non-filesystem
 values, data operands of output commands, candidate extraction, approval
 mode, path facts, and reviewed-safe policy. The job fails unless every mutant
@@ -389,6 +389,14 @@ the real authorizer: a folder or chat grant, an unknown redirect target, a
 glob scope, a link, a known outside path, and an unattended call keep the
 prompt or the denial. The data-operand target moved into
 `ClassifyUnresolvedPart`. The gate now kills 89 Security and 28 Actors mutants.
+
+Approval taxonomy PR 6 (owner decision D2) replaces the blanket kill denial
+with `ShellCommandPolicy.DaemonProcessKillDenyPattern` (3 mutants). A kill is
+denied only when an operand names the Netclaw daemon.
+`Only_a_kill_that_names_the_daemon_is_hard_denied` kills the mutants: a kill
+of a process ID or a test server stays allowed by the hard-deny list, and a
+kill that names `netclaw` stays denied. The gate now kills 92 Security and 28
+Actors mutants.
 
 The script groups targets by source project. Stryker analyzes each source project once.
 The local run on 2026-09-24 took under four minutes.

@@ -42,6 +42,26 @@ public sealed class ShellCommandAnalysisMutationTests
             .Order(StringComparer.Ordinal));
     }
 
+    // Owner decision D2: only a kill whose operand text names the Netclaw
+    // daemon stays hard-denied. Any other kill reaches the approval gate. A
+    // name split by quotes or an escape is unparseable, and the text scan
+    // still joins it.
+    [Theory]
+    [InlineData("pkill netclawd", false)]
+    [InlineData("kill -9 $(cat ~/.netclaw/daemon.pid)", false)]
+    [InlineData("KILLALL NetClaw", false)]
+    [InlineData("pkill net''clawd", false)]
+    [InlineData("pkill net\\clawd", false)]
+    [InlineData("kill -9 12345", true)]
+    [InlineData("pkill -f 'http.server 8899'", true)]
+    [InlineData("echo netclaw", true)]
+    public void Only_a_kill_that_names_the_daemon_is_hard_denied(string command, bool allowed)
+    {
+        var policy = new ShellCommandPolicy(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+        Assert.Equal(allowed, policy.Evaluate(command).Allowed);
+    }
+
     // A word with a control character gets the deepest ancestor directory of
     // its text before that character, not an unresolved scope.
     [Theory]

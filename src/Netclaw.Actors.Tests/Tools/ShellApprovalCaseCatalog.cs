@@ -941,10 +941,27 @@ public static class ShellApprovalCases
             PowerShell7("Get-ChildItem | Remove-Item"),
             Approvals.PersistentAnywhere("Remove-Item"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:Remove-Item")),
+        // Owner decision D2: a kill that does not name the Netclaw daemon is an
+        // ordinary command that a grant can cover. A kill of the daemon stays denied.
         Case(
-            "powershell7-stop-process-hard-deny",
+            "powershell7-stop-process-uses-grant",
             PowerShell7("Stop-Process -Id 42"),
             Approvals.PersistentAnywhere("Stop-Process"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:Stop-Process")),
+        Case(
+            "kill-test-server-uses-grant",
+            Bash("pkill -f 'http.server 8899'"),
+            Approvals.PersistentAnywhere("pkill"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:pkill")),
+        Case(
+            "kill-process-id-prompts",
+            Bash("kill 12345"),
+            Approvals.None,
+            ExpectedApproval.Require(["kill"])),
+        Case(
+            "kill-daemon-stays-hard-denied",
+            Bash("pkill -f netclawd"),
+            Approvals.PersistentAnywhere("pkill"),
             ExpectedApproval.Deny("hard_deny_self_destructive")),
         Case(
             "powershell7-elevated-process-hard-deny",

@@ -382,8 +382,9 @@ public sealed class ShellCommandPolicy
         new VerbChainDenyPattern(["systemctl", "stop", "netclaw"], "Cannot stop the netclaw service", DenyCategory.SelfDestructive),
         new VerbChainDenyPattern(["systemctl", "kill", "netclaw"], "Cannot kill the netclaw service", DenyCategory.SelfDestructive),
 
-        // Process killing patterns targeting netclaw
-        new ProcessKillDenyPattern("Cannot kill processes from within a session", DenyCategory.SelfDestructive),
+        // Owner decision D2: a process kill that names the Netclaw daemon stays
+        // denied. Any other kill is an ordinary command that a grant can cover.
+        new DaemonProcessKillDenyPattern("Cannot kill the Netclaw daemon from within a session", DenyCategory.SelfDestructive),
 
         // Privilege escalation: the agent must never elevate privileges.
         // If it needs elevated access, the daemon should run as a user with those permissions.
@@ -552,12 +553,22 @@ public sealed class ShellCommandPolicy
     }
 
     /// <summary>
-    /// Matches kill/killall/pkill commands. These are categorically denied because
-    /// the agent could target the daemon process or other critical processes.
+    /// Matches a process kill (kill, killall, pkill, Stop-Process) whose operand
+    /// text names the Netclaw daemon, for example <c>pkill netclawd</c>,
+    /// <c>Stop-Process -Name netclaw</c>, or <c>kill $(cat ~/.netclaw/daemon.pid)</c>.
     /// </summary>
-    internal sealed record ProcessKillDenyPattern(string Reason, DenyCategory Category)
+    /// <remarks>
+    /// Owner decision D2: the blanket kill denial blocked test servers that the
+    /// agent started. Any other kill is an ordinary command that a grant can
+    /// cover, and the prompt shows its process ID or name. The verbs and the
+    /// daemon name are policy data; the rule reads no option grammar. An
+    /// operand with an unknown value (<c>kill "$pid"</c>) is not denied here.
+    /// </remarks>
+    internal sealed record DaemonProcessKillDenyPattern(string Reason, DenyCategory Category)
         : DenyPattern(Reason, Category)
     {
+        private const string DaemonName = "netclaw";
+
         private static readonly HashSet<string> KillVerbs = new(StringComparer.OrdinalIgnoreCase)
         {
             "kill", "killall", "pkill", "Stop-Process"
@@ -569,7 +580,9 @@ public sealed class ShellCommandPolicy
                 return false;
 
             var verb = LegacyShellTextScan.TrimShellPunctuation(tokens[0].Value);
-            return KillVerbs.Contains(verb);
+            return KillVerbs.Contains(verb)
+                   && tokens.Skip(1).Any(static token =>
+                       token.AuthoredValue.Contains(DaemonName, StringComparison.OrdinalIgnoreCase));
         }
     }
 

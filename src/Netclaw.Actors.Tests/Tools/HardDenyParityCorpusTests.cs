@@ -123,7 +123,7 @@ public sealed class HardDenyParityCorpusTests(ShellApprovalMatrixFixture fixture
         Deny("policy-daemon-stop", PolicyTests, "netclaw daemon stop", SelfDestructive),
         Deny("policy-daemon-kill", PolicyTests, "netclaw daemon kill", SelfDestructive),
         Deny("policy-systemctl-stop", PolicyTests, "systemctl stop netclaw", SelfDestructive),
-        Deny("policy-kill", PolicyTests, "kill -9 12345", SelfDestructive),
+        Deny("policy-kill", PolicyTests, "kill -9 $(cat ~/.netclaw/daemon.pid)", SelfDestructive),
         Deny("policy-killall", PolicyTests, "killall netclaw", SelfDestructive),
         Deny("policy-pkill", PolicyTests, "pkill -f netclaw", SelfDestructive),
         Deny("policy-sudo", PolicyTests, "sudo rm -rf /tmp/build", PrivilegeEscalation),
@@ -156,7 +156,7 @@ public sealed class HardDenyParityCorpusTests(ShellApprovalMatrixFixture fixture
         Deny("policy-zsh-c", PolicyTests, "/usr/bin/zsh -c \"netclaw daemon stop\"", SelfDestructive),
         Deny("policy-ksh-c", PolicyTests, "ksh -c \"netclaw daemon stop\"", SelfDestructive),
         Deny("policy-case-daemon", PolicyTests, "Netclaw Daemon Stop", SelfDestructive),
-        Deny("policy-case-kill", PolicyTests, "KILL -9 123", SelfDestructive),
+        Deny("policy-case-kill", PolicyTests, "KILL -9 $(PGREP NETCLAWD)", SelfDestructive),
         Deny("policy-split-flags", PolicyTests, "rm -r -f /", SystemDestructive),
         Deny("policy-long-flags", PolicyTests, "rm --recursive --force /", SystemDestructive),
         Deny("policy-custom-pattern", PolicyTests, "docker rm my-container", CustomDeny, BashOverrides),
@@ -272,7 +272,7 @@ public sealed class HardDenyParityCorpusTests(ShellApprovalMatrixFixture fixture
         // PR 1b: unresolved input still meets hard deny and protected paths.
         Deny("boundary-background-daemon", BoundaryTests, "netclaw daemon stop &", SelfDestructive),
         Deny("boundary-background-quoted-head", BoundaryTests, "'netclaw' daemon stop &", SelfDestructive),
-        Deny("boundary-background-wrapper", BoundaryTests, "bash -c \"kill -9 1\" &", SelfDestructive),
+        Deny("boundary-background-wrapper", BoundaryTests, "bash -c \"pkill netclawd\" &", SelfDestructive),
         Deny("boundary-background-sudo", BoundaryTests, "sudo rm -rf / &", PrivilegeEscalation),
         Deny("boundary-background-protected", BoundaryTests, "cat ../netclaw/config/notes.txt &", ProtectedPath),
     ];

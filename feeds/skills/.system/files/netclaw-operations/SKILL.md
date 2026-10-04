@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.82.0"
+  version: "2.83.0"
 ---
 
 # Netclaw Operations
@@ -470,7 +470,10 @@ The directory order reserves `temp_dir` for disposable output.
 Preserve an explicitly required platform temporary path.
 Netclaw does not automatically clean managed temporary storage yet.
 
-1. **Hard-deny list** — system-protected paths. Always blocks.
+1. **Hard-deny list** — system-protected paths and self-destructive commands.
+   Always blocks. A process kill is blocked only when it names the Netclaw
+   daemon (`pkill netclawd`); stopping a test server you started
+   (`pkill -f 'http.server 8899'`) prompts like any other command.
 2. **Safe-verb short-circuit** — in an interactive session, when the verb is
    on the curated safe list AND your audience may read every path of the call
    with a file tool, the call auto-runs with no prompt. A protected path never

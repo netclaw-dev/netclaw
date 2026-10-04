@@ -628,7 +628,7 @@ public class ShellToolTests
         var commandPolicy = new ShellCommandPolicy();
         var tool = new ShellTool(new ToolConfig(), new ToolPathPolicy([]), commandPolicy);
 
-        var args = ToolInput.Create("Command", "kill -9 12345");
+        var args = ToolInput.Create("Command", "pkill -f netclawd");
         var result = await tool.ExecuteAsync(args, CreateExecutionContext(), CancellationToken.None);
 
         Assert.Contains("hard deny policy", result);

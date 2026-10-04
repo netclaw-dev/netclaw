@@ -149,6 +149,15 @@ read -r traversal_start traversal_end < <(
 )
 security_mutations+=("ShellFileSystemTreeAccessPolicy.cs{$traversal_start..$traversal_end}")
 
+read -r kill_start kill_end < <(
+  find_span \
+    "$policy_file" \
+    "internal sealed record DaemonProcessKillDenyPattern(" \
+    "return KillVerbs.Contains(verb)" \
+    "token.AuthoredValue.Contains(DaemonName, StringComparison.OrdinalIgnoreCase));"
+)
+security_mutations+=("ShellCommandPolicy.cs{$kill_start..$kill_end}")
+
 read -r nonfile_start nonfile_end < <(
   find_span \
     "$analysis_file" \
@@ -261,7 +270,7 @@ security_mutations+=("IToolApprovalMatcher.cs{$messy_start..$messy_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  89 \
+  92 \
   "${security_mutations[@]}"
 
 actor_mutations=()

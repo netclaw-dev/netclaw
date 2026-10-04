@@ -261,7 +261,7 @@ Some commands and paths are always blocked, in every mode:
 
 | Category | Examples |
 | --- | --- |
-| Self-destructive | `netclaw daemon stop`, `kill`, `killall`, `pkill`, `systemctl stop netclaw` |
+| Self-destructive | `netclaw daemon stop`, `systemctl stop netclaw`, and a `kill`, `killall`, `pkill`, or `Stop-Process` whose operand names `netclaw` (for example `pkill netclawd`). Any other kill prompts, and a grant can cover it (owner decision D2). |
 | System-destructive | `rm -rf /`, `rm -rf ~/`, fork bombs, `mkfs` |
 | Privilege escalation | `sudo`, `su`, `doas`, and a PowerShell `-Verb RunAs` start |
 | Protected paths | `secrets.json`, key material, webhook secrets, the grant store, the Netclaw database, and daemon lifecycle files |
