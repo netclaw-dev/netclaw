@@ -523,6 +523,24 @@ public sealed class ShellCommandAnalysisTests
             || analysis.HasDynamicSyntax);
     }
 
+    // A bracket pattern in the program word names no fixed program, so the
+    // command stays unresolved, as with ShellSyntaxTree 0.4.0-beta.10. Other
+    // program words without command words keep their earlier decision.
+    [Theory]
+    [InlineData("[\"ci\",\"build\"]", true)]
+    [InlineData("[\"batch one\"]", true)]
+    [InlineData("{\"b\":2,\"nested\":{\"c\":3}}", false)]
+    [InlineData("^\\d{4}-\\d{2}-\\d{2}$", false)]
+    [InlineData("[ -d /work ]", false)]
+    public void Bracket_program_word_stays_unresolved(string command, bool unresolved)
+    {
+        var analysis = new ShellCommandAnalyzer(
+                ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)))
+            .Analyze(command, "/work");
+
+        Assert.Equal(unresolved, analysis.HasDynamicSyntax);
+    }
+
     // ShellSyntaxTree 0.4.0-beta.14 parses a background list as a group, so
     // each command in it and after it has its own facts.
     [Fact]
