@@ -99,7 +99,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
             "shell_execute",
             ToolInput.Create(
                 "Command",
-                "for i in $(printf '1 2 3'); do echo \"$i\"; done",
+                "for i in $(printf '1 2 3'); do cat \"$i\"; done",
                 "_rationale",
                 "Verify one-time approval for a complex command."));
 

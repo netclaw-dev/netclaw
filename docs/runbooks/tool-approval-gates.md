@@ -162,7 +162,9 @@ covered:
 - A grant that you saved (this chat, a folder, a repository, or everywhere)
   covers the phrase.
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
-  This rule also applies after `cd dir && action;`.
+  This rule also applies after `cd dir && action;`. A dynamic operand, such as
+  `echo "head: $(git rev-parse HEAD)"`, is data. The command inside `$(...)`
+  still needs its own coverage, and a redirect target keeps its own check.
 - In an interactive session, the reviewed diagnostic catalog covers the
   phrase, and the audience profile lets a file tool read every path
   (`ReadFiles`). With the default Personal profile, that is every path except a

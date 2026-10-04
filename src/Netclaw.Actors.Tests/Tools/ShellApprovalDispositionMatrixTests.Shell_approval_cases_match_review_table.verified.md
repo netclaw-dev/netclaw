@@ -187,7 +187,9 @@
 | nohup-nested-shell-prompts | Bash | Personal | Project | Interactive | nohup bash -lc "git push" | none | RequiresApproval | approval required | nohup bash, git push | No |
 | timeout-nested-shell-prompts | Bash | Personal | Project | Interactive | timeout 5 bash -lc "git push" | none | RequiresApproval | approval required | timeout, git push | No |
 | subshell-prompts | Bash | Personal | Project | Interactive | (git status && git push) | none | RequiresApproval | approval required | git push | No |
-| command-substitution-fails-closed | Bash | Personal | Project | Interactive | echo $(git push) | none | RequiresApproval | approval required | none | Yes |
+| command-substitution-fails-closed | Bash | Personal | Project | Interactive | echo $(git push) | none | RequiresApproval | approval required | git push | No |
+| echo-substitution-data-uses-inner-grant | Bash | Personal | Project | Interactive | echo "base: $(git merge-base origin/main origin/dev)"; echo "=== done ===" | persistent[anywhere]:git merge-base | Allowed | StoredApproval | none | Not applicable |
+| echo-substitution-data-prompts-for-inner-command | Bash | Personal | Project | Interactive | echo "merged: $(git merge-base --is-ancestor HEAD dev && echo yes)" | none | RequiresApproval | approval required | git merge-base | No |
 | bash-substitution-quoted-path-fails-closed | Bash | Personal | Project | Interactive | cat "$(git status)" | persistent[anywhere]:cat, persistent[anywhere]:git status | RequiresApproval | approval required | none | Yes |
 | bash-substitution-multiple-nested-fails-closed | Bash | Personal | Project | Interactive | cat "$(printf '%s' "$(git status)")" "$(dotnet --info)" | persistent[anywhere]:cat, persistent[anywhere]:printf, persistent[anywhere]:git status, persistent[anywhere]:dotnet | RequiresApproval | approval required | none | Yes |
 | bash-substitution-redirect-target-fails-closed | Bash | Personal | Project | Interactive | git status > "$(printf result.log)" | persistent[anywhere]:git status, persistent[anywhere]:printf | RequiresApproval | approval required | none | Yes |
@@ -287,7 +289,7 @@
 | echo-control-word-argument-allows | Bash | Personal | Project | Interactive | echo done | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | unquoted-status-output-reuses-session-grant | Bash | Personal | Project | Interactive | git push; echo $? | session[this-chat]:git push | Allowed | StoredApproval | none | Not applicable |
 | unquoted-status-output-prompts-for-unapproved-verb | Bash | Personal | Project | Interactive | git push; echo $? | none | RequiresApproval | approval required | git push | No |
-| unquoted-status-output-redirect-remains-complex | Bash | Personal | Project | Interactive | echo $? > /tmp/marker | persistent[anywhere]:echo | RequiresApproval | approval required | none | Yes |
+| unquoted-status-output-redirect-remains-complex | Bash | Personal | Project | Interactive | echo $? > /netclaw-approval-external/marker | persistent[anywhere]:echo | RequiresAgentCorrection | approval required | none | Not applicable |
 | control-flow-fails-closed | Bash | Personal | Project | Interactive | for f in *.txt; do cat "$f"; done | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | printf-variable-target-hidden-execution-fails-closed | Bash | Personal | Project | Interactive | printf -v'value[$(printf marker >&2)0]' '%s' data | persistent[anywhere]:printf | RequiresApproval | approval required | none | Yes |
 | recursive-builtin-eval-fails-closed | Bash | Personal | Project | Interactive | command -p -- builtin -- eval 'printf marker >&2' | persistent[anywhere]:command, persistent[anywhere]:builtin, persistent[anywhere]:eval, persistent[anywhere]:printf | RequiresApproval | approval required | none | Yes |

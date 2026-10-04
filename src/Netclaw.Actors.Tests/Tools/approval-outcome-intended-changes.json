@@ -459,6 +459,13 @@
       "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
       "negativeControl": "unattended-external-without-grant-denies",
       "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unquoted-status-output-redirect-remains-complex",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "A dynamic value in an echo operand is data, so the call keeps its echo candidate. The $? word is not literal, so the echo grant does not cover it. The agent gets advice to write the command words literally."
     }
   ]
 }

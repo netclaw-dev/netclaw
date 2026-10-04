@@ -176,6 +176,24 @@ read -r status_start status_end < <(
 )
 security_mutations+=("ShellCommandAnalysis.cs{$status_start..$status_end}")
 
+read -r data_start data_end < <(
+  find_span \
+    "$analysis_file" \
+    "private bool HasOnlyDataOperands(" \
+    "=> Environment.Grammar == ShellGrammar.Bash" \
+    "&& ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(verb);"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$data_start..$data_end}")
+
+read -r data_use_start data_use_end < <(
+  find_span \
+    "$analysis_file" \
+    "private bool CommandHasDynamicSyntax(" \
+    "|| !HasOnlyDataOperands(command)" \
+    "&& HasUnresolvedOperand(command, accountedRegionArguments)"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$data_use_start..$data_use_end}")
+
 matcher_file="$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs"
 read -r candidate_start candidate_end < <(
   find_span \
@@ -198,7 +216,7 @@ security_mutations+=("IToolApprovalMatcher.cs{$messy_start..$messy_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  72 \
+  75 \
   "${security_mutations[@]}"
 
 actor_mutations=()

@@ -42,13 +42,25 @@ public sealed class ShellCommandAnalysisMutationTests
             .Order(StringComparer.Ordinal));
     }
 
-    [Fact]
-    public void Bare_status_output_keeps_static_candidates_without_accepting_other_unknown_data_or_redirects()
+    // A dynamic value is data only in an operand of an output command: echo,
+    // :, true, false, or printf after a literal format that is not an option.
+    [Theory]
+    [InlineData("git push; echo \"head: $(git rev-parse HEAD)\"", false)]
+    [InlineData("git push; true \"$(date)\"", false)]
+    [InlineData("git push; printf '%s' \"$(date)\"", false)]
+    [InlineData("git push; printf \"$(date)\" x", true)]
+    [InlineData("git push; printf -v name '%s' \"$(date)\"", true)]
+    [InlineData("git push; cat \"$(date)\"", true)]
+    [InlineData("git push; echo $?", false)]
+    [InlineData("git push; echo $? > /work/out/marker", false)]
+    [InlineData("git push; echo $? > \"$(date)\"", true)]
+    [InlineData("git push; \"$(date)\" \"$@\"", true)]
+    public void Dynamic_value_is_data_only_in_an_output_operand(string command, bool messy)
     {
         var matcher = new ShellApprovalMatcher(
             ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
 
-        ShellApprovalAnalysis Analyze(string command) => matcher.AnalyzeInvocation(
+        var analysis = matcher.AnalyzeInvocation(
             new ToolName("shell_execute"),
             new Dictionary<string, object?>
             {
@@ -56,16 +68,42 @@ public sealed class ShellCommandAnalysisMutationTests
                 ["WorkingDirectory"] = "/work"
             });
 
+        Assert.Equal(messy, analysis.IsMessy);
+        Assert.Equal(messy, analysis.Candidates.Count == 0);
+    }
+
+    // PowerShell keeps the bare status rule: only $? keeps the static
+    // candidates of an output command without a redirect.
+    [Fact]
+    public void Power_shell_bare_status_output_keeps_static_candidates()
+    {
+        var matcher = new ShellApprovalMatcher(PowerShellEnvironment);
+
+        ShellApprovalAnalysis Analyze(string command) => matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = @"C:\work"
+            });
+
         var status = Analyze("git push; echo $?");
-        var positional = Analyze("git push; echo $@");
-        var redirect = Analyze("git push; echo $? > /tmp/marker");
+        var other = Analyze("git push; echo $dynamic");
 
         Assert.False(status.IsMessy);
-        Assert.Equal(["git push", "echo"], status.Candidates.Select(static candidate => candidate.Verb));
-        Assert.True(positional.IsMessy);
-        Assert.Empty(positional.Candidates);
-        Assert.True(redirect.IsMessy);
-        Assert.Empty(redirect.Candidates);
+        Assert.Contains("git push", status.Candidates.Select(static candidate => candidate.Verb));
+        Assert.True(other.IsMessy);
+    }
+
+    // The data-operand rule is Bash only. In PowerShell, echo is an alias of
+    // Write-Output, so a dynamic value keeps the call unresolved.
+    [Fact]
+    public void Power_shell_output_alias_keeps_a_dynamic_value_unresolved()
+    {
+        var analysis = new ShellCommandAnalyzer(PowerShellEnvironment).Analyze("echo $dynamic", @"C:\work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.True(analysis.HasDynamicSyntax);
     }
 
     [Fact]

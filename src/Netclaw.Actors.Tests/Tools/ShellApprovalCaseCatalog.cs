@@ -1276,11 +1276,23 @@ public static class ShellApprovalCases
             Bash("(git status && git push)"),
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
+        // The ID keeps its old name. The substitution is its own command with its
+        // own candidate, and the echo operand is data.
         Case(
             "command-substitution-fails-closed",
             Bash("echo $(git push)"),
             Approvals.None,
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["git push"])),
+        Case(
+            "echo-substitution-data-uses-inner-grant",
+            Bash("echo \"base: $(git merge-base origin/main origin/dev)\"; echo \"=== done ===\""),
+            Approvals.PersistentAnywhere("git merge-base"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git merge-base")),
+        Case(
+            "echo-substitution-data-prompts-for-inner-command",
+            Bash("echo \"merged: $(git merge-base --is-ancestor HEAD dev && echo yes)\""),
+            Approvals.None,
+            ExpectedApproval.Require(["git merge-base"])),
         Case(
             "bash-substitution-quoted-path-fails-closed",
             Bash("cat \"$(git status)\""),
@@ -1812,11 +1824,13 @@ public static class ShellApprovalCases
             Bash("git push; echo $?"),
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
+        // The ID keeps its old name. The echo operand is data, and the exact
+        // redirect target gets the managed temporary directory correction.
         Case(
             "unquoted-status-output-redirect-remains-complex",
-            Bash("echo $? > /tmp/marker"),
+            Bash($"echo $? > {TemporaryFile("marker")}"),
             Approvals.PersistentAnywhere("echo"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Correct(1)),
         Case(
             "control-flow-fails-closed",
             Bash("for f in *.txt; do cat \"$f\"; done"),

@@ -463,7 +463,7 @@ public sealed class ShellCommandAnalysisTests
     }
 
     [Theory]
-    [InlineData("echo $(git push)")]
+    [InlineData("cat $(git push)")]
     public void Dynamic_command_syntax_is_explicit(string command)
     {
         var analysis = _analyzer.Analyze(command);
