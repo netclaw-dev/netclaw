@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Buffers;
 using System.Collections;
 using System.Text;
 using System.Text.Json;
@@ -182,6 +183,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     public static readonly ShellApprovalMatcher Instance = new();
 
     private const string PosixNullDevicePath = "/dev/null";
+
+    private static readonly SearchValues<char> ControlCharacters = SearchValues.Create(
+        Enumerable.Range(0, char.MaxValue + 1).Select(static value => (char)value).Where(char.IsControl).ToArray());
 
     private readonly ShellCommandAnalyzer _analyzer;
 
@@ -527,6 +531,12 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     continue;
                 }
 
+                if (ResolveControlCharacterScope(arg, pathStyle) is { } textScope)
+                {
+                    directories.Add(textScope);
+                    continue;
+                }
+
                 var resolvedPaths = ResolveArgumentPaths(
                     occurrence,
                     arg,
@@ -715,6 +725,30 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             ShellSyntaxTree.ShellValueDomain.FiniteSet finite => finite.Values,
             _ => []
         };
+
+    /// <summary>
+    /// Returns the scope of a path word whose resolved text has a control
+    /// character, for example the multi-line code of <c>python3 -c</c>.
+    /// </summary>
+    /// <remarks>
+    /// The scope is the deepest ancestor directory of the text before the first
+    /// control character. Each path that the word can name is inside that
+    /// directory, so the scope covers the word without a guess about whether
+    /// it is code or a path. A <c>..</c> after a link already made the
+    /// occurrence unresolved (<see cref="HasParentSegmentAfterLink(ShellSyntaxTree.CommandOccurrence, string?, ShellPathStyle)"/>).
+    /// The scope holds no control character, so it is safe to show. Text
+    /// without a directory separator returns null, and the word stays unresolved.
+    /// </remarks>
+    private static string? ResolveControlCharacterScope(
+        Arg argument,
+        ShellPathStyle pathStyle)
+    {
+        var resolved = argument.Resolved;
+        var firstControl = resolved.AsSpan().IndexOfAny(ControlCharacters);
+        return firstControl == -1
+            ? null
+            : GetRedirectDirectory(resolved![..firstControl], pathStyle);
+    }
 
     private static IReadOnlyList<string>? ResolveArgumentPaths(
         CommandOccurrence occurrence,

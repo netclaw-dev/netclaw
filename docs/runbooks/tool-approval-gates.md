@@ -133,6 +133,9 @@ The prompt offers fewer options when a broader grant is not safe:
 - Only `Once` and `Deny` appear when the shell parser cannot prove a reusable
   phrase for every command in the call, or when the call is a managed
   temporary directory retry.
+  A multi-line operand, such as `python3 -c` code, does not cause this. Its
+  scope is the deepest directory of its text before the first line break,
+  usually the working directory.
 - Only `Once` and `Deny` appear when a shell path has a `..` segment that
   leaves a symbolic link. The OS follows the link before it applies `..`. If
   `lnk` points to `/data/deep`, then `cat lnk/../notes.txt` reads
