@@ -411,6 +411,27 @@ public sealed class ToolAccessPolicy
         return firstDenial;
     }
 
+    /// <summary>
+    /// Gives an interactive call with an unresolved command the candidates of
+    /// each command. The unresolved command becomes one exact candidate, so the
+    /// other commands get their normal decisions.
+    /// </summary>
+    /// <remarks>
+    /// An unattended call keeps the unresolved analysis, so
+    /// <see cref="ScreenUnresolvedShellInput"/> still denies it as before.
+    /// </remarks>
+    internal static ShellApprovalAnalysis WithCommandCandidates(
+        ShellApprovalAnalysis approval,
+        ToolExecutionContext context)
+        => approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }
+           && context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available
+            ? approval with
+            {
+                Candidates = approval.CommandCandidates,
+                IsMessy = false
+            }
+            : approval;
+
     /// <summary>Replaces the unresolved candidates with the candidates of a screened directory proof.</summary>
     internal static ShellApprovalAnalysis WithDirectoryScopes(
         ShellApprovalAnalysis approval,
@@ -1162,8 +1183,10 @@ public sealed class ToolAccessPolicy
     }
 
     // An approval-exempt output command is never saved, so it needs no command words.
+    // An exact candidate of an unresolved command offers only "Once".
     private static bool HasReusableShellPhrase(ApprovalCandidate candidate) =>
         candidate.Shell is not null
+        && candidate.Unresolved == ShellUnresolvedPart.None
         && (ApprovalPatternMatching.IsPureSideEffect(candidate)
             || candidate.VerbTokens is { Count: > 0 } tokens
                && tokens.All(static token => token.Length > 0 && !token.Any(char.IsWhiteSpace)));

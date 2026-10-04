@@ -133,9 +133,14 @@ internal sealed class ReviewedSafeShellPolicy
         ToolInvocationContext context,
         ShellPolicyResolvedPathView? resolvedPaths,
         string? proposedProjectRoot = null,
-        bool includeTrustedRootInLinkCheck = true)
+        bool includeTrustedRootInLinkCheck = true,
+        bool allowUnknownOperands = false)
     {
-        if (!IsReviewedDiagnosticSyntax(candidate, sourceOccurrence, resolvedPaths, out var shell))
+        // An unresolved program word, structure, directory, redirect, or glob
+        // scope is never a reviewed diagnostic.
+        if (candidate.Unresolved == ShellUnresolvedPart.Command
+            || candidate.Unresolved == ShellUnresolvedPart.Operand && !allowUnknownOperands
+            || !IsReviewedDiagnosticSyntax(candidate, sourceOccurrence, resolvedPaths, out var shell))
             return false;
 
         return AllAuthoredPathsStayWithinRoots(
@@ -143,7 +148,8 @@ internal sealed class ReviewedSafeShellPolicy
             shell,
             context,
             proposedProjectRoot,
-            includeTrustedRootInLinkCheck);
+            includeTrustedRootInLinkCheck,
+            allowUnknownOperands);
     }
 
     internal bool ShortCircuitsCausalIntent(
@@ -200,11 +206,15 @@ internal sealed class ReviewedSafeShellPolicy
         ToolInvocationContext context)
     {
         var candidate = projected.Candidate;
+        // Owner decision D1: in an interactive call, a reviewed phrase also
+        // covers a command whose only unknown part is an operand value. The
+        // caller applies reviewed-safe coverage to interactive calls only.
         if (!IsReviewedDiagnostic(
                 candidate,
                 projected.SourceOccurrence,
                 context,
-                pathFacts.Real)
+                pathFacts.Real,
+                allowUnknownOperands: candidate.Unresolved == ShellUnresolvedPart.Operand)
             || pathFacts.RealScope is not
             {
                 State: ShellPolicyPathResolutionState.Known,
@@ -320,7 +330,8 @@ internal sealed class ReviewedSafeShellPolicy
         ApprovalShell shell,
         ToolInvocationContext context,
         string? proposedProjectRoot,
-        bool includeTrustedRootInLinkCheck)
+        bool includeTrustedRootInLinkCheck,
+        bool allowUnknownOperands)
     {
         if (resolvedPaths is null)
             return false;
@@ -332,6 +343,14 @@ internal sealed class ReviewedSafeShellPolicy
                      fact.Source.Origin is ShellPolicyPathOrigin.AuthoredArgument
                          or ShellPolicyPathOrigin.FileSystemTreeRoot))
         {
+            // D1: an unknown operand value adds no reach that a literal operand
+            // lacks. Each known path still needs read authority.
+            if (allowUnknownOperands
+                && fact.State == ShellPolicyPathResolutionState.UnknownDynamic)
+            {
+                continue;
+            }
+
             var validDomain = fact.Source.Origin == ShellPolicyPathOrigin.FileSystemTreeRoot
                 ? fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.PathPattern
                 : fact.Source.Domain is ShellValueDomain.Exact or ShellValueDomain.FiniteSet;

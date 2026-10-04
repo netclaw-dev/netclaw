@@ -92,14 +92,14 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
         var approvalService = new AkkaToolApprovalService(new StubRequiredActor(approvalActor));
         var executor = new DispatchingToolExecutor(registry, policy, approvalService);
 
-        // The runtime iterator is unresolved, so the command remains messy
-        // even though bounded literal loops can now publish authored facts.
+        // The parser does not support a while loop, so the whole command stays
+        // unresolved and has no command candidates.
         var toolCall = new FunctionCallContent(
             "call-messy-once",
             "shell_execute",
             ToolInput.Create(
                 "Command",
-                "for i in $(printf '1 2 3'); do cat \"$i\"; done",
+                "while read -r f; do cat \"$f\"; done < list.txt",
                 "_rationale",
                 "Verify one-time approval for a complex command."));
 

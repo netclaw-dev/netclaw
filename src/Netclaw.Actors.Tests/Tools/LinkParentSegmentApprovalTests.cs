@@ -40,11 +40,10 @@ public sealed class LinkParentSegmentApprovalTests(ShellApprovalMatrixFixture fi
             "link-parent-folder-grant",
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, grant));
 
-        var decision = await harness.EvaluateShellAsync(
-            command.Replace("{P}", harness.ProjectDirectory, StringComparison.Ordinal),
-            Ct);
+        var source = command.Replace("{P}", harness.ProjectDirectory, StringComparison.Ordinal);
+        var decision = await harness.EvaluateShellAsync(source, Ct);
 
-        AssertExactConsentOnly(decision);
+        AssertExactConsentOnly(decision, source);
     }
 
     [SlopwatchSuppress("SW001", "The case uses a POSIX symbolic link and Bash authorization behavior.")]
@@ -57,7 +56,7 @@ public sealed class LinkParentSegmentApprovalTests(ShellApprovalMatrixFixture fi
 
         var decision = await harness.EvaluateShellAsync("cat lnk/../notes.txt", Ct);
 
-        AssertExactConsentOnly(decision);
+        AssertExactConsentOnly(decision, "cat lnk/../notes.txt");
     }
 
     [SlopwatchSuppress("SW001", "The case uses a POSIX symbolic link and Bash authorization behavior.")]
@@ -106,7 +105,7 @@ public sealed class LinkParentSegmentApprovalTests(ShellApprovalMatrixFixture fi
 
             var decision = await harness.EvaluateShellAsync("touch lnk/../tracked.txt", Ct);
 
-            AssertExactConsentOnly(decision);
+            AssertExactConsentOnly(decision, "touch lnk/../tracked.txt");
         }
         finally
         {
@@ -166,7 +165,7 @@ public sealed class LinkParentSegmentApprovalTests(ShellApprovalMatrixFixture fi
 
         harness.ReplaceProjectDirectoryWithExternalSymlink(directory);
         var linked = await harness.EvaluateShellAsync(command, Ct);
-        AssertExactConsentOnly(linked);
+        AssertExactConsentOnly(linked, command);
     }
 
     // The shell expands these words at run time, so the segment before ".."
@@ -186,7 +185,7 @@ public sealed class LinkParentSegmentApprovalTests(ShellApprovalMatrixFixture fi
 
         var decision = await harness.EvaluateShellAsync(command, Ct);
 
-        AssertExactConsentOnly(decision);
+        AssertExactConsentOnly(decision, command);
     }
 
     // The file tools canonicalize the path before the policy check and open
@@ -230,12 +229,12 @@ public sealed class LinkParentSegmentApprovalTests(ShellApprovalMatrixFixture fi
         return harness;
     }
 
-    private static void AssertExactConsentOnly(ApprovalObservation decision)
+    // The command is one exact candidate: its text, and only "Once" or "Deny".
+    private static void AssertExactConsentOnly(ApprovalObservation decision, string command)
     {
         Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
         var prompt = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);
-        Assert.True(prompt.IsMessy);
-        Assert.Empty(prompt.CandidateVerbs);
+        Assert.Equal([command], prompt.CandidateVerbs);
         Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], prompt.OptionKeys);
     }
 }

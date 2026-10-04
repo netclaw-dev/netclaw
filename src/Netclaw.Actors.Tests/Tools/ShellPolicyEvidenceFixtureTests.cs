@@ -97,9 +97,33 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
 
         foreach (var policyCase in catalog.AdversarialCases)
         {
-            await AssertPolicyCaseAsync(catalog, timeProvider, policyCase);
+            await AssertPolicyCaseAsync(
+                catalog,
+                timeProvider,
+                policyCase with { Expected = CurrentAdversarialExpected(policyCase) });
         }
     }
+
+    // The archived A06 result kept the whole loop as one exact prompt. Each
+    // command now gets its own decision (approval taxonomy PR 5): the global
+    // cat grant covers cat "$f" under owner decision D1, and the iterator
+    // program still prompts with normal options.
+    private static PolicyAdversarialExpected CurrentAdversarialExpected(PolicyAdversarialCase policyCase)
+        => policyCase.Id == "A06"
+            ? policyCase.Expected with
+            {
+                ApprovalCandidates = ["list-files"],
+                IsMessy = false,
+                OptionKeys =
+                [
+                    ApprovalOptionKeys.ApproveOnce,
+                    ApprovalOptionKeys.ApproveSession,
+                    ApprovalOptionKeys.ApproveEverywhere,
+                    ApprovalOptionKeys.Deny
+                ],
+                ActorCheckCount = 1
+            }
+            : policyCase.Expected;
 
     public static TheoryData<string> LiveRegressionCaseIds => new(
         Enumerable.Range(1, 32).Select(number => $"L{number:00}"));
@@ -137,10 +161,6 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
         // interactive run on a POSIX host, the reviewed catalog covers a cd and
         // a read in each directory that the audience may read, so no row lists
         // cd there. A Windows host keeps the project-root results.
-        // macOS resolves /tmp through a link, so the redirect paths in L17 stay exact.
-        if (OperatingSystem.IsMacOS() && policyCase.Id == "L17")
-            return policyCase.Expected;
-
         // The reviewed catalog lists sort, so L05 needs no prompt. In an
         // interactive run a reviewed phrase covers each path that the audience
         // may read, so the external reads in L18, L21, and L28 need no prompt.
@@ -159,10 +179,61 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             };
         }
 
+        // Each command gets its own decision (approval taxonomy PR 5). An
+        // unresolved command is one exact candidate with only "Once" and "Deny".
+        // In L27 the dynamic -C value comes before the verb, so its command
+        // words are unknown, and the model gets a rewrite correction.
+        if (policyCase.Id == "L27")
+        {
+            return policyCase.Expected with
+            {
+                Outcome = "RequiresAgentCorrection",
+                AgentCorrection = "ShellCommandWordsRewriteSuggested",
+                ApprovalCandidates = null,
+                IsMessy = null,
+                OptionKeys = null,
+                ActorCheckCount = 1
+            };
+        }
+
+        // Host facts change the lists. The Windows bundled catalog has no cd or
+        // grep entry, so those commands stay in the prompt. On macOS, /tmp is a
+        // link, so a command that writes below /tmp stays exact. The macOS host
+        // also gives no proved scope to any L17 command, so each one is exact.
+        const string sedRange = "sed -n \"$(grep -n 'FAIL' /tmp/test.log | cut -d: -f1),+4p\" /tmp/test.log";
+        var windowsHost = OperatingSystem.IsWindows();
+        var macHost = OperatingSystem.IsMacOS();
+        List<string>? exactCandidates = policyCase.Id switch
+        {
+            "L10" when windowsHost => ["dotnet test", "grep", sedRange],
+            "L10" when macHost => ["dotnet test > /tmp/test.log", sedRange],
+            "L10" => ["dotnet test", sedRange],
+            "L13" when windowsHost => ["cd", "ls -la \"$project\"", "head"],
+            "L13" => ["ls -la \"$project\"", "head"],
+            "L17" when macHost =>
+            [
+                "git diff --name-only origin/dev...HEAD",
+                "sort > /tmp/old-files",
+                "git diff --name-only origin/dev...feature/example",
+                "sort > /tmp/new-files",
+                "comm /tmp/old-files /tmp/new-files"
+            ],
+            _ => null
+        };
+        if (exactCandidates is not null)
+        {
+            return policyCase.Expected with
+            {
+                ApprovalCandidates = exactCandidates,
+                IsMessy = false,
+                OptionKeys = [ApprovalOptionKeys.ApproveOnce, ApprovalOptionKeys.Deny],
+                ActorCheckCount = 1
+            };
+        }
+
         // The Windows bundled catalog has no cd entry, so L22 keeps cd on a Windows host.
         // The catalog lists git diff, git show, and sort. In L17 each sort writes a
         // file outside the project, so it still prompts.
-        var windowsHost = OperatingSystem.IsWindows();
         List<string>? candidates = policyCase.Id switch
         {
             "L12" => posixHost ? ["mkdir", "git clone"] : ["mkdir", "cd", "git clone"],

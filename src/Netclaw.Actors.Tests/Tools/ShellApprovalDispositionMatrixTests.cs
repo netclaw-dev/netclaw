@@ -171,10 +171,11 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
         var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
+        // The relative cd has no proved target, so each later command is one
+        // exact candidate. The grant covers only the cd.
         Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
-        Assert.True(decision.Prompt?.IsMessy);
-        Assert.Empty(decision.Prompt!.CandidateVerbs);
-        Assert.Equal(0, harness.ApprovalService.CheckCount);
+        Assert.Equal(["cat result.txt", "sed -n '1p'", "ls ."], decision.Prompt!.CandidateVerbs);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], decision.Prompt.OptionKeys);
     }
 
     [SlopwatchSuppress("SW001", "This case requires POSIX Bash directory and pipeline semantics.")]
@@ -491,8 +492,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
             var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
+            // The deep glob and the command after the list are exact candidates.
             Assert.Equal(ApprovalOutcome.RequiresApproval, decision.Outcome);
-            Assert.True(decision.Prompt?.IsMessy);
+            Assert.Equal(["cat */result.txt", "ls ."], decision.Prompt!.CandidateVerbs);
+            Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], decision.Prompt.OptionKeys);
         }
         finally
         {
@@ -853,9 +856,10 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
 
         var retry = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
 
+        // The glob is now exact. The "Once" answer for git push does not cover it.
         Assert.Equal(ApprovalOutcome.RequiresApproval, retry.Outcome);
-        Assert.True(retry.Prompt!.IsMessy);
-        Assert.Empty(retry.Prompt.CandidateVerbs);
+        Assert.Contains("cat artifacts/*", retry.Prompt!.CandidateVerbs);
+        Assert.Equal([ObservedOptionKeys.ApproveOnce, ObservedOptionKeys.Deny], retry.Prompt.OptionKeys);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires POSIX symlink and Bash authorization behavior.")]

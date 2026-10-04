@@ -188,9 +188,9 @@ security_mutations+=("ShellCommandAnalysis.cs{$data_start..$data_end}")
 read -r data_use_start data_use_end < <(
   find_span \
     "$analysis_file" \
-    "private bool CommandHasDynamicSyntax(" \
-    "|| !HasOnlyDataOperands(command)" \
-    "&& HasUnresolvedOperand(command, accountedRegionArguments)"
+    "private ShellUnresolvedPart ClassifyUnresolvedPart(" \
+    "return !HasOnlyDataOperands(command)" \
+    ": ShellUnresolvedPart.None;"
 )
 security_mutations+=("ShellCommandAnalysis.cs{$data_use_start..$data_use_end}")
 
@@ -231,6 +231,24 @@ read -r absent_start absent_end < <(
 )
 security_mutations+=("IToolApprovalMatcher.cs{$absent_start..$absent_end}")
 
+read -r split_start split_end < <(
+  find_span \
+    "$matcher_file" \
+    "private IReadOnlyList<ApprovalCandidate> ExtractCommandCandidates(" \
+    "var part = occurrence.WorkingDirectory is ShellValueDomain.Exact" \
+    ": ShellUnresolvedPart.Command;"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$split_start..$split_end}")
+
+read -r exact_start exact_end < <(
+  find_span \
+    "$matcher_file" \
+    "private ApprovalCandidate? CreateExactCandidate(" \
+    "var unresolved = part == ShellUnresolvedPart.None" \
+    "Unresolved = unresolved,"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$exact_start..$exact_end}")
+
 read -r messy_start messy_end < <(
   find_span \
     "$matcher_file" \
@@ -243,7 +261,7 @@ security_mutations+=("IToolApprovalMatcher.cs{$messy_start..$messy_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  82 \
+  89 \
   "${security_mutations[@]}"
 
 actor_mutations=()
@@ -278,8 +296,63 @@ read -r reviewed_start reviewed_end < <(
 )
 actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$reviewed_start..$reviewed_end}")
 
+coordinator_file="$repo_root/src/Netclaw.Actors/Tools/ShellPolicyCoordinator.cs"
+read -r d1_grant_start d1_grant_end < <(
+  find_span \
+    "$coordinator_file" \
+    "private static ShellApprovalMatchResult KeepUnknownOperandGlobalGrants(" \
+    "return candidate.Unresolved == ShellUnresolvedPart.None" \
+    "&& evidence.Grant is { Scope: GrantScope.Everywhere }"
+)
+actor_mutations+=("Tools/ShellPolicyCoordinator.cs{$d1_grant_start..$d1_grant_end}")
+
+read -r split_use_start split_use_end < <(
+  find_span \
+    "$tool_policy_file" \
+    "internal static ShellApprovalAnalysis WithCommandCandidates(" \
+    "=> approval is { IsMessy: true, Candidates.Count: 0, CommandCandidates.Count: > 0 }" \
+    "&& context.RunScope.InteractiveApproval is InteractiveApprovalCapability.Available"
+)
+actor_mutations+=("Tools/ToolAccessPolicy.cs{$split_use_start..$split_use_end}")
+
+read -r reusable_start reusable_end < <(
+  find_span \
+    "$tool_policy_file" \
+    "private static bool HasReusableShellPhrase(" \
+    "&& candidate.Unresolved == ShellUnresolvedPart.None" \
+    "&& candidate.Unresolved == ShellUnresolvedPart.None"
+)
+actor_mutations+=("Tools/ToolAccessPolicy.cs{$reusable_start..$reusable_end}")
+
+read -r d1_safe_start d1_safe_end < <(
+  find_span \
+    "$reviewed_file" \
+    "string? proposedProjectRoot = null," \
+    "if (candidate.Unresolved == ShellUnresolvedPart.Command" \
+    "|| candidate.Unresolved == ShellUnresolvedPart.Operand && !allowUnknownOperands"
+)
+actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_safe_start..$d1_safe_end}")
+
+read -r d1_fact_start d1_fact_end < <(
+  find_span \
+    "$reviewed_file" \
+    "private bool AllAuthoredPathsStayWithinRoots(" \
+    "if (allowUnknownOperands" \
+    "&& fact.State == ShellPolicyPathResolutionState.UnknownDynamic)"
+)
+actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_fact_start..$d1_fact_end}")
+
+read -r d1_call_start d1_call_end < <(
+  find_span \
+    "$reviewed_file" \
+    "internal bool ShortCircuits(" \
+    "allowUnknownOperands: candidate.Unresolved == ShellUnresolvedPart.Operand)" \
+    "allowUnknownOperands: candidate.Unresolved == ShellUnresolvedPart.Operand)"
+)
+actor_mutations+=("Tools/ReviewedSafeShellPolicy.cs{$d1_call_start..$d1_call_end}")
+
 run_group \
   "stryker-config.json" \
   "$output_path/actors" \
-  9 \
+  28 \
   "${actor_mutations[@]}"

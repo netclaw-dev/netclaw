@@ -493,6 +493,27 @@ internal enum ShellAnalysisFailure
     Unresolved
 }
 
+/// <summary>How much of one command occurrence the parser could not prove.</summary>
+internal enum ShellUnresolvedPart
+{
+    /// <summary>The parser proves the whole command.</summary>
+    None = 0,
+
+    /// <summary>
+    /// Only an operand value is unknown. The program word, the command
+    /// structure, the working directory, and each redirect are proved.
+    /// </summary>
+    Operand = 1,
+
+    /// <summary>
+    /// The program word, the structure, the directory, a redirect, or the
+    /// scope of a glob with a wildcard in a directory segment is unknown. A glob
+    /// can name a protected path that no screen checks yet, so the D1 rule for
+    /// an unknown operand does not apply to it.
+    /// </summary>
+    Command = 2,
+}
+
 internal static class ShellGlobPath
 {
     public static bool HasUnresolvedDescendantScope(
@@ -542,9 +563,18 @@ public sealed record ShellCommandAnalysis
         Commands = commands.ToImmutableArray();
         DenyOnlyClauses = denyOnlyClauses.ToImmutableArray();
         Failure = failure;
-        HasDynamicSyntax = !syntaxProofComplete
-            || Commands.Any(command =>
-                CommandHasDynamicSyntax(command, knownRegionArguments));
+        SyntaxProofComplete = syntaxProofComplete;
+        var unresolvedParts = new Dictionary<CommandOccurrence, ShellUnresolvedPart>(
+            ReferenceEqualityComparer.Instance);
+        foreach (var command in Commands)
+        {
+            var part = ClassifyUnresolvedPart(command, knownRegionArguments);
+            if (part != ShellUnresolvedPart.None)
+                unresolvedParts[command] = part;
+        }
+
+        _unresolvedParts = unresolvedParts;
+        HasDynamicSyntax = !syntaxProofComplete || unresolvedParts.Count > 0;
         RequiresExactTreeApproval = ShellFileSystemTreeAccessPolicy.RequiresExactApproval(
             environment,
             Commands);
@@ -573,7 +603,24 @@ public sealed record ShellCommandAnalysis
 
     public bool IsResolved => Failure == ShellAnalysisFailure.None && Commands.Count > 0;
 
+    /// <summary>
+    /// Gets whether any part of the source is unresolved. Advice for the whole
+    /// call reads it. Approval reads <see cref="GetUnresolvedPart"/> for each
+    /// command, so one unresolved command does not hide the others.
+    /// </summary>
     public bool HasDynamicSyntax { get; }
+
+    /// <summary>
+    /// Gets whether the PowerShell assignment and execution-region proof is
+    /// complete. Bash sources always have a complete proof here.
+    /// </summary>
+    internal bool SyntaxProofComplete { get; }
+
+    private readonly IReadOnlyDictionary<CommandOccurrence, ShellUnresolvedPart> _unresolvedParts;
+
+    /// <summary>Returns how much of one command of this analysis the parser could not prove.</summary>
+    internal ShellUnresolvedPart GetUnresolvedPart(CommandOccurrence command)
+        => _unresolvedParts.TryGetValue(command, out var part) ? part : ShellUnresolvedPart.None;
 
     /// <summary>
     /// Gets whether a filesystem tree effect requires one exact approval.
@@ -750,10 +797,11 @@ public sealed record ShellCommandAnalysis
             .SequenceEqual(element.Raw.AsSpan());
     }
 
-    private bool CommandHasDynamicSyntax(
+    private ShellUnresolvedPart ClassifyUnresolvedPart(
         CommandOccurrence command,
         IReadOnlySet<ClauseElement> accountedRegionArguments)
-        => !command.IsComplete
+    {
+        if (!command.IsComplete
             || !Enum.IsDefined(command.ImmediateRole)
             || command.ImmediateRole == CommandOccurrenceRole.Unknown
             || command.Ancestry.Any(static frame =>
@@ -762,13 +810,24 @@ public sealed record ShellCommandAnalysis
                 || frame.Region == CommandAncestryRegion.Unknown)
             || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
             || command.Clause.Verb.IsDynamic
-            || !HasOnlyDataOperands(command)
-                && HasUnresolvedOperand(command, accountedRegionArguments)
-            // A glob in a directory segment can hide traversal or a symlink.
-            // Only a leaf glob has a fixed directory scope.
-            || command.Clause.Args.Any(arg =>
-                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle))
-            || HasUnresolvedRedirect(command);
+            || HasUnresolvedRedirect(command))
+        {
+            return ShellUnresolvedPart.Command;
+        }
+
+        // A glob in a directory segment can hide traversal or a symlink.
+        // Only a leaf glob has a fixed directory scope.
+        if (command.Clause.Args.Any(arg =>
+                ShellGlobPath.HasUnresolvedDescendantScope(arg, Environment.PathStyle)))
+        {
+            return ShellUnresolvedPart.Command;
+        }
+
+        return !HasOnlyDataOperands(command)
+               && HasUnresolvedOperand(command, accountedRegionArguments)
+            ? ShellUnresolvedPart.Operand
+            : ShellUnresolvedPart.None;
+    }
 
     private static bool HasUnresolvedOperand(
         CommandOccurrence command,

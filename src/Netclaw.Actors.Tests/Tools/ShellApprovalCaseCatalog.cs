@@ -754,7 +754,7 @@ public static class ShellApprovalCases
             "native-command-valued-option-fails-closed",
             Bash("tar --info-script=./helper.sh archive.tar"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "tar"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["tar --info-script=./helper.sh archive.tar"])),
         Case(
             "native-project-file-reference-reuses-grant",
             Bash("curl --data=@request.json https://example.invalid/api"),
@@ -814,12 +814,12 @@ public static class ShellApprovalCases
             "glob-traversal-fails-closed",
             Bash("cat */../../secret.txt"),
             Approvals.PersistentAnywhere("cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["cat */../../secret.txt"])),
         Case(
             "glob-intermediate-symlink-scope-fails-closed",
             Bash("cat artifacts/*/secret.txt"),
             Approvals.PersistentAnywhere("cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["cat artifacts/*/secret.txt"])),
         // Directory-listing idiom `foo/*/`: a trailing slash filters the glob to
         // directories but stays a direct-child scope, so it is NOT a "complex
         // command". Inside the trusted tree a read-only safe verb auto-allows
@@ -1293,6 +1293,25 @@ public static class ShellApprovalCases
             Bash("mkdir -p /netclaw-approval-absent/output"),
             Approvals.None,
             ExpectedApproval.Require(["mkdir"])),
+        // Owner decision D1: in an interactive call, a safe phrase or a global
+        // grant covers a command whose only unknown part is an operand. A
+        // folder grant, an unknown redirect target, and an unattended call keep
+        // the exact prompt or the denial.
+        Case(
+            "unknown-operand-global-grant-allows",
+            Bash("kubectl get pods -l \"app=$(whoami)\""),
+            Approvals.PersistentAnywhere("kubectl get pods"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:kubectl get pods -l \"app=$(whoami)\"")),
+        Case(
+            "unknown-operand-folder-grant-prompts",
+            Bash("kubectl get pods -l \"app=$(whoami)\""),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "kubectl get pods"),
+            ExpectedApproval.Require(["kubectl get pods -l \"app=$(whoami)\""])),
+        Case(
+            "unknown-operand-unattended-denies",
+            Bash("kubectl get pods -l \"app=$(whoami)\"", interactive: false),
+            Approvals.PersistentAnywhere("kubectl get pods"),
+            ExpectedApproval.Deny("shell_unresolved_trust_zone_input")),
         Case(
             "multi-line-inline-code-offers-reusable-grant",
             Bash("python3 -c \"import sys\nprint(sys.argv)\""),
@@ -1314,25 +1333,25 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git merge-base"])),
         Case(
-            "bash-substitution-quoted-path-fails-closed",
+            "bash-substitution-quoted-path-operand-allows",
             Bash("cat \"$(git status)\""),
             Approvals.PersistentAnywhere("cat", "git status"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git status")),
         Case(
-            "bash-substitution-multiple-nested-fails-closed",
+            "bash-substitution-multiple-nested-operand-allows",
             Bash("cat \"$(printf '%s' \"$(git status)\")\" \"$(dotnet --info)\""),
             Approvals.PersistentAnywhere("cat", "printf", "git status", "dotnet"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git status", "persistent:dotnet")),
         Case(
             "bash-substitution-redirect-target-fails-closed",
             Bash("git status > \"$(printf result.log)\""),
             Approvals.PersistentAnywhere("git status", "printf"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["git status > \"$(printf result.log)\""])),
         Case(
             "bash-substitution-state-is-isolated",
             Bash("cat \"$(cd /tmp && pwd)\""),
             Approvals.PersistentAnywhere("cat", "cd", "pwd"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:pwd", "persistent:cat \"$(cd /tmp && pwd)\"")),
         Case(
             "bash-substitution-escaped-literal-allows",
             Bash("cat \"./\\$(git push)\""),
@@ -1515,17 +1534,17 @@ public static class ShellApprovalCases
             "cd-previous-directory-stays-one-time",
             Bash("cd - && inspect; cat *.md"),
             Approvals.PersistentAnywhere("cd", "inspect", "cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["inspect", "cat *.md"], approvalMatches: ["persistent:cd"])),
         Case(
             "pushd-directory-stack-stays-one-time",
             Bash("pushd /netclaw-approval-external/cd-list && inspect; cat *.md"),
             Approvals.PersistentAnywhere("pushd", "inspect", "cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["inspect", "cat *.md"], approvalMatches: ["persistent:pushd"])),
         Case(
             "cd-after-pipe-stays-one-time",
             Bash("ls | cd /netclaw-approval-external/cd-list; cat *.md"),
             Approvals.PersistentAnywhere("ls", "cd", "cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["cat *.md"], approvalMatches: ["persistent:ls", "persistent:cd"])),
         Case(
             "cd-in-function-stays-one-time",
             Bash("f() { cd /netclaw-approval-external/cd-list; }; f; cat *.md"),
@@ -1545,7 +1564,7 @@ public static class ShellApprovalCases
             "expanding-heredoc-cat-prompts",
             Bash("cat <<EOF\nhello\nEOF"),
             Approvals.PersistentAnywhere("cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["cat <<EOF"])),
         Case(
             "dynamic-heredoc-cat-prompts",
             Bash("cat <<EOF\n$value\nEOF"),
@@ -1565,12 +1584,12 @@ public static class ShellApprovalCases
             "here-string-cat-with-argument-prompts",
             Bash("cat -n <<< \"hello\""),
             Approvals.PersistentAnywhere("cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["cat -n <<< \"hello\""])),
         Case(
             "here-string-interpreter-grant-prompts",
             Bash("bash <<< \"echo ok\""),
             Approvals.PersistentAnywhere("bash"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["bash <<< \"echo ok\""])),
 
         // These synthetic cases represent the dominant search, pipeline, and
         // file-change shapes in the sanitized local approval-prompt sample.
@@ -1782,12 +1801,12 @@ public static class ShellApprovalCases
             "workload-search-loop-inherited-state-prompts",
             Bash("for f in src/*.cs; do grep -n \"TODO\" \"$f\"; done"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "grep"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["grep -n \"TODO\" \"$f\""])),
         Case(
             "workload-edit-loop-inherited-state-prompts",
             Bash("for f in src/a.txt src/b.txt; do sed -i 's/old/new/' \"$f\"; done"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "sed"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Correct(1)),
         Case(
             "workload-search-loop-child-unknown-state-prompts",
             Bash("bash --noprofile --norc -c 'for f in src/a.cs src/b.cs; do grep -n TODO \"$f\"; done'"),
@@ -1812,7 +1831,7 @@ public static class ShellApprovalCases
             "workload-search-loop-substitution-pipeline-redirect-remains-complex",
             Bash("for f in logs/*.log; do grep -n \"$(printf '%s' error)\" \"$f\" | head -20 > \"reports/$f.txt\"; done"),
             Approvals.PersistentHere(ApprovalDirectoryShape.Project, "grep", "head", "printf"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["grep -n \"$(printf '%s' error)\" \"$f\"", "head -20 > \"reports/$f.txt\""])),
 
         Case(
             "echo-allows-without-grant",
@@ -1855,7 +1874,7 @@ public static class ShellApprovalCases
             "control-flow-fails-closed",
             Bash("for f in *.txt; do cat \"$f\"; done"),
             Approvals.PersistentAnywhere("cat"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Correct(1)),
         Case(
             "printf-variable-target-hidden-execution-fails-closed",
             Bash("printf -v'value[$(printf marker >&2)0]' '%s' data"),
@@ -1966,7 +1985,7 @@ public static class ShellApprovalCases
             "inline-python-heredoc-fails-closed",
             Bash("python3 <<'PY'\nprint('hello')\nPY"),
             Approvals.PersistentAnywhere("python3"),
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["python3 <<'PY'"])),
         Case(
             "empty-command-fails-closed",
             Bash(string.Empty),

@@ -459,10 +459,15 @@ internal sealed class ToolAuthorizer
                 ? proof
                 : null)).Value;
 
-        /// <summary>The consent candidates, from the directory proof when one applies.</summary>
+        /// <summary>
+        /// The consent candidates: from the directory proof when one applies,
+        /// else one candidate set for each command of an interactive call.
+        /// </summary>
         internal ShellApprovalAnalysis? Approval => DirectoryProof is { } proof
             ? ToolAccessPolicy.WithDirectoryScopes(ParsedApproval!, proof)
-            : ParsedApproval;
+            : ParsedApproval is { } parsed
+                ? ToolAccessPolicy.WithCommandCandidates(parsed, context)
+                : null;
 
         internal ToolApprovalMode Mode => (_mode ??= new(() =>
             authorizer._policy.GetShellApprovalMode(_toolName, context, call.Arguments, Analysis))).Value;
