@@ -3550,6 +3550,8 @@ public partial class DispatchingToolExecutorTests
         Assert.Empty(context.Outputs.FileAttachments);
     }
 
+    // An interactive run may read the directory, so the reviewed phrase runs
+    // with no declaration. Only an unattended run asks for one.
     [Theory]
     [InlineData(ToolApprovalMode.Auto, true)]
     [InlineData(ToolApprovalMode.Auto, false)]
@@ -3578,10 +3580,17 @@ public partial class DispatchingToolExecutorTests
 
         var result = await AuthorizeShellAsync(registry, policy, approvalService: null, call, context);
 
-        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Outcome);
-        Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.AgentCorrection).Directory);
         Assert.Null(result.ApprovalContext);
         Assert.Null(context.Receipt);
+        if (interactive)
+        {
+            Assert.Equal(ToolAuthorizationOutcome.Allowed, result.Outcome);
+            Assert.Null(result.AgentCorrections);
+            return;
+        }
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, result.Outcome);
+        Assert.Equal(directory, Assert.IsType<ToolCorrection.ProjectDirectorySuggested>(result.AgentCorrection).Directory);
     }
 
     [Theory]
@@ -3613,7 +3622,7 @@ public partial class DispatchingToolExecutorTests
 
     [Theory]
     [InlineData(ToolApprovalMode.Auto, "", nameof(ToolAuthorizationOutcome.Allowed))]
-    [InlineData(ToolApprovalMode.Approval, "", nameof(ToolAuthorizationOutcome.RequiresApproval))]
+    [InlineData(ToolApprovalMode.Approval, "", nameof(ToolAuthorizationOutcome.Allowed))]
     [InlineData(ToolApprovalMode.Deny, "", nameof(ToolAuthorizationOutcome.Denied))]
     [InlineData(ToolApprovalMode.Auto, " > result.log", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]
     [InlineData(ToolApprovalMode.Approval, " > result.log", nameof(ToolAuthorizationOutcome.RequiresAgentCorrection))]

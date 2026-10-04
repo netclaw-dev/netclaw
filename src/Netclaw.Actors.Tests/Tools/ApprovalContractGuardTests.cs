@@ -161,12 +161,26 @@ public sealed class ApprovalContractGuardTests(ShellApprovalMatrixFixture fixtur
         Assert.Equal(ApprovalOutcome.Denied, variantRead.Outcome);
         Assert.Equal("path_access_denied", variantRead.DenyReason);
 
+        // An interactive reviewed phrase may read each path that the profile
+        // reads. Confine reads, so the reviewed-safe root check decides.
         await using var interactive = await ShellApprovalHarness.CreateAsync(
             "macos-case-interactive",
             new ShellApprovalInvocation("true"),
             Approvals.None,
             fixture.ActorSystem,
-            Ct);
+            Ct,
+            policy: new ShellApprovalHarnessPolicy
+            {
+                ConfigureTools = config =>
+                {
+                    config.AudienceProfiles.GlobalReadRoots = [];
+                    config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = []
+                    };
+                }
+            });
         var project = Path.Combine(interactive.ProjectDirectory, "a.txt");
         await File.WriteAllTextAsync(project, "project data", Ct);
         var projectVariant = Path.Combine(

@@ -279,7 +279,9 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         };
 
         var pipelineTask = new SessionToolPipelineTestFixture(executor, toolCalls, sessionId, probe.Ref)
-            .WithTurnContext(InteractiveTurnContext(sessionId))
+            // An interactive run may read the directory, so a reviewed phrase
+            // runs there with no declaration. Only an unattended run asks for one.
+            .WithTurnContext(InteractiveTurnContext(sessionId) with { SupportsInteractiveApproval = false })
             .WithSetWorkingDirectoryAvailable()
             .WithApprovals(
                 new ApprovalChannel(),

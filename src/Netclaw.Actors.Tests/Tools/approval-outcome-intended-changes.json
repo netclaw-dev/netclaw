@@ -254,6 +254,211 @@
       "from": "Allowed",
       "to": "Allowed",
       "reason": "Rename only. gh run view --web runs with no prompt, so the old ID was wrong."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-git-ls-tree-external-allows-with-canonical-verb",
+      "renamedFrom": "safe-git-ls-tree-external-prompts-with-canonical-verb",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-git-ls-tree-external-reuses-canonical-grant",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-context-project-traversal-allows",
+      "renamedFrom": "safe-verb-context-project-traversal-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-external-allows",
+      "renamedFrom": "safe-verb-external-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-external-path-allows",
+      "renamedFrom": "safe-verb-external-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "safe-verb-quoted-external-path-allows",
+      "renamedFrom": "safe-verb-quoted-external-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-cd-external-allows",
+      "renamedFrom": "reviewed-cd-external-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-backslash-word-external-path-allows",
+      "renamedFrom": "reviewed-backslash-word-external-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-grep-external-option-path-allows",
+      "renamedFrom": "reviewed-grep-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-wc-external-option-path-allows",
+      "renamedFrom": "reviewed-wc-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-du-external-option-path-allows",
+      "renamedFrom": "reviewed-du-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "reviewed-realpath-external-option-path-allows",
+      "renamedFrom": "reviewed-realpath-external-option-path-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "post-334cb4c-inline-cd-read-batch-has-scoped-candidates",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "native-external-path-operand-allows",
+      "renamedFrom": "native-external-path-operand-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "directory-listing-glob-external-offers-persistent-grant",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "input-redirect-outside-zone-allows",
+      "renamedFrom": "input-redirect-outside-zone-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "cd-parent-then-safe-allows",
+      "renamedFrom": "cd-parent-then-safe-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "multiple-cd-then-safe-allows",
+      "renamedFrom": "multiple-cd-then-safe-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "cd-alternate-branch-prompts-for-the-other-branch",
+      "from": "RequiresAgentCorrection",
+      "to": "RequiresApproval",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-rg-external-allows",
+      "renamedFrom": "workload-search-rg-external-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "workload-search-cat-jq-external-stored-tail-allows",
+      "renamedFrom": "workload-search-cat-jq-external-stored-tail-still-prompts",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "In an interactive run a reviewed phrase covers each path that the audience may read. The audience reads these paths with file tools already. An unattended run keeps the session and project roots.",
+      "negativeControl": "unattended-external-without-grant-denies",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy plan PR 1, 2026-10-03"
     }
   ]
 }

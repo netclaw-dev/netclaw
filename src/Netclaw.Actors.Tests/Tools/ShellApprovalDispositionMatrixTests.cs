@@ -24,6 +24,29 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     public Task Power_shell_approval_contract(string caseId)
         => AssertApprovalContract(caseId);
 
+    // An interactive reviewed phrase covers each path that the audience may
+    // read. These cases need the project and session roots only, so the
+    // profile reads no other root.
+    private Task<ShellApprovalHarness> CreateWithConfinedReadsAsync(ShellApprovalCase testCase)
+        => ShellApprovalHarness.CreateAsync(
+            testCase.Id,
+            testCase.Invocation,
+            testCase.Approvals,
+            fixture.ActorSystem,
+            TestContext.Current.CancellationToken,
+            policy: new ShellApprovalHarnessPolicy
+            {
+                ConfigureTools = config =>
+                {
+                    config.AudienceProfiles.GlobalReadRoots = [];
+                    config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = []
+                    };
+                }
+            });
+
     private async Task AssertApprovalContract(string caseId)
     {
         await AssertApprovalContract(ShellApprovalCases.Get(caseId));
@@ -690,7 +713,8 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     [InlineData("cd {src} && ls -la; pwd", null)]
     [InlineData("cd {src} && rm -rf build", "rm")]
     [InlineData("cd {src} && git push", "git push")]
-    [InlineData("cd {src}/../.. && ls", "cd|ls")]
+    // The cd leaves the project. An interactive run may read there, so it needs no prompt.
+    [InlineData("cd {src}/../.. && ls", null)]
     public async Task Reviewed_cd_into_project_folder_keeps_later_checks(
         string command,
         string? expectedCandidates)
@@ -751,10 +775,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
             new ShellApprovalInvocation("cat leak/secret.txt && git push"),
             Approvals.None,
             ExpectedApproval.Require(["git push"]));
-        await using var harness = await ShellApprovalHarness.CreateAsync(
-            testCase,
-            fixture.ActorSystem,
-            TestContext.Current.CancellationToken);
+        await using var harness = await CreateWithConfinedReadsAsync(testCase);
 
         var initial = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
         Assert.Equal(["git push"], initial.Prompt!.CandidateVerbs);
@@ -778,10 +799,7 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
                 ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Require(["head"]));
-        await using var harness = await ShellApprovalHarness.CreateAsync(
-            testCase,
-            fixture.ActorSystem,
-            TestContext.Current.CancellationToken);
+        await using var harness = await CreateWithConfinedReadsAsync(testCase);
 
         var decision = await harness.EvaluateAsync(TestContext.Current.CancellationToken);
         var context = Assert.IsType<ApprovalPromptObservation>(decision.Prompt);

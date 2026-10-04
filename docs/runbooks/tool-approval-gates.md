@@ -164,8 +164,9 @@ covered:
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
   This rule also applies after `cd dir && action;`.
 - In an interactive session, the reviewed diagnostic catalog covers the
-  phrase, and every path is inside the session or project directory. The
-  catalog ships with the daemon (`safe-verbs.linux.json`,
+  phrase, and the audience profile lets a file tool read every path
+  (`ReadFiles`). With the default Personal profile, that is every path except a
+  protected path. The catalog ships with the daemon (`safe-verbs.linux.json`,
   `safe-verbs.windows.json`). It includes readers such as `ls`, `cat`, `grep`,
   `rg`, `jq`, `sort`, `pgrep`, `ps`, `Get-Content`, and `Select-String`, the
   Bash `cd`, and queries such as `git status`, `git log`, `git diff`,
@@ -175,8 +176,8 @@ covered:
   cannot extend it.
 - The catalog lists a common read command even when a rare flag of that
   command can write or run a program, for example `sort -o`, `rg --pre`, or
-  `git branch -D`. Each path argument must still be inside the session or
-  project directory.
+  `git branch -D`. Each path argument must still be a path that the audience
+  may read.
 - A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,
   so it does not stop the catalog coverage. A redirect to any other file does.
 - On Linux and macOS, a backslash in a Bash word is a file-name character, not

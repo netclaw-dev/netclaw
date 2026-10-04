@@ -784,16 +784,13 @@ public class SubAgentActorTests : TestKit
             GetLastToolResult(fakeClient, "call-native-temporary-correction"));
     }
 
-    [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task Subagent_reviewed_safe_external_cwd_receives_project_scope_correction_before_bridge(
-        bool supportsApproval)
+    // Only an unattended child asks for a declaration. An interactive child may
+    // read the worktree, so the reviewed phrase runs with no prompt (see
+    // Subagent_interactive_reviewed_phrase_in_readable_worktree_needs_no_prompt).
+    [Fact]
+    public async Task Subagent_reviewed_safe_external_cwd_receives_project_scope_correction_before_bridge()
     {
         const string callId = "call-project-scope-correction";
-        var approvalBridge = supportsApproval
-            ? new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance)
-            : null;
         var fakeShell = new FakeNetclawTool(ShellTool.ToolName, "should not run");
         var scenario = await RunProjectScopeScenarioAsync(
             fakeShell,
@@ -801,11 +798,10 @@ public class SubAgentActorTests : TestKit
             ProjectScopeCorrectionCommand,
             includeScopeTool: true,
             scopeToolAccepts: true,
-            approvalBridge);
+            approvalBridge: null);
 
         Assert.True(scenario.Result.Success, scenario.Result.Output);
         Assert.False(fakeShell.WasCalled);
-        Assert.Equal(0, approvalBridge?.RequestCount ?? 0);
         var correction = GetLastToolResult(scenario.Client, callId);
         Assert.Equal(
             "Tool execution deferred: working_directory_not_declared\n" +
@@ -821,7 +817,7 @@ public class SubAgentActorTests : TestKit
     [Theory]
     [InlineData(false, true)]
     [InlineData(true, false)]
-    public async Task Subagent_unavailable_project_scope_keeps_parent_approval_bridge(
+    public async Task Subagent_interactive_reviewed_phrase_in_readable_worktree_needs_no_prompt(
         bool includeScopeTool,
         bool scopeToolAccepts)
     {
@@ -830,14 +826,13 @@ public class SubAgentActorTests : TestKit
         var scenario = await RunProjectScopeScenarioAsync(
             CreateShellTool(),
             callId,
-            TestShellEnvironment.PrintWorkingDirectoryCommand,
+            ProjectScopeCorrectionCommand,
             includeScopeTool,
             scopeToolAccepts,
             approvalBridge);
 
         Assert.True(scenario.Result.Success, scenario.Result.Output);
-        Assert.Equal(1, approvalBridge.RequestCount);
-        Assert.Equal(scenario.Worktree, approvalBridge.RequestedCwd);
+        Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Contains(
             scenario.Worktree,
             GetLastToolResult(scenario.Client, callId),
@@ -856,14 +851,14 @@ public class SubAgentActorTests : TestKit
         var scenario = await RunProjectScopeScenarioAsync(
             CreateShellTool(),
             callId,
-            TestShellEnvironment.PrintWorkingDirectoryCommand,
+            ProjectScopeCorrectionCommand,
             includeScopeTool: true,
             scopeToolAccepts: true,
             approvalBridge,
             hideScopeTool: true);
 
         Assert.True(scenario.Result.Success, scenario.Result.Output);
-        Assert.Equal(1, approvalBridge.RequestCount);
+        Assert.Equal(0, approvalBridge.RequestCount);
         Assert.Contains(
             scenario.Worktree,
             GetLastToolResult(scenario.Client, callId),

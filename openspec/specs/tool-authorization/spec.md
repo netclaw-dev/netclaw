@@ -496,7 +496,8 @@ Coverage sources SHALL be:
   scope is inside the folder, with no link below the grant root), or
   repository;
 - reviewed-safe policy, only in an interactive session, only for a catalog
-  phrase, and only when every path is inside the session or project roots;
+  phrase, and only when the audience profile lets a file tool read every
+  path (a protected path never qualifies);
 - an approval-exempt output command (`echo`, `printf`, `:`, `true`, `false`)
   with no directory scope and no assignment digest, while the store is
   available.

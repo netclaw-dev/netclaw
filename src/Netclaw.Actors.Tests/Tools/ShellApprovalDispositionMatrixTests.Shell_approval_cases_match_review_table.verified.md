@@ -14,8 +14,8 @@
 | compound-hard-deny-denies | Bash | Personal | Project | Interactive | git status && netclaw daemon stop | none | Denied | hard_deny_self_destructive | none | Not applicable |
 | safe-verb-project-allows | Bash | Personal | Project | Interactive | git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-git-ls-tree-ref-allows | Bash | Personal | Project | Interactive | git ls-tree feature | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| safe-git-ls-tree-external-prompts-with-canonical-verb | Bash | Personal | External | Interactive | git ls-tree feature | none | RequiresApproval | approval required | git ls-tree feature | No |
-| safe-git-ls-tree-external-reuses-canonical-grant | Bash | Personal | External | Interactive | git ls-tree feature | persistent[external]:git ls-tree | RequiresApproval | approval required | git ls-tree feature | No |
+| safe-git-ls-tree-external-allows-with-canonical-verb | Bash | Personal | External | Interactive | git ls-tree feature | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| safe-git-ls-tree-external-reuses-canonical-grant | Bash | Personal | External | Interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | ReviewedSafePolicy | none | Not applicable |
 | unattended-external-grant-allows | Bash | Personal | External | Non-interactive | git ls-tree feature | persistent[external]:git ls-tree | Denied | shell_working_directory_outside_trust_zone | none | Not applicable |
 | unattended-external-without-grant-denies | Bash | Personal | External | Non-interactive | git ls-tree feature | none | Denied | shell_working_directory_outside_trust_zone | none | Not applicable |
 | unattended-prose-outside-path-denies-without-lookup | Bash | Personal | Project | Non-interactive | I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me? | none | Denied | shell_path_outside_trust_zone | none | Not applicable |
@@ -26,12 +26,12 @@
 | unattended-cd-semicolon-protected-slice-denies | Bash | Personal | Project | Non-interactive | cd /netclaw-approval-external/cd-list; cat ~/.netclaw/config/secrets.json | persistent[anywhere]:cd, persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
 | unattended-external-grant-with-exempt-command-denies | Bash | Personal | External | Non-interactive | git ls-tree feature; echo done | persistent[external]:git ls-tree | Denied | shell_working_directory_outside_trust_zone | none | Not applicable |
 | safe-verb-context-project-fallback-allows | Bash | Personal | None | Interactive | cat src/readme.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| safe-verb-context-project-traversal-prompts | Bash | Personal | None | Interactive | cat ../secret.txt | none | RequiresApproval | approval required | cat | No |
+| safe-verb-context-project-traversal-allows | Bash | Personal | None | Interactive | cat ../secret.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-verb-session-allows | Bash | Personal | Session | Interactive | git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| safe-verb-external-prompts | Bash | Personal | External | Interactive | git status | none | RequiresApproval | approval required | git status | No |
-| safe-verb-external-path-prompts | Bash | Personal | Project | Interactive | cat /etc/passwd | none | RequiresApproval | approval required | cat | No |
-| safe-verb-quoted-external-path-prompts | Bash | Personal | Project | Interactive | cat "/etc/netclaw.secret" | none | RequiresApproval | approval required | cat | No |
-| safe-verb-traversal-external-path-prompts | Bash | Personal | Project | Interactive | cat safe/../../../../../../etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
+| safe-verb-external-allows | Bash | Personal | External | Interactive | git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| safe-verb-external-path-allows | Bash | Personal | Project | Interactive | cat /etc/passwd | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| safe-verb-quoted-external-path-allows | Bash | Personal | Project | Interactive | cat "/etc/netclaw.secret" | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| safe-verb-traversal-external-path-prompts | Bash | Personal | Project | Interactive | cat safe/../../../../../../../../../../../../../../../../../../../../../../../../etc/netclaw.secret | none | RequiresApproval | approval required | cat | No |
 | safe-verb-bash-provider-looking-relative-path-allows | Bash | Personal | Project | Interactive | cat filesystem::/etc/netclaw.secret | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-verb-external-redirect-prompts | Bash | Personal | Project | Interactive | git status > /netclaw-approval-external/netclaw-approval-matrix.txt | none | RequiresApproval | approval required | git status | No |
 | safe-verb-null-device-redirect-prompts | Bash | Personal | Project | Interactive | ls -la 2>/dev/null | none | Allowed | ReviewedSafePolicy | none | Not applicable |
@@ -63,19 +63,19 @@
 | reviewed-pgrep-allows | Bash | Personal | Project | Interactive | pgrep -fl dotnet | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-pgrep-into-kill-prompts | Bash | Personal | Project | Interactive | pgrep -f server \| xargs kill | none | RequiresApproval | approval required | xargs kill | No |
 | reviewed-cd-then-remove-prompts-for-remove | Bash | Personal | Project | Interactive | cd . && rm -rf build | none | RequiresApproval | approval required | rm | No |
-| reviewed-cd-external-prompts | Bash | Personal | Project | Interactive | cd /netclaw-approval-external && ls | none | RequiresApproval | approval required | cd, ls | No |
+| reviewed-cd-external-allows | Bash | Personal | Project | Interactive | cd /netclaw-approval-external && ls | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-null-device-stderr-allows | Bash | Personal | Project | Interactive | grep -rn needle src 2>/dev/null | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-null-device-all-output-allows | Bash | Personal | Project | Interactive | ls -la src > /dev/null 2>&1 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-project-file-redirect-prompts | Bash | Personal | Project | Interactive | grep -n needle src/readme.txt > hits.txt | none | RequiresApproval | approval required | grep | No |
 | reviewed-null-device-with-file-redirect-prompts | Bash | Personal | Project | Interactive | ls src 2>/dev/null > listing.txt | none | RequiresApproval | approval required | ls | No |
 | echo-external-redirect-prompts | Bash | Personal | Project | Interactive | echo x > /netclaw-approval-external/netclaw-approval-echo.txt | none | RequiresApproval | approval required | echo | No |
 | reviewed-backslash-pattern-allows | Bash | Personal | Project | Interactive | grep -n "alpha\\|beta" src/readme.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| reviewed-backslash-word-external-path-prompts | Bash | Personal | Project | Interactive | cat '/etc/a\b' | none | RequiresApproval | approval required | cat | No |
+| reviewed-backslash-word-external-path-allows | Bash | Personal | Project | Interactive | cat '/etc/a\b' | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-git-global-option-before-phrase-prompts | Bash | Personal | Project | Interactive | git -c include.path=/tmp/external status | none | RequiresApproval | approval required | git status | No |
-| reviewed-grep-external-option-path-prompts | Bash | Personal | Project | Interactive | grep -f /tmp/patterns ./data.txt | none | RequiresApproval | approval required | grep | No |
-| reviewed-wc-external-option-path-prompts | Bash | Personal | Project | Interactive | wc --files0-from=/tmp/list | none | RequiresApproval | approval required | wc | No |
-| reviewed-du-external-option-path-prompts | Bash | Personal | Project | Interactive | du --exclude-from=/tmp/patterns ./data | none | RequiresApproval | approval required | du | No |
-| reviewed-realpath-external-option-path-prompts | Bash | Personal | Project | Interactive | realpath --relative-to=/tmp ./data | none | RequiresApproval | approval required | realpath | No |
+| reviewed-grep-external-option-path-allows | Bash | Personal | Project | Interactive | grep -f /tmp/patterns ./data.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-wc-external-option-path-allows | Bash | Personal | Project | Interactive | wc --files0-from=/tmp/list | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-du-external-option-path-allows | Bash | Personal | Project | Interactive | du --exclude-from=/tmp/patterns ./data | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| reviewed-realpath-external-option-path-allows | Bash | Personal | Project | Interactive | realpath --relative-to=/tmp ./data | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-grep-local-option-path-allows | Bash | Personal | Project | Interactive | grep -f ./patterns ./data.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | reviewed-path-shaped-data-under-project-allows | Bash | Personal | Project | Interactive | gh run list --repo example/project | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | live-read-chain-with-separator-allows | Bash | Personal | Project | Interactive | rg -rn "operation failed" src/ tests/ \| head -20; echo "---"; rg -rln "upload" src/ \| head -20 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
@@ -83,12 +83,12 @@
 | live-finite-url-loop-prompts-with-reusable-phrase | Bash | Personal | Project | Interactive | for url in /api/first /api/second; do echo "=== $url ==="; curl -sS -m 10 "$url" \| head -c 1500; echo; done | none | RequiresAgentCorrection | approval required | none | Not applicable |
 | gh-run-diagnostic-exit-status-prompts-without-grant | Bash | Personal | Project | Interactive | gh run view 123456 --repo example/project --log-failed --verbose 2>&1 \| head -200; echo "---EXIT $?---" | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | live-finite-run-loop-with-tr-data-reuses-gh-grant | Bash | Personal | Project | Interactive | for r in 100001 100002 100003 100004 100005; do echo -n "$r: "; gh run view $r --json headSha,headBranch,displayTitle 2>/dev/null \| tr -d '\n'; echo; done | persistent[anywhere]:gh run view | Allowed | StoredApproval | none | Not applicable |
-| live-inline-cd-mixed-read-chain-has-scoped-candidates | Bash | Personal | Project | Interactive | cd /work/netclaw-worktrees/fix-probe-timeout && sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; echo "=== TESTS ==="; ls src/Netclaw.Daemon.Tests/ \| grep -i powershell; grep -rn "ProbeTimeout\\|WaitForExitAsync" src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null \| head | none | RequiresApproval | approval required | cd, sed, ls, grep, head | No |
+| live-inline-cd-mixed-read-chain-has-scoped-candidates | Bash | Personal | Project | Interactive | cd /work/netclaw-worktrees/fix-probe-timeout && sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; echo "=== TESTS ==="; ls src/Netclaw.Daemon.Tests/ \| grep -i powershell; grep -rn "ProbeTimeout\\|WaitForExitAsync" src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null \| head | none | RequiresApproval | approval required | sed | No |
 | post-334cb4c-independent-read-batch-remains-complex | Bash | Personal | Project | Interactive | grep -n "Alpha" src/Alpha.cs \| head -5; grep -rn "Beta" src/*.cs tests/*.cs docs/*.md 2>/dev/null \| head | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| post-334cb4c-inline-cd-read-batch-has-scoped-candidates | Bash | Personal | Project | Interactive | cd /work/project && git log --oneline -5 -- src/Alpha.cs && grep -n "Timeout" src/Alpha.cs tests/AlphaTests.cs 2>/dev/null \| head -5; cat Project.csproj | none | RequiresApproval | approval required | cd, git log, grep, head, cat | No |
+| post-334cb4c-inline-cd-read-batch-has-scoped-candidates | Bash | Personal | Project | Interactive | cd /work/project && git log --oneline -5 -- src/Alpha.cs && grep -n "Timeout" src/Alpha.cs tests/AlphaTests.cs 2>/dev/null \| head -5; cat Project.csproj | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | live-typed-cwd-mixed-read-chain-prompts-for-sed-and-pattern | Bash | Personal | Project | Interactive | sed -n '40,80p' src/Netclaw.Daemon/Probe.cs; echo "=== TESTS ==="; ls src/Netclaw.Daemon.Tests/ \| grep -i powershell; grep -rn "ProbeTimeout\\|WaitForExitAsync" src/Netclaw.Daemon.Tests/ProbeTests.cs 2>/dev/null \| head | none | RequiresApproval | approval required | sed | No |
 | native-project-path-operand-allows | Bash | Personal | Project | Interactive | git diff install-skills.sh | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| native-external-path-operand-prompts | Bash | Personal | Project | Interactive | git diff /etc/passwd | none | RequiresApproval | approval required | git diff | No |
+| native-external-path-operand-allows | Bash | Personal | Project | Interactive | git diff /etc/passwd | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | native-project-path-operand-reuses-grant | Bash | Personal | Project | Interactive | kubectl apply deployment.yaml | persistent[project]:kubectl apply | Allowed | StoredApproval | none | Not applicable |
 | native-external-path-operand-does-not-reuse-project-grant | Bash | Personal | Project | Interactive | kubectl apply /etc/deployment.yaml | persistent[project]:kubectl apply | RequiresApproval | approval required | kubectl apply | No |
 | native-output-option-outside-scope-prompts | Bash | Personal | Project | Interactive | curl -D /etc/netclaw.headers https://example.invalid/api | persistent[project]:curl | RequiresApproval | approval required | curl | No |
@@ -106,8 +106,8 @@
 | glob-traversal-fails-closed | Bash | Personal | Project | Interactive | cat */../../secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | glob-intermediate-symlink-scope-fails-closed | Bash | Personal | Project | Interactive | cat artifacts/*/secret.txt | persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | directory-listing-glob-in-project-auto-allows | Bash | Personal | Project | Interactive | ls -d subdirs/*/ | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| directory-listing-glob-external-offers-persistent-grant | Bash | Personal | External | Interactive | ls -d subdirs/*/ | none | RequiresApproval | approval required | ls | No |
-| directory-listing-glob-pipeline-offers-persistent-grant | Bash | Personal | External | Interactive | ls -d subdirs/*/ \| xargs -n1 basename | none | RequiresApproval | approval required | ls, xargs | No |
+| directory-listing-glob-external-offers-persistent-grant | Bash | Personal | External | Interactive | ls -d subdirs/*/ | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| directory-listing-glob-pipeline-offers-persistent-grant | Bash | Personal | External | Interactive | ls -d subdirs/*/ \| xargs -n1 basename | none | RequiresApproval | approval required | xargs | No |
 | native-global-option-identity-gap-currently-prompts | Bash | Personal | Project | Interactive | git --no-pager status | persistent[project]:git status | Allowed | StoredApproval | none | Not applicable |
 | semicolon-sequence-prompts | Bash | Personal | Project | Interactive | git status; git push | none | RequiresApproval | approval required | git push | No |
 | newline-sequence-prompts | Bash | Personal | Project | Interactive | git status\ngit push | none | RequiresApproval | approval required | git push | No |
@@ -210,18 +210,18 @@
 | multiline-argument-prompts | Bash | Personal | Project | Interactive | gh issue comment 123 --body "first line\nsecond line" | none | RequiresApproval | approval required | gh issue comment | No |
 | approved-pipeline-head-does-not-cover-tail | Bash | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push | RequiresApproval | approval required | curl | No |
 | all-pipeline-clauses-approved | Bash | Personal | Project | Interactive | git push \| curl https://example.com | persistent[anywhere]:git push, persistent[anywhere]:curl | Allowed | StoredApproval | none | Not applicable |
-| input-redirect-outside-zone-prompts | Bash | Personal | Project | Interactive | cat < /netclaw-approval-external/netclaw-approval-input.txt | none | RequiresApproval | approval required | cat | No |
+| input-redirect-outside-zone-allows | Bash | Personal | Project | Interactive | cat < /netclaw-approval-external/netclaw-approval-input.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | error-redirect-outside-zone-prompts | Bash | Personal | Project | Interactive | git status 2> /netclaw-approval-external/netclaw-approval-errors.txt | none | RequiresApproval | approval required | git status | No |
 | cd-current-then-safe-prompts-for-navigation | Bash | Personal | Project | Interactive | cd . && git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| cd-parent-then-safe-prompts | Bash | Personal | Project | Interactive | cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
-| multiple-cd-then-safe-prompts | Bash | Personal | Project | Interactive | cd . && cd .. && git status | none | RequiresApproval | approval required | cd, git status | No |
+| cd-parent-then-safe-allows | Bash | Personal | Project | Interactive | cd .. && git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| multiple-cd-then-safe-allows | Bash | Personal | Project | Interactive | cd . && cd .. && git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | cd-causal-list-prompts-with-reusable-grants | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log; wc -c result.log | none | RequiresApproval | approval required | cd, gh api | No |
 | cd-causal-list-diagnostic-reuses-stored-grant | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && inspect; cat *.md | persistent[anywhere]:cd, persistent[anywhere]:inspect, persistent[anywhere]:cat | RequiresAgentCorrection | approval required | none | Not applicable |
 | cd-causal-list-reviewed-diagnostic-keeps-intent-coverage | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; wc -c result.log; head -100 result.log | persistent[anywhere]:cd, persistent[anywhere]:gh api | Allowed | StoredApproval | none | Not applicable |
 | cd-causal-list-echo-is-exempt | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; echo "--- size ---"; wc -c result.log | persistent[anywhere]:cd, persistent[anywhere]:gh api | Allowed | StoredApproval | none | Not applicable |
 | cd-causal-list-echo-without-grants-prompts | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && gh api repos/example/project > result.log 2>&1; echo "--- size ---"; wc -c result.log | none | RequiresApproval | approval required | cd, gh api | No |
 | cd-causal-list-folder-grant-outside-target-prompts | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && inspect; cat *.md | persistent[project]:cd, persistent[project]:inspect, persistent[project]:cat | RequiresAgentCorrection | approval required | none | Not applicable |
-| cd-alternate-branch-prompts-for-the-other-branch | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && inspect \|\| recover; cat *.md | persistent[anywhere]:cd, persistent[anywhere]:inspect, persistent[anywhere]:cat | RequiresAgentCorrection | approval required | none | Not applicable |
+| cd-alternate-branch-prompts-for-the-other-branch | Bash | Personal | Project | Interactive | cd /netclaw-approval-external/cd-list && inspect \|\| recover; cat *.md | persistent[anywhere]:cd, persistent[anywhere]:inspect, persistent[anywhere]:cat | RequiresApproval | approval required | recover | No |
 | cd-dynamic-target-stays-one-time | Bash | Personal | Project | Interactive | cd "$TARGET" && inspect; cat *.md | persistent[anywhere]:cd, persistent[anywhere]:inspect, persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | cd-previous-directory-stays-one-time | Bash | Personal | Project | Interactive | cd - && inspect; cat *.md | persistent[anywhere]:cd, persistent[anywhere]:inspect, persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
 | pushd-directory-stack-stays-one-time | Bash | Personal | Project | Interactive | pushd /netclaw-approval-external/cd-list && inspect; cat *.md | persistent[anywhere]:pushd, persistent[anywhere]:inspect, persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
@@ -242,7 +242,7 @@
 | workload-search-head-in-project-allows | Bash | Personal | Project | Interactive | head -40 src/file.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-tail-in-project-allows | Bash | Personal | Project | Interactive | tail -100 logs/app.log | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-sed-print-in-project-currently-prompts | Bash | Personal | Project | Interactive | sed -n '20,80p' src/file.txt | none | RequiresApproval | approval required | sed | No |
-| workload-search-rg-external-prompts | Bash | Personal | External | Interactive | rg -n "TODO" . | none | RequiresApproval | approval required | rg | No |
+| workload-search-rg-external-allows | Bash | Personal | External | Interactive | rg -n "TODO" . | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-rg-external-grant-allows | Bash | Personal | External | Interactive | rg -n "TODO" . | persistent[external]:rg | Allowed | StoredApproval | none | Not applicable |
 | workload-search-rg-head-pipeline-allows | Bash | Personal | Project | Interactive | rg -n "TODO" src \| head -40 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-grep-tail-pipeline-allows | Bash | Personal | Project | Interactive | grep -R "error" logs \| tail -20 | none | Allowed | ReviewedSafePolicy | none | Not applicable |
@@ -251,7 +251,7 @@
 | workload-search-jq-direct-allows | Bash | Personal | Project | Interactive | jq '.items[]' config.json | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | workload-search-jq-direct-grant-allows | Bash | Personal | Project | Interactive | jq '.items[]' config.json | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
 | workload-search-cat-jq-stored-tail-allows | Bash | Personal | Project | Interactive | cat config.json \| jq '.items[]' | persistent[project]:jq | Allowed | StoredApproval | none | Not applicable |
-| workload-search-cat-jq-external-stored-tail-still-prompts | Bash | Personal | External | Interactive | cat config.json \| jq '.items[]' | persistent[external]:jq | RequiresApproval | approval required | cat | No |
+| workload-search-cat-jq-external-stored-tail-allows | Bash | Personal | External | Interactive | cat config.json \| jq '.items[]' | persistent[external]:jq | Allowed | StoredApproval | none | Not applicable |
 | workload-edit-grep-tee-pipeline-prompts | Bash | Personal | Project | Interactive | grep "error" logs/app.log \| tee reports/errors.txt | none | RequiresApproval | approval required | tee | No |
 | workload-edit-tee-direct-prompts | Bash | Personal | Project | Interactive | tee reports/output.txt | none | RequiresApproval | approval required | tee | No |
 | workload-edit-tee-direct-grant-allows | Bash | Personal | Project | Interactive | tee reports/output.txt | persistent[project]:tee | Allowed | StoredApproval | none | Not applicable |
@@ -272,7 +272,7 @@
 | workload-edit-printf-redirect-prompts | Bash | Personal | Project | Interactive | printf '%s\n' "text" > reports/output.txt | none | RequiresApproval | approval required | printf | No |
 | workload-edit-printf-redirect-grant-allows | Bash | Personal | Project | Interactive | printf '%s\n' "text" > reports/output.txt | persistent[project]:printf | Allowed | StoredApproval | none | Not applicable |
 | workload-edit-search-pipeline-redirect-in-project-prompts-for-writer | Bash | Personal | Project | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | RequiresApproval | approval required | head | No |
-| workload-edit-search-pipeline-redirect-external-prompts | Bash | Personal | External | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | RequiresApproval | approval required | grep, head | No |
+| workload-edit-search-pipeline-redirect-external-prompts | Bash | Personal | External | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | none | RequiresApproval | approval required | head | No |
 | workload-edit-search-pipeline-redirect-external-grant-allows | Bash | Personal | External | Interactive | grep -R "error" logs \| head -20 > reports/errors.txt | persistent[external]:grep, persistent[external]:head | Allowed | StoredApproval | none | Not applicable |
 | workload-search-loop-inherited-state-prompts | Bash | Personal | Project | Interactive | for f in src/*.cs; do grep -n "TODO" "$f"; done | persistent[project]:grep | RequiresApproval | approval required | none | Yes |
 | workload-edit-loop-inherited-state-prompts | Bash | Personal | Project | Interactive | for f in src/a.txt src/b.txt; do sed -i 's/old/new/' "$f"; done | persistent[project]:sed | RequiresApproval | approval required | none | Yes |
