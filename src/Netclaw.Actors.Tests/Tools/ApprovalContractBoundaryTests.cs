@@ -558,10 +558,11 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
     }
 
     // On a Windows host, the catalog row powershell7-prose-quoted-program-word-prompts
-    // reads "/" as a real path of the drive, which gives a normal path denial.
+    // reads "/" as the root of the drive. The shell text then names a protected
+    // path, so the call gets the normal protected-path denial.
     [SlopwatchSuppress("SW001", "The case needs real Windows paths.")]
     [Fact(SkipUnless = nameof(IsWindows), Skip = "The case needs real Windows paths.")]
-    public async Task Windows_host_prose_gets_a_path_denial()
+    public async Task Windows_host_prose_gets_a_protected_path_denial()
     {
         await using var harness = await CreateHarnessAsync(
             "windows-prose",
@@ -570,7 +571,7 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
         var decision = await harness.EvaluateAsync(Ct);
 
         Assert.Equal(ApprovalOutcome.Denied, decision.Outcome);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal("shell_references_protected_path", decision.DenyReason);
     }
 
     private static string CanonicalPath(string path)

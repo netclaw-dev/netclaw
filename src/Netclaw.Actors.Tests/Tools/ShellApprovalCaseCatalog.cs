@@ -339,7 +339,8 @@ public static class ShellApprovalCases
             Bash("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?"),
             Approvals.None,
             ExpectedApproval.Require(["'Im speaking at Stir Trek 2026 - I fly out of IAH. Whats' the best flight"])),
-        // A Windows host reads "/" as a real path, so ApprovalContractBoundaryTests pins that result.
+        // A Windows host reads "/" as the drive root, a protected path, so
+        // ApprovalContractBoundaryTests pins that denial.
         Case(
             "powershell7-prose-quoted-program-word-prompts",
             PowerShell7("I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me?"),
