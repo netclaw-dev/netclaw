@@ -61,17 +61,14 @@ public sealed class ProseShellCallApprovalTests(ShellApprovalMatrixFixture fixtu
 
         var observed = await harness.EvaluateShellAsync(prose, ct);
 
+        // Prose never runs without a person, and it never fails inside the policy.
         Assert.NotEqual("internal_policy_failure", observed.DenyReason);
-        if (interactive)
-        {
-            // The person in the chat sees the prose and can deny it.
-            Assert.Equal(ApprovalOutcome.RequiresApproval, observed.Outcome);
-            Assert.Equal(prose, observed.Prompt?.DisplayText);
-            return;
-        }
-
-        // Nobody can answer in an unattended run, and no grant covers prose,
-        // so the call never runs.
         Assert.Contains(observed.Outcome, new[] { ApprovalOutcome.Denied, ApprovalOutcome.RequiresApproval });
+
+        // In a chat, a prompt shows the prose, so the person can deny it. A
+        // path-like word can also give a normal path denial (for example
+        // "/ hotel" under PowerShell on Windows).
+        if (interactive && observed.Outcome == ApprovalOutcome.RequiresApproval)
+            Assert.Equal(prose, observed.Prompt?.DisplayText);
     }
 }
