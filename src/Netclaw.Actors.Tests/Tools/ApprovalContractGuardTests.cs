@@ -141,12 +141,26 @@ public sealed class ApprovalContractGuardTests(ShellApprovalMatrixFixture fixtur
     [Fact(SkipUnless = nameof(IsMacOS), Skip = "The case needs a case-insensitive macOS volume.")]
     public async Task Allow_checks_compare_paths_with_case_on_macos()
     {
+        // A bounded read profile keeps the declared project as a root, attended
+        // or not (D2), so the allow check of the file tool decides.
         await using var unattended = await ShellApprovalHarness.CreateAsync(
             "macos-case-unattended",
             new ShellApprovalInvocation("true", Interactive: false),
             Approvals.None,
             fixture.ActorSystem,
-            Ct);
+            Ct,
+            policy: new ShellApprovalHarnessPolicy
+            {
+                ConfigureTools = config =>
+                {
+                    config.AudienceProfiles.GlobalReadRoots = [];
+                    config.AudienceProfiles.Personal.ReadFiles = new ToolFilesystemAccessProfile
+                    {
+                        Mode = ToolFilesystemMode.Roots,
+                        Roots = []
+                    };
+                }
+            });
         var exact = Path.Combine(unattended.ProjectDirectory, "a.txt");
         await File.WriteAllTextAsync(exact, "project data", Ct);
         var variant = Path.Combine(

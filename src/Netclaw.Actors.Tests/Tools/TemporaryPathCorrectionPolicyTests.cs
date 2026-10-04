@@ -199,7 +199,8 @@ public sealed class TemporaryPathCorrectionPolicyTests
         Assert.Null(decision.AgentCorrection);
     }
 
-    [Fact]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "This case uses POSIX host path semantics.")]
+    [SlopwatchSuppress("SW001", "This test requires a POSIX storage path and Bash temporary path semantics.")]
     public void Headless_temp_call_gets_the_managed_temporary_correction_of_a_chat()
     {
         // D2: a headless run gets the same advice as a chat.

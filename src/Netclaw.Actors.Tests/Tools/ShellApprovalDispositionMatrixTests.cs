@@ -118,7 +118,9 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
     public Task Noninteractive_reviewed_safe_candidate_uses_reviewed_policy()
         => AssertApprovalContract(new ShellApprovalCase(
             "noninteractive-reviewed-safe-allows",
-            new ShellApprovalInvocation("git status", Interactive: false),
+            OperatingSystem.IsWindows()
+                ? new ShellApprovalInvocation("Get-Date", Host: ShellApprovalHost.PowerShell7, Interactive: false)
+                : new ShellApprovalInvocation("git status", Interactive: false),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)));
 
@@ -768,7 +770,8 @@ public sealed class ShellApprovalDispositionMatrixTests(ShellApprovalMatrixFixtu
         }
     }
 
-    [Fact]
+    [SlopwatchSuppress("SW001", "The git status phrase is in the Bash reviewed catalog only.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The git status phrase is in the Bash reviewed catalog only.")]
     public Task Noninteractive_safe_candidate_fills_the_gap_of_a_partial_grant()
         => AssertApprovalContract(new ShellApprovalCase(
             "noninteractive-partial-grant-and-safe-candidate-allow",

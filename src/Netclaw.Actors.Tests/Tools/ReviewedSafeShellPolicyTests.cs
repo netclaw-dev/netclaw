@@ -617,6 +617,11 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
     {
         // D2: a reviewed phrase covers each path that the audience profile lets
         // a file tool read, attended or not. A global read root is such a path.
+        // The Bash candidates use POSIX paths, which the read decision can judge
+        // only on a POSIX host.
+        if (OperatingSystem.IsWindows())
+            return;
+
         var skillDirectory = Path.Combine(_paths.SkillsDirectory, "example");
         Directory.CreateDirectory(skillDirectory);
         var policy = CreatePolicy(VerbList("cat"));
