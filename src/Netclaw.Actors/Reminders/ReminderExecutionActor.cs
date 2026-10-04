@@ -168,7 +168,10 @@ internal sealed class ReminderExecutionActor : ReceiveActor, IWithTimers
                 new SessionPipelineOptions
                 {
                     ChannelType = Channels.ChannelType.Reminder,
-                    Filter = OutputFilter.TextStreaming | OutputFilter.ToolCalls
+                    // The session streams a reply as deltas only when the model
+                    // sends two or more text chunks. A one-chunk reply arrives
+                    // only as the final TextOutput, so subscribe to both.
+                    Filter = OutputFilter.Text | OutputFilter.TextStreaming | OutputFilter.ToolCalls
                 },
                 output => self.Tell(new ExecutionOutput(output)),
                 (_, failure) => self.Tell(new OutputStreamTerminated(failure)));
