@@ -40,16 +40,19 @@ namespace Netclaw.Actors.Tests.Tools;
 /// approval-timeout removal). Click landed on the now-living workflow,
 /// retry hit the bypass guard, threw.
 /// </remarks>
-public sealed class MessyCommandOneTimeApprovalTests : TestKit
+public sealed class MessyCommandOneTimeApprovalTests : TestKit, IAsyncDisposable
 {
     // The shell run creates a managed temporary directory inside the session directory.
     private readonly DisposableTempDir _temp = new();
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

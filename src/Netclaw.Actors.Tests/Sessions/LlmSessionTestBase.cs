@@ -22,7 +22,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public abstract class LlmSessionTestBase : TestKit
+public abstract class LlmSessionTestBase : TestKit, IAsyncDisposable
 {
     private TestSessionTempDirectory? _testTempDir;
 
@@ -109,7 +109,7 @@ public abstract class LlmSessionTestBase : TestKit
         services.AddSingleton(TimeProvider.System);
         // Own a unique temp directory for this test and register it (plus its
         // NetclawPaths) so SessionServices can construct. Disposed in
-        // AfterAllAsync so the /tmp tree is not leaked (issue #2266).
+        // DisposeAsync so the /tmp tree is not leaked (issue #2266).
         _testTempDir = TestSessionTempDirectory.Create("netclaw-llm-session-");
         services.AddSingleton(_testTempDir);
         services.AddSingleton(_testTempDir.Paths);
@@ -132,17 +132,18 @@ public abstract class LlmSessionTestBase : TestKit
 
     protected virtual void ConfigureSessionServices(IServiceCollection services) { }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns, so an actor can
+    // still write into the temp directory until then (issue #2266). Delete the
+    // directory after TestKit has disposed. The finally block runs the cleanup even
+    // when the base teardown throws.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {
-            // Base teardown can throw (actor-system / host shutdown). Run temp
-            // cleanup in finally so a failed teardown does not recreate the
-            // /tmp leak (issue #2266).
             if (_testTempDir is not null)
                 await _testTempDir.DisposeAsync();
         }

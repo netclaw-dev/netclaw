@@ -30,7 +30,7 @@ namespace Netclaw.Actors.Tests.Reminders;
 /// <see cref="ReminderManagerActorTests"/> for actor-level coverage of that check.
 /// </summary>
 [Collection(ReminderActorTestCollection.Name)]
-public class GetReminderHistoryToolTests : TestKit
+public class GetReminderHistoryToolTests : TestKit, IAsyncDisposable
 {
     private readonly DisposableTempDir _dir = new();
     private readonly TestShardRegionResolver _sharedResolver = new();
@@ -39,13 +39,14 @@ public class GetReminderHistoryToolTests : TestKit
 
     public GetReminderHistoryToolTests(ITestOutputHelper output) : base(output: output) { }
 
-    // TestKit disposes asynchronously, and xunit then skips IDisposable.Dispose.
-    // Delete the directory in AfterAllAsync so it is not left behind.
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

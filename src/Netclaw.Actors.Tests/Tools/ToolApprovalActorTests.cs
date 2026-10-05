@@ -18,7 +18,7 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public sealed class ToolApprovalActorTests : TestKit
+public sealed class ToolApprovalActorTests : TestKit, IAsyncDisposable
 {
     // The store writes ".lock" and ".v2.bak" files next to the store file.
     // Each test keeps its store in this directory, and the directory is deleted
@@ -27,11 +27,14 @@ public sealed class ToolApprovalActorTests : TestKit
 
     private string NewStorePath() => Path.Combine(_storeDir.Path, Guid.NewGuid().ToString("N") + ".json");
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

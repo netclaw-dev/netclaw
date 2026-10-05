@@ -20,7 +20,7 @@ namespace Netclaw.Actors.Tests.Webhooks;
 /// tests assert on message outcomes and on the resulting file, never on thread
 /// scheduling or elapsed time.
 /// </summary>
-public class WebhookRouteActorTests : TestKit
+public class WebhookRouteActorTests : TestKit, IAsyncDisposable
 {
     private readonly DisposableTempDir _dir = new();
     private NetclawPaths _paths = null!;
@@ -41,12 +41,14 @@ public class WebhookRouteActorTests : TestKit
         });
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
-        // Stop the actor system first. A running actor can recreate files in the directory.
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {

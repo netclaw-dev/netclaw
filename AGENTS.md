@@ -373,12 +373,15 @@ each other. Otherwise, open one PR.
     the fake itself, never in test orchestration logic.
 - **A test MUST delete every file and folder that it creates in the temp
   directory.** Use `DisposableTempDir` or `TestSessionTempDirectory`. Delete
-  the path in `Dispose`. A `TestKit` class MUST delete it in `AfterAllAsync`,
-  after `base.AfterAllAsync()`, because xunit does not call `IDisposable` on
-  a class that also has `IAsyncDisposable`. Each test process gets a private
-  temp root (`tests/Shared/TestRunTempRoot.cs`). The test run fails with
-  "Test Assembly Cleanup Failure" when a test leaves an entry in that root.
-  A test project opts in with `<UseTestRunTempRoot>true</UseTestRunTempRoot>`.
+  the path in `Dispose`. A `TestKit` class has `IAsyncDisposable`, so xunit
+  does not call its `IDisposable.Dispose`. `TestKit` also stops its actor system
+  after `AfterAllAsync` returns. A `TestKit` class that owns a temp folder MUST
+  re-implement `IAsyncDisposable.DisposeAsync`. It calls `base.DisposeAsync()`,
+  and then deletes the folder. Each test process gets a private temp root
+  (`tests/Shared/TestRunTempRoot.cs`). The test run fails with "Test Assembly
+  Cleanup Failure" when a test leaves an entry in that root. The CI log prints
+  the leaks. A test project opts in with
+  `<UseTestRunTempRoot>true</UseTestRunTempRoot>`.
 - **TUI / Termina changes MUST be validated with the native smoke
   harness** before being marked done. xUnit cannot drive Spectre-style
   prompts, and the non-interactive smoke scenarios only cover the

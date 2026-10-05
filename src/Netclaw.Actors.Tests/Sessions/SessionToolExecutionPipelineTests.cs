@@ -32,17 +32,20 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) : TestKit(output: output)
+public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) : TestKit(output: output), IAsyncDisposable
 {
     // The native-tool correction test makes the pipeline create a managed
     // temporary directory inside its session directory.
     private readonly DisposableTempDir _temp = new();
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system only after AfterAllAsync returns. An actor can
+    // still write into the directory until then. Delete the directory after TestKit
+    // has disposed, and not in AfterAllAsync.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {
