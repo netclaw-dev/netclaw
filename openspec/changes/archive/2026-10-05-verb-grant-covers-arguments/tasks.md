@@ -15,7 +15,7 @@
 
 ## 4. Gates and documentation
 
-- [ ] 4.1 Retarget `scripts/run-exact-verb-chain-mutations.sh` to the shared rule and verify every tested mutant is detected
+- [x] 4.1 Retarget `scripts/run-exact-verb-chain-mutations.sh` to the shared rule and verify every tested mutant is detected
 - [x] 4.2 Update the CLI help, runbook, architecture document, TOOLING.md, and the `netclaw-operations` skill (version bump); verify by review
-- [ ] 4.3 Run the authorization corpus differential against dev and verify only prompt to Allowed transitions
-- [ ] 4.4 Run slopwatch and the file header check and verify both pass
+- [x] 4.3 Run the authorization corpus differential against dev and verify only prompt to Allowed transitions
+- [x] 4.4 Run slopwatch and the file header check and verify both pass
