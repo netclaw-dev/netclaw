@@ -4,6 +4,9 @@
 
 Define Netclaw's first-party and integrated tool execution behavior, including
 authorization, approval, and filesystem tooling.
+
+Use the [Netclaw engineering glossary](../../../docs/spec/GLOSSARY.md) for tool call, dispatcher, tool result, tool receipt, outcome category, application error, and tool-declared error.
+
 ## Requirements
 
 ### Requirement: First-party tool outcomes are machine-actionable
@@ -12,31 +15,203 @@ First-party workspace tool execution SHALL produce exactly one call-local
 outcome category: `success`, `invalid_input`, `access_denied`, `not_found`,
 `transient_failure`, or `recoverable_correction`. The category SHALL be separate
 from the model-facing string. The system SHALL NOT infer it from that string.
-The outcome MAY carry a bounded remediation code and canonical file activity.
-It SHALL NOT change the public string-returning `INetclawTool` contract.
+The outcome MAY carry canonical file activity. A `recoverable_correction`
+outcome SHALL carry exactly one closed internal remediation code. Every other
+outcome SHALL reject remediation. Dynamic facts SHALL remain in the bounded
+model-facing result and SHALL NOT become a free-form receipt field. It SHALL NOT
+change the public string-returning `INetclawTool` contract.
+
+The shared dispatcher, `DispatchingToolExecutor`, SHALL classify a terminal policy denial as `access_denied` for parent and child callers. An approval request SHALL NOT create a terminal receipt before its final decision.
+
+The receipt category answers what happened in a stable machine-readable form.
+The separate bounded result explains why to the model. The receipt does not copy
+or parse that text.
+
+The parent and child execution paths SHALL use one shared presenter to turn a
+validated remediation into one model-facing next action. The presenter SHALL
+omit a next action that names a tool hidden from the current audience. It SHALL
+NOT grant authority, execute a tool, rewrite a tool call, or persist the
+remediation.
+
+The following pseudocode shows the required separation:
+
+```text
+tool implementation returns:
+  result  = raw factual text
+  receipt = trusted internal facts for the actor
+
+dispatcher normal-return path:
+  redact and bound the factual text
+
+shared presenter receives:
+  current model-result text
+  receipt.RemediationCode
+  current tool visibility
+
+shared presenter returns:
+  one final tool-role message for the model
+```
+
+Example receipt shapes:
+
+```text
+successful file read:
+  category      = Success
+  file activity = Read("/workspace/project/README.md")
+  remediation   = none
+
+policy denial before tool execution:
+  category      = AccessDenied
+  file activity = empty
+  remediation   = none
+  model result  = "Tool access denied: tool_not_allowed_for_audience_profile"
+
+path access denial inside file_read:
+  category      = AccessDenied
+  file activity = empty
+  remediation   = none
+  model result  = "Error: Path is outside trusted roots: /workspace."
+
+correctable missing path base:
+  category      = RecoverableCorrection
+  file activity = empty
+  remediation   = SetWorkingDirectory
+  model result  = "Error: invalid_context: No project or session directory is available."
+```
+
+Counterexamples:
+
+| Result | Why it is invalid |
+|---|---|
+| `AccessDenied` plus successful file activity | A denied call did not read or change the file. |
+| `Success` plus `SetWorkingDirectory` remediation | Only a recoverable correction may carry remediation. |
+| Approval request plus terminal `AccessDenied` receipt | Approval is a paused, undecided call rather than a denial. |
+| Inferring `not_found` because the string contains “not found” | The typed receipt, not prose, owns the outcome. |
 
 #### Scenario: Access denial has no successful file activity
 
-- **GIVEN** `file_read` is called for a path outside the current read authority
-- **WHEN** scoped access denies the call
+- **GIVEN** `file_read` is called for a path outside the current audience's read authority
+- **WHEN** the path access decision denies the call
 - **THEN** the outcome category is `access_denied`
 - **AND** the outcome contains no successful file activity
+- **AND** the outcome contains no remediation
 - **AND** the model receives a bounded denial string
+
+#### Scenario: Dispatcher denial has one category
+
+- **GIVEN** policy denies a tool before its implementation runs
+- **WHEN** a parent or child actor invokes the tool
+- **THEN** the receipt category is `access_denied`
+- **AND** neither actor reports `transient_failure`
+- **AND** the separate model-facing result includes the bounded policy reason
+
+#### Scenario: Approval request is not terminal
+
+- **GIVEN** a tool requires human approval
+- **WHEN** the dispatcher parks the call for that decision
+- **THEN** no terminal denial receipt is recorded
+- **AND** an approved retry can execute the tool
 
 #### Scenario: Recoverable correction stays distinct from failure
 
 - **GIVEN** a workspace tool can continue after the project directory is declared
+- **AND** `set_working_directory` is visible to the current model
 - **WHEN** the missing declaration is the only blocker
 - **THEN** the outcome category is `recoverable_correction`
-- **AND** its remediation code identifies `set_working_directory`
+- **AND** its remediation code is `SetWorkingDirectory`
+- **AND** the shared presenter tells the model to call `set_working_directory`
 - **AND** no authority is granted by the outcome itself
+
+#### Scenario: Parent and child present the same correction
+
+- **GIVEN** the same validated recoverable correction reaches a parent and child session
+- **WHEN** each path creates its tool-role message
+- **THEN** both messages contain the same single next action
+- **AND** neither path parses the original result to choose that action
+
+#### Scenario: Hidden declaration tool is not revealed
+
+- **GIVEN** a corrective receipt uses `SetWorkingDirectory`
+- **AND** `set_working_directory` is hidden from the current audience
+- **WHEN** the shared presenter creates the tool-role message
+- **THEN** it does not add an action that names the hidden tool
+- **AND** it returns the factual tool result unchanged
+
+#### Scenario: Ambiguous file edit has one next action
+
+- **GIVEN** `file_edit` finds more than one `OldString` match
+- **WHEN** `ReplaceAll` is false
+- **THEN** the tool changes no file
+- **AND** the result reports the match count
+- **AND** the remediation code is `ProvideUniqueOldString`
+- **AND** the presenter adds one fixed retry action
+
+#### Scenario: Host temporary path suggests the managed temporary directory
+
+- **GIVEN** shell policy proposes the managed temporary directory for a host temporary path
+- **WHEN** the call returns a recoverable correction
+- **THEN** the remediation code is `UseManagedTemporaryDirectory`
+- **AND** the presenter adds one fixed managed-temporary-directory action
+- **AND** a later retry still runs normal shell authorization
+
+#### Scenario: Recoverable correction requires a known value
+
+- **WHEN** an internal caller creates a recoverable correction without a remediation
+- **THEN** receipt construction fails closed
+- **AND** an undefined remediation code also fails closed
+
+### Requirement: MCP tool outcomes are machine-actionable
+
+An MCP tool call that ends in an exception SHALL produce a tool receipt under the same rules as the requirement "First-party tool outcomes are machine-actionable". The category SHALL follow the failure kind: an HTTP 401 or 403 is `access_denied`, an HTTP 404 is `not_found`, and every other exception is `transient_failure`. The tool result SHALL stay a factual error string that names the tool. A tool-declared error is not an exception and SHALL keep its current result path. The receipt SHALL NOT grant authority, retry the call, or replay it.
+
+#### Scenario: HTTP 500 becomes a transient failure receipt
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 500
+- **WHEN** the adapter returns the tool result
+- **THEN** the outcome category is `transient_failure`
+- **AND** the tool result names the tool and the HTTP status
+- **AND** the receipt records no file activity
+
+#### Scenario: HTTP 403 becomes an access-denied receipt
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 403
+- **WHEN** the adapter returns the tool result
+- **THEN** the outcome category is `access_denied`
+- **AND** no authority changes
+
+#### Scenario: Tool-declared error keeps the result path
+
+- **GIVEN** an MCP tool call that the server answers with HTTP 200 and a tool-declared error, for example `{"content":[{"type":"text","text":"Internal Server Error"}],"isError":true}`
+- **WHEN** the adapter returns the tool result
+- **THEN** the tool result carries the error text the tool declared
+- **AND** no exception outcome is produced
+- **AND** no reconnect occurs
 
 ### Requirement: Working context records successful file activity only
 
-`WorkingContext.RecentFiles` SHALL update only from canonical file activity in a
-successful tool outcome. Failed, denied, missing, malformed, or corrective tool
-results SHALL NOT update recent files. The session pipeline SHALL NOT infer file
-activity only from authored argument names.
+`WorkingContext.RecentFiles` SHALL update only from canonical file activity in a successful tool outcome. Failed, denied, missing, malformed, or corrective tool results SHALL NOT update recent files. The session pipeline SHALL NOT infer file activity only from authored argument names. Only a successful `set_working_directory` receipt MAY replace the declared project directory.
+
+Concrete activity example:
+
+```text
+project = /workspace/project
+
+file_read(Path = "README.md")
+  -> Success + Read("/workspace/project/README.md")
+
+file_read(Path = "./README.md")
+  -> Success + Read("/workspace/project/README.md")
+
+RecentFiles contains one canonical entry:
+  /workspace/project/README.md
+
+file_write(Path = "../denied.txt") -> AccessDenied
+  -> no RecentFiles entry for ../denied.txt
+
+file_read receipt carries DeclaredProjectDirectory("/outside")
+  -> file activity may be applied when otherwise valid
+  -> project effect is rejected because the producer is not set_working_directory
+```
 
 #### Scenario: Failed write does not become recent
 
@@ -46,10 +221,18 @@ activity only from authored argument names.
 
 #### Scenario: Successful batch read records canonical files
 
-- **GIVEN** `file_read_many` successfully reads two authorized relative paths
-- **WHEN** the session applies the tool receipt
-- **THEN** both canonical resolved paths are added to `RecentFiles`
+- **GIVEN** `README.md` and `docs/guide.md` resolve under `/workspace/project`
+- **AND** separate `file_read` calls read both paths in one tool batch
+- **WHEN** the session applies their successful receipts
+- **THEN** `/workspace/project/README.md` and `/workspace/project/docs/guide.md` are added to `RecentFiles`
 - **AND** no authored relative spelling becomes a separate file
+
+#### Scenario: Another tool cannot declare a project
+
+- **GIVEN** a successful receipt from a tool other than `set_working_directory`
+- **WHEN** the receipt contains a project directory
+- **THEN** the actor rejects that project effect
+- **AND** the current project directory remains unchanged
 
 ### Requirement: Recursive workspace search is bounded and structured
 
@@ -72,50 +255,6 @@ filesystem APIs instead of an external executable.
 - **WHEN** `file_search` reaches the ceiling
 - **THEN** it stops further content enumeration
 - **AND** the result reports that it was truncated
-
-### Requirement: Batch file reads validate before content access
-
-The system SHALL provide a `file_read_many` tool that accepts a bounded path
-list plus per-file and total output ceilings. It SHALL authorize the complete
-path list before it reads content. If one member is malformed, missing, denied,
-or outside the batch limits, the tool SHALL return no content from another
-member.
-
-#### Scenario: Denied member makes batch atomic
-
-- **GIVEN** a batch contains one authorized file and one denied file
-- **WHEN** `file_read_many` validates the batch
-- **THEN** the outcome is `access_denied`
-- **AND** no content from the authorized file is returned
-- **AND** no file activity is recorded
-
-#### Scenario: Authorized batch returns bounded sections
-
-- **GIVEN** a batch of authorized text files within count limits
-- **WHEN** `file_read_many` reads them
-- **THEN** the result contains one labeled bounded section per file
-- **AND** total output does not exceed the declared ceiling
-
-### Requirement: JSON projection uses bounded data semantics
-
-The system SHALL provide a `json_read` tool that reads one authorized JSON file
-and projects a bounded list of RFC 6901 JSON Pointers. It SHALL reject duplicate
-or invalid pointers. It SHALL bound input bytes, pointer count, and output
-characters. It SHALL NOT accept executable query languages.
-
-#### Scenario: Selected JSON properties returned without shell
-
-- **GIVEN** an authorized JSON document
-- **WHEN** `json_read` receives pointers `/status` and `/items/0/name`
-- **THEN** it returns the selected values with their pointers
-- **AND** the outcome is `success`
-
-#### Scenario: Invalid pointer fails before partial projection
-
-- **GIVEN** one valid pointer and one malformed pointer
-- **WHEN** `json_read` validates the request
-- **THEN** the outcome is `invalid_input`
-- **AND** no selected value is returned
 
 ### Requirement: File inspection exposes bounded image metadata
 
