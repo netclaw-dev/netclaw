@@ -471,4 +471,32 @@ public sealed class MattermostApprovalPromptBuilderTests
         Assert.True(textPrompt.Length < 16_001, $"Text prompt length {textPrompt.Length} exceeded Mattermost's 16000-char cap");
         Assert.True(buttonText.Length < 16_001, $"Button prompt length {buttonText.Length} exceeded Mattermost's 16000-char cap");
     }
+
+    // A pattern can be the full text of one command. With a long display text,
+    // unbounded patterns push the post over the Mattermost cap.
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Long_command_patterns_keep_the_prompt_postable(bool withSiblingVerbs)
+    {
+        var baseRequest = LongApprovalCommand.Request(withSiblingVerbs);
+        var longPattern = baseRequest.Patterns.Select(static p => p + new string('x', 12_000)).ToArray();
+        var request = baseRequest with
+        {
+            DisplayText = baseRequest.DisplayText + new string('y', 20_000),
+            Patterns = longPattern,
+            CandidateVerbs = longPattern
+        };
+
+        var textPrompt = MattermostApprovalPromptBuilder.BuildTextPrompt(request);
+        var (buttonText, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
+            request, "https://callback.example/url", channelId: "ch-1", rootPostId: "root-1", promptCorrelationId: "prompt-corr-1");
+        var resolved = MattermostApprovalPromptBuilder.BuildResolvedPromptText(request, ApprovalOptionKeys.Deny, "U123");
+
+        Assert.All([textPrompt, buttonText, resolved], message => Assert.InRange(message.Length, 1, 16_000));
+        Assert.Equal(request.Options.Select(static o => o.Label), Assert.Single(attachments).Actions!.Select(static a => a.Name));
+        Assert.Contains("**B)** Deny", textPrompt, StringComparison.Ordinal);
+        Assert.Contains("characters hidden", buttonText, StringComparison.Ordinal);
+        Assert.Contains(withSiblingVerbs ? "  - `git push" : "**Pattern:** `gh api repos/netclaw-dev", buttonText, StringComparison.Ordinal);
+    }
 }

@@ -584,9 +584,9 @@ internal sealed class SessionToolExecutionPipeline
             if (decisionOverride is { } refusedOnReplay)
             {
                 sw.Stop();
-                resultText = refusedOnReplay == RefusalKind.TimedOut
-                    ? "Tool access denied: approval_timed_out"
-                    : $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)";
+                resultText = ConsentRefusalText.For(
+                    refusedOnReplay,
+                    $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)");
                 if (refusedOnReplay == RefusalKind.Denied
                     && managedTemporaryDenialDirectory is { Length: > 0 })
                 {
@@ -758,9 +758,9 @@ internal sealed class SessionToolExecutionPipeline
             else
             {
                 var refusal = (ConsentAnswer.Refused)step.Answer;
-                var reason = refusal.Kind == RefusalKind.TimedOut
-                    ? "Tool access denied: approval_timed_out"
-                    : $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)";
+                var reason = ConsentRefusalText.For(
+                    refusal.Kind,
+                    $"Tool access denied: approval_denied_by_user ({tc.Name} requires interactive approval and the user declined it)");
 
                 // When a shell call is denied because its cwd is outside both
                 // session_dir and project_dir, surface a one-line hint pointing

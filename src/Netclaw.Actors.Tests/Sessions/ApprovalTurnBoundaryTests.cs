@@ -150,6 +150,57 @@ public sealed class ApprovalTurnBoundaryTests : LlmSessionTestBase
         Assert.False(File.Exists(MarkerPath(deniedDirectory)));
     }
 
+    // A channel binding could not post the prompt, so nobody saw it. The call
+    // must not run, and the model must not read the failure as a user "Deny".
+    [Fact]
+    public async Task Unposted_prompt_refuses_the_call_with_its_own_reason()
+    {
+        var directory = Directory.CreateDirectory(Path.Combine(_root, "unposted")).FullName;
+        const string callId = "call-unposted";
+        _chatClient.ToolCallsOnFirstCall = [CreateMarkerCall(callId, directory)];
+        var sessionId = new SessionId("approval-turn/unposted");
+        var manager = ActorRegistry.Get<SessionManagerActorKey>();
+        var subscriber = CreateTestProbe("approval-turn-unposted");
+        var ct = TestContext.Current.CancellationToken;
+
+        await manager.Ask<SessionJoined>(new JoinSession(subscriber)
+        {
+            SessionId = sessionId,
+            Filter = OutputFilter.Full
+        }, TimeSpan.FromSeconds(10), ct);
+        await subscriber.ExpectMsgAsync<SessionJoined>(cancellationToken: ct);
+        await manager.Ask<CommandAck>(new SendUserMessage
+        {
+            SessionId = sessionId,
+            Content = "Run the test command.",
+            Source = RequesterSource()
+        }, TimeSpan.FromSeconds(10), ct);
+
+        await subscriber.ExpectMsgAsync<ToolCallOutput>(TimeSpan.FromSeconds(10), cancellationToken: ct);
+        var request = await subscriber.ExpectMsgAsync<ToolInteractionRequest>(
+            TimeSpan.FromSeconds(10), cancellationToken: ct);
+        Assert.DoesNotContain(request.Options, offered => offered.Key == ApprovalOptionKeys.PromptUnavailableKey);
+
+        var response = await manager.Ask<ISessionResponse>(
+            new ToolInteractionResponse
+            {
+                SessionId = sessionId,
+                CallId = request.CallId,
+                SelectedKey = ApprovalOptionKeys.PromptUnavailableKey,
+                SenderId = new SenderId("local-user")
+            },
+            TimeSpan.FromSeconds(10),
+            ct);
+        Assert.IsType<CommandAck>(response);
+
+        var result = await subscriber.ExpectMsgAsync<ToolResultOutput>(
+            TimeSpan.FromSeconds(10), cancellationToken: ct);
+        Assert.Contains("approval_prompt_unavailable", result.Result, StringComparison.Ordinal);
+        Assert.DoesNotContain("approval_denied_by_user", result.Result, StringComparison.Ordinal);
+        Assert.DoesNotContain("declined", result.Result, StringComparison.Ordinal);
+        Assert.False(File.Exists(MarkerPath(directory)));
+    }
+
     private FunctionCallContent CreateMarkerCall(string callId, string workingDirectory)
         => new(
             callId,

@@ -1611,9 +1611,9 @@ public sealed class SubAgentActor : ReceiveActor, IWithTimers
                     }
 
                     var refusal = (ConsentAnswer.Refused)step.Answer;
-                    var reason = refusal.Kind == RefusalKind.TimedOut
-                        ? "Tool access denied: approval_timed_out"
-                        : "Tool access denied: approval_denied_by_user";
+                    var reason = ConsentRefusalText.For(
+                        refusal.Kind,
+                        "Tool access denied: approval_denied_by_user");
                     if (refusal.Kind == RefusalKind.Denied
                         && consumedManagedTemporaryKey is { } deniedManagedTemporaryRetry)
                     {

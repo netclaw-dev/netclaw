@@ -37,6 +37,7 @@ public sealed class ConsentWireCompatibilityTests
     [InlineData("Denied")]
     [InlineData("TimedOut")]
     [InlineData("ApprovedRepository")]
+    [InlineData("PromptUnavailable")]
     public void Journal_text_round_trips_through_the_answer(string journalText)
     {
         var answer = ConsentAnswerCodec.FromJournalText(journalText);

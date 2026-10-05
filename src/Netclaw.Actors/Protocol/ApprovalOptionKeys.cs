@@ -40,6 +40,14 @@ public static class ApprovalOptionKeys
     public const string ApproveAssignmentEverywhereV1 = "approve_assignment_everywhere_v1";
     public const string Deny = "deny";
 
+    /// <summary>
+    /// A system key, never an option on a prompt. A channel binding sends it
+    /// when it could not post the prompt, so the session can tell the model
+    /// that nobody saw the prompt. The session maps it to a refusal: the call
+    /// does not run.
+    /// </summary>
+    public const string PromptUnavailable = "prompt_unavailable";
+
     public static ApprovalOptionKey ApproveOnceKey { get; } = new(ApproveOnce);
     public static ApprovalOptionKey ApproveSessionKey { get; } = new(ApproveSession);
     public static ApprovalOptionKey ApproveAlwaysKey { get; } = new(ApproveAlways);
@@ -50,6 +58,7 @@ public static class ApprovalOptionKeys
     public static ApprovalOptionKey ApproveAssignmentRepositoryV1Key { get; } = new(ApproveAssignmentRepositoryV1);
     public static ApprovalOptionKey ApproveAssignmentEverywhereV1Key { get; } = new(ApproveAssignmentEverywhereV1);
     public static ApprovalOptionKey DenyKey { get; } = new(Deny);
+    public static ApprovalOptionKey PromptUnavailableKey { get; } = new(PromptUnavailable);
 
     public const string ApproveOnceLabel = "Once";
     public const string ApproveSessionLabel = "This chat";
@@ -64,7 +73,7 @@ public static class ApprovalOptionKeys
     /// (Slack <c>PlainText</c> = 76 chars, Discord button label = 80 chars).
     /// Approval option labels MUST stay within this bound for the channel
     /// adapter to render them; oversized labels cause Slack to reject the
-    /// post with <c>invalid_blocks</c>, which then triggers an auto-deny.
+    /// post with <c>invalid_blocks</c>, and then the call does not run.
     /// </summary>
     public const int MaxLabelLength = 76;
 

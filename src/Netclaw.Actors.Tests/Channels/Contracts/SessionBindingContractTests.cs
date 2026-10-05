@@ -1174,7 +1174,7 @@ public abstract class SessionBindingContractTests : TestKit
     // --- Auto-Deny on Reply Failure ---
 
     [Fact]
-    public async Task Reply_failure_auto_denies_approval()
+    public async Task Reply_failure_refuses_approval_as_prompt_unavailable()
     {
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
@@ -1188,6 +1188,7 @@ public abstract class SessionBindingContractTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-deny-1"),
                 ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "dangerous command",
+                RequesterSenderId = new SenderId("requester-1"),
                 Options =
                 [
                     new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
@@ -1205,7 +1206,10 @@ public abstract class SessionBindingContractTests : TestKit
             var feedback = pipeline.RecordedFeedback.OfType<ToolInteractionResponse>().ToList();
             Assert.Single(feedback);
             Assert.Equal("call-deny-1", feedback[0].CallId.Value);
-            Assert.Equal(ApprovalOptionKeys.Deny, feedback[0].SelectedKey.Value);
+            // A post failure is not a user decision. The session needs the
+            // distinct key to tell the model that nobody saw the prompt.
+            Assert.Equal(ApprovalOptionKeys.PromptUnavailable, feedback[0].SelectedKey.Value);
+            Assert.Equal("requester-1", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
 
         ClearReplyClientThrows();

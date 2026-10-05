@@ -17,13 +17,27 @@ internal static class SlackApprovalBlockBuilder
     private const string ComplexCommandHint = "_complex command — only one-shot approval available_";
 
     /// <summary>
-    /// Display-text budget sized to stay under Slack's hard 3000-char
-    /// SectionBlock text cap after accounting for the surrounding markdown
-    /// scaffolding. Exceeding the cap causes Slack to reject the post with
-    /// <c>invalid_blocks</c>, which today triggers an auto-deny the model
-    /// misreads as the user declining.
+    /// Slack rejects a post with <c>invalid_blocks</c> when the text of one
+    /// section block has more than 3000 characters. Then the user sees no
+    /// prompt and the call does not run.
+    /// </summary>
+    internal const int MaxSectionTextChars = 3000;
+
+    /// <summary>
+    /// Display-text budget sized to stay under <see cref="MaxSectionTextChars"/>
+    /// after accounting for the surrounding markdown scaffolding.
     /// </summary>
     internal const int MaxDisplayTextChars = 2500;
+
+    // Field budgets. A candidate verb can be the full text of one command, so
+    // the header, the verb list, and the resolution line bound it again.
+    private const int MaxHeaderVerbChars = 200;
+    private const int MaxLocationChars = 300;
+    private const int MaxListedVerbChars = 300;
+    private const int MaxVerbListChars = 2500;
+    private const int VerbLineOverheadChars = 6;
+    private const int MaxResolutionVerbsChars = 1000;
+    private const int MaxSpeakerListChars = 500;
 
     public static string BuildApprovalText(ToolInteractionRequest request)
     {
@@ -37,7 +51,7 @@ internal static class SlackApprovalBlockBuilder
         var verbs = ResolveDisplayVerbs(request);
         if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
-            foreach (var verb in verbs)
+            foreach (var verb in BoundVerbList(verbs))
                 lines.Add($"  • `{verb}`");
         }
 
@@ -58,48 +72,26 @@ internal static class SlackApprovalBlockBuilder
     {
         var blocks = new List<Block>
         {
-            new SectionBlock
-            {
-                Text = new Markdown($":lock: *{ApprovalTitle(request.ToolName)}*")
-            },
-            new SectionBlock
-            {
-                Text = new Markdown(
-                    $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
-                    + $"*{RequestLabel(request.ToolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`"),
-                Expand = true
-            },
-            new SectionBlock
-            {
-                Text = new Markdown($"*{EscapeMarkdown(BuildApproveHeader(request))}*")
-            }
+            Section($":lock: *{ApprovalTitle(request.ToolName)}*"),
+            Section(
+                $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
+                + $"*{RequestLabel(request.ToolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`",
+                expand: true),
+            Section($"*{EscapeMarkdown(BuildApproveHeader(request))}*")
         };
 
         var verbs = ResolveDisplayVerbs(request);
         if (!request.ToolName.IsMcp && verbs.Count > 1)
         {
-            var verbLines = verbs.Select(v => $"• `{EscapeMarkdown(v)}`");
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown(string.Join("\n", verbLines))
-            });
+            var verbLines = BoundVerbList(verbs).Select(v => $"• `{EscapeMarkdown(v)}`");
+            blocks.Add(Section(string.Join("\n", verbLines)));
         }
 
         if (request.IsMessy)
-        {
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown(ComplexCommandHint)
-            });
-        }
+            blocks.Add(Section(ComplexCommandHint));
 
         if (request.HasAdoptedContext)
-        {
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown(BuildAdoptedContextMarkdown(request))
-            });
-        }
+            blocks.Add(Section(BuildAdoptedContextMarkdown(request)));
 
         // Slack hard-caps PlainText button text at 76 characters; oversized labels are
         // rejected with `invalid_blocks` and the post fails. Labels MUST come from the
@@ -118,10 +110,7 @@ internal static class SlackApprovalBlockBuilder
                 })]
         });
 
-        blocks.Add(new SectionBlock
-        {
-            Text = new Markdown($"You can also reply with {FormatReplyLetters(request.Options)} in this thread.")
-        });
+        blocks.Add(Section($"You can also reply with {FormatReplyLetters(request.Options)} in this thread."));
 
         return blocks;
     }
@@ -155,27 +144,16 @@ internal static class SlackApprovalBlockBuilder
 
         var blocks = new List<Block>
         {
-            new SectionBlock
-            {
-                Text = new Markdown($"{statusPrefix} *{ApprovalResolvedTitle(request.ToolName)}* by <@{EscapeMarkdown(senderId)}>")
-            },
-            new SectionBlock
-            {
-                Text = new Markdown(
-                    $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
-                    + $"*{RequestLabel(request.ToolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`\n"
-                    + $"*{EscapeMarkdown(resolutionLine)}*"),
-                Expand = true
-            }
+            Section($"{statusPrefix} *{ApprovalResolvedTitle(request.ToolName)}* by <@{EscapeMarkdown(senderId)}>"),
+            Section(
+                $"*Tool:* `{EscapeMarkdown(request.ToolName.Value)}`\n"
+                + $"*{RequestLabel(request.ToolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(request.DisplayText, MaxDisplayTextChars))}`\n"
+                + $"*{EscapeMarkdown(resolutionLine)}*",
+                expand: true)
         };
 
         if (request.HasAdoptedContext)
-        {
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown(BuildAdoptedContextMarkdown(request))
-            });
-        }
+            blocks.Add(Section(BuildAdoptedContextMarkdown(request)));
 
         return blocks;
     }
@@ -242,29 +220,20 @@ internal static class SlackApprovalBlockBuilder
 
         var blocks = new List<Block>(3)
         {
-            new SectionBlock
-            {
-                Text = new Markdown($"{statusPrefix} *{ApprovalResolvedTitle(toolName)}* by <@{EscapeMarkdown(senderId)}>")
-            }
+            Section($"{statusPrefix} *{ApprovalResolvedTitle(toolName)}* by <@{EscapeMarkdown(senderId)}>")
         };
 
         if (!string.IsNullOrEmpty(toolName) && !string.IsNullOrEmpty(displayText))
         {
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown(
-                    $"*Tool:* `{EscapeMarkdown(toolName)}`\n"
-                    + $"*{RequestLabel(toolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))}`\n"
-                    + $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey, IsMcpToolName(toolName)))}*"),
-                Expand = true
-            });
+            blocks.Add(Section(
+                $"*Tool:* `{EscapeMarkdown(toolName)}`\n"
+                + $"*{RequestLabel(toolName)}:* `{EscapeMarkdown(ApprovalDisplayTextFormatter.Truncate(displayText, MaxDisplayTextChars))}`\n"
+                + $"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey, IsMcpToolName(toolName)))}*",
+                expand: true));
         }
         else
         {
-            blocks.Add(new SectionBlock
-            {
-                Text = new Markdown($"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey, isMcpTool: false))}*")
-            });
+            blocks.Add(Section($"*{EscapeMarkdown(BuildGenericResolutionLine(selectedKey, isMcpTool: false))}*"));
         }
 
         return blocks;
@@ -319,11 +288,14 @@ internal static class SlackApprovalBlockBuilder
         var location = ResolveHeaderLocation(request);
 
         return verbs.Count == 1
-            ? $"Approve {verbs[0]} in {location}?"
+            ? $"Approve {ApprovalDisplayTextFormatter.Truncate(verbs[0], MaxHeaderVerbChars)} in {location}?"
             : $"Approve in {location}?";
     }
 
     private static string ResolveHeaderLocation(ToolInteractionRequest request)
+        => ApprovalDisplayTextFormatter.Truncate(ResolveFullHeaderLocation(request), MaxLocationChars);
+
+    private static string ResolveFullHeaderLocation(ToolInteractionRequest request)
     {
         var distinctDirs = request.Candidates
             .Where(c => !string.IsNullOrWhiteSpace(c.Directory))
@@ -382,7 +354,9 @@ internal static class SlackApprovalBlockBuilder
             };
         }
 
-        var verbs = string.Join(", ", ResolveDisplayVerbs(request));
+        var verbs = ApprovalDisplayTextFormatter.Truncate(
+            string.Join(", ", ResolveDisplayVerbs(request)),
+            MaxResolutionVerbsChars);
         var location = ResolveHeaderLocation(request);
 
         return ApprovalOptionKeys.CanonicalDecisionKey(selectedKey) switch
@@ -432,11 +406,30 @@ internal static class SlackApprovalBlockBuilder
         if (!request.HasAdoptedContext)
             return;
 
-        lines.Add($"Adopted context: present ({string.Join(", ", request.AdoptedSpeakerIds)})");
+        lines.Add($"Adopted context: present ({SpeakerList(request)})");
     }
 
     private static string BuildAdoptedContextMarkdown(ToolInteractionRequest request)
-        => $"*Adopted context:* present\n*Speakers:* `{EscapeMarkdown(string.Join(", ", request.AdoptedSpeakerIds))}`";
+        => $"*Adopted context:* present\n*Speakers:* `{EscapeMarkdown(SpeakerList(request))}`";
+
+    private static string SpeakerList(ToolInteractionRequest request)
+        => ApprovalDisplayTextFormatter.Truncate(string.Join(", ", request.AdoptedSpeakerIds), MaxSpeakerListChars);
+
+    private static IReadOnlyList<string> BoundVerbList(IReadOnlyList<string> verbs)
+        => ApprovalDisplayTextFormatter.TruncateList(
+            verbs, MaxListedVerbChars, MaxVerbListChars, VerbLineOverheadChars);
+
+    /// <summary>
+    /// Builds one markdown section. The field budgets keep each section under
+    /// <see cref="MaxSectionTextChars"/>; this last bound also covers a field
+    /// that a later change adds without a budget.
+    /// </summary>
+    private static SectionBlock Section(string markdown, bool expand = false)
+        => new()
+        {
+            Text = new Markdown(ApprovalDisplayTextFormatter.Truncate(markdown, MaxSectionTextChars)),
+            Expand = expand
+        };
 
     private static IEnumerable<(string Letter, ToolInteractionOption Option)> EnumerateReplyOptions(IReadOnlyList<ToolInteractionOption> options)
     {

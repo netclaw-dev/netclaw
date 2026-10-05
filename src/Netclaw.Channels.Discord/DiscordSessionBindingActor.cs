@@ -128,7 +128,7 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             uploadFileAsync: SafeUploadFileAsync,
             postApprovalPromptAsync: SafeReplyWithButtonsAsync,
             readPromptIdValue: promptMessageId => promptMessageId.Value,
-            onApprovalPromptFailedAsync: request => SendApprovalDenyOnFailureAsync(request.CallId),
+            onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
             persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: AdvanceCursor,
@@ -720,9 +720,9 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             }
             catch (Exception textEx)
             {
-                // The shared output engine auto-denies the request when this
+                // The shared output engine refuses the call as prompt_unavailable when this
                 // returns null, so the blocked tool call still unwinds.
-                _log.Error(textEx, "Failed posting text-only approval fallback; auto-denying request");
+                _log.Error(textEx, "Failed posting text-only approval fallback; refusing the call");
                 return null;
             }
         }
@@ -853,8 +853,20 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
         }
     }
 
-    private async Task SendApprovalDenyOnFailureAsync(Netclaw.Tools.ToolCallId callId)
+    /// <summary>
+    /// Tells the session that the approval prompt could not be posted. The
+    /// session refuses the call with <c>approval_prompt_unavailable</c>, so the
+    /// call does not run and the model does not read the failure as a user
+    /// decision. The requester sender ID passes the session's requester check.
+    /// </summary>
+    private async Task SendApprovalPromptUnavailableAsync(ToolInteractionRequest request)
     {
+        var callId = request.CallId;
+        _log.Warning(
+            "Refusing {CallId} ({ToolName}) because the approval prompt could not be posted",
+            callId,
+            request.ToolName);
+
         var pending = _pendingApprovalRequests.LastOrDefault(p =>
             p.CallId == callId);
         if (pending is not null)
@@ -866,13 +878,13 @@ internal sealed class DiscordSessionBindingActor : ReceivePersistentActor, IWith
             {
                 SessionId = _sessionId,
                 CallId = callId,
-                SelectedKey = ApprovalOptionKeys.DenyKey,
-                SenderId = new Netclaw.Actors.Protocol.SenderId("system")
+                SelectedKey = ApprovalOptionKeys.PromptUnavailableKey,
+                SenderId = request.RequesterSenderId ?? new Netclaw.Actors.Protocol.SenderId(string.Empty)
             });
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send auto-deny feedback for call {CallId}", callId);
+            _log.Error(ex, "Failed to send prompt-unavailable feedback for call {CallId}", callId);
         }
     }
 
