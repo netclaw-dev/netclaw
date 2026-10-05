@@ -61,9 +61,15 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
-    // Mattermost typing pulses are transient; repeat at the documented client
-    // clearing window so a long turn stays visible. See issue #2347.
-    private static readonly TimeSpan TypingPulseIntervalDefault = TimeSpan.FromSeconds(3);
+    // A Mattermost client clears a typing pulse after about five seconds (the
+    // server default for TimeBetweenUserTypingUpdatesMilliseconds). The repeat
+    // interval stays below that window so a long turn stays visible. See
+    // issue #2347.
+    private static readonly TimeSpan TypingPulseInterval = TimeSpan.FromSeconds(3);
+    // The actor awaits each pulse on its message path. The limit stays below
+    // the repeat interval so a stalled transport cannot delay session output
+    // or queue repeat pulses in the mailbox.
+    private static readonly TimeSpan TypingPulseTimeout = TimeSpan.FromSeconds(2);
     private static readonly object TypingPulseTimerKey = new();
     private bool _processingIndicatorActive;
     private string? _cursorPostId;
@@ -203,7 +209,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     protected override void PostStop()
     {
-        Timers.Cancel(TypingPulseTimerKey);
+        // The timer scheduler cancels the typing pulse timer when the actor stops.
         _handle.Dispose();
         base.PostStop();
     }
@@ -299,6 +305,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
+            // A reinitialize abandons the turn in flight, so its
+            // ProcessingStateOutput(false) never arrives. Stop the pulses here,
+            // or the channel shows typing until the actor stops.
+            StopTypingPulses();
             _outputEngine.ResetForPipelineReinitialize(msg.Reason);
             await _handle.ReinitializeAsync(
                 msg.Reason,
@@ -646,25 +656,29 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     private async Task RenderProcessingStateAsync(ProcessingStateOutput output)
     {
-        _processingIndicatorActive = output.IsProcessing;
+        if (!output.IsProcessing)
+        {
+            StopTypingPulses();
+            return;
+        }
 
-        if (output.IsProcessing)
-        {
-            // Send the initial pulse, then repeat it while the session still
-            // reports processing. The session emits ProcessingStateOutput(true)
-            // once on entering a processing phase, and Mattermost typing pulses
-            // are transient, so a single fire-and-forget pulse would disappear
-            // before a long turn finishes. See issue #2347.
-            await RenderTypingPulseAsync(output);
-            Timers.StartPeriodicTimer(
-                TypingPulseTimerKey,
-                SendTypingPulse.Instance,
-                _dependencies.TypingPulseInterval ?? TypingPulseIntervalDefault);
-        }
-        else
-        {
-            Timers.Cancel(TypingPulseTimerKey);
-        }
+        // Start the repeat timer before the first pulse. The session emits
+        // ProcessingStateOutput(true) once for each processing phase, and a
+        // Mattermost typing pulse is transient. A required first pulse that
+        // throws must not leave the flag set with no timer.
+        _processingIndicatorActive = true;
+        Timers.StartPeriodicTimer(
+            TypingPulseTimerKey,
+            SendTypingPulse.Instance,
+            TypingPulseInterval);
+        await RenderTypingPulseAsync(output);
+    }
+
+    private void StopTypingPulses()
+    {
+        // The flag also stops a timer message that is already in the mailbox.
+        _processingIndicatorActive = false;
+        Timers.Cancel(TypingPulseTimerKey);
     }
 
     private async Task RenderTypingPulseAsync(ProcessingStateOutput output)
@@ -680,7 +694,8 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         try
         {
-            await _dependencies.ChannelRegistry.RenderOutputAsync(request);
+            using var cts = new CancellationTokenSource(TypingPulseTimeout);
+            await _dependencies.ChannelRegistry.RenderOutputAsync(request, cts.Token);
         }
         catch (Exception ex) when (!output.IsRequired)
         {

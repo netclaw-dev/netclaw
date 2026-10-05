@@ -146,6 +146,11 @@ Reminder channel delivery maps to the generic `send_channel_message` tool with
   accepting ingress again.
 - SDK event handlers are subscribed for the lifecycle actor lifetime, not on
   each reconnect attempt, so reconnect cycles do not duplicate message handlers.
+- Netclaw sends a native typing pulse to the thread while a session processes
+  an accepted message. The pulse repeats every three seconds. It stops when the
+  session becomes idle, when the session pipeline resets, or when the thread
+  binding stops. A pulse that fails is logged as a warning and does not affect
+  the turn.
 
 Common failure patterns:
 

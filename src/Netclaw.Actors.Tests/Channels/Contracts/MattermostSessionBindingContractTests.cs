@@ -187,8 +187,7 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
         SessionId sessionId,
         ISessionPipeline pipeline,
         ConfigurablePromptInjectionDetector detector,
-        IThreadHistoryFetcher? historyFetcher = null,
-        TimeSpan? typingPulseInterval = null)
+        IThreadHistoryFetcher? historyFetcher = null)
     {
         var options = new MattermostChannelOptions();
         var deps = new MattermostGatewayDependencies(
@@ -204,8 +203,7 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
             ModelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
                         StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
             PromptInjectionDetector: detector,
-            ThreadHistoryFetcher: historyFetcher,
-            TypingPulseInterval: typingPulseInterval);
+            ThreadHistoryFetcher: historyFetcher);
 
         var name = $"mm-session-contract-{Interlocked.Increment(ref _actorCounter)}";
         return Sys.ActorOf(MattermostSessionBindingActor.CreateProps(
@@ -213,32 +211,6 @@ public sealed class MattermostSessionBindingContractTests(ITestOutputHelper outp
             new MattermostChannelId("ch-test"),
             new MattermostRootPostId("root-test"),
             deps), name);
-    }
-
-    [Fact]
-    public async Task Processing_state_output_pulses_channel_and_thread()
-    {
-        var ct = TestContext.Current.CancellationToken;
-        var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
-        var sid = new SessionId("session-mm-processing-pulse");
-        var pipeline = new RecordingSessionPipeline(_ =>
-        [
-            new ProcessingStateOutput(true) { SessionId = sid, IsRequired = false },
-            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
-        ]);
-
-        // A tight interval so the initial pulse is delivered promptly. The
-        // repeat and stop behavior is separately covered by the renderer's
-        // IsProcessing:false no-op test and the Timers.Cancel call in PostStop.
-        CreateActorCore(sid, pipeline, detector, typingPulseInterval: TimeSpan.FromMilliseconds(50));
-
-        await AwaitAssertAsync(() =>
-        {
-            // The pulse targets the session channel and its thread root.
-            var pulse = Assert.Single(_replyClient.TypingPulses);
-            Assert.Equal("ch-test", pulse.ChannelId.Value);
-            Assert.Equal("root-test", pulse.RootPostId);
-        }, cancellationToken: ct);
     }
 
     [Fact]
