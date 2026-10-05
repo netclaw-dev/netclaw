@@ -203,15 +203,20 @@ covered:
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
   This rule also applies after `cd dir && action;`. A dynamic operand, such as
   `echo "head: $(git rev-parse HEAD)"`, is data. A value from `$(...)` or
-  `read`, such as `n=$(cmd); echo "$n"`, is also data. The command inside
+  `read` in one double-quoted word, such as `n=$(cmd); echo "$n"`, is also
+  data. An unquoted word with such a value (`echo $n`) can expand to file
+  names, so it needs consent. The command inside
   `$(...)` still needs its own coverage, and a redirect target keeps its own
   check.
 - In Bash, the command is a test builtin, `test` or `[`, and the parser proves
   each operand value with no `[` in it. Examples: `[ 3 -gt 2 ]`,
   `x=3; [ "$x" -gt 2 ]`, and `for d in a b; do [ "$d" = a ]; done`. A path
   operand is not a scope, but a protected path is still denied. An operand with
-  `[`, a value from `$(...)` or `read`, or a file name from a glob keeps a
-  one-time prompt, because `[ -v 'a[$(cmd)]' ]` runs `cmd`.
+  `[` or a value from `$(...)` or `read` gets a one-time prompt, because a
+  `-v` subscript can run a command. A file name from a glob loop
+  (`for f in src/*; do [ -f "$f" ]; done`) gets the `WriteWordsLiterally`
+  correction. The agent cannot follow that advice for a glob loop, so the
+  call does not run.
 - In an interactive session, the reviewed diagnostic catalog covers the
   phrase, and the audience profile lets a file tool read every path
   (`ReadFiles`). With the default Personal profile, that is every path except a

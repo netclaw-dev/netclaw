@@ -709,9 +709,14 @@ have their glossary meaning.
   candidate. Netclaw SHALL NOT parse the test operators. A path operand of a
   test builtin SHALL NOT be a scope. The protected-path screen SHALL still
   deny a literal or proved protected path.
-- A Bash data command with no redirect SHALL get no assignment digest. A
-  builtin cannot change with an assignment, and its operands are data. A data
-  command with a redirect SHALL keep its digest.
+- A Bash data command with no redirect SHALL get no assignment digest only
+  when each operand is proved data. An output operand SHALL be proved data
+  with an exact value, a finite set, or one double-quoted raw word (Bash does
+  no pathname expansion inside double quotes). A test operand SHALL need an
+  exact value or a finite set with no `[`. Any other data command, and a data
+  command with a redirect, SHALL keep its digest. Thus
+  `n=$(cmd); echo "$n"` is data, and `d=key; echo ../netclaw/"${d}s"/*` needs
+  consent, because its literal twin is denied.
 - `continue` and `break` inside a loop SHALL stay unresolved until
   ShellSyntaxTree accepts them. ShellSyntaxTree 0.4.0-beta.17 rejects them.
 - Owner decision D1: a command whose command words are known and whose only
@@ -786,6 +791,13 @@ call-local. The analysis keeps no state between calls.
 - **GIVEN** an interactive Personal session on the Bash 5.2 host with no grants (catalog case `echo-substitution-value-is-data`)
 - **WHEN** the model calls `shell_execute` with `n=$(git push); echo "$n"; printf '%s\n' "$n"`
 - **THEN** authorization returns `RequiresApproval` with the candidate `git push` only
+
+#### Scenario: An unquoted glob built from a variable needs consent
+
+- **GIVEN** a Personal session on the Bash 5.2 host with no grants (catalog cases `output-glob-from-binding-prompts` and `output-glob-from-binding-unattended-denies`)
+- **WHEN** the model calls `shell_execute` with `d=key; echo ../netclaw/"${d}s"/*`
+- **THEN** an interactive call returns `RequiresApproval` with the candidate `echo`
+- **AND** an unattended call is denied with `approval_required_unattended`
 
 #### Scenario: A dynamic redirect target is not data
 

@@ -2347,11 +2347,6 @@ public static class ShellApprovalCases
             Bash52($"test -f {TemporaryFile("marker")} && echo yes"),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
-        Case(
-            "test-builtin-unattended-allows",
-            Bash52("[ 3 -gt 2 ] && echo yes", interactive: false),
-            Approvals.None,
-            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
         // A substitution value is data in an output operand. Only the inner
         // command needs approval.
         Case(
@@ -2377,6 +2372,19 @@ public static class ShellApprovalCases
             Bash52("n=$(basename src/a.cs); [ -v \"$n\" ]"),
             Approvals.PersistentAnywhere("basename"),
             ExpectedApproval.Require(["[ -v \"$n\" ]"], approvalMatches: "persistent:basename")),
+        // An unquoted word with a bound value can expand to the names in a
+        // protected folder. The parser gives no path for it, so the command keeps
+        // its assignment digest and needs consent. The literal twin is denied.
+        Case(
+            "output-glob-from-binding-prompts",
+            Bash52("d=key; echo ../netclaw/\"${d}s\"/*"),
+            Approvals.None,
+            ExpectedApproval.Require(["echo"])),
+        Case(
+            "output-glob-from-binding-unattended-denies",
+            Bash52("d=key; echo ../netclaw/\"${d}s\"/*", interactive: false),
+            Approvals.None,
+            ExpectedApproval.DenyUnattended()),
         Case(
             "test-builtin-guard-keeps-action-prompt",
             Bash52("[ 3 -gt 2 ] && git push"),

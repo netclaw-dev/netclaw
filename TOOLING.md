@@ -48,7 +48,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `ShellGrantCandidateResult.IsFor` | Approval evidence keeps the requested candidate facts | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ShellPolicyEvaluation.CandidateState.ValidateActorEvidence` | Actor evidence cannot replace existing candidate coverage (`Coverage != null`) | 1 killed | `./scripts/run-tool-authorization-mutations.sh` |
 | `ToolAuthorizer` shell rule order (hard deny, trusted root, covering grant) | No rule can move ahead of an earlier rule: hard deny and today's trusted-root check precede a covering grant | 3 killed | `./scripts/run-tool-authorizer-order-mutations.sh` |
-| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an unknown operand with a safe phrase or a grant for anywhere, attended or not) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin; a Bash test builtin is data only with proved operand values without `[` | 210 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
+| Shell analysis, denial-only, tree effects, and reviewed-safe gates | Parser-proved regions and authored diagnostic syntax preserve hard denials; only bounded audited non-path values and consistent non-link-following tree facts can use reusable approval; a control-character word gets only the ancestor scope of its clean text; only a word below an absent top-level directory loses its path scope; an unresolved command is one exact candidate, and only decision D1 (an unknown operand with a safe phrase or a grant for anywhere, attended or not) covers it; a glob word gets the decision of each protected path that it can match (D5), and its link walk stays inside the covering directory; a bound value gets the hard-deny decision of its literal twin; a Bash test builtin is data only with proved operand values without `[`; a data command keeps its assignment digest unless each operand is proved data | 238 killed | `./scripts/run-shell-command-analysis-mutations.sh` |
 | Shell assignment identity, wrapper fallback, wrapper child source, hard-deny screen, syntax reconciliation, host mode, prompt rollback, and Bash sanitation | Reusable grants require exact facts, fallback wrappers and wrappers with an assignment prefix must stay one-time, a wrapper child source is the decoded argument value, unresolved Bash source and each list element meet the hard-deny screen, versioned prompts must fail closed, and strong modes require the reviewed launch contract | 71 killed | `./scripts/run-shell-assignment-mutations.sh` |
 | Filesystem authority folder membership, repository identity, repository persistence, and the folder of a new grant | Folder and repository grants require candidate scope, identity, registration, and containment; a folder grant trusts its own root and refuses a link below it; a `..` after a link makes the shell scope unresolved; a new folder grant uses the directory where its occurrence runs | 18 killed | `./scripts/run-approval-directory-mutations.sh` |
 | `ReminderManagerActor.HandleExecutionOutcomeAsync` | Only the current attempt can settle; the manager replies after settlement | 2 killed | `./scripts/run-reminder-execution-mutations.sh` |
@@ -350,7 +350,7 @@ Run the shell analysis gate:
 ./scripts/run-shell-command-analysis-mutations.sh
 ```
 
-The script tests 210 mutants across execution-region accounting, denial-only
+The script tests 238 mutants across execution-region accounting, denial-only
 matching, tree traversal and root correspondence, bounded non-filesystem
 values, data operands of output commands and test builtins, candidate extraction, approval
 mode, path facts, and reviewed-safe policy. The job fails unless every mutant
@@ -433,6 +433,13 @@ unknown value, or a glob file name is not. A data command with a redirect keeps
 its assignment digest. `Power_shell_test_word_is_not_a_data_command` kills the
 Bash condition. The gate now kills 183 Security and 27 Actors mutants. The local
 run took 9 minutes 45 seconds.
+
+The review of #2344 adds `HasProvedDataOperands` and `IsOneDoubleQuotedWord`.
+A Bash data command keeps its assignment digest unless each operand has a
+proved value or is one double-quoted raw word (a test operand needs a proved
+value without `[`). `Test_builtin_operand_is_data_only_with_a_bounded_value_without_a_subscript`
+and `One_double_quoted_word_has_no_unescaped_inner_quote` kill the new mutants.
+The gate now kills 211 Security and 27 Actors mutants.
 
 The script groups targets by source project. Stryker analyzes each source project once.
 The local run on 2026-09-24 took under four minutes.

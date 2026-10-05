@@ -539,13 +539,14 @@ authorized for the current call by the click but no `ApprovalEntry` is
 written for them. Recording every literal `echo "==="` would be noise.
 A dynamic operand of these verbs is data: `echo "head: $(git rev-parse HEAD)"`
 keeps reusable candidates, and the command inside `$(...)` gets its own. A
-value from `$(...)` or `read` is data too: in `n=$(cmd); echo "$n"`, only
-`cmd` needs approval. In Bash, `test` and `[` need no approval when each
-operand is a literal or a proved value without `[`: `[ 3 -gt 2 ]`,
-`x=3; [ "$x" -gt 2 ]`, and a guard on a loop value. A test on a value from
-`$(...)`, `read`, or a glob keeps a one-time prompt. Write the value literally
-when you can. `continue` and `break` inside a loop still make the whole
-command unreadable, so prefer an `if` block around the loop body.
+value from `$(...)` or `read` is data too when the word is double-quoted: in
+`n=$(cmd); echo "$n"`, only `cmd` needs approval. Unquoted, `echo $n` needs
+consent. In Bash, `test` and `[` need no approval when each operand is a
+literal or a proved value without `[`: `[ 3 -gt 2 ]`, `x=3; [ "$x" -gt 2 ]`,
+and a guard on a loop over literal words. A test on a value from `$(...)` or
+`read` gets a one-time prompt. A test on a file name from a glob loop gets a
+"write the command words literally" correction, and the call does not run.
+`continue` and `break` inside a loop make the whole command unreadable.
 
 **Prompts survive passivation and restart.** Pending approval prompts are
 journaled with their requester and trust context, so if the session goes idle or

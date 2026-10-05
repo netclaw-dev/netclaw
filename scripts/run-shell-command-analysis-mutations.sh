@@ -190,7 +190,7 @@ read -r data_start data_end < <(
     "$analysis_file" \
     "private bool HasOnlyDataOperands(" \
     "=> Environment.Grammar == ShellGrammar.Bash" \
-    "|| command.Arguments.All(HasBoundedNameSafeValue));"
+    "|| HasProvedDataOperands(command, isTestBuiltin: true));"
 )
 security_mutations+=("ShellCommandAnalysis.cs{$data_start..$data_end}")
 
@@ -220,6 +220,24 @@ read -r name_safe_start name_safe_end < <(
     "&& !value.Contains('[', StringComparison.Ordinal);"
 )
 security_mutations+=("ShellCommandAnalysis.cs{$name_safe_start..$name_safe_end}")
+
+read -r proved_start proved_end < <(
+  find_span \
+    "$analysis_file" \
+    "internal static bool HasProvedDataOperands(" \
+    "=> command.Arguments.All(argument => isTestBuiltin" \
+    "|| IsOneDoubleQuotedWord(argument.Argument.Raw));"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$proved_start..$proved_end}")
+
+read -r quoted_start quoted_end < <(
+  find_span \
+    "$analysis_file" \
+    "internal static bool IsOneDoubleQuotedWord(" \
+    "if (raw.Length < 2" \
+    "return !escaped;"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$quoted_start..$quoted_end}")
 
 verb_data_file="$repo_root/src/Netclaw.Security/ShellVerbPolicyData.cs"
 read -r data_verb_start data_verb_end < <(
@@ -420,7 +438,7 @@ security_mutations+=("ShellCommandPolicy.cs{$combine_start..$combine_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  183 \
+  211 \
   "${security_mutations[@]}"
 
 actor_mutations=()

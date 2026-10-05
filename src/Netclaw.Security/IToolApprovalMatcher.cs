@@ -491,7 +491,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (directories is null)
             return null;
 
-        if (!TryCreateAssignmentDigest(occurrence, shell, isSideEffectVerb, out var assignmentDigest))
+        if (!TryCreateAssignmentDigest(occurrence, shell, verb, isSideEffectVerb, out var assignmentDigest))
             return null;
 
         var verbTokens = commandWords.Words;
@@ -1788,6 +1788,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                 !TryCreateAssignmentDigest(
                     command,
                     shell,
+                    NormalizedVerb(command, shell),
                     IsSideEffectCommand(command, shell),
                     out _)))
         {
@@ -1875,25 +1876,31 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     /// <summary>
     /// Returns the assignment digest of a command. A Bash data command with no
-    /// redirect gets no digest.
+    /// redirect and with proved data operands gets no digest.
     /// </summary>
     /// <remarks>
     /// SECURITY: a Bash data command is a builtin, so an assignment cannot
-    /// change the program. A value reaches only its operands, and analysis
-    /// proves those operands are data. The command has no path scope and no
-    /// stored grant. Thus an unbounded value, from <c>$(...)</c> or
-    /// <c>read</c>, does not make <c>echo "$n"</c> an exact candidate. A
-    /// redirect target can read the assignment, so that command keeps its digest.
+    /// change the program. An assignment can change only the operands. When
+    /// <see cref="ShellCommandAnalysis.HasProvedDataOperands"/> proves each
+    /// operand is data, the command has no path scope and no stored grant, so
+    /// <c>n=$(cmd); echo "$n"</c> needs no exact candidate. An unquoted word
+    /// with an unknown value can expand to the names in any folder, and a test
+    /// operand with <c>[</c> can run code. Such a command keeps its digest, and
+    /// so does a command with a redirect.
     /// </remarks>
     private static bool TryCreateAssignmentDigest(
         ShellSyntaxTree.CommandOccurrence occurrence,
         ApprovalShell shell,
+        string verb,
         bool isDataCommand,
         out ApprovalAssignmentDigest? digest)
     {
         if (shell == ApprovalShell.Bash
             && isDataCommand
-            && occurrence.Redirects.Count == 0)
+            && occurrence.Redirects.Count == 0
+            && ShellCommandAnalysis.HasProvedDataOperands(
+                occurrence,
+                isTestBuiltin: ShellVerbPolicyData.BashTestBuiltins.Contains(verb)))
         {
             digest = null;
             return true;

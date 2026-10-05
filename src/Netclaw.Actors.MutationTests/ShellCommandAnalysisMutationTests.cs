@@ -162,6 +162,8 @@ public sealed class ShellCommandAnalysisMutationTests
     [InlineData("git push; for f in /work/*; do [ -f \"$f\" ]; done", true)]
     [InlineData("git push; n=$(date); echo \"$n\"", false)]
     [InlineData("git push; n=$(date); echo \"$n\" > /work/out", true)]
+    [InlineData("git push; n=$(date); echo $n", true)]
+    [InlineData("git push; x=3; echo yes", false)]
     public void Test_builtin_operand_is_data_only_with_a_bounded_value_without_a_subscript(
         string command,
         bool messy)
@@ -183,6 +185,24 @@ public sealed class ShellCommandAnalysisMutationTests
             analysis.Candidates.Where(static candidate => candidate.Verb is "[" or "test" or "echo"),
             static candidate => Assert.True(ApprovalPatternMatching.IsPureSideEffect(candidate)));
     }
+
+    // Bash does no pathname expansion inside one double-quoted word. A
+    // backslash must escape each other quote in the word.
+    [Theory]
+    [InlineData("\"$n\"", true)]
+    [InlineData("\"x: $(date)\"", true)]
+    [InlineData("\"\"", true)]
+    [InlineData("\"a\\\"b\"", true)]
+    [InlineData("\"a\\\\\"", true)]
+    [InlineData("$n", false)]
+    [InlineData("\"", false)]
+    [InlineData("x\"$n\"", false)]
+    [InlineData("\"$n\"x", false)]
+    [InlineData("\"a\"$n\"b\"", false)]
+    [InlineData("\"a\\\\\"b\"", false)]
+    [InlineData("\"abc\\\"", false)]
+    public void One_double_quoted_word_has_no_unescaped_inner_quote(string raw, bool expected)
+        => Assert.Equal(expected, ShellCommandAnalysis.IsOneDoubleQuotedWord(raw));
 
     // In PowerShell, test is not a builtin, so it keeps its candidate.
     [Fact]

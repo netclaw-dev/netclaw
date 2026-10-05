@@ -1265,7 +1265,7 @@ public sealed record ShellCommandAnalysis
            && command.Clause.Verb.Tokens is [var verb, ..]
            && ShellVerbPolicyData.IsDataCommand(verb, ApprovalShell.Bash)
            && (!HasTestBuiltinVerb(command)
-               || command.Arguments.All(HasBoundedNameSafeValue));
+               || HasProvedDataOperands(command, isTestBuiltin: true));
 
     private bool HasTestBuiltinVerb(CommandOccurrence command)
         => Environment.Grammar == ShellGrammar.Bash
@@ -1296,6 +1296,52 @@ public sealed record ShellCommandAnalysis
 
     private static bool HasNoSubscript(string? value)
         => value is not null && !value.Contains('[', StringComparison.Ordinal);
+
+    /// <summary>
+    /// Returns true when each operand of a Bash data command is proved data. An
+    /// output operand needs a proved value (an exact value or a finite set) or
+    /// one double-quoted raw word. A test operand needs
+    /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: an unquoted word with an unknown value, such as <c>$n</c> or
+    /// <c>../"$d"/*</c>, gets pathname expansion. ShellSyntaxTree 0.4.0-beta.17
+    /// gives no path for such a word, so the protected-path screen cannot see
+    /// what it lists. Inside double quotes Bash does no pathname expansion and
+    /// no word splitting. A quoted unknown value is still not data for a test
+    /// builtin, because a <c>-v</c> subscript can run code.
+    /// </remarks>
+    internal static bool HasProvedDataOperands(CommandOccurrence command, bool isTestBuiltin)
+        => command.Arguments.All(argument => isTestBuiltin
+            ? HasBoundedNameSafeValue(argument)
+            : argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
+              || IsOneDoubleQuotedWord(argument.Argument.Raw));
+
+    /// <summary>
+    /// Returns true when the raw word is one double-quoted string: it starts
+    /// and ends with <c>"</c>, and a backslash escapes each <c>"</c> between them.
+    /// </summary>
+    /// <remarks>
+    /// The scan is lexical and conservative. A word with a quote inside a
+    /// command substitution, such as <c>"$(cmd "a")"</c>, does not pass, so
+    /// it keeps its earlier decision.
+    /// </remarks>
+    internal static bool IsOneDoubleQuotedWord(string raw)
+    {
+        if (raw.Length < 2 || raw[0] != '"' || raw[^1] != '"')
+            return false;
+
+        var escaped = false;
+        for (var i = 1; i < raw.Length - 1; i++)
+        {
+            if (raw[i] == '"' && !escaped)
+                return false;
+
+            escaped = raw[i] == '\\' && !escaped;
+        }
+
+        return !escaped;
+    }
 
     private static bool IsUnknownOutputData(
         CommandOccurrence command,
