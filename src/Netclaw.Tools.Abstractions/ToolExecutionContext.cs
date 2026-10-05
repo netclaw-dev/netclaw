@@ -37,7 +37,8 @@ internal enum ToolRemediationCode
     UseNativeTool,
     BreakToolCycle,
     UseShellWorkingDirectory,
-    RewriteShellCommandWords
+    RewriteShellCommandWords,
+    ShortenShellCommand
 }
 
 internal enum ToolFileActivityKind
