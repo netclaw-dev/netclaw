@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Netclaw.Cli.Daemon;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -16,8 +17,12 @@ using Xunit;
 namespace Netclaw.Cli.Tests.Doctor;
 
 [Collection(Netclaw.Cli.Tests.LegacyModelEnvironmentCollection.Name)]
-public sealed class DoctorFixServiceTests
+public sealed class DoctorFixServiceTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     // POSIX install dir: systemd units are always POSIX-style regardless of the host OS
     // running the test, and TryGetInstallDir parses forward-slash ExecStart accordingly.
     private const string InstallDir = "/opt/netclaw";
@@ -599,7 +604,7 @@ public sealed class DoctorFixServiceTests
         return bound.Tools;
     }
 
-    private static NetclawPaths NewPaths()
+    private NetclawPaths NewPaths()
     {
         var paths = new NetclawPaths(CreateTempBasePath());
         paths.EnsureDirectoriesExist();
@@ -609,7 +614,7 @@ public sealed class DoctorFixServiceTests
     private static DoctorFixService ConfigOnlyService(NetclawPaths paths)
         => new(paths, Path.Combine(paths.BasePath, "unused.service"), systemdEnabled: false);
 
-    private static string WriteWiredUnit(NetclawPaths paths)
+    private string WriteWiredUnit(NetclawPaths paths)
         // Forward-slash concatenation (NOT Path.Combine): systemd ExecStart is POSIX even
         // when the test runs on Windows, matching what TryGetInstallDir parses.
         => WriteRawUnit(DaemonManager.BuildDaemonUnitContent(
@@ -617,18 +622,18 @@ public sealed class DoctorFixServiceTests
             $"{InstallDir}/netclaw",
             paths.DaemonEnvironmentFilePath));
 
-    private static string WriteRawUnit(string content)
+    private string WriteRawUnit(string content)
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var unitPath = Path.Combine(dir, "netclaw.service");
         File.WriteAllText(unitPath, content);
         return unitPath;
     }
 
-    private static string CreateTempBasePath()
+    private string CreateTempBasePath()
     {
-        var path = Path.Combine(Path.GetTempPath(), "netclaw-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(path);
         return path;
     }

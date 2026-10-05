@@ -30,7 +30,7 @@ namespace Netclaw.Actors.Tests.Reminders;
 /// <see cref="ReminderManagerActorTests"/> for actor-level coverage of that check.
 /// </summary>
 [Collection(ReminderActorTestCollection.Name)]
-public class GetReminderHistoryToolTests : TestKit, IDisposable
+public class GetReminderHistoryToolTests : TestKit
 {
     private readonly DisposableTempDir _dir = new();
     private readonly TestShardRegionResolver _sharedResolver = new();
@@ -39,9 +39,18 @@ public class GetReminderHistoryToolTests : TestKit, IDisposable
 
     public GetReminderHistoryToolTests(ITestOutputHelper output) : base(output: output) { }
 
-    void IDisposable.Dispose()
+    // TestKit disposes asynchronously, and xunit then skips IDisposable.Dispose.
+    // Delete the directory in AfterAllAsync so it is not left behind.
+    protected override async Task AfterAllAsync()
     {
-        _dir.Dispose();
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            _dir.Dispose();
+        }
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

@@ -42,6 +42,21 @@ namespace Netclaw.Actors.Tests.Tools;
 /// </remarks>
 public sealed class MessyCommandOneTimeApprovalTests : TestKit
 {
+    // The shell run creates a managed temporary directory inside the session directory.
+    private readonly DisposableTempDir _temp = new();
+
+    protected override async Task AfterAllAsync()
+    {
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            _temp.Dispose();
+        }
+    }
+
     public MessyCommandOneTimeApprovalTests(ITestOutputHelper output) : base(output: output)
     {
     }
@@ -103,7 +118,7 @@ public sealed class MessyCommandOneTimeApprovalTests : TestKit
                 "_rationale",
                 "Verify one-time approval for a complex command."));
 
-        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", _temp.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,

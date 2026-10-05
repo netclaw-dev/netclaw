@@ -43,8 +43,15 @@ public class WebhookRouteActorTests : TestKit
 
     protected override async Task AfterAllAsync()
     {
-        _dir.Dispose();
-        await base.AfterAllAsync();
+        // Stop the actor system first. A running actor can recreate files in the directory.
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            _dir.Dispose();
+        }
     }
 
     private IActorRef RouteActor => ActorRegistry.For(Sys).Get<WebhookRouteActorKey>();

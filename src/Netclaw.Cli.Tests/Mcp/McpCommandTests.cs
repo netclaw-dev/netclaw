@@ -978,7 +978,7 @@ public sealed class McpCommandTests : IDisposable
         Assert.Equal("Approval", overrides.GetProperty("dropbox/copy").GetString());
     }
 
-    private static DaemonApi ToolsDaemonApi(string serverName, params string[] tools)
+    private DaemonApi ToolsDaemonApi(string serverName, params string[] tools)
     {
         var body = JsonSerializer.Serialize(tools);
         return CreateDaemonApi(request => request.RequestUri!.AbsolutePath == $"/api/mcp/tools/{serverName}"
@@ -994,10 +994,10 @@ public sealed class McpCommandTests : IDisposable
         return JsonDocument.Parse(File.ReadAllText(path));
     }
 
-    private static DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    private DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
         var configuration = new ConfigurationBuilder().Build();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-daemon-api-test-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(_dir.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
 
         return new DaemonApi(new FakeHttpClientFactory(handler), configuration, paths);

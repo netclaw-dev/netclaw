@@ -34,6 +34,22 @@ namespace Netclaw.Actors.Tests.Sessions;
 
 public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) : TestKit(output: output)
 {
+    // The native-tool correction test makes the pipeline create a managed
+    // temporary directory inside its session directory.
+    private readonly DisposableTempDir _temp = new();
+
+    protected override async Task AfterAllAsync()
+    {
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            _temp.Dispose();
+        }
+    }
+
     private static readonly string ManagedTemporarySessionDirectory = Path.GetFullPath(
         Path.Combine(Path.GetTempPath(), "netclaw-test-sessions", "example"));
     private static readonly string TestManagedTemporaryDirectory = Path.Combine(
@@ -303,6 +319,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
                 [call],
                 new SessionId("D1/native-temporary-collection"),
                 probe.Ref)
+            .InSessionDirectory(_temp.Path)
             .WithTurnContext(InteractiveTurnContext(new SessionId("D1/native-temporary-collection")))
             .WithApprovals(new ApprovalChannel(), _ => throw new InvalidOperationException("The collection must not prompt."), Timeout.InfiniteTimeSpan)
             .ExecuteAsync(TestContext.Current.CancellationToken);
@@ -315,7 +332,7 @@ public sealed class SessionToolExecutionPipelineTests(ITestOutputHelper output) 
         var result = Assert.Single(completed.ToolResults);
         Assert.Equal(
             "Shell execution stopped because 'file_write' is a native Netclaw tool.\n" +
-            $"Managed temporary directory: '{Path.Combine(Path.GetTempPath(), "tmp", "parent")}'.\n" +
+            $"Managed temporary directory: '{Path.Combine(_temp.Path, "tmp", "parent")}'.\n" +
             "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
             result.Content);
         Assert.Equal(ToolRemediationCode.UseNativeTool, Assert.IsType<ToolInvocationReceipt.Correction>(completed.ToolReceipts["call-native-temporary-collection"]).RemediationCode);

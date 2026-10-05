@@ -40,8 +40,15 @@ public class BackgroundJobExecutionActorTests : TestKit
 
     protected override async Task AfterAllAsync()
     {
-        _dir.Dispose();
-        await base.AfterAllAsync();
+        // Stop the actor system first. A running actor can recreate files in the directory.
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            _dir.Dispose();
+        }
     }
 
     private static string LongRunningCommand => TestShellEnvironment.LongRunningCommand;

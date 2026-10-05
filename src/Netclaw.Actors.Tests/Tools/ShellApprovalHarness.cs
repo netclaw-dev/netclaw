@@ -259,8 +259,47 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     {
         var rootDirectory = Path.Combine(
             CanonicalTemporaryDirectory(),
-            "netclaw-approval-matrix",
-            Guid.NewGuid().ToString("N"));
+            $"netclaw-approval-matrix-{Guid.NewGuid():N}");
+        try
+        {
+            return await CreateInRootAsync(
+                rootDirectory,
+                caseId,
+                invocation,
+                approvals,
+                actorSystem,
+                ct,
+                timeProvider,
+                scope,
+                safeVerbs,
+                deniedPaths,
+                shellApprovalMode,
+                policy);
+        }
+        catch
+        {
+            // A harness that fails to build has no owner to dispose it. Some
+            // cases expect that failure, for example an invalid override file.
+            if (Directory.Exists(rootDirectory))
+                Directory.Delete(rootDirectory, recursive: true);
+            throw;
+        }
+    }
+
+    private static async Task<ShellApprovalHarness> CreateInRootAsync(
+        string rootDirectory,
+        string caseId,
+        ShellApprovalInvocation invocation,
+        ApprovalState approvals,
+        ActorSystem actorSystem,
+        CancellationToken ct,
+        TimeProvider? timeProvider,
+        ShellApprovalHarnessScope? scope,
+        SafeVerbList? safeVerbs,
+        IReadOnlyList<string>? deniedPaths,
+        ToolApprovalMode? shellApprovalMode,
+        ShellApprovalHarnessPolicy? policy)
+    {
         var projectDirectory = Path.Combine(rootDirectory, "project");
         var sessionDirectory = Path.Combine(rootDirectory, "session");
         var externalDirectory = Path.Combine(rootDirectory, "workspaces", "external");
@@ -843,11 +882,18 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
     {
         // Same reason as the seed-phase stop above: the budget bounds a
         // multi-hop teardown under a starved CI scheduler, not correctness.
-        if (_approvalActor.StartedActor is { } actor)
-            await actor.GracefulStop(TimeSpan.FromSeconds(15));
-        await _services.DisposeAsync();
-        if (Directory.Exists(_rootDirectory))
-            Directory.Delete(_rootDirectory, recursive: true);
+        try
+        {
+            if (_approvalActor.StartedActor is { } actor)
+                await actor.GracefulStop(TimeSpan.FromSeconds(15));
+            await _services.DisposeAsync();
+        }
+        finally
+        {
+            // A failed stop must not leave the case directory in the temp root.
+            if (Directory.Exists(_rootDirectory))
+                Directory.Delete(_rootDirectory, recursive: true);
+        }
     }
 
     private static ToolConfig CreateConfig(

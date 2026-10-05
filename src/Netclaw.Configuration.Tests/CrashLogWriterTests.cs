@@ -58,7 +58,7 @@ public sealed class CrashLogWriterTests : IDisposable
 
     private string NewTempDirectory()
     {
-        var path = Path.Join(Path.GetTempPath(), "netclaw-crash-tests", Guid.NewGuid().ToString("N"));
+        var path = Path.Combine(Path.GetTempPath(), $"netclaw-crash-tests-{Guid.NewGuid():N}");
         Directory.CreateDirectory(path);
         _tempDirectories.Add(path);
         return path;

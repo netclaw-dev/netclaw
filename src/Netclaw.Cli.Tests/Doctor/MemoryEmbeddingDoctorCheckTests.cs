@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Extensions.Configuration;
@@ -20,8 +21,12 @@ namespace Netclaw.Cli.Tests.Doctor;
 /// graph (linked from <c>Netclaw.Embeddings.Tests/Fixtures</c>) instead of the real allowlist —
 /// no network access anywhere in these tests.
 /// </summary>
-public sealed class MemoryEmbeddingDoctorCheckTests
+public sealed class MemoryEmbeddingDoctorCheckTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     private const string ModelId = "tiny-fixture";
     private static string FixturesDir => Path.Combine(AppContext.BaseDirectory, "Fixtures");
 
@@ -125,9 +130,9 @@ public sealed class MemoryEmbeddingDoctorCheckTests
         Assert.Contains("healthy", result.Message, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static NetclawPaths CreateTempPaths()
+    private NetclawPaths CreateTempPaths()
     {
-        var basePath = Path.Combine(Path.GetTempPath(), "netclaw-embedding-doctor-tests", Guid.NewGuid().ToString("N"));
+        var basePath = Path.Combine(_temp.Path, Guid.NewGuid().ToString("N"));
         var paths = new NetclawPaths(basePath);
         paths.EnsureDirectoriesExist();
         return paths;

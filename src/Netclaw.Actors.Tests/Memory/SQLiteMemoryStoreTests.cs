@@ -12,7 +12,7 @@ namespace Netclaw.Actors.Tests.Memory;
 
 public sealed class SQLiteMemoryStoreTests : IAsyncLifetime
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-sqlite-memory-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-sqlite-memory-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

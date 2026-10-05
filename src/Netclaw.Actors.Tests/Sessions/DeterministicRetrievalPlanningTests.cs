@@ -6,14 +6,19 @@
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Sessions;
 using Netclaw.Actors.Memory;
+using Netclaw.Actors.Tests.Memory;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Configuration;
 using Xunit;
 
 namespace Netclaw.Actors.Tests.Sessions;
 
-public sealed class DeterministicRetrievalPlanningTests
+public sealed class DeterministicRetrievalPlanningTests : IAsyncDisposable
 {
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-deterministic-retrieval-tests-{Guid.NewGuid():N}");
+
+    public async ValueTask DisposeAsync() => await SqliteTempDirectoryCleanup.TryDeleteDirectoryAsync(_baseDir);
+
     [Fact]
     public void Planner_uses_runtime_hard_scope_and_bundle_mode_for_trip_prompt()
     {
@@ -50,7 +55,7 @@ public sealed class DeterministicRetrievalPlanningTests
     [Fact]
     public async Task Coordinator_keeps_stage_empty_when_deterministic_planning_succeeds_but_sidecars_are_disabled()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-planning-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_baseDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
@@ -76,7 +81,7 @@ public sealed class DeterministicRetrievalPlanningTests
     [Fact]
     public async Task Coordinator_returns_ranked_candidates_from_deterministic_path()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-candidate-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_baseDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
@@ -123,7 +128,7 @@ public sealed class DeterministicRetrievalPlanningTests
     [Fact]
     public async Task Coordinator_reports_composite_score_used_for_final_ordering()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-score-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_baseDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
@@ -203,7 +208,7 @@ public sealed class DeterministicRetrievalPlanningTests
     [Fact]
     public async Task Coordinator_recalls_evidence_class_memories()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-evidence-recall-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_baseDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
@@ -258,7 +263,7 @@ public sealed class DeterministicRetrievalPlanningTests
     [Fact]
     public async Task Coordinator_enforces_recall_char_budget_dropping_whole_items()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-char-budget-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_baseDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
@@ -320,7 +325,7 @@ public sealed class DeterministicRetrievalPlanningTests
     [Fact]
     public async Task Coordinator_recalls_memories_via_audience_primary_path()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-audience-primary-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_baseDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);
@@ -366,7 +371,7 @@ public sealed class DeterministicRetrievalPlanningTests
     [Fact]
     public async Task Coordinator_recalls_named_project_entities()
     {
-        var dir = Path.Combine(Path.GetTempPath(), "netclaw-deterministic-project-entity-tests", Guid.NewGuid().ToString("N"));
+        var dir = Path.Combine(_baseDir, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dir);
         var store = new SQLiteMemoryStore(Path.Combine(dir, "memory.db"), TimeProvider.System);
         await store.InitializeAsync(TestContext.Current.CancellationToken);

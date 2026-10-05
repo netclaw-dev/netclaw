@@ -21,7 +21,7 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 namespace Netclaw.Actors.Tests.Reminders;
 
 [Collection(ReminderActorTestCollection.Name)]
-public class ReminderExecutionActorTests : TestKit, IDisposable
+public class ReminderExecutionActorTests : TestKit
 {
     private readonly DisposableTempDir _dir = new();
     private readonly ReminderHistoryStore _historyStore;
@@ -33,9 +33,18 @@ public class ReminderExecutionActorTests : TestKit, IDisposable
         _historyStore = new ReminderHistoryStore(paths);
     }
 
-    void IDisposable.Dispose()
+    // TestKit disposes asynchronously, and xunit then skips IDisposable.Dispose.
+    // Delete the directory in AfterAllAsync so it is not left behind.
+    protected override async Task AfterAllAsync()
     {
-        _dir.Dispose();
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            _dir.Dispose();
+        }
     }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)

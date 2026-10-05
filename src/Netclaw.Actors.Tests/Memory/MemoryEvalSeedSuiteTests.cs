@@ -14,7 +14,7 @@ namespace Netclaw.Actors.Tests.Memory;
 
 public sealed class MemoryEvalSeedSuiteTests : IAsyncLifetime
 {
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-memory-eval-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-memory-eval-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

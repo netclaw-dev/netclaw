@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using Akka.Actor;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
@@ -19,6 +20,25 @@ namespace Netclaw.Actors.Tests.Tools;
 
 public sealed class ToolApprovalActorTests : TestKit
 {
+    // The store writes ".lock" and ".v2.bak" files next to the store file.
+    // Each test keeps its store in this directory, and the directory is deleted
+    // with all of its side files after the test.
+    private readonly DisposableTempDir _storeDir = new();
+
+    private string NewStorePath() => Path.Combine(_storeDir.Path, Guid.NewGuid().ToString("N") + ".json");
+
+    protected override async Task AfterAllAsync()
+    {
+        try
+        {
+            await base.AfterAllAsync();
+        }
+        finally
+        {
+            _storeDir.Dispose();
+        }
+    }
+
     public static TheoryData<string, string, string> DirectoryRootCoverageCases
     {
         get
@@ -202,7 +222,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Persistent_approval_survives_new_service_instance()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var store = CreateStore(tempFile);
@@ -265,7 +285,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Non_persistent_approval_is_session_scoped_only()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var store = CreateStore(tempFile);
@@ -357,7 +377,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Persistent_shell_approval_uses_candidate_directory_when_present()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
@@ -393,7 +413,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Persistent_shell_approval_rejects_candidate_directory_outside_grant_even_when_cwd_matches()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
@@ -430,7 +450,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Partial_directory_grant_returns_exact_unapproved_occurrence()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var grantDir = Path.Combine(Path.GetTempPath(), "netclaw-approval", "repo");
@@ -476,7 +496,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Legacy_shell_check_does_not_log_raw_near_miss_data()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             // Lexical containment only — the directories need not exist.
@@ -508,7 +528,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task First_time_prompt_emits_no_near_miss_diagnostic()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             // Store holds an unrelated verb, so the prompted verb has no
@@ -538,7 +558,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Invalid_persistent_store_returns_typed_failure_without_authority()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
@@ -627,7 +647,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Session_grant_can_cover_candidate_when_persistent_store_is_invalid()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
@@ -669,7 +689,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Persistent_token_prefix_covers_a_longer_candidate()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var store = CreateStore(tempFile);
@@ -704,7 +724,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Persistent_assignment_grant_requires_the_same_exact_digest()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var store = CreateStore(tempFile);
@@ -769,7 +789,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Persistent_phrase_uses_parser_tokens_when_legacy_projection_is_shorter()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var store = CreateStore(tempFile);
@@ -802,7 +822,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Persistent_structured_batch_stores_each_clean_candidate_atomically()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var store = CreateStore(tempFile);
@@ -851,7 +871,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Malformed_structured_batch_stores_no_partial_authority()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             var store = CreateStore(tempFile);
@@ -886,7 +906,7 @@ public sealed class ToolApprovalActorTests : TestKit
     public async Task Typed_shell_batch_preserves_ids_and_store_status()
     {
         var ct = TestContext.Current.CancellationToken;
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             File.WriteAllText(tempFile, "{\"version\":3,\"audiences\":{\"personal\":null}}");
@@ -940,7 +960,7 @@ public sealed class ToolApprovalActorTests : TestKit
     {
         var ct = TestContext.Current.CancellationToken;
         var grantTimestamp = new DateTimeOffset(2026, 8, 13, 8, 0, 0, TimeSpan.Zero);
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             File.Delete(tempFile);
@@ -987,7 +1007,7 @@ public sealed class ToolApprovalActorTests : TestKit
     {
         var ct = TestContext.Current.CancellationToken;
         var grantTimestamp = new DateTimeOffset(2026, 8, 13, 8, 15, 0, TimeSpan.Zero);
-        var tempFile = Path.GetTempFileName();
+        var tempFile = NewStorePath();
         try
         {
             File.Delete(tempFile);

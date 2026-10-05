@@ -212,23 +212,30 @@ public class AttachFileToolTests : IDisposable
         // directory's name prefix is outside the roots and denied (#1724).
         var outsideDir = _dir.Path + "-outside";
         Directory.CreateDirectory(outsideDir);
-        var outsideFile = Path.Combine(outsideDir, "secret.txt");
-        await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
-
-        var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+        try
         {
-            Audience = TrustAudience.Personal,
-            Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
-            InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
-            ChannelType = "reminder"
-        });
-        var args = ToolInput.Create("Path", outsideFile);
+            var outsideFile = Path.Combine(outsideDir, "secret.txt");
+            await File.WriteAllTextAsync(outsideFile, "sensitive", TestContext.Current.CancellationToken);
 
-        var result = await _boundedTool.ExecuteAsync(args, context, CancellationToken.None);
+            var context = TestToolExecutionContext.CreateBound("reminder/test-session", _dir.Path, new TestToolExecutionContextOptions
+            {
+                Audience = TrustAudience.Personal,
+                Boundary = SecurityPolicyDefaults.ResolveBoundaryFromAudience(TrustAudience.Personal),
+                InteractiveApproval = TestToolExecutionContext.InteractiveApproval(false),
+                ChannelType = "reminder"
+            });
+            var args = ToolInput.Create("Path", outsideFile);
 
-        Assert.Contains("Error", result);
-        Assert.Contains("configured roots", result, StringComparison.OrdinalIgnoreCase);
-        Assert.Empty(context.FileAttachments);
+            var result = await _boundedTool.ExecuteAsync(args, context, CancellationToken.None);
+
+            Assert.Contains("Error", result);
+            Assert.Contains("configured roots", result, StringComparison.OrdinalIgnoreCase);
+            Assert.Empty(context.FileAttachments);
+        }
+        finally
+        {
+            Directory.Delete(outsideDir, recursive: true);
+        }
     }
 
     [Fact]

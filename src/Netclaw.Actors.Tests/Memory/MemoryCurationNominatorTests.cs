@@ -45,7 +45,7 @@ public sealed class MemoryCurationNominatorTests : IAsyncDisposable
 
     private static readonly SessionId TestSessionId = new("test-channel/nominator");
 
-    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), "netclaw-curation-nominator-tests", Guid.NewGuid().ToString("N"));
+    private readonly string _baseDir = Path.Combine(Path.GetTempPath(), $"netclaw-curation-nominator-tests-{Guid.NewGuid():N}");
     private readonly string _dbPath;
     private readonly SQLiteMemoryStore _store;
 

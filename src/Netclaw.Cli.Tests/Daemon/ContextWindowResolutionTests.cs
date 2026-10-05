@@ -13,8 +13,12 @@ using Xunit;
 
 namespace Netclaw.Cli.Tests.Daemon;
 
-public sealed class ContextWindowResolutionTests
+public sealed class ContextWindowResolutionTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public async Task ResolveRuntime_UsesDaemonRuntimeModelWhenNoContextWindowConfigured()
     {
@@ -180,10 +184,10 @@ public sealed class ContextWindowResolutionTests
 
     // ── Helpers ──────────────────────────────────────────────────────────
 
-    private static DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
+    private DaemonApi CreateDaemonApi(Func<HttpRequestMessage, HttpResponseMessage> handler)
     {
         var configuration = new ConfigurationBuilder().Build();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-ctx-res-test-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(_temp.Path, Guid.NewGuid().ToString("N")));
         paths.EnsureDirectoriesExist();
         return new DaemonApi(new StubHttpClientFactory(handler), configuration, paths);
     }

@@ -12,20 +12,20 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public class ShellToolStreamingTests
+public class ShellToolStreamingTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
     private readonly ShellTool _tool = CreateTool();
 
     public static bool IsPosix => !OperatingSystem.IsWindows();
 
-    private static ToolExecutionContext CreateExecutionContext()
+    private ToolExecutionContext CreateExecutionContext()
     {
-        var sessionDirectory = Path.Combine(
-            Path.GetTempPath(),
-            "netclaw-shell-stream-tests",
-            Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
-        Directory.CreateDirectory(sessionDirectory);
+        var sessionDirectory = _temp.Path;
         return TestToolExecutionContext.CreateBound(
             "test/shell-stream",
             sessionDirectory,
@@ -65,7 +65,7 @@ public class ShellToolStreamingTests
         Assert.DoesNotContain("cmd.exe", completion.Result, StringComparison.OrdinalIgnoreCase);
     }
 
-    private static async Task<(List<ToolActivityUpdate> Activities, ToolCompletedUpdate? Completion)>
+    private async Task<(List<ToolActivityUpdate> Activities, ToolCompletedUpdate? Completion)>
         CollectStreamAsync(ShellTool tool, IDictionary<string, object?> args,
             ToolExecutionContext? context = null, CancellationToken ct = default)
     {
@@ -165,7 +165,7 @@ public class ShellToolStreamingTests
         // stdout/stderr and holds the pipe write end open for its own life
         // span. The streaming path must complete once bash exits.
         var args = ToolInput.Create("Command", "sleep 20 & exit 0");
-        var context = TestToolExecutionContext.CreateBound("test/thread", Path.GetTempPath(), new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("test/thread", _temp.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             ExecutionTimeout = new ToolExecutionTimeout(TimeSpan.FromSeconds(90))

@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Tests.Utilities;
 using System.Reflection;
 using Akka.Actor;
 using Akka.Streams;
@@ -25,8 +26,12 @@ using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Daemon.Tests.Configuration;
 
-public sealed class ChannelIntegrationRegistrationTests
+public sealed class ChannelIntegrationRegistrationTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+
+    public void Dispose() => _temp.Dispose();
+
     [Fact]
     public void Invalid_mattermost_server_url_does_not_throw_during_registration()
     {
@@ -126,7 +131,7 @@ public sealed class ChannelIntegrationRegistrationTests
         }
     }
 
-    private static ServiceCollection BuildChannelServices(IReadOnlyDictionary<string, string?> settings)
+    private ServiceCollection BuildChannelServices(IReadOnlyDictionary<string, string?> settings)
     {
         var services = new ServiceCollection();
         services.AddLogging();
@@ -134,7 +139,7 @@ public sealed class ChannelIntegrationRegistrationTests
         services.AddSingleton<IContentScanner>(new NullContentScanner());
         services.AddSingleton(new ToolConfig());
         services.AddSingleton(new ModelCapabilities());
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), Path.GetRandomFileName()));
+        var paths = new NetclawPaths(_temp.Path);
         services.AddSingleton(paths);
         services.AddSingleton<ISessionStorageResolver>(new TestSessionStorageResolver(paths));
 

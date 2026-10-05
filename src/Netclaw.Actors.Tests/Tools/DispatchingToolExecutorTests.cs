@@ -24,15 +24,16 @@ using Xunit;
 
 namespace Netclaw.Actors.Tests.Tools;
 
-public partial class DispatchingToolExecutorTests
+public partial class DispatchingToolExecutorTests : IDisposable
 {
+    private readonly DisposableTempDir _temp = new();
+    private string BoundSessionDirectory => _temp.Path;
+
+    public void Dispose() => _temp.Dispose();
+
     private const string MissingShellCommandError =
         "Error parsing arguments for tool 'shell_execute': Required parameter 'Command' is missing.";
     private static readonly ShellExecutionEnvironment ShellEnvironment = TestShellEnvironment.Current;
-    private static readonly string BoundSessionDirectory = Path.Combine(
-        Path.GetTempPath(),
-        "netclaw-dispatching-tool-tests",
-        Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture));
     private readonly DispatchingToolExecutor _executor;
     private readonly DispatchingToolExecutor _restrictedExecutor;
 
@@ -430,7 +431,7 @@ public partial class DispatchingToolExecutorTests
             "call-2", "file_read",
             ToolInput.Create("Path", missingPath));
 
-        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", Path.GetTempPath(), new TestToolExecutionContextOptions
+        var context = TestToolExecutionContext.CreateBound("signalr/thread-1", _temp.Path, new TestToolExecutionContextOptions
         {
             Audience = TrustAudience.Personal,
             Boundary = TrustBoundary.TrustedInstance,
@@ -2097,7 +2098,7 @@ public partial class DispatchingToolExecutorTests
                 $"call-{toolName}-deny", toolName,
                 buildArgs(filePath));
 
-            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-{toolName}-session-{Guid.NewGuid():N}");
+            var sessionDir = Path.Combine(_temp.Path, $"{toolName}-session");
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("slack/thread-1", sessionDir, new TestToolExecutionContextOptions
@@ -2137,7 +2138,7 @@ public partial class DispatchingToolExecutorTests
                 "call-3", "file_write",
                 ToolInput.Create("Path", filePath, "Content", "dispatch test"));
 
-            var sessionDir = Path.Combine(Path.GetTempPath(), $"netclaw-dispatch-session-{Guid.NewGuid():N}");
+            var sessionDir = Path.Combine(_temp.Path, "dispatch-session");
             Directory.CreateDirectory(sessionDir);
 
             var context = TestToolExecutionContext.CreateBound("signalr/thread-1", sessionDir, new TestToolExecutionContextOptions
@@ -2213,7 +2214,7 @@ public partial class DispatchingToolExecutorTests
             new ToolPathPolicy([]));
 
         var registry = new ToolRegistry();
-        var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), $"netclaw-{audience}-tools-{Guid.NewGuid():N}"));
+        var paths = new NetclawPaths(Path.Combine(_temp.Path, $"{audience}-tools"));
         paths.EnsureDirectoriesExist();
         registry.WithFirstPartyTools(policy, webhookRouteStore: new WebhookRouteStore(paths));
         // set_webhook and delete_webhook ask WebhookRouteActor. This test reads
@@ -2642,7 +2643,7 @@ public partial class DispatchingToolExecutorTests
         var registry = new ToolRegistry();
         registry.WithFirstPartyTools(TestToolAccessPolicy.Create(config));
 
-        var tempFile = Path.GetTempFileName();
+        var tempFile = Path.Combine(_temp.Path, "tool-approvals.json");
         var system = ActorSystem.Create($"tool-approval-audit-{Guid.NewGuid():N}");
         try
         {
@@ -4021,7 +4022,7 @@ public partial class DispatchingToolExecutorTests
                 InteractiveApproval = TestToolExecutionContext.InteractiveApproval(true)
             });
 
-    private static ToolExecutionContext CreateInteractivePersonalExecutionContext(string sessionId)
+    private ToolExecutionContext CreateInteractivePersonalExecutionContext(string sessionId)
         => TestToolExecutionContext.CreateBound(
             sessionId,
             BoundSessionDirectory,

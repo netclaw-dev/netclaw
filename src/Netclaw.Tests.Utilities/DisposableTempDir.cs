@@ -34,12 +34,24 @@ internal sealed class DisposableTempDir : IDisposable
             }
             catch (UnauthorizedAccessException) when (i < 4) // slopwatch-ignore: SW003 test cleanup retry
             {
+                // A test can leave a read-only file. Windows refuses to delete it.
+                ClearReadOnlyAttributes(Path);
                 Thread.Sleep(50 * (i + 1));
             }
             catch (DirectoryNotFoundException)
             {
                 return;
             }
+        }
+    }
+
+    private static void ClearReadOnlyAttributes(string root)
+    {
+        foreach (var entry in Directory.EnumerateFileSystemEntries(root, "*", SearchOption.AllDirectories))
+        {
+            var attributes = File.GetAttributes(entry);
+            if ((attributes & FileAttributes.ReadOnly) != 0)
+                File.SetAttributes(entry, attributes & ~FileAttributes.ReadOnly);
         }
     }
 }

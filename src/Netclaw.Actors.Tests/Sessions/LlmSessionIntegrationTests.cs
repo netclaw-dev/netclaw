@@ -120,7 +120,7 @@ public class LlmSessionIntegrationTests : LlmSessionTestBase
             "You are a test assistant."));
         services.AddSingleton<MemoryProposalGate>();
         services.AddSingleton<IMemoryCheckpointSink, NullMemoryCheckpointSink>();
-        services.AddSingleton<SQLiteMemoryStore>(sp => new SQLiteMemoryStore(Path.Combine(Path.GetTempPath(), $"netclaw-sidecar-tests-{Guid.NewGuid():N}.db"), TimeProvider.System));
+        services.AddSingleton<SQLiteMemoryStore>(sp => new SQLiteMemoryStore(Path.Combine(TestPaths.BasePath, "sidecar-memory.db"), TimeProvider.System));
         services.AddSingleton<IMemoryRecallCoordinator>(sp => new SQLiteMemoryRecallCoordinator(
             sp.GetRequiredService<SQLiteMemoryStore>(),
             Microsoft.Extensions.Logging.Abstractions.NullLogger<SQLiteMemoryRecallCoordinator>.Instance,
