@@ -2397,9 +2397,9 @@ public static class ShellApprovalCases
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "until-loop-prompts-for-each-command",
-            Bash52("until test -f marker; do sleep 1; done"),
+            Bash52("until test -f marker; do git fetch; done"),
             Approvals.None,
-            ExpectedApproval.Require(["test"])),
+            ExpectedApproval.Require(["test", "git fetch"])),
         Case(
             "background-process-id-kill-prompts",
             Bash52("server & PID=$!; kill \"$PID\""),

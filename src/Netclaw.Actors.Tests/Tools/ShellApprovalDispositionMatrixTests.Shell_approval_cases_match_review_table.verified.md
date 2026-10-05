@@ -374,7 +374,7 @@
 | unattended-brace-program-word-gets-rewrite-advice | Bash52 | Personal | Project | Non-interactive | {"b":2,"nested":{"c":3}} | none | RequiresAgentCorrection | approval required | none | Not applicable |
 | if-statement-prompts-for-each-command | Bash52 | Personal | Project | Interactive | if test -f marker; then git push; else git fetch; fi | none | RequiresApproval | approval required | test, git push, git fetch | No |
 | case-statement-uses-reviewed-phrases | Bash52 | Personal | Project | Interactive | case x in a) cat a.txt ;; *) cat b.txt ;; esac | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| until-loop-prompts-for-each-command | Bash52 | Personal | Project | Interactive | until test -f marker; do sleep 1; done | none | RequiresApproval | approval required | test | No |
+| until-loop-prompts-for-each-command | Bash52 | Personal | Project | Interactive | until test -f marker; do git fetch; done | none | RequiresApproval | approval required | test, git fetch | No |
 | background-process-id-kill-prompts | Bash52 | Personal | Project | Interactive | server & PID=$!; kill "$PID" | persistent[anywhere]:kill | RequiresApproval | approval required | server, kill "$PID" | No |
 | unassigned-operand-uses-global-grant | Bash52 | Personal | Project | Interactive | rm -rf "$BUILD_DIR/out" | persistent[anywhere]:rm | Allowed | StoredApproval | none | Not applicable |
 | unassigned-operand-prompts-with-folder-grant | Bash52 | Personal | Project | Interactive | rm -rf "$BUILD_DIR/out" | persistent[project]:rm | RequiresApproval | approval required | rm -rf "$BUILD_DIR/out" | No |

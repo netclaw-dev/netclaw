@@ -12,7 +12,6 @@
     { "tokens": ["wc"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["cut"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["tr"], "classification": "ReviewedDiagnostic" },
-    { "tokens": ["base64"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["pwd"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["which"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["stat"], "classification": "ReviewedDiagnostic" },

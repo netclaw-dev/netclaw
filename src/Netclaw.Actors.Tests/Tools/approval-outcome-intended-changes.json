@@ -602,8 +602,9 @@
       "renamedFrom": "echo-substitution-data-prompts-for-inner-command",
       "from": "RequiresApproval",
       "to": "Allowed",
-      "reason": "Decision D4 adds git merge-base to the reviewed catalog. It only reads commits and has no write, code, or network mode. An unreviewed command in the substitution still prompts (see echo-substitution-data-prompts-for-unreviewed-inner-command).",
-      "negativeControl": "unsafe-catalog-find-exec-prompts"
+      "reason": "Approval taxonomy D4 adds git merge-base to the reviewed catalog. It only reads commits and has no write, code, or network mode. An unreviewed command in the substitution still prompts (see echo-substitution-data-prompts-for-unreviewed-inner-command).",
+      "negativeControl": "unsafe-catalog-find-exec-prompts",
+      "approvedBy": "Aaron Stannard (owner), approval taxonomy D4 (one reviewed batch of read-only commands, plan page approval-taxonomy.html), 2026-10-05"
     }
   ]
 }
