@@ -4,15 +4,25 @@
 // </copyright>
 // -----------------------------------------------------------------------
 
+using System.Runtime.CompilerServices;
+
 namespace Netclaw.Tests.Utilities;
 
 internal sealed class DisposableTempDir : IDisposable
 {
-    public string Path { get; } = System.IO.Path.Combine(
-        System.IO.Path.GetTempPath(),
-        $"netclaw-test-{Guid.NewGuid():N}");
+    public string Path { get; }
 
-    public DisposableTempDir() => Directory.CreateDirectory(Path);
+    /// <summary>
+    /// The folder name carries the name of the test file that made it. When a
+    /// test leaks the folder, the leak report names the file.
+    /// </summary>
+    public DisposableTempDir([CallerFilePath] string callerFile = "")
+    {
+        Path = System.IO.Path.Combine(
+            System.IO.Path.GetTempPath(),
+            $"netclaw-test-{System.IO.Path.GetFileNameWithoutExtension(callerFile)}-{Guid.NewGuid():N}");
+        Directory.CreateDirectory(Path);
+    }
 
     public void Dispose()
     {

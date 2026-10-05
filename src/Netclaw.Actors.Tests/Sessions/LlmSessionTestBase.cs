@@ -110,7 +110,7 @@ public abstract class LlmSessionTestBase : TestKit
         // Own a unique temp directory for this test and register it (plus its
         // NetclawPaths) so SessionServices can construct. Disposed in
         // AfterAllAsync so the /tmp tree is not leaked (issue #2266).
-        _testTempDir = TestSessionTempDirectory.Create();
+        _testTempDir = TestSessionTempDirectory.Create("netclaw-llm-session-");
         services.AddSingleton(_testTempDir);
         services.AddSingleton(_testTempDir.Paths);
         services.AddSingleton(SecurityPolicyDefaults.Resolve(null));
