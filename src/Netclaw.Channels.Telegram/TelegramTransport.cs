@@ -18,6 +18,16 @@ public sealed class TelegramTransport(
     ILogger<TelegramTransport> logger,
     TelegramBotClientFactory clientFactory) : IAsyncDisposable
 {
+    // Convenience constructor for production and sample callers; it uses the
+    // same factory the DI container registers. Tests inject a fake client
+    // through the factory constructor instead.
+    public TelegramTransport(
+        TelegramChannelOptions options,
+        ILogger<TelegramTransport> logger)
+        : this(options, logger, TelegramBotApiClient.Factory)
+    {
+    }
+
     private readonly object _albumLock = new();
     private readonly Dictionary<string, AlbumBuffer> _albums = [];
     private CancellationTokenSource? _stopSource;
