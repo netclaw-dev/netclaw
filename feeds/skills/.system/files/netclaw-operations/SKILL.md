@@ -611,10 +611,11 @@ You may read each file under `~/.netclaw/config/` with `file_read`, for example
 cannot write them, and you cannot read `secrets.json`, the webhook route files
 in `~/.netclaw/config/webhooks/`, or `~/.netclaw/keys`.
 In the shell, `cat`, `head`, `tail`, `wc`, `grep`, `jq`, and `diff` can read a
-config file by its exact path argument. A glob, a recursive search of the
-config directory, the config path inside program text (a `jq` or
-`python3 -c` program), or a write to a config file is denied. `file_read`
-always works.
+config file by its exact path argument. A glob, a brace word
+(`{a,b}.json`), a recursive search of the config directory, the config path
+inside program text (a `jq` or `python3 -c` program), or a write to a config
+file is denied. A `jq` filter with a brace (`jq '{a: .x}' file`) is denied
+too; use `cat file | jq '{a: .x}'`. `file_read` always works.
 
 ```bash
 # Interactive TUI: see everything grouped by audience and tool

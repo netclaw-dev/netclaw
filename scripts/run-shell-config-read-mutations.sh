@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Decision D6: a read-only shell program can read a config file that a file
 # tool may read. Every other form keeps the old denial: a credential, a
-# directory that holds one, a glob, a ".." out of the config directory, a
+# directory that holds one, a glob, a brace, a ".." out of the config directory,
+# another spelling of the config directory in program text, a
 # program that can write, a write redirect, and a path outside the write roots.
 # A mutant that widens one of these rules must die.
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -64,7 +65,7 @@ policy="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
 read -r occurrences_start occurrences_end < <(
   find_range 'foreach (var occurrence in analysis.Commands)' 'occurrences.Add(occurrence);' "$policy")
 read -r operand_start operand_end < <(
-  find_range '=> argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet' '=> ShellGrantFileWords.NamesEntry(word, directory, out _);' "$policy")
+  find_range "=> !argument.Element.Raw.Contains('{', StringComparison.Ordinal)" '=> ShellGrantFileWords.NamesEntry(word, directory, out _);' "$policy")
 read -r redirect_start redirect_end < <(
   find_range 'var read = readOnly' ': ShellPathRead.None;' "$policy")
 read -r relax_start relax_end < <(
@@ -74,7 +75,7 @@ read -r gate_start gate_end < <(
   find_range 'if (!path.IsHostStyle || !_fileSystem.IsProtected' 'PathOperation.Write))' "$access")
 read -r read_start read_end < <(
   find_range 'var read = Evaluate(path.Value, context, FileOperation.Read);' ': read;' "$access")
-run_gate Netclaw.Actors.csproj "$output_path/actors" 22 "read-only shell path" \
+run_gate Netclaw.Actors.csproj "$output_path/actors" 24 "read-only shell path" \
   "Tools/ToolAccessPolicy.cs{$occurrences_start..$occurrences_end}" \
   "Tools/ToolAccessPolicy.cs{$operand_start..$operand_end}" \
   "Tools/ToolAccessPolicy.cs{$redirect_start..$redirect_end}" \
@@ -86,14 +87,14 @@ text_policy="$repo_root/src/Netclaw.Security/ToolPathPolicy.cs"
 read -r whole_start whole_end < <(
   find_range 'var text = slashCommand;' "&& CanonicalPath.IsWithin(path.Value, directory, CanonicalPath.HostStyle, AllowIgnoresCase));" "$text_policy")
 read -r guarded_start guarded_end < <(
-  find_range 'var screened = RemoveReadOperands' 'screened.Contains(marker, StringComparison.OrdinalIgnoreCase)))' "$text_policy")
+  find_range 'var screened = ScreenText' 'if (MentionsGuardedDirectory(screened))' "$text_policy")
 read -r proved_start proved_end < <(
   find_range 'var proved = analysis.IsResolved' 'var shell = proved ? FileSystem : _unprovedShell;' "$text_policy")
 read -r holds_start holds_end < <(
   find_range 'TryResolveLinks(normalized, out var resolved);' \
     'CanonicalPath.IsWithin(protectedPath, resolved, CanonicalPath.HostStyle,' \
     "$repo_root/src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs")
-run_gate Netclaw.Security.csproj "$output_path/security" 18 "guarded config directory" \
+run_gate Netclaw.Security.csproj "$output_path/security" 30 "guarded config directory" \
   "ToolPathPolicy.cs{$whole_start..$whole_end}" \
   "ToolPathPolicy.cs{$guarded_start..$guarded_end}" \
   "ToolPathPolicy.cs{$proved_start..$proved_end}" \

@@ -341,10 +341,12 @@ for example `netclaw.json`, `tool-approvals.json`, and
 `ShellVerbPolicyData.ReadOnlyOperandVerbs`) can read a config file by its
 exact path (decision D6). Every other shell command that names a config file
 meets write protection, because shell text cannot show a read from a write.
-A glob, an unknown path value, or a directory operand that holds a
-read-denied path keeps write protection too. Shell text that names the config
-directory in any other place, for example in a `jq` or `python3 -c` program,
-stays denied. A redirect that writes, such as `> copy.json`, gets the write
+A glob, a brace word (`{netclaw,secrets}.json`), an unknown path value, or a
+directory operand that holds a read-denied path keeps write protection too. A
+`jq` filter with a brace (`jq '{a: .x}' file`) is not a read-only program, so
+use `cat file | jq '{a: .x}'`. Shell text that names the config directory in
+any other place, for example in a `jq` or `python3 -c` program, stays denied.
+This includes spellings with `//`, `/./`, `name/../`, or split quotes. A redirect that writes, such as `> copy.json`, gets the write
 check for its target only.
 
 Add your own command patterns with `HardDenyPatterns`. They add to the

@@ -563,9 +563,12 @@ public sealed class ToolAccessPolicy
     // SECURITY: each value must be bounded. A path gets a path fact. A plain word
     // must have one value that names no entry of the occurrence directory: such a
     // word (grep -r token config) is a path that no path fact sees, and its scope
-    // is not read below, so the occurrence is not read-only.
+    // is not read below, so the occurrence is not read-only. The parser reports a
+    // brace word ({netclaw,secrets}.json) as one exact value, but Bash expands it
+    // to more paths, so a word with a brace is never a read-only operand.
     private static bool IsReadOnlyOperand(AnalyzedArgument argument, string? directory)
-        => argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
+        => !argument.Element.Raw.Contains('{', StringComparison.Ordinal)
+           && argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
            && (argument.Argument.IsPath
                || argument.Value is ShellValueDomain.Exact exact && !NamesEntry(exact.Value, directory));
 

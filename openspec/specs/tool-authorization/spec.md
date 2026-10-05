@@ -82,7 +82,7 @@ document in the same diff.
 | TA-3 | `ToolAuthorizationMutationTests` (tool authorization mutation gate), `McpToolAudienceGrantsTests`, `ToolAudienceProfileDefaultsTests` |
 | TA-4 | `ToolApprovalConfigTests`, `SecurityPolicyDefaultsTests`, `ToolApprovalGateTests` |
 | TA-5 | Catalog deny rows with 0 approval service calls (`ShellApprovalDispositionMatrixTests`), `ToolAuthorizationMutationTests.Shell_hard_denial_prevents_dispatch_despite_approval`, `DispatchingToolExecutorLaunchTests`, `HardDenyParityCorpusTests`, `GlobPolicyMutationTests` (bound values), the shell analysis mutation gate (daemon kill pattern) |
-| TA-6 | `ToolPathPolicyTests`, `UnattendedPathAccessTests`, `PublicAudienceFileAccessPolicyTests`, `PathAccessPolicyMutationTests` (path access mutation gate), `DaemonToolPathPolicyFactoryTests`, `GlobPolicyMutationTests` (D5 glob match and link walk) |
+| TA-6 | `ToolPathPolicyTests`, `UnattendedPathAccessTests`, `PublicAudienceFileAccessPolicyTests`, `PathAccessPolicyMutationTests` (path access mutation gate), `DaemonToolPathPolicyFactoryTests`, `GlobPolicyMutationTests` (D5 glob match and link walk), `ShellConfigReadTests` (D6 gate), `ToolAuthorizerOrderMutationTests` with `scripts/run-shell-config-read-mutations.sh` (D6 mutation gate) |
 | TA-7 | `ShellApprovalDispositionMatrixTests` with `ShellApprovalCaseCatalog`, `MessyCommandOneTimeApprovalTests`, `ShellCommandAnalysisTests`, `PerCommandJudgmentMutationTests` (D1), `GlobPolicyMutationTests`, the shell analysis and shell assignment mutation gates |
 | TA-8 | `ToolApprovalActorTests`, `RepositoryWorktreeApprovalTests`, `ApprovalDirectoryMutationTests` (approval directory mutation gate), `ReviewedSafeShellPolicyTests`, `PathAccessPolicyMutationTests` (interactive read branch), `ApprovalPatternV3Tests` and `SubcommandEverywhereGrantTests` (legacy grant words) |
 | TA-9 | `DispatchingToolExecutorTests` correction cases, `SessionToolExecutionPipelineTests`, `ToolCorrectionDeliveryTests`, `TemporaryPathCorrectionPolicyTests` |
@@ -432,17 +432,22 @@ the link check, then protection.
   process-control files SHALL be denied. Shell text that names the config
   directory SHALL be denied. Only an exact path argument of a read-only shell
   program that names one file below the config directory SHALL leave this
-  text check. A `..` segment, a glob, the directory itself, and program text
-  (a `jq` module search path, `python3 -c`, `node -e`) SHALL keep the denial.
+  text check. A `..` segment, a glob, a brace word, the directory itself, and
+  program text (a `jq` module search path, `python3 -c`, `node -e`) SHALL keep
+  the denial. The check SHALL also see the directory in each spelling: with
+  `//`, `/./`, or `name/../` in the text, and in the unquoted value of a word
+  whose quotes split the name.
 - A read-only shell program SHALL be one of the policy-data programs `cat`,
   `head`, `tail`, `wc`, `grep`, `jq`, and `diff`, with bounded argument
   values and no assignment prefix. A redirect that writes SHALL keep `Write`
   protection for its target only, and a null-device redirect SHALL be
   ignored. A plain
-  argument word that names an entry of the command's directory SHALL make the
-  program not read-only. Such a program SHALL get `Read` protection only for a
-  path that the write list protects. A directory operand that holds a
-  read-denied path SHALL stay denied. Each other shell program SHALL keep
+  argument word that names an entry of the command's directory, or a word
+  with a brace, SHALL make the program not read-only. Such a program SHALL get
+  `Read` protection only for a path that the write list protects. A
+  write-protected directory operand that holds a read-denied path SHALL stay
+  denied. Known gap (issue #2341): a recursive or brace read that names only a
+  parent of the config directory is not denied by this rule. Each other shell program SHALL keep
   `Write` protection for each path, so each write to a config file stays
   denied.
 - Owner decision D5 (option A): a shell glob word that can match a protected
@@ -582,8 +587,22 @@ process-local. No state of these checks is durable.
 #### Scenario: A grant never opens a protected path
 
 - **GIVEN** an unattended Personal run in Approval mode and a grant for `cat`
-- **WHEN** the model calls `shell_execute` with `cat <config dir>/netclaw.json`
+- **WHEN** the model calls `shell_execute` with `cat <config dir>/secrets.json`
 - **THEN** the call is denied
+
+#### Scenario: A brace word keeps the denial
+
+- **GIVEN** a Personal run, attended or unattended
+- **WHEN** the model calls `shell_execute` with `cat <config dir>/{netclaw,secrets}.json`
+- **THEN** the call is denied, because Bash expands the word to `secrets.json`
+- **AND** `cat <config dir>/netclaw.json` is not denied
+
+#### Scenario: Program text keeps the denial in each spelling
+
+- **GIVEN** a Personal run, attended or unattended
+- **WHEN** the model calls `shell_execute` with `jq -n 'import "secrets" as $s {search: "<home>//config"}; $s'`, or with `<home>/./config`, `<home>/x/../config`, or `<home>/con'fig'` in the program text
+- **THEN** the call is denied
+- **AND** program text that names `<home>/x/../other` is not denied by this check
 
 #### Scenario: Team does not get the shared sessions root
 

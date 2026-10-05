@@ -61,6 +61,26 @@ public sealed class DaemonToolPathPolicyFactoryTests
         Assert.All(protectedPaths, path => Assert.True(policy.CommandReferencesDeniedPath($"cat '{path}'"), path));
     }
 
+    // Program text can name the config directory in another spelling. The text
+    // screen collapses "//", "/./", a trailing "/.", and "name/../" before it
+    // matches the ".netclaw/config" marker, so each spelling stays denied.
+    [Theory]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"~/.netclaw/./config\"}; $s'")]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"~/.netclaw//config\"}; $s'")]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"~/.netclaw/x/../config\"}; $s'")]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"$HOME/.netclaw/./config\"}; $s'")]
+    [InlineData("python3 -c \"import os; print(os.listdir('/srv/.netclaw/config/.'))\"")]
+    public void Program_text_that_spells_the_config_directory_stays_denied(string command)
+    {
+        var paths = new NetclawPaths("/home/user/.netclaw");
+        var policy = DaemonToolPathPolicyFactory.Create(
+            paths,
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+
+        Assert.True(policy.CommandReferencesDeniedPath(command), command);
+        Assert.False(policy.CommandReferencesDeniedPath("jq -n 'import \"x\" as $s {search: \"~/.netclaw/./skills\"}; $s'"));
+    }
+
     [Theory]
     [InlineData(ShellPlatform.Linux)]
     [InlineData(ShellPlatform.MacOS)]

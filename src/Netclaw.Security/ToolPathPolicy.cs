@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Text.RegularExpressions;
 using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 
@@ -130,7 +131,7 @@ public sealed class ToolPathPolicy
     /// Shell text that names such a directory stays denied, as before decision
     /// D6. Decision D6 exempts only an exact path argument of a read-only
     /// program that names one file below the directory
-    /// (<see cref="RemoveReadOperands"/>). Program text that names the directory
+    /// (<see cref="ScreenText"/>). Program text that names the directory
     /// (<c>jq 'import "secrets" {search: "dir"}'</c>, <c>python3 -c</c>) stays
     /// denied.
     /// </remarks>
@@ -153,39 +154,81 @@ public sealed class ToolPathPolicy
     }
 
     /// <summary>
-    /// Returns the command text without each exact path argument of a
-    /// read-only program that names one file below a guarded directory.
+    /// Returns the text that the guarded-directory screen reads: the command text
+    /// without each exact path argument of a read-only program that names one
+    /// file below a guarded directory, plus the unquoted value of each other
+    /// argument.
     /// </summary>
     /// <remarks>
-    /// SECURITY: only such an argument leaves the text screen. A glob, a
-    /// <c>..</c> segment, the directory itself, an option value, a redirect, and
-    /// program text keep the denial. The read-only programs are policy data
-    /// (<see cref="ShellVerbPolicyData.ReadOnlyOperandVerbs"/>). The caller uses
-    /// this only for a source that the parser proves.
+    /// SECURITY: only such an argument leaves the text screen. A glob, a brace
+    /// expansion, a <c>..</c> segment, the directory itself, an option value, a
+    /// redirect, and program text keep the denial. The parser reports a brace word
+    /// as one exact path, but Bash expands it to more paths. The unquoted values
+    /// show a directory that quotes split in the text (<c>"dir/con'fig'"</c>).
+    /// The read-only programs are policy data
+    /// (<see cref="ShellVerbPolicyData.ReadOnlyOperandVerbs"/>). Without a parser
+    /// proof, the structured check still denies the removed operand.
     /// </remarks>
-    private string RemoveReadOperands(ShellCommandAnalysis analysis, string slashCommand)
+    private string ScreenText(ShellCommandAnalysis analysis, string slashCommand)
     {
         var text = slashCommand;
+        var values = new List<string>();
         foreach (var occurrence in analysis.Commands)
         {
-            if (occurrence is not { IsComplete: true, Assignments.Count: 0, Clause.Verb: { IsDynamic: false, Tokens: [var program, ..] } }
-                || !ShellVerbPolicyData.ReadOnlyOperandVerbs.Contains(program))
-            {
-                continue;
-            }
-
+            var readOnly = occurrence is { IsComplete: true, Assignments.Count: 0, Clause.Verb: { IsDynamic: false, Tokens: [var program, ..] } }
+                && ShellVerbPolicyData.ReadOnlyOperandVerbs.Contains(program);
             foreach (var argument in occurrence.Arguments)
             {
                 var raw = argument.Element.Raw.Replace('\\', '/');
-                if (argument is { Argument.IsPath: true, Argument.Kind: not ArgKind.Glob, Value: ShellValueDomain.Exact }
+                if (readOnly
+                    && argument is { Argument.IsPath: true, Argument.Kind: not ArgKind.Glob, Value: ShellValueDomain.Exact }
                     && !raw.Split('/').Contains("..")
+                    && !raw.Contains('{', StringComparison.Ordinal)
                     && NamesOneFileBelowGuardedDirectory(argument.Argument.Resolved)
                     && text.IndexOf(raw, StringComparison.Ordinal) is var at and >= 0)
                 {
                     text = text.Remove(at, raw.Length);
+                    continue;
                 }
+
+                values.AddRange(argument.Value switch
+                {
+                    ShellValueDomain.Exact exact => [exact.Value],
+                    ShellValueDomain.FiniteSet finite => finite.Values,
+                    _ => []
+                });
             }
         }
+
+        return string.Join('\n', [text, .. values.Select(value => value.Replace('\\', '/'))]);
+    }
+
+    // SECURITY: shell text can spell a guarded directory with "//", "/./", or
+    // "name/../". The marker check also reads the text with these forms
+    // collapsed, so each spelling stays denied. It also reads the original text,
+    // because a collapsed "dir/../x" no longer names the directory. A trailing
+    // "/." needs no rule: the directory name comes before it, so a marker matches.
+    private bool MentionsGuardedDirectory(string text)
+    {
+        var collapsed = CollapseDotSegments(text);
+        return _guardedDirectoryMarkers.Any(marker =>
+            text.Contains(marker, StringComparison.OrdinalIgnoreCase)
+            || collapsed.Contains(marker, StringComparison.OrdinalIgnoreCase));
+    }
+
+    private static readonly Regex ParentSegment = new("/[^/]+/\\.\\./", RegexOptions.CultureInvariant);
+
+    private static string CollapseDotSegments(string text)
+    {
+        string previous;
+        do
+        {
+            previous = text;
+            text = ParentSegment.Replace(
+                text.Replace("//", "/", StringComparison.Ordinal).Replace("/./", "/", StringComparison.Ordinal),
+                "/");
+        }
+        while (!string.Equals(text, previous, StringComparison.Ordinal));
 
         return text;
     }
@@ -255,8 +298,8 @@ public sealed class ToolPathPolicy
         // config directory was a shell indicator. Only an exact read operand leaves
         // the text (decision D6). Without a parser proof, the structured check of
         // the operand uses the shell set plus each guarded directory.
-        var screened = RemoveReadOperands(analysis, slashCommand);
-        if (_guardedDirectoryMarkers.Any(marker => screened.Contains(marker, StringComparison.OrdinalIgnoreCase)))
+        var screened = ScreenText(analysis, slashCommand);
+        if (MentionsGuardedDirectory(screened))
             return true;
 
         if (StructuredAnalysisReferencesDeniedPath(analysis, shell))

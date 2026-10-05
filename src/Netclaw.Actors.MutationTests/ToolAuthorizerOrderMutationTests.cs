@@ -247,6 +247,7 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     [InlineData("cp \"$X\" '{C}/netclaw.json'", true)]
     [InlineData("echo \"$X\" > '{C}/netclaw.json'", true)]
     [InlineData("cp \"$X\" {R}/netclaw.json", true)]
+    [InlineData("cat {R}/{netclaw,secrets}.json", true)]
     public async Task Read_only_program_reads_only_a_readable_config_file(string template, bool denied)
     {
         if (OperatingSystem.IsWindows())
@@ -289,15 +290,25 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     [InlineData("cat {C}/n*.json", true)]
     [InlineData("cat {C}/../config/netclaw.json", true)]
     [InlineData("cat {C}/netclaw.json \"$(cat list)\"", true)]
+    [InlineData("cat {C}/{netclaw,secrets}.json", true)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}//config\"}; $s'", true)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/./config\"}; $s'", true)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/xy/../config\"}; $s'", true)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/a/b/../../config\"}; $s'", true)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/config/../other\"}; $s'", true)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/xy/../other\"}; $s'", false)]
+    [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/con'fig'\"}; $s'", true)]
     public void Text_screen_lets_a_token_name_one_exact_config_file(string template, bool denied)
     {
         if (OperatingSystem.IsWindows())
             return;
 
-        // {U} is the config directory in upper case: another path on Linux.
+        // {U} is the config directory in upper case: another path on Linux. {N}
+        // is the Netclaw home, so "{N}//config" spells the config directory.
         var command = template
             .Replace("{C}", _paths.ConfigDirectory, StringComparison.Ordinal)
-            .Replace("{U}", _paths.ConfigDirectory.ToUpperInvariant(), StringComparison.Ordinal);
+            .Replace("{U}", _paths.ConfigDirectory.ToUpperInvariant(), StringComparison.Ordinal)
+            .Replace("{N}", _paths.BasePath, StringComparison.Ordinal);
 
         Assert.Equal(denied, CreateConfigReadPolicy().CommandReferencesDeniedPath(command, _storage.SessionDirectory.Value));
     }
