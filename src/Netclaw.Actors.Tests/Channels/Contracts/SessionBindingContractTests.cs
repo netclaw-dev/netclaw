@@ -62,6 +62,23 @@ public abstract class SessionBindingContractTests : TestKit
 
     protected virtual bool SupportsApprovalSenderReplies => false;
 
+    /// <summary>
+    /// Whether the binding parses approval replies from ordinary message
+    /// text, for example "A" or "deny". Slack, Discord, and Mattermost route
+    /// text replies through the shared text-approval path. Telegram approvals
+    /// are button/callback only, so a Telegram fixture opts out.
+    /// </summary>
+    protected virtual bool SupportsTextApprovalResponses => true;
+
+    /// <summary>
+    /// Whether a click on a prompt whose binding-side pending entry was
+    /// cleared at a turn boundary still routes to the session through the
+    /// call id carried on the response payload. Slack, Discord, and
+    /// Mattermost do. Telegram's callback_data carries only the option key,
+    /// so a cleared prompt fails closed as expired and its fixture opts out.
+    /// </summary>
+    protected virtual bool SupportsApprovalAfterTurnCompleted => true;
+
     // --- Thread Hydration Contract (opt-in) ---
 
     protected virtual bool SupportsThreadHydration => false;
@@ -477,7 +494,7 @@ public abstract class SessionBindingContractTests : TestKit
                 CallId = new Netclaw.Tools.ToolCallId("call-2"),
                 ToolName = new Netclaw.Tools.ToolName("execute_shell"),
                 DisplayText = "rm -rf /tmp",
-                RequesterSenderId = new SenderId("user-1"),
+                RequesterSenderId = new SenderId("1001"),
                 Options =
                 [
                     new ToolInteractionOption(ApprovalOptionKeys.ApproveOnceKey, ApprovalOptionKeys.ApproveOnceLabel),
@@ -504,7 +521,7 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
 
         // Send explicit approval response
-        actor.Tell(CreateApprovalResponse("call-2", ApprovalOptionKeys.ApproveOnce, "user-1"), TestActor);
+        actor.Tell(CreateApprovalResponse("call-2", ApprovalOptionKeys.ApproveOnce, "1001"), TestActor);
 
         await AwaitAssertAsync(() =>
         {
@@ -576,7 +593,7 @@ public abstract class SessionBindingContractTests : TestKit
 
         var actor = CreateBindingActor(sid, pipeline, detector);
 
-        actor.Tell(CreateApprovalResponse("call-cold", ApprovalOptionKeys.ApproveOnce, "user-1"), TestActor);
+        actor.Tell(CreateApprovalResponse("call-cold", ApprovalOptionKeys.ApproveOnce, "1001"), TestActor);
 
         await AwaitAssertAsync(() =>
         {
@@ -584,13 +601,15 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Single(feedback);
             Assert.Equal("call-cold", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
-            Assert.Equal("user-1", feedback[0].SenderId.Value);
+            Assert.Equal("1001", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
     }
 
     [Fact]
     public async Task Text_approval_response_resolves_pending()
     {
+        if (!SupportsTextApprovalResponses) return;
+
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-text-approve");
@@ -638,6 +657,8 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Normal_chat_text_that_looks_like_approval_is_not_consumed_when_no_approval_history()
     {
+        if (!SupportsTextApprovalResponses) return;
+
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-cold-text-false-positive");
@@ -690,6 +711,8 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Cold_text_approval_response_forwards_to_session_when_binding_cold_spawned()
     {
+        if (!SupportsTextApprovalResponses) return;
+
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-cold-text-approve");
@@ -715,6 +738,8 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Text_approval_response_uses_visible_option_order_when_option_set_is_pruned()
     {
+        if (!SupportsTextApprovalResponses) return;
+
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-text-approve-pruned");
@@ -765,6 +790,8 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Text_approval_response_resolves_earliest_pending_approval()
     {
+        if (!SupportsTextApprovalResponses) return;
+
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-text-approve-order");
@@ -824,6 +851,8 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Approval_response_after_turn_completed_forwards_to_session()
     {
+        if (!SupportsApprovalAfterTurnCompleted) return;
+
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-approval-post-turn");
@@ -1019,7 +1048,7 @@ public abstract class SessionBindingContractTests : TestKit
         }, cancellationToken: ct);
 
         // Any user (not "reminder-system") should be able to approve
-        actor.Tell(CreateApprovalResponse("call-auto-1", ApprovalOptionKeys.ApproveOnce, "random-human-user"), TestActor);
+        actor.Tell(CreateApprovalResponse("call-auto-1", ApprovalOptionKeys.ApproveOnce, "2002"), TestActor);
 
         await AwaitAssertAsync(() =>
         {
@@ -1027,7 +1056,7 @@ public abstract class SessionBindingContractTests : TestKit
             Assert.Single(feedback);
             Assert.Equal("call-auto-1", feedback[0].CallId.Value);
             Assert.Equal(ApprovalOptionKeys.ApproveOnce, feedback[0].SelectedKey.Value);
-            Assert.Equal("random-human-user", feedback[0].SenderId.Value);
+            Assert.Equal("2002", feedback[0].SenderId.Value);
         }, cancellationToken: ct);
     }
 
@@ -1126,6 +1155,8 @@ public abstract class SessionBindingContractTests : TestKit
     [Fact]
     public async Task Text_approval_from_wrong_requester_posts_warning()
     {
+        if (!SupportsTextApprovalResponses) return;
+
         var ct = TestContext.Current.CancellationToken;
         var detector = new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe());
         var sid = new SessionId("session-wrong-text");

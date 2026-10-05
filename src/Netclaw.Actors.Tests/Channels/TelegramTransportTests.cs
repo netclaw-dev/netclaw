@@ -215,6 +215,12 @@ public sealed class TelegramTransportTests
 
         public Queue<Exception> SendMessageFailures { get; } = new();
 
+        /// <summary>
+        /// Sticky failure used by the session-binding contract fixture: every
+        /// post throws until the test clears it.
+        /// </summary>
+        public Exception? StickySendMessageFailure { get; set; }
+
         public Exception? EditMessageTextFailure { get; set; }
 
         public Exception? AnswerCallbackFailure { get; set; }
@@ -274,6 +280,8 @@ public sealed class TelegramTransportTests
             CancellationToken cancellationToken = default)
         {
             SentTexts.Add((chatId, text, parseMode, messageThreadId));
+            if (StickySendMessageFailure is { } sticky)
+                throw sticky;
             if (SendMessageFailures.TryDequeue(out var failure))
                 throw failure;
 
