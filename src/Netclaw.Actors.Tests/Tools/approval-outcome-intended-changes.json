@@ -614,6 +614,23 @@
       "to": "Denied",
       "reason": "ShellSyntaxTree 0.4.0-beta.18 rejects a brace word in the command name, because Bash expands it to another program and its operands (#227). The unparsed call is denied in an unattended run. Neither outcome runs the call; the agent no longer gets the rewrite advice.",
       "approvedBy": "Aaron Stannard (owner), confirmed for #2349, 2026-10-05"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "brace-credential-keys-gets-rewrite-correction",
+      "renamedFrom": "brace-credential-keys-needs-exact-consent",
+      "from": "RequiresApproval",
+      "to": "RequiresAgentCorrection",
+      "reason": "The brace word is the only cause that makes the command exact, so the agent gets the rewrite correction (#2349 review comment 4187346461). Neither outcome runs the call, and no grant covers the candidate."
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-brace-credential-keys-gets-rewrite-correction",
+      "renamedFrom": "unattended-brace-credential-keys-denies",
+      "from": "Denied",
+      "to": "RequiresAgentCorrection",
+      "reason": "The brace word is the only cause that makes the command exact, so the agent gets the rewrite correction in place of the unattended denial (#2349 review comment 4187346461). Neither outcome runs the call; the rewritten literal credential paths are denied.",
+      "approvedBy": "Aaron Stannard (owner), confirmed 2026-10-06"
     }
   ]
 }
