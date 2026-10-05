@@ -620,9 +620,16 @@ static IReadOnlyList<string> ConfigureDaemonServices(
         .Get<SearchConfig>() ?? new SearchConfig();
     var searchBackend = searchConfig.Enabled ? CreateSearchBackend(searchConfig) : null;
 
+    // Server feed skill sources (private skill-server instances). The feed list
+    // is fixed for the daemon lifetime; the tool path policy protects the sync
+    // state file of each feed.
+    var skillFeedsConfig = configuration.GetSection("SkillFeeds")
+        .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
+    services.AddSingleton(skillFeedsConfig);
+
     // Agent tools cannot read or change the control plane. This also protects the
     // complete operator-only tool catalogs from model-visible name disclosure.
-    var toolPathPolicy = DaemonToolPathPolicyFactory.Create(paths, shellEnvironment);
+    var toolPathPolicy = DaemonToolPathPolicyFactory.Create(paths, shellEnvironment, skillFeedsConfig);
     services.AddSingleton(toolPathPolicy);
 
     services.AddShellParser(shellEnvironment);
@@ -688,11 +695,6 @@ static IReadOnlyList<string> ConfigureDaemonServices(
     var resolvedExternalSources = externalSkillsConfig.ResolveEnabledSources();
     services.AddSingleton(externalSkillsConfig);
     services.AddSingleton(resolvedExternalSources);
-
-    // Server feed skill sources (private skill-server instances)
-    var skillFeedsConfig = configuration.GetSection("SkillFeeds")
-        .Get<SkillFeedsConfig>() ?? new SkillFeedsConfig();
-    services.AddSingleton(skillFeedsConfig);
 
     services.AddSingleton(skillRegistry);
 

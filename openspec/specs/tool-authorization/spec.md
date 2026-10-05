@@ -430,8 +430,10 @@ the link check, then protection.
   control files, and the tooling shadow SHALL be write-denied. The system
   skill folder and the server feed folder SHALL NOT be protected (owner
   decision, 2026-10-05): skills are agent guidance, as the identity files
-  are, and not control plane. The shell and the file tools SHALL use the
-  same protected-path list.
+  are, and not control plane. The sync state files of each configured
+  server feed (skills and sub-agents) are integrity records and SHALL stay
+  write-denied; a file tool MAY read them. The shell and the file tools SHALL
+  use the same protected-path list.
 - Shell text that names secrets, webhook route files, keys, the database, or
   process-control files SHALL be denied. Shell text that names the config
   directory SHALL be denied. Only an exact path argument of a read-only shell
@@ -670,6 +672,13 @@ process-local. No state of these checks is durable.
 - **GIVEN** a Personal profile with `WriteFiles` mode `Roots`
 - **WHEN** the model calls `shell_execute` with a path argument outside those roots
 - **THEN** authorization returns `Denied` with reason `shell_path_outside_trusted_roots`
+
+#### Scenario: The feed sync state stays write-protected
+
+- **GIVEN** an interactive Personal session with a configured server feed and a grant for anywhere for `echo` and `rm`
+- **WHEN** the model calls `shell_execute` with `echo x > <feed sync state>` or `rm <feed sync state>`, or calls `file_write` on that file
+- **THEN** authorization returns `Denied`, and the shell redirect gets reason `shell_path_protected`
+- **AND** `file_read` on that file is not denied
 
 ### Requirement: TA-7 Shell analysis uses general syntax facts
 

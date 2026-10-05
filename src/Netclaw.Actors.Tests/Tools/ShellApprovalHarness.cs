@@ -451,7 +451,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             paths,
             environment,
             config,
-            DaemonToolPathPolicyFactory.Create(paths, environment),
+            DaemonToolPathPolicyFactory.Create(paths, environment, HarnessSkillFeeds),
             SafeVerbLoader.Load(environment.Platform == ShellPlatform.Windows),
             TimeProvider.System);
 
@@ -484,6 +484,12 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
         services.AddDaemonToolExecutor(registry, policy);
     }
 
+    /// <summary>One configured server feed, so that its sync state files are protected as in the daemon.</summary>
+    internal static SkillFeedsConfig HarnessSkillFeeds { get; } = new()
+    {
+        Feeds = [new SkillFeedSource { Name = "team", Url = "https://skills.example.test/" }]
+    };
+
     // The daemon protects the control plane of its Netclaw home. A Windows host
     // case runs on any host, so it uses one Windows protected path instead.
     // A case that names its own protected paths uses only those paths.
@@ -497,7 +503,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
 
         return environment.Platform == ShellPlatform.Windows
             ? new ToolPathPolicy(environment, [@"C:\protected\config"])
-            : DaemonToolPathPolicyFactory.Create(paths, environment);
+            : DaemonToolPathPolicyFactory.Create(paths, environment, HarnessSkillFeeds);
     }
 
     private static FunctionCallContent CreateShellCall(

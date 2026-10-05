@@ -232,6 +232,36 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
         Assert.NotEqual(ApprovalOutcome.Denied, write.Outcome);
     }
 
+    // The feed sync state holds the file hashes that the sync restore compares.
+    // It is an integrity record, so it stays write-protected inside the writable
+    // skill folders. The agent may read it.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Feed_sync_state_stays_write_protected()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "feed-sync-state",
+            approvals: Approvals.PersistentAnywhere("echo", "touch", "cp", "rm"));
+        var feed = ShellApprovalHarness.HarnessSkillFeeds.Feeds[0].Name;
+        string[] states = [harness.Paths.ServerFeedSyncStatePath(feed), harness.Paths.ServerFeedAgentSyncStatePath(feed)];
+
+        foreach (var state in states)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(state)!);
+            await File.WriteAllTextAsync(state, "{}", Ct);
+            var redirect = await harness.EvaluateShellAsync($"echo x > '{state}'", Ct);
+            var remove = await harness.EvaluateShellAsync($"rm '{state}'", Ct);
+            var write = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", state, "Content", "{}"), Ct);
+            var read = await harness.EvaluateToolAsync("file_read", ToolInput.Create("Path", state), Ct);
+
+            Assert.Equal(ApprovalOutcome.Denied, redirect.Outcome);
+            Assert.Equal("shell_path_protected", redirect.DenyReason);
+            Assert.Equal(ApprovalOutcome.Denied, remove.Outcome);
+            Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
+            Assert.NotEqual(ApprovalOutcome.Denied, read.Outcome);
+        }
+    }
+
     // Negative control for the skill folder decision: each write form to a
     // control-plane file stays denied, with a grant for anywhere for each program.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]

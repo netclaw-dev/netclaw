@@ -30,7 +30,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
         var policy = DaemonToolPathPolicyFactory.Create(
             paths,
-            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            new SkillFeedsConfig());
         var configPath = Path.Combine(paths.ConfigDirectory, fileName);
 
         Assert.False(policy.FileSystem.IsProtected(configPath, PathOperation.Read));
@@ -44,7 +45,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
         var policy = DaemonToolPathPolicyFactory.Create(
             paths,
-            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            new SkillFeedsConfig());
         string[] protectedPaths =
         [
             paths.SecretsPath,
@@ -75,7 +77,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
         var paths = new NetclawPaths("/home/user/.netclaw");
         var policy = DaemonToolPathPolicyFactory.Create(
             paths,
-            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            new SkillFeedsConfig());
 
         Assert.True(policy.CommandReferencesDeniedPath(command), command);
         Assert.False(policy.CommandReferencesDeniedPath("jq -n 'import \"x\" as $s {search: \"~/.netclaw/./skills\"}; $s'"));
@@ -101,7 +104,7 @@ public sealed class DaemonToolPathPolicyFactoryTests
 
         var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
         var home = Assert.IsType<string>(environment.HomeDirectory);
-        var policy = DaemonToolPathPolicyFactory.Create(new NetclawPaths(Path.Combine(home, ".netclaw")), environment);
+        var policy = DaemonToolPathPolicyFactory.Create(new NetclawPaths(Path.Combine(home, ".netclaw")), environment, new SkillFeedsConfig());
         var command = template.Replace("{user}", Environment.UserName, StringComparison.Ordinal);
 
         Assert.True(policy.CommandReferencesDeniedPath(command), command);
@@ -120,7 +123,7 @@ public sealed class DaemonToolPathPolicyFactoryTests
                 @"C:\Windows\System32\WindowsPowerShell\v1.0\powershell.exe",
                 PwshDialect.WindowsPowerShell51)
             : ShellExecutionEnvironment.CreateBash(platform);
-        var policy = DaemonToolPathPolicyFactory.Create(paths, environment);
+        var policy = DaemonToolPathPolicyFactory.Create(paths, environment, new SkillFeedsConfig());
         string[] skillPaths =
         [
             Path.Combine(paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md"),
@@ -154,7 +157,8 @@ public sealed class DaemonToolPathPolicyFactoryTests
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
         var policy = DaemonToolPathPolicyFactory.Create(
             paths,
-            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux));
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux),
+            new SkillFeedsConfig());
         var catalogPath = Path.Combine([paths.ToolingShadowDirectory, .. relativePath.Split('/')]);
 
         Assert.True(policy.FileSystem.IsProtected(catalogPath, PathOperation.Write));

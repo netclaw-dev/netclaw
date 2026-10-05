@@ -1041,7 +1041,7 @@ public class SkillToolTests : IDisposable
 
     // Use the production factory so the test deny list cannot drift from the daemon.
     private ToolPathPolicy CreateProtectedPathPolicy()
-        => DaemonToolPathPolicyFactory.Create(_paths, ShellExecutionEnvironmentDefaults.Bash);
+        => DaemonToolPathPolicyFactory.Create(_paths, ShellExecutionEnvironmentDefaults.Bash, new SkillFeedsConfig());
 
     private static SubAgentSpawner CreateSubAgentSpawner()
     {

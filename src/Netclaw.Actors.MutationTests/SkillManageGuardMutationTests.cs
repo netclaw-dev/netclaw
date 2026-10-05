@@ -99,7 +99,7 @@ public sealed class SkillManageGuardMutationTests : IDisposable
     }
 
     private Task<string> WriteFileAsync(string skill, string filePath)
-        => WriteFileAsync(skill, filePath, DaemonToolPathPolicyFactory.Create(_paths, ShellExecutionEnvironmentDefaults.Bash));
+        => WriteFileAsync(skill, filePath, DaemonToolPathPolicyFactory.Create(_paths, ShellExecutionEnvironmentDefaults.Bash, new SkillFeedsConfig()));
 
     private Task<string> WriteFileAsync(string skill, string filePath, ToolPathPolicy protectedPaths)
     {

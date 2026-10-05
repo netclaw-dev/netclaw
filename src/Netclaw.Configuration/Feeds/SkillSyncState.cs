@@ -8,8 +8,10 @@ using System.Text.Json.Serialization;
 namespace Netclaw.Configuration.Feeds;
 
 /// <summary>
-/// Tracks which system skills have been synced from the feed.
-/// Persisted at <c>~/.netclaw/skills/.system/.sync-state.json</c>.
+/// Tracks which skills or sub-agents a server feed sync installed.
+/// Persisted at <see cref="NetclawPaths.ServerFeedSyncStatePath"/> and
+/// <see cref="NetclawPaths.ServerFeedAgentSyncStatePath"/>. The tool path
+/// policy write-protects both files for each configured feed.
 /// </summary>
 public sealed class SkillSyncState
 {

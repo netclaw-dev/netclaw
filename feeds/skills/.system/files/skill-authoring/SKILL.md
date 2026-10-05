@@ -265,7 +265,8 @@ cannot be edited, patched, or deleted via `skill_manage`. These folders are not
 protected paths. You can run a bundled script with `bash <path>` and list the
 folders. A file tool or a shell command can change a file there, but the change
 does not last. Each daemon start restores the system tree from the binary. Each
-feed sync restores a changed feed skill to its published version. Put a lasting
+feed sync restores a changed feed skill to its published version. The feed
+`.sync-state.json` file is protected, so you cannot change it. Put a lasting
 change in a skill at the root.
 
 All skills — regardless of origin — are visible in the skill index and
