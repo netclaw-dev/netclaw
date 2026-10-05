@@ -89,7 +89,7 @@ public sealed class CausalListDirectoryScopeApprovalTests(ShellApprovalMatrixFix
 
         var observed = await harness.EvaluateShellAsync($"cd {home} && inspect; cat {config}/secrets.json", Ct);
 
-        // The base denied this call with shell_path_outside_trust_zone. The directory
+        // The base denied this call with the trusted-root path check. The directory
         // proof now checks each slice first and reports the protected path.
         Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
         Assert.Equal("shell_references_protected_path", observed.DenyReason);

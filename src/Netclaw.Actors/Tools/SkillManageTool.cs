@@ -515,8 +515,9 @@ public sealed partial class SkillManageTool : NetclawTool<SkillManageTool.Params
     /// Returns an error when a skill mutation must not touch <paramref name="targetPath"/>.
     /// A text check alone is not sufficient. A link inside the native skills tree can
     /// send a write, patch, or delete to a file outside the skill, and a flat-file
-    /// skill uses the skills root as its directory, so a relative path can reach the
-    /// write-protected <c>.system</c> or <c>.server-feeds</c> tiers.
+    /// skill uses the skills root as its directory, so a relative path can name a
+    /// file of another skill. The flat-skill rule of each action then stops it.
+    /// A protected path below the root stays protected.
     /// </summary>
     /// <remarks>
     /// The link walk starts below the native skills root. The operator owns that

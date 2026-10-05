@@ -28,6 +28,12 @@ internal static class DaemonToolPathPolicyFactory
             paths.RestartManifestPath
         };
 
+        // Owner decision (2026-10-05): the system skill folder and the server feed
+        // folder are agent guidance, as the identity files are. They are not
+        // control plane, so they are not on this list. Netclaw cannot tell if a
+        // program reads or writes a path argument, so a write entry also denied
+        // "bash <skill script>" and "ls <skill folder>". The daemon start restores
+        // the system skills, and the feed sync restores a changed feed skill.
         string[] writeDenyList =
         [
             paths.ConfigDirectory,
@@ -36,8 +42,6 @@ internal static class DaemonToolPathPolicyFactory
             sqlitePath,
             ..sqliteSidecars,
             ..processControlPaths,
-            paths.SystemSkillsDirectory,
-            paths.ServerFeedsDirectory,
             paths.ToolingShadowDirectory,
         ];
         // Owner decision D6: the agent may read each file under the config

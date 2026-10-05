@@ -1297,7 +1297,6 @@ public class SkillToolTests : IDisposable
     // A rescan warning can repeat scanner text such as "Symlink traversal is not
     // allowed for resource file". Match the tool's own denial as a prefix instead.
     private const string LinkDeniedMessage = "Symlink traversal is not allowed in skill file paths.";
-    private const string ProtectedDeniedMessage = "The target path is protected.";
 
     [Fact]
     public async Task SkillManage_file_actions_succeed_inside_skill_directory()
@@ -1412,10 +1411,11 @@ public class SkillToolTests : IDisposable
     }
 
     [Fact]
-    public async Task SkillManage_write_into_protected_path_is_denied()
+    public async Task SkillManage_flat_skill_cannot_write_into_the_system_tier()
     {
         // A flat-file skill uses the skills root as its skill directory, so a
-        // text-only root check lets it reach the write-protected .system tier.
+        // relative path can name the .system tier. The tier is not a protected
+        // path (owner decision, 2026-10-05); the flat-skill rule stops the write.
         File.WriteAllText(Path.Combine(_paths.SkillsDirectory, "flat-skill.md"), """
             ---
             name: flat-skill
@@ -1431,12 +1431,12 @@ public class SkillToolTests : IDisposable
             "FilePath", ".system/planted/SKILL.md",
             "FileContent", "---\nname: planted\ndescription: Planted.\n---\n# Planted"), PersonalCtx, TestContext.Current.CancellationToken);
 
-        Assert.StartsWith(ProtectedDeniedMessage, result);
+        Assert.StartsWith(FlatSkillFileDeniedMessage, result);
         Assert.False(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "planted", "SKILL.md")));
     }
 
     [Fact]
-    public async Task SkillManage_remove_of_protected_path_is_denied()
+    public async Task SkillManage_flat_skill_cannot_remove_a_system_skill_file()
     {
         File.WriteAllText(Path.Combine(_paths.SkillsDirectory, "flat-skill.md"), """
             ---
@@ -1458,7 +1458,7 @@ public class SkillToolTests : IDisposable
             "Action", "remove_file", "Name", "flat-skill",
             "FilePath", ".system/sys-kept/SKILL.md"), PersonalCtx, TestContext.Current.CancellationToken);
 
-        Assert.StartsWith(ProtectedDeniedMessage, result);
+        Assert.StartsWith(FlatSkillFileDeniedMessage, result);
         Assert.True(File.Exists(Path.Combine(_paths.SystemSkillsDirectory, "sys-kept", "SKILL.md")));
     }
 

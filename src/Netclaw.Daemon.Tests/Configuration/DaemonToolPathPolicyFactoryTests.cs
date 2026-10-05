@@ -111,8 +111,9 @@ public sealed class DaemonToolPathPolicyFactoryTests
     [InlineData(ShellPlatform.Linux)]
     [InlineData(ShellPlatform.MacOS)]
     [InlineData(ShellPlatform.Windows)]
-    public void System_skills_are_readable_but_not_writable(ShellPlatform platform)
+    public void Skill_folders_are_writable_and_the_control_plane_is_not(ShellPlatform platform)
     {
+        // Owner decision (2026-10-05): skills are agent guidance, not control plane.
         var paths = new NetclawPaths(Path.Combine(Path.GetTempPath(), "netclaw-policy-contract"));
         var environment = platform == ShellPlatform.Windows
             ? ShellExecutionEnvironment.CreatePowerShell(
@@ -120,10 +121,29 @@ public sealed class DaemonToolPathPolicyFactoryTests
                 PwshDialect.WindowsPowerShell51)
             : ShellExecutionEnvironment.CreateBash(platform);
         var policy = DaemonToolPathPolicyFactory.Create(paths, environment);
-        var skillPath = Path.Combine(paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md");
+        string[] skillPaths =
+        [
+            Path.Combine(paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md"),
+            Path.Combine(paths.ServerFeedDirectory("team"), "disk-cleanup", "scripts", "audit.sh"),
+        ];
+        string[] controlPlanePaths =
+        [
+            Path.Combine(paths.ConfigDirectory, "netclaw.json"),
+            Path.Combine(paths.ConfigDirectory, "tool-approvals.json"),
+            paths.SecretsPath,
+            Path.Combine(paths.WebhooksDirectory, "github-issues.json"),
+            Path.Combine(paths.KeysDirectory, "key-1.xml"),
+            paths.SqliteDbPath,
+            paths.SqliteDbPath + "-wal",
+            paths.PidFilePath,
+            paths.LockFilePath,
+            paths.RestartManifestPath,
+            Path.Combine(paths.ToolingShadowDirectory, "tool-index.md"),
+        ];
 
-        Assert.False(policy.FileSystem.IsProtected(skillPath, PathOperation.Read));
-        Assert.True(policy.FileSystem.IsProtected(skillPath, PathOperation.Write));
+        Assert.All(skillPaths, path => Assert.False(policy.FileSystem.IsProtected(path, PathOperation.Write), path));
+        Assert.All(skillPaths, path => Assert.False(policy.FileSystem.IsProtected(path, PathOperation.Read), path));
+        Assert.All(controlPlanePaths, path => Assert.True(policy.FileSystem.IsProtected(path, PathOperation.Write), path));
     }
 
     [Theory]

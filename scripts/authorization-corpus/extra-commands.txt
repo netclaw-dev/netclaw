@@ -263,3 +263,18 @@ mode='one'; inspect item
 'my tool' --version
 "/opt/My App/bin/tool" -v
 "echo x" hi
+bash {K}/.server-feeds/team/disk-cleanup/scripts/audit.sh
+sh {K}/.server-feeds/team/disk-cleanup/scripts/audit.sh
+{K}/.server-feeds/team/disk-cleanup/scripts/audit.sh
+ls {K}/.system/
+ls -la {K}/.server-feeds/team/disk-cleanup
+find {K}/.system -name SKILL.md
+cat {K}/.system/netclaw-operations/SKILL.md
+touch {K}/.system/netclaw-operations/added.md
+echo x > {K}/.server-feeds/team/disk-cleanup/notes.md
+cp {P}/notes.txt {K}/.system/netclaw-operations/notes.md
+echo x > {C}/netclaw.json
+touch {C}/tool-approvals.json
+cp {P}/notes.txt {C}/secrets.json
+echo x | tee {C}/webhooks/route.json
+sed -i s/a/b/ {C}/netclaw.json

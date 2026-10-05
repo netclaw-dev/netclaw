@@ -6,6 +6,7 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Netclaw.Actors.Authorization;
+using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -187,19 +188,111 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
 
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
-    public async Task Synced_skill_script_can_run_but_its_directory_stays_write_protected()
+    public async Task Skill_folders_get_the_decision_of_an_ordinary_path()
     {
-        await using var harness = await CreateHarnessAsync("synced-skill-script");
-        var tools = Path.Combine(harness.Paths.SystemSkillsDirectory, "netclaw-operations", "tools");
-        Directory.CreateDirectory(tools);
-        var script = Path.Combine(tools, "check");
+        // Owner decision (2026-10-05): the system skill folder and the server feed
+        // folder are agent guidance, not control plane. Netclaw cannot tell if a
+        // program reads or writes a path argument, so the old write protection
+        // denied "bash <skill script>" and "ls <skill folder>".
+        await using var harness = await CreateHarnessAsync(
+            "skill-folder-paths",
+            approvals: Approvals.PersistentAnywhere("bash"));
+        var scripts = Path.Combine(harness.Paths.ServerFeedDirectory("team"), "disk-cleanup", "scripts");
+        Directory.CreateDirectory(scripts);
+        var script = Path.Combine(scripts, "audit.sh");
         await File.WriteAllTextAsync(script, "#!/bin/sh\necho ok\n", Ct);
+        var systemSkill = Path.Combine(harness.Paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md");
+        Directory.CreateDirectory(Path.GetDirectoryName(systemSkill)!);
+        await File.WriteAllTextAsync(systemSkill, "skill", Ct);
+        var userSkill = Path.Combine(harness.Paths.SkillsDirectory, "user-skill", "SKILL.md");
 
-        var run = await harness.EvaluateShellAsync($"'{script}'", Ct);
-        var write = await harness.EvaluateShellAsync($"touch '{Path.Combine(tools, "added")}'", Ct);
+        var run = await harness.EvaluateShellAsync($"bash '{script}'", Ct);
+        var list = await harness.EvaluateShellAsync($"ls '{harness.Paths.SystemSkillsDirectory}/'", Ct);
+        var touch = await harness.EvaluateShellAsync($"touch '{Path.Combine(scripts, "added")}'", Ct);
+        var edit = await harness.EvaluateToolAsync(
+            "file_edit",
+            ToolInput.Create("Path", systemSkill, "OldString", "skill", "NewString", "guide"),
+            Ct);
+        var write = await harness.EvaluateToolAsync(
+            "file_write",
+            ToolInput.Create("Path", systemSkill, "Content", "x"),
+            Ct);
+        var userWrite = await harness.EvaluateToolAsync(
+            "file_write",
+            ToolInput.Create("Path", userSkill, "Content", "x"),
+            Ct);
 
-        Assert.Equal(ApprovalOutcome.RequiresApproval, run.Outcome);
-        Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
+        Assert.Equal(ApprovalOutcome.Allowed, run.Outcome);
+        Assert.Equal(ApprovalAllowReason.StoredApproval, run.AllowReason);
+        Assert.Equal(ApprovalOutcome.Allowed, list.Outcome);
+        Assert.Equal(ApprovalOutcome.RequiresApproval, touch.Outcome);
+        // The file tools use the same protected-path list. A skill folder gets
+        // the decision of the user skill root.
+        Assert.Equal(userWrite.Outcome, write.Outcome);
+        Assert.Equal(userWrite.Outcome, edit.Outcome);
+        Assert.NotEqual(ApprovalOutcome.Denied, write.Outcome);
+    }
+
+    // Negative control for the skill folder decision: each write form to a
+    // control-plane file stays denied, with a grant for anywhere for each program.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Control_plane_writes_stay_denied_in_every_form()
+    {
+        await using var harness = await CreateHarnessAsync(
+            "control-plane-writes",
+            approvals: Approvals.PersistentAnywhere("echo", "touch", "cp", "tee", "rm", "mv", "bash", "sed"));
+        var source = Path.Combine(harness.ProjectDirectory, "source.txt");
+        await File.WriteAllTextAsync(source, "x", Ct);
+        string[] targets =
+        [
+            Path.Combine(harness.Paths.ConfigDirectory, "netclaw.json"),
+            Path.Combine(harness.Paths.ConfigDirectory, "tool-approvals.json"),
+            harness.Paths.SecretsPath,
+            Path.Combine(harness.Paths.WebhooksDirectory, "route.json"),
+            Path.Combine(harness.Paths.KeysDirectory, "key-1.xml"),
+        ];
+        foreach (var target in targets)
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            await File.WriteAllTextAsync(target, "{}", Ct);
+        }
+
+        foreach (var target in targets)
+        {
+            string[] commands =
+            [
+                $"echo x > '{target}'",
+                $"echo x >> '{target}'",
+                $"touch '{target}'",
+                $"cp '{source}' '{target}'",
+                $"mv '{source}' '{target}'",
+                $"echo x | tee '{target}'",
+                $"rm '{target}'",
+                $"sed -i s/a/b/ '{target}'",
+                $"bash -c \"echo x > '{target}'\"",
+            ];
+            foreach (var command in commands)
+            {
+                var shell = await harness.EvaluateShellAsync(command, Ct);
+                Assert.True(ApprovalOutcome.Denied == shell.Outcome, $"{command}: {shell.Outcome} {shell.DenyReason}");
+            }
+
+            var write = await harness.EvaluateToolAsync("file_write", ToolInput.Create("Path", target, "Content", "x"), Ct);
+            var edit = await harness.EvaluateToolAsync(
+                "file_edit",
+                ToolInput.Create("Path", target, "OldString", "{}", "NewString", "[]"),
+                Ct);
+            Assert.Equal(ApprovalOutcome.Denied, write.Outcome);
+            Assert.Equal(ApprovalOutcome.Denied, edit.Outcome);
+        }
+
+        // A link hides the config directory from the text screen. The path check
+        // still finds the write-protected target and names the cause.
+        Directory.CreateSymbolicLink(Path.Combine(harness.ProjectDirectory, "cfg"), harness.Paths.ConfigDirectory);
+        var linked = await harness.EvaluateShellAsync("touch cfg/netclaw.json", Ct);
+        Assert.Equal(ApprovalOutcome.Denied, linked.Outcome);
+        Assert.Equal(ToolAccessPolicy.ShellPathProtected, linked.DenyReason);
     }
 
     // ── 3. Unattended and Public path authority for file tools ──

@@ -3,7 +3,7 @@ name: skill-authoring
 description: "How to create, edit, and manage Netclaw skills. Read this when you need to synthesize a new skill from a session, understand the skill file format, or use the skill_manage tool."
 metadata:
   author: netclaw
-  version: "1.11.0"
+  version: "1.12.0"
 ---
 
 # Skill Authoring
@@ -254,15 +254,19 @@ Hard rules:
 
 Skills live in two locations:
 
-| Directory | Source | Editable |
-|-----------|--------|----------|
-| `~/.netclaw/skills/.system/` | Embedded Netclaw system bundle | No — read-only |
-| `~/.netclaw/skills/.server-feeds/<feed>/` | Private skill-server feeds | No — read-only |
+| Directory | Source | Lasting edits |
+|-----------|--------|---------------|
+| `~/.netclaw/skills/.system/` | Embedded Netclaw system bundle | No — Netclaw restores it |
+| `~/.netclaw/skills/.server-feeds/<feed>/` | Private skill-server feeds | No — Netclaw restores it |
 | `~/.netclaw/skills/` (root) | Operator-placed or user-created via `skill_manage` | Yes |
 
 System skills (`.system/`) and private server-feed skills (`.server-feeds/`)
-cannot be edited, patched, or deleted via `skill_manage`. Startup restores the
-system tree. Server feed sync maintains private feed trees.
+cannot be edited, patched, or deleted via `skill_manage`. These folders are not
+protected paths. You can run a bundled script with `bash <path>` and list the
+folders. A file tool or a shell command can change a file there, but the change
+does not last. Each daemon start restores the system tree from the binary. Each
+feed sync restores a changed feed skill to its published version. Put a lasting
+change in a skill at the root.
 
 All skills — regardless of origin — are visible in the skill index and
 available to all sessions. The skill index is a compressed file listing

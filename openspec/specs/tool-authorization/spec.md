@@ -427,7 +427,11 @@ the link check, then protection.
   `daemon.env`, device state, bootstrap state, and the hard-deny override
   file. Secrets (`secrets.json`), webhook route files, keys, the database,
   process-control files, and the tooling shadow SHALL be read-denied. The config directory, secrets, keys, the database, process
-  control files, system skills, and server feeds SHALL be write-denied.
+  control files, and the tooling shadow SHALL be write-denied. The system
+  skill folder and the server feed folder SHALL NOT be protected (owner
+  decision, 2026-10-05): skills are agent guidance, as the identity files
+  are, and not control plane. The shell and the file tools SHALL use the
+  same protected-path list.
 - Shell text that names secrets, webhook route files, keys, the database, or
   process-control files SHALL be denied. Shell text that names the config
   directory SHALL be denied. Only an exact path argument of a read-only shell
@@ -465,6 +469,11 @@ the link check, then protection.
   decision of the literal value.
 - Allow checks SHALL compare paths with ordinal case except on Windows. Deny
   checks SHALL ignore case.
+- A shell path that file protection denies SHALL get the reason
+  `shell_path_protected` when the path, or its link target, is a
+  write-protected path. Otherwise it SHALL get the reason
+  `shell_path_outside_trusted_roots`: a bounded (`Roots`) profile does not hold
+  the path.
 - A path access denial SHALL be terminal and SHALL NOT reveal root paths to a
   Public session. No grant SHALL replace a path access denial, attended or
   unattended.
@@ -628,6 +637,39 @@ process-local. No state of these checks is durable.
 - **GIVEN** an interactive Personal session
 - **WHEN** the model calls `file_read` on a file in another session directory
 - **THEN** the path access decision allows the read
+
+#### Scenario: A skill script runs from its skill folder
+
+- **GIVEN** an interactive Personal session with a grant for anywhere for `bash`
+- **AND** a script `scripts/audit.sh` in a server feed skill folder
+- **WHEN** the model calls `shell_execute` with `bash <feed skill folder>/scripts/audit.sh`
+- **THEN** authorization returns `Allowed` with allow reason `StoredApproval`
+- **AND** `ls ~/.netclaw/skills/.system/` is not denied
+
+#### Scenario: A skill folder write gets the decision of an ordinary path
+
+- **GIVEN** an interactive Personal session
+- **WHEN** the model calls `file_write` or `file_edit` on a file in the system skill folder
+- **THEN** the decision is the same as for a file in the user skill root
+- **AND** `touch <feed skill folder>/added` asks for approval and is not denied
+
+#### Scenario: A control-plane write stays denied in each form
+
+- **GIVEN** an interactive Personal session with a grant for anywhere for `echo`, `touch`, `cp`, `mv`, `tee`, `rm`, `sed`, and `bash`
+- **WHEN** the model writes to `netclaw.json`, `tool-approvals.json`, `secrets.json`, a webhook route file, or a key file with a redirect, `touch`, `cp`, `mv`, `tee`, `rm`, `sed -i`, `bash -c`, `file_write`, or `file_edit`
+- **THEN** authorization returns `Denied`
+
+#### Scenario: A link to the config directory names the protected cause
+
+- **GIVEN** an interactive Personal session and a project link `cfg` to the config directory
+- **WHEN** the model calls `shell_execute` with `touch cfg/netclaw.json`
+- **THEN** authorization returns `Denied` with reason `shell_path_protected`
+
+#### Scenario: A bounded profile names the trusted-root cause
+
+- **GIVEN** a Personal profile with `WriteFiles` mode `Roots`
+- **WHEN** the model calls `shell_execute` with a path argument outside those roots
+- **THEN** authorization returns `Denied` with reason `shell_path_outside_trusted_roots`
 
 ### Requirement: TA-7 Shell analysis uses general syntax facts
 

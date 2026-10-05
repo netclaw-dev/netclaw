@@ -235,7 +235,7 @@ public sealed class ToolApprovalGateTests
             ToolInput.Create("Command", TestShellEnvironment.ReadFileCommand(Path.Combine(dir.Path, "outside", "data.txt"))));
 
         Assert.False(decision.Allowed);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal(ToolAccessPolicy.ShellPathOutsideTrustedRoots, decision.DenyReason);
         Assert.False(decision.NeedsApproval);
     }
 
@@ -1084,7 +1084,7 @@ public sealed class ToolApprovalGateTests
             });
 
         Assert.False(decision.Allowed);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal(ToolAccessPolicy.ShellPathOutsideTrustedRoots, decision.DenyReason);
     }
 
     [Fact]
@@ -1227,7 +1227,7 @@ public sealed class ToolApprovalGateTests
 
         Assert.False(decision.Allowed);
         Assert.False(decision.NeedsApproval);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal(ToolAccessPolicy.ShellPathOutsideTrustedRoots, decision.DenyReason);
     }
 
     [Theory]
@@ -1286,7 +1286,7 @@ public sealed class ToolApprovalGateTests
 
         Assert.False(decision.Allowed);
         Assert.False(decision.NeedsApproval);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal(ToolAccessPolicy.ShellPathOutsideTrustedRoots, decision.DenyReason);
     }
 
     [Fact]
@@ -1328,7 +1328,7 @@ public sealed class ToolApprovalGateTests
         }
 
         Assert.False(decision.Allowed);
-        Assert.Equal("shell_path_outside_trust_zone", decision.DenyReason);
+        Assert.Equal(ToolAccessPolicy.ShellPathOutsideTrustedRoots, decision.DenyReason);
     }
 
     [Fact]

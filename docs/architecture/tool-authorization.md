@@ -513,8 +513,8 @@ Translation at each seam:
 
 Words to avoid in new prose, with the replacement:
 
-- "trust zone": use "trusted root". The token stays in reason codes such as
-  `shell_path_outside_trust_zone`.
+- "trust zone": use "trusted root". The token stays only in the reason code
+  `shell_working_directory_outside_trust_zone`.
 - "messy": use "unresolved syntax". `IsMessy` stays as a code name.
 - "policy" for an evaluator class: name the context. Use "policy data" for
   configuration.

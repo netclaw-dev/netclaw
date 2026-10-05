@@ -576,15 +576,32 @@ public sealed class ToolAccessPolicy
     private static bool NamesEntry(string word, string? directory)
         => ShellGrantFileWords.NamesEntry(word, directory, out _);
 
+    /// <summary>Reason code: a shell path is a protected path, such as the config directory or the keys.</summary>
+    internal const string ShellPathProtected = "shell_path_protected";
+
+    /// <summary>Reason code: a bounded (<c>Roots</c>) audience profile does not hold the shell path.</summary>
+    internal const string ShellPathOutsideTrustedRoots = "shell_path_outside_trusted_roots";
+
     private ToolAuthorizationDecision? EnforceKnownShellPaths(
         IEnumerable<ShellPathAccess> paths,
         ToolInvocationContext context)
-        => paths
-            .Where(static access => !ShellRedirectPolicyFacts.IsNullDevice(access.Path))
-            .DistinctBy(static access => (access.Path.Style, access.Path.Value, access.Read))
-            .Any(access => !IsShellPathAllowed(access, context))
-            ? ToolAuthorizationDecision.Deny("shell_path_outside_trust_zone")
-            : null;
+    {
+        foreach (var access in paths
+                     .Where(static access => !ShellRedirectPolicyFacts.IsNullDevice(access.Path))
+                     .DistinctBy(static access => (access.Path.Style, access.Path.Value, access.Read)))
+        {
+            if (IsShellPathAllowed(access, context))
+                continue;
+
+            // The code only names the cause. Both codes deny, and no grant opens either one.
+            return ToolAuthorizationDecision.Deny(
+                access.Path.IsHostStyle && _toolPathPolicy.FileSystem.IsProtected(access.Path.Value, PathOperation.Write)
+                    ? ShellPathProtected
+                    : ShellPathOutsideTrustedRoots);
+        }
+
+        return null;
+    }
 
     // D6: a read-only program can read a write-protected path that a file tool
     // may read. Its scopes and operands get read protection instead.

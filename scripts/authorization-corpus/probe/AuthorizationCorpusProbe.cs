@@ -144,6 +144,7 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
                 .Replace("{X}", external, StringComparison.Ordinal)
                 .Replace("{S}", harness.SessionDirectory, StringComparison.Ordinal)
                 .Replace("{C}", harness.Paths.ConfigDirectory, StringComparison.Ordinal)
+                .Replace("{K}", harness.Paths.SkillsDirectory, StringComparison.Ordinal)
                 .Replace("{T}", temporaryRoot, StringComparison.Ordinal);
             var call = new FunctionCallContent("corpus", ShellTool.ToolName, ToolInput.Create(
                 "Command", command, "WorkingDirectory", harness.ProjectDirectory));
@@ -441,6 +442,8 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
                      ("session", Path.Combine(session, "notes.txt")),
                      ("external", Path.Combine(external, "secret.txt")),
                      ("config", configFile),
+                     ("system-skill", Path.Combine(paths.SystemSkillsDirectory, "netclaw-operations", "SKILL.md")),
+                     ("feed-skill", Path.Combine(paths.ServerFeedsDirectory, "team", "disk-cleanup", "scripts", "audit.sh")),
                      ("relative", "notes.txt"),
                      ("tilde", "~/notes.txt"),
                      ("temporary", platformTemporary),

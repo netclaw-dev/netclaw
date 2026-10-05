@@ -138,7 +138,7 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
         var decision = await AuthorizeAsync(authorizer, command, TrustAudience.Personal, interactive: false);
 
         var denied = Assert.IsType<AuthorizationDecision.Denied>(decision);
-        Assert.Equal("shell_path_outside_trust_zone", denied.Reason);
+        Assert.Equal(ToolAccessPolicy.ShellPathOutsideTrustedRoots, denied.Reason);
         Assert.Null(denied.Message);
     }
 

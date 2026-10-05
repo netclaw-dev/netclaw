@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.94.2"
+  version: "2.95.0"
 ---
 
 # Netclaw Operations
@@ -727,7 +727,11 @@ protected. Attachment handling is covered alongside. Full setup + rules:
 Secrets live in `~/.netclaw/config/secrets.json` — **never print raw secret values**
 in chat, issues, PRs, or logs. Set them via CLI (`netclaw secrets set <Path> <value>`),
 never by direct file edit. Protected paths (`secrets.json`, `.netclaw/keys`,
-`config/webhooks`) are always access-denied. Full rotation guidance:
+`config/webhooks`) are always access-denied. A write to the config directory,
+including the grant store `tool-approvals.json`, is always denied. The skill
+folders (`~/.netclaw/skills/.system`, `~/.netclaw/skills/.server-feeds`) are not
+protected. You can run a bundled skill script with `bash <path>` from
+`skill_read_resource`. Do not copy it to another folder first. Full rotation guidance:
 `skill_read_resource('netclaw-operations', 'references/secrets.md')`.
 
 ## LLM & Search Providers

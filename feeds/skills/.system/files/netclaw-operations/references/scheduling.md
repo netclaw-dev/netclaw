@@ -287,10 +287,14 @@ approval, and no stored grant covers it. Test the reminder with
 `/run-reminder <id>` in a chat with the same audience and answer the prompt
 with an "Always" option, or run `netclaw approvals trust-verb <verb>`.
 
-**If a reminder fails with `shell_path_outside_trust_zone`:** The audience
+**If a reminder fails with `shell_path_outside_trusted_roots`:** The audience
 profile is bounded (`Roots`) and the command targets a path outside its roots.
 Either move the target into those roots, or ask the user to add the path to the
 profile. A grant cannot open it.
+
+**If a reminder fails with `shell_path_protected`:** The command uses a
+protected path, such as the config directory or the keys. No grant or profile
+change opens it. Use the CLI command for that setting.
 
 ## Background Jobs
 

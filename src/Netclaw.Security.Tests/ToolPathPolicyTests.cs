@@ -169,8 +169,6 @@ public sealed class ToolPathPolicyTests
             "/home/user/.netclaw/netclaw.pid",
             "/home/user/.netclaw/netclaw.lock",
             "/home/user/.netclaw/cache/restart-manifest.json",
-            "/home/user/.netclaw/skills/.system",
-            "/home/user/.netclaw/skills/.server-feeds",
         };
         var readDeny = new[]
         {
@@ -211,8 +209,6 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/.netclaw/netclaw.pid")]
     [InlineData("/home/user/.netclaw/netclaw.lock")]
     [InlineData("/home/user/.netclaw/cache/restart-manifest.json")]
-    [InlineData("/home/user/.netclaw/skills/.system/my-skill/SKILL.md")]
-    [InlineData("/home/user/.netclaw/skills/.server-feeds/my-feed/feed-skill/SKILL.md")]
     public void Write_protection_blocks_control_plane_files(string path)
     {
         var policy = CreateProductionPolicy();
@@ -227,6 +223,8 @@ public sealed class ToolPathPolicyTests
     [InlineData("/home/user/.netclaw/identity/SOUL.md")]
     [InlineData("/home/user/.netclaw/identity/AGENTS.md")]
     [InlineData("/home/user/.netclaw/skills/my-skill/SKILL.md")]
+    [InlineData("/home/user/.netclaw/skills/.system/my-skill/SKILL.md")]
+    [InlineData("/home/user/.netclaw/skills/.server-feeds/my-feed/feed-skill/SKILL.md")]
     [InlineData("/tmp/foo.json")]
     [InlineData("/home/user/Documents/notes.txt")]
     public void Write_protection_allows_safe_write_paths(string path)

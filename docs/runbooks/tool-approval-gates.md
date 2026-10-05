@@ -426,8 +426,10 @@ Tool executed: {ToolName} ({Duration}ms, {ResultLength} chars) authorizationAtte
 ```
 
 - A `Denied` line is a warning and includes `reason=`, for example
-  `hard_deny_self_destructive`, `tool_not_allowed_for_audience_profile`, or
-  `shell_path_outside_trust_zone`.
+  `hard_deny_self_destructive`, `tool_not_allowed_for_audience_profile`,
+  `shell_path_protected` (a shell path is a protected path), or
+  `shell_path_outside_trusted_roots` (a bounded `Roots` profile does not hold
+  the shell path).
 - An `Allowed` line is at debug level.
 - One `authorizationAttemptId` joins the decision, the prompt, your answer,
   and the retry of one call.

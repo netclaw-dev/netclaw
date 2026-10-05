@@ -2482,7 +2482,7 @@ assert_approval_natural_directory_change() {
         && jq -e '(.argumentsJson | fromjson | .WorkingDirectory? == null)' \
             <<<"$shell_call" >/dev/null \
         && daemon_log_tail | grep -qaF \
-            "Tool authorization evaluated: shell_execute outcome=Denied reason=shell_path_outside_trust_zone" \
+            "Tool authorization evaluated: shell_execute outcome=Denied reason=shell_path_outside_trusted_roots" \
         && jq -e '
             (.response | test("blocked|denied|outside.*trust|approval"; "i"))
             and ((.response | test("observed directory.*(/tmp)|result.*(/tmp)"; "i")) | not)
