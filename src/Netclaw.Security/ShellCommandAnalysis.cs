@@ -562,14 +562,25 @@ public sealed record ShellCommandAnalysis
         SyntaxProofComplete = syntaxProofComplete;
         var unresolvedParts = new Dictionary<CommandOccurrence, ShellUnresolvedPart>(
             ReferenceEqualityComparer.Instance);
+        var expansionOnly = new HashSet<CommandOccurrence>(ReferenceEqualityComparer.Instance);
         foreach (var command in Commands)
         {
             var part = ClassifyUnresolvedPart(command, knownRegionArguments);
+            // The expansion rule applies after the other causes. When it is the
+            // only cause of an exact command, a rewrite of the words can resolve
+            // the command, so the coordinator can keep its rewrite correction.
+            if (part != ShellUnresolvedPart.Command && HasUnboundedPathnameExpansion(command))
+            {
+                part = ShellUnresolvedPart.Command;
+                expansionOnly.Add(command);
+            }
+
             if (part != ShellUnresolvedPart.None)
                 unresolvedParts[command] = part;
         }
 
         _unresolvedParts = unresolvedParts;
+        _expansionOnly = expansionOnly;
         HasDynamicSyntax = !syntaxProofComplete || unresolvedParts.Count > 0;
         RequiresExactTreeApproval = ShellFileSystemTreeAccessPolicy.RequiresExactApproval(
             environment,
@@ -617,6 +628,17 @@ public sealed record ShellCommandAnalysis
     /// <summary>Returns how much of one command of this analysis the parser could not prove.</summary>
     internal ShellUnresolvedPart GetUnresolvedPart(CommandOccurrence command)
         => _unresolvedParts.TryGetValue(command, out var part) ? part : ShellUnresolvedPart.None;
+
+    private readonly IReadOnlySet<CommandOccurrence> _expansionOnly;
+
+    /// <summary>
+    /// Returns true when the only cause that makes the command exact is a word
+    /// that Bash can glob, with an unknown value
+    /// (<see cref="HasUnboundedPathnameExpansion(CommandOccurrence)"/>). The
+    /// command stays exact, so no grant and no reviewed phrase covers it.
+    /// </summary>
+    internal bool IsUnresolvedOnlyByPathnameExpansion(CommandOccurrence command)
+        => _expansionOnly.Contains(command);
 
     /// <summary>
     /// Gets whether a filesystem tree effect requires one exact approval.
@@ -825,8 +847,7 @@ public sealed record ShellCommandAnalysis
             || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
             || command.Clause.Verb.IsDynamic
             || HasDynamicProgramWord(command)
-            || HasUnresolvedRedirect(command)
-            || HasUnboundedPathnameExpansion(command))
+            || HasUnresolvedRedirect(command))
         {
             return ShellUnresolvedPart.Command;
         }
@@ -1340,6 +1361,13 @@ public sealed record ShellCommandAnalysis
     /// worst case is file names in the output, never file contents. A test
     /// builtin keeps the proved-value rule of
     /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>.
+    /// The rule does not read <c>MayFieldSplit</c>. A word that can split but
+    /// cannot glob is a quoted <c>"$@"</c> or a bounded arithmetic word. Field
+    /// splitting only cuts a value into more words, and each word keeps the
+    /// check of a normal operand: an unknown value gets decision D1, as a
+    /// quoted <c>"$x"</c> does. Splitting cannot add a path that the D1 gap
+    /// does not already accept. The agent cannot set <c>$@</c> without consent:
+    /// <c>set --</c> needs consent, and a function definition fails closed.
     /// </remarks>
     private bool HasUnboundedPathnameExpansion(CommandOccurrence command)
         => Environment.Grammar == ShellGrammar.Bash

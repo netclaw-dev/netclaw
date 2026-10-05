@@ -316,13 +316,17 @@ Leaks today:
   `((...))`, stay unresolved, because Bash evaluates those values as code. A
   brace word (`{a,b}`) has an unknown value and no path, and a brace word in
   the program word is unresolved. A bounded `break`, `continue`, `exit`, or
-  `return` in a loop no longer makes the source unresolved; `break` and
-  `continue` are data commands.
+  `return` in a loop no longer makes the source unresolved; all four are data
+  commands.
 - Since ShellSyntaxTree 0.4.0-beta.19, an ANSI-C word (`$'\x6beys'`) has its
   decoded value, and each proved path value also gets the default credential
   store text hints. For a program that can open files, a word that Bash can
   glob (`MayPathnameExpand`) with an unknown value is not covered by decision
-  D1: the command is one exact candidate with `Once` and `Deny` only. A proved
+  D1: the command is one exact candidate with `Once` and `Deny` only. When
+  this rule is the only cause and a rewrite of the words can remove the word,
+  the call gets the rewrite correction instead; the candidate stays exact. The
+  rule does not read `MayFieldSplit`: a word that can split but cannot glob
+  (`"$@"`, a bounded arithmetic word) keeps the check of a normal operand. A proved
   glob scope keeps decision D5, and a proved authored value with no glob
   character is exempt. Owner decision (#2349): `echo` and `printf` operands
   stay data (the worst case is file names in the output), and `test` and `[`

@@ -10,8 +10,8 @@ using Xunit;
 namespace Netclaw.Actors.MutationTests;
 
 /// <summary>
-/// ShellSyntaxTree 0.4.0-beta.11 to beta.17 facts on the Bash 5.2 host: glob
-/// words, bound values, and the per-command judgment of a glob.
+/// ShellSyntaxTree 0.4.0-beta.11 to beta.19 facts on the Bash 5.2 host: glob
+/// words, bound and decoded values, and the per-command judgment of a glob.
 /// </summary>
 public sealed class GlobPolicyMutationTests
 {
@@ -73,6 +73,28 @@ public sealed class GlobPolicyMutationTests
             return;
 
         var policy = new ToolPathPolicy(Bash52, ["/srv/other"]);
+
+        Assert.Equal(denied, policy.CommandReferencesDeniedPath(command, "/work"));
+    }
+
+    // ShellSyntaxTree 0.4.0-beta.19 decodes an ANSI-C word. The decoded value
+    // has no text hint in the authored word, so the proved value gets the
+    // protected list and the default credential store text hints.
+    [Theory]
+    [InlineData("cat /srv/x/.netclaw/$'\\x6beys'/id.xml", true)]
+    [InlineData("cat /srv/x/.NETCLAW/$'\\x4bEYS'/id.xml", true)]
+    [InlineData("cat /srv/x/config/$'\\x73ecrets.json'", true)]
+    [InlineData("cat $'/srv/x/.netclaw\\x5ckeys/id.xml'", true)]
+    [InlineData("cat /srv/netclaw/$'\\x6beys'/id.xml", true)]
+    [InlineData("cat /srv/x/.netclaw/$'\\x6cogs'/id.xml", false)]
+    [InlineData("cat /srv/x/$'\\x6beys'/id.xml", false)]
+    public void Decoded_word_gets_the_decision_of_its_proved_value(string command, bool denied)
+    {
+        // The decoded value is a fact of the POSIX Bash 5.2 host.
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var policy = new ToolPathPolicy(Bash52, ["/srv/netclaw/keys"]);
 
         Assert.Equal(denied, policy.CommandReferencesDeniedPath(command, "/work"));
     }

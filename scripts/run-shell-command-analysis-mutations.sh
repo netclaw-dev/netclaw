@@ -245,7 +245,7 @@ read -r data_verb_start data_verb_end < <(
     "$verb_data_file" \
     "internal static bool IsDataCommand(" \
     "=> SingleTokenSideEffectVerbs.Contains(verb)" \
-    "|| BashLoopControlBuiltins.Contains(verb));"
+    "|| BashControlTransferBuiltins.Contains(verb));"
 )
 security_mutations+=("ShellVerbPolicyData.cs{$data_verb_start..$data_verb_end}")
 
@@ -344,6 +344,17 @@ read -r credential_start credential_end < <(
 )
 security_mutations+=("ToolPathPolicy.cs{$credential_start..$credential_end}")
 
+# ShellSyntaxTree 0.4.0-beta.19 decodes ANSI-C words. A proved value gets the
+# protected list and the default credential store text hints.
+read -r proved_value_start proved_value_end < <(
+  find_span \
+    "$path_policy_file" \
+    "private static bool IsProvedValueDenied(" \
+    "=> IsShellDenied(shell, value)" \
+    "StringComparison.OrdinalIgnoreCase));"
+)
+security_mutations+=("ToolPathPolicy.cs{$proved_value_start..$proved_value_end}")
+
 read -r glob_fact_start glob_fact_end < <(
   find_span \
     "$glob_file" \
@@ -438,7 +449,7 @@ security_mutations+=("ShellCommandPolicy.cs{$combine_start..$combine_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  212 \
+  214 \
   "${security_mutations[@]}"
 
 actor_mutations=()

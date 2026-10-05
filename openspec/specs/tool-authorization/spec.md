@@ -771,9 +771,13 @@ have their glossary meaning.
   command with a redirect, SHALL keep its digest. Thus
   `n=$(cmd); echo "$n"` is data, and `d=key; echo ../netclaw/"${d}s"/*` needs
   consent, because its literal twin is denied.
-- `continue` and `break` SHALL be Bash data commands. ShellSyntaxTree
-  0.4.0-beta.18 parses them with no operand or one decimal level, and it
-  joins the loop state at each one. Other forms stay unresolved.
+- `continue`, `break`, `exit`, and `return` SHALL be Bash data commands.
+  They change only which statement runs next. ShellSyntaxTree 0.4.0-beta.18
+  parses `break` and `continue` with no operand or one decimal level, and
+  `exit` and `return` with no operand or one bounded status. It joins the
+  flow state at each one. Other forms stay unresolved. A redirect or a
+  substitution keeps its own check. Thus `cd x || exit 1; ls` needs no grant
+  for `exit`.
 - Arithmetic (ShellSyntaxTree 0.4.0-beta.18): a bounded `$((...))` SHALL be
   data. Arithmetic that reads a command substitution or a variable without a
   proved integer value, and an arithmetic command `((...))`, SHALL be
@@ -792,6 +796,19 @@ have their glossary meaning.
   a Bash data command keeps its earlier rule. An `echo` or `printf` operand
   can only print file names, never contents, and a test operand keeps the
   proved-value rule above.
+- Rewrite exception: when the pathname-expansion rule is the only cause that
+  makes a command exact, and a rewrite of the command words can remove the
+  word, the call SHALL get the rewrite correction, attended or unattended.
+  The command SHALL stay exact, so no grant and no reviewed phrase covers it.
+  The call does not run, and the rewritten call passes normal approval. A
+  run-time value, as in `f=$(date); cat /work/$f`, has no literal spelling, so
+  that command SHALL keep its prompt or its unattended denial.
+- The pathname-expansion rule SHALL NOT read `MayFieldSplit`. A word that can
+  split but cannot glob is a quoted `"$@"` or a bounded arithmetic word.
+  Splitting only cuts a value into more words, and each word keeps the check
+  of a normal operand: an unknown value gets decision D1. The agent cannot set
+  `$@` without consent, because `set --` needs consent and a function
+  definition fails closed.
 - Owner decision D1: a command whose command words are known and whose only
   unknown part is an operand value SHALL be covered by a reviewed safe phrase
   or by a grant for anywhere, attended or unattended (D2). A folder,
@@ -970,15 +987,26 @@ parser rejects the brace word, so the call gets no rewrite advice.
 
 #### Scenario: A word that can glob to an unproved path needs exact consent
 
-- **GIVEN** a Personal session with a global `cat` grant (catalog cases `brace-credential-keys-needs-exact-consent` and `unattended-brace-credential-keys-denies`)
+The scenario name is historical. The brace word is the only cause that makes
+the command exact, so the call gets the rewrite correction.
+
+- **GIVEN** a Personal session with a global `cat` grant (catalog cases `brace-credential-keys-gets-rewrite-correction` and `unattended-brace-credential-keys-gets-rewrite-correction`)
 - **WHEN** the model calls `shell_execute` with `cat ~/.netclaw/{keys,config}/key-1.xml`
-- **THEN** an interactive run returns `RequiresApproval` with the one exact candidate `cat ~/.netclaw/{keys,config}/key-1.xml`
-- **AND** an unattended run returns `Denied` with reason `approval_required_unattended`
-- **AND** the `cat` grant does not cover the call
+- **THEN** an interactive run and an unattended run return `RequiresAgentCorrection`
+- **AND** the call does not run, and the `cat` grant does not cover it
+- **AND** `f=$(date); cat /work/$f` with the same grant returns `RequiresApproval` with the one exact candidate `cat /work/$f` (catalog case `unknown-glob-word-read-needs-exact-consent`)
+- **AND** an unattended run of that call returns `Denied` with reason `approval_required_unattended` (catalog case `unattended-unknown-glob-word-read-denies`)
+
+#### Scenario: A control-transfer builtin needs no grant
+
+- **GIVEN** an unattended Personal session with grants for anywhere for `cd` and `make` (catalog case `unattended-cd-or-exit-grant-allows`)
+- **WHEN** the model calls `shell_execute` with `cd /netclaw-approval-external/cd-list || exit 1; make`
+- **THEN** authorization returns `Allowed` with allow reason `StoredApproval`
+- **AND** `exit` needs no grant
 
 #### Scenario: A quoted unknown output part is data
 
-- **GIVEN** an interactive Personal session with no grants (catalog cases `quoted-unknown-output-part-is-data` and `unknown-glob-word-output-needs-exact-consent`)
+- **GIVEN** an interactive Personal session with no grants (catalog cases `quoted-unknown-output-part-is-data` and `unknown-glob-word-output-keeps-glob-rule`)
 - **WHEN** the model calls `shell_execute` with `d=$(date); echo pre"$d"`
 - **THEN** authorization returns `Allowed`
 - **AND** `d=$(date); echo "${d}ret"/*` returns `RequiresApproval` with the one exact candidate `echo "${d}ret"/*`

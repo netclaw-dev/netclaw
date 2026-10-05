@@ -60,6 +60,13 @@ public sealed record ApprovalCandidate(
     internal ShellUnresolvedPart Unresolved { get; init; }
 
     /// <summary>
+    /// True when the candidate is exact only because a word can glob with an
+    /// unknown value. A rewrite of the words can then resolve the command, so
+    /// the coordinator can give the rewrite correction. It grants no authority.
+    /// </summary>
+    internal bool WordRewriteCanResolve { get; init; }
+
+    /// <summary>
     /// Parser source metadata does not change occurrence identity.
     /// </summary>
     public bool Equals(ApprovalCandidate? other) =>
@@ -72,6 +79,7 @@ public sealed record ApprovalCandidate(
         other is not null &&
         Equals(other) &&
         Unresolved == other.Unresolved &&
+        WordRewriteCanResolve == other.WordRewriteCanResolve &&
         AssignmentDigest == other.AssignmentDigest &&
         Shell == other.Shell &&
         HasSameVerbTokens(other.VerbTokens);
@@ -380,7 +388,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             if (CreateExactCandidate(result.Source, occurrence, part) is not { } exact)
                 return [];
 
-            candidates.Add(exact);
+            candidates.Add(exact with
+            {
+                WordRewriteCanResolve = occurrence.WorkingDirectory is ShellValueDomain.Exact
+                                        && result.IsUnresolvedOnlyByPathnameExpansion(occurrence)
+            });
         }
 
         return candidates;

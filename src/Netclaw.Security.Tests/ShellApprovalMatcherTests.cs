@@ -1691,9 +1691,9 @@ public sealed class ShellApprovalMatcherPathExtractionTests
         Assert.All(candidates, candidate => Assert.Null(candidate.VerbTokens));
     }
 
-    // ShellSyntaxTree 0.4.0-beta.19 reports that Bash can glob a brace word.
-    // Its value is unknown, so the command is one exact candidate, and no
-    // candidate has a grant identity.
+    // ShellSyntaxTree 0.4.0-beta.18 gives a brace word no proved value, so the
+    // command words are unknown and no candidate has a grant identity. `echo`
+    // is a data command, so the pathname expansion rule does not apply to it.
     [SlopwatchSuppress("SW001", "The case uses the Bash grammar of a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     public void ExtractCandidates_has_no_grant_identity_for_a_brace_word()
@@ -1702,6 +1702,7 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             new ToolName("shell_execute"),
             Args("echo {a,b}", "/home/user/project"));
 
+        Assert.NotEmpty(candidates);
         Assert.All(candidates, candidate => Assert.Null(candidate.VerbTokens));
     }
 

@@ -189,6 +189,9 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("rm *.md", ShellCommandWordsRewrite.UsePathGlob, "rm ./*.md", "Use ./* (a path with /)")]
     [InlineData("for v in push fetch; do git $v origin; done", ShellCommandWordsRewrite.WriteWordsLiterally, "git push origin", "Write the command words literally")]
+    // ShellSyntaxTree 0.4.0-beta.18 gives a brace word an unknown value with no
+    // public cause, so the advice is the general expansion advice.
+    [InlineData("git {push,fetch} origin", ShellCommandWordsRewrite.WriteWordsLiterally, "git push origin", "Write the command words literally")]
     public async Task Unknown_command_words_get_a_rewrite_correction(
         string command,
         ShellCommandWordsRewrite expectedRewrite,

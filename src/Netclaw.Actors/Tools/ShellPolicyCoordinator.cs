@@ -448,8 +448,11 @@ internal sealed class ShellPolicyCoordinator(
         foreach (var candidate in uncovered)
         {
             // A rewrite of the words cannot prove a directory, a redirect, a
-            // link, or a glob scope, so such a call keeps its prompt.
-            if (candidate.Candidate.Unresolved == ShellUnresolvedPart.Command)
+            // link, or a glob scope, so such a call keeps its prompt. A word
+            // that can glob with an unknown value is the exception: the rewrite
+            // can remove it.
+            if (candidate.Candidate.Unresolved == ShellUnresolvedPart.Command
+                && !candidate.Candidate.WordRewriteCanResolve)
                 return null;
 
             if (candidate.Candidate.VerbTokens is not null)

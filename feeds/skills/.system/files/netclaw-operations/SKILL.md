@@ -548,11 +548,13 @@ literal or a proved value without `[`: `[ 3 -gt 2 ]`, `x=3; [ "$x" -gt 2 ]`,
 and a guard on a loop over literal words. A test on a value from `$(...)` or
 `read` gets a one-time prompt. A test on a file name from a glob loop gets a
 "write the command words literally" correction, and the call does not run.
-`continue` and `break` inside a loop need no approval. For a program that can
-open files, such as `cat`, a word that the shell can glob and whose value
+`continue`, `break`, `exit`, and `return` need no approval. For a program that
+can open files, such as `cat`, a word that the shell can glob and whose value
 Netclaw cannot prove (`$f`, `/work/$f`, `~/notes/{a,b}.txt`) makes its command
-one exact prompt with `Once` and `Deny`; no grant covers it. Write such paths
-literally. `echo`, `printf`, `test`, and `[` keep their own rules. An ANSI-C word such as
+exact; no grant covers it. When a rewrite can remove the word (a brace list or
+a loop over literal words), you get a "write the command words literally"
+correction, and the call does not run. A value from `$(...)` or `read` gets one
+exact prompt with `Once` and `Deny`. Write such paths literally. `echo`, `printf`, `test`, and `[` keep their own rules. An ANSI-C word such as
 `$'\x6beys'` gets the decision of its decoded text.
 
 **Prompts survive passivation and restart.** Pending approval prompts are

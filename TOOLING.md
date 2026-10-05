@@ -451,7 +451,9 @@ character check. An output operand no longer needs the separate proved-value
 test, because a proved value without a glob character already passes. Owner
 decision (#2349) exempts Bash data commands (`echo`, `printf`, `test`, `[`)
 from the exact-candidate rule; the `echo` rows and the `git log -n $?` rows
-kill the new mutants. The gate now kills 212 Security and 27 Actors mutants.
+kill the new mutants. `IsProvedValueDenied` is also a target:
+`Decoded_word_gets_the_decision_of_its_proved_value` kills its mutants with
+decoded ANSI-C paths. The gate now kills 214 Security and 27 Actors mutants.
 
 The script groups targets by source project. Stryker analyzes each source project once.
 The local run on 2026-09-24 took under four minutes.

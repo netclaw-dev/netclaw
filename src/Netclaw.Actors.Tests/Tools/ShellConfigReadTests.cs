@@ -38,10 +38,6 @@ public sealed class ShellConfigReadTests(ShellApprovalMatrixFixture fixture)
     // text. They also fail on the base without decision D6.
     private const string HiddenValueGap = "#2343: a run-time value or a program-text escape hides the protected path.";
 
-    // Issue #2343 also owns this old gap: the parser reads $'\x6beys' as the
-    // literal "$\x6beys", so a path outside the config directory is not seen.
-    private const string AnsiQuoteGap = "#2343: the parser misreads ANSI-C quotes in a path outside the config directory.";
-
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // {C} is the config directory, {K} the keys directory, {N} the Netclaw home,
@@ -185,7 +181,7 @@ public sealed class ShellConfigReadTests(ShellApprovalMatrixFixture fixture)
         (Shell, "cat {C}/$\"webhooks\"/route.json", false, null),
         (Shell, "cat {K}/key\\-1.xml", false, null),
         (Shell, "cat {N}/ke\"\"ys/key-1.xml", false, null),
-        (Shell, "cat {N}/$'\\x6beys'/key-1.xml", false, AnsiQuoteGap),
+        (Shell, "cat {N}/$'\\x6beys'/key-1.xml", false, null),
         (Shell, "cat {C}/web\"\"hooks/route.json", false, null),
         (Shell, "cat {C}/$'webhooks'/route.json", false, null),
         (Shell, "cat {C}/webhooks/rou\\te.json", false, null),

@@ -208,7 +208,9 @@ covered:
   `MayPathnameExpand`). An unquoted word with such a value (`echo $n`) can
   expand to file names, so it needs consent. For a program that can open
   files, such as `cat /work/$f`, such a word gets one exact prompt that no
-  grant covers. The command inside
+  grant covers. A brace word or a loop over literal words in that place gets
+  a rewrite correction instead, and the call does not run. `exit` and `return`
+  need no approval. The command inside
   `$(...)` still needs its own coverage, and a redirect target keeps its own
   check.
 - In Bash, the command is a test builtin, `test` or `[`, and the parser proves

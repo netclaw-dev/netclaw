@@ -365,8 +365,10 @@ public static class ShellApprovalCases
         Case(
             "unattended-cd-or-exit-grant-allows",
             Bash("cd /netclaw-approval-external/cd-list || exit 1; make", interactive: false),
-            Approvals.PersistentAnywhere("cd", "exit", "make"),
-            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:exit", "persistent:make", "persistent:make")),
+            // exit is a control-transfer builtin (ShellSyntaxTree 0.4.0-beta.18),
+            // so it needs no grant.
+            Approvals.PersistentAnywhere("cd", "make"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:make", "persistent:make")),
         Case(
             "unattended-cd-semicolon-without-grant-denies",
             Bash("cd /netclaw-approval-external/cd-list; make", interactive: false),
@@ -2442,17 +2444,19 @@ public static class ShellApprovalCases
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:dotnet", "persistent:dotnet")),
         // ShellSyntaxTree 0.4.0-beta.18 gives a brace word an Unknown value and no
         // path. Bash expands it to several words, so the literal brace text is not
-        // the path that the program reads.
+        // the path that the program reads. The word is the only cause, so the
+        // model gets a rewrite correction. The call does not run, and the
+        // rewritten literal paths get their own path checks.
         Case(
-            "brace-credential-keys-needs-exact-consent",
+            "brace-credential-keys-gets-rewrite-correction",
             Bash52("cat ~/.netclaw/{keys,config}/key-1.xml"),
             Approvals.PersistentAnywhere("cat"),
-            ExpectedApproval.Require(["cat ~/.netclaw/{keys,config}/key-1.xml"])),
+            ExpectedApproval.Correct()),
         Case(
-            "unattended-brace-credential-keys-denies",
+            "unattended-brace-credential-keys-gets-rewrite-correction",
             Bash52("cat ~/.netclaw/{keys,config}/key-1.xml", interactive: false),
             Approvals.PersistentAnywhere("cat"),
-            ExpectedApproval.DenyUnattended()),
+            ExpectedApproval.Correct()),
         // ShellSyntaxTree 0.4.0-beta.19 decodes an ANSI-C quote, so the decoded
         // path gets the decision of its literal twin.
         Case(
