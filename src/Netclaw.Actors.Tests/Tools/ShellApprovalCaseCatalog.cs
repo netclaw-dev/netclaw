@@ -1317,7 +1317,7 @@ public static class ShellApprovalCases
             Approvals.None,
             ExpectedApproval.Require(["git push"])),
         // The ID keeps its old name. The substitution is its own command with its
-        // own candidate, and the echo operand is data.
+        // own candidate, and the echo operand is data (owner decision, #2349).
         Case(
             "command-substitution-fails-closed",
             Bash("echo $(git push)"),
@@ -1937,7 +1937,26 @@ public static class ShellApprovalCases
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
             "arithmetic-expansion-fails-closed",
+            Bash("echo $(( $(id) + 1 ))"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        // ShellSyntaxTree 0.4.0-beta.18 parses a bounded $((...)). Its value is
+        // data: never a path and never a command word. Bash evaluates the value
+        // of a variable read as code, so a read without a proved integer value
+        // stays unparseable.
+        Case(
+            "arithmetic-expansion-is-data",
             Bash("echo $((1 + 2))"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "arithmetic-unproved-read-fails-closed",
+            Bash("echo $((count + 1))"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "arithmetic-command-fails-closed",
+            Bash("(( p = 0 ))"),
             Approvals.None,
             ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
         Case(
@@ -2400,13 +2419,14 @@ public static class ShellApprovalCases
             Bash52("[ -f ~/.netclaw/keys/x ] && echo yes"),
             Approvals.None,
             ExpectedApproval.Deny("shell_references_protected_path")),
-        // ShellSyntaxTree 0.4.0-beta.17 rejects continue and break inside a loop,
-        // so the call stays unresolved and the write still needs consent.
+        // ShellSyntaxTree 0.4.0-beta.18 parses continue and break inside a loop.
+        // They are data commands, so only the write needs consent. The ID keeps
+        // its old name.
         Case(
             "loop-control-with-write-stays-unresolved",
             Bash52("for d in a b; do touch \"$d.txt\"; continue; done"),
             Approvals.None,
-            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+            ExpectedApproval.Require(["touch \"$d.txt\""])),
         // In PowerShell, test is not a builtin, so it keeps its candidate.
         Case(
             "power-shell-test-word-prompts",
@@ -2420,6 +2440,57 @@ public static class ShellApprovalCases
             Bash52("cd src && ls *.cs; dotnet --list-sdks"),
             Approvals.PersistentAnywhere("cd", "dotnet"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:dotnet", "persistent:dotnet")),
+        // ShellSyntaxTree 0.4.0-beta.18 gives a brace word an Unknown value and no
+        // path. Bash expands it to several words, so the literal brace text is not
+        // the path that the program reads.
+        Case(
+            "brace-credential-keys-needs-exact-consent",
+            Bash52("cat ~/.netclaw/{keys,config}/key-1.xml"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require(["cat ~/.netclaw/{keys,config}/key-1.xml"])),
+        Case(
+            "unattended-brace-credential-keys-denies",
+            Bash52("cat ~/.netclaw/{keys,config}/key-1.xml", interactive: false),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.DenyUnattended()),
+        // ShellSyntaxTree 0.4.0-beta.19 decodes an ANSI-C quote, so the decoded
+        // path gets the decision of its literal twin.
+        Case(
+            "ansi-c-credential-keys-denied-as-literal",
+            Bash52("cat ~/.netclaw/$'\\x6beys'/key-1.xml"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        // ShellSyntaxTree 0.4.0-beta.19 reports whether a word can glob. An
+        // unknown value that can glob makes a program that can open files one
+        // exact candidate. An echo or printf operand keeps its earlier rule
+        // (owner decision, #2349): the worst case is file names in the output.
+        Case(
+            "unknown-glob-word-read-needs-exact-consent",
+            Bash52("f=$(date); cat /work/$f"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Require(["cat /work/$f"])),
+        Case(
+            "unattended-unknown-glob-word-read-denies",
+            Bash52("f=$(date); cat /work/$f", interactive: false),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.DenyUnattended()),
+        // The glob rule of dev still applies to an echo operand: a glob with no
+        // proved scope makes the command one exact candidate.
+        Case(
+            "unknown-glob-word-output-keeps-glob-rule",
+            Bash52("d=$(date); echo \"${d}ret\"/*"),
+            Approvals.None,
+            ExpectedApproval.Require(["echo \"${d}ret\"/*"])),
+        Case(
+            "quoted-unknown-output-part-is-data",
+            Bash52("d=$(date); echo pre\"$d\""),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "brace-credential-secrets-denied-as-literal",
+            Bash52("cat ~/.netclaw/config/{netclaw,secrets}.json"),
+            Approvals.PersistentAnywhere("cat"),
+            ExpectedApproval.Deny("shell_references_protected_path")),
         // ShellSyntaxTree 0.4.0-beta.17 publishes the effective value of a binding.
         Case(
             "assigned-credential-path-denied-as-literal",
@@ -2465,13 +2536,14 @@ public static class ShellApprovalCases
             Bash52("[\"ci\",\"build\"]", interactive: false),
             Approvals.None,
             ExpectedApproval.DenyUnattended()),
-        // A brace text in the program word keeps the rewrite advice that it got
-        // with ShellSyntaxTree 0.4.0-beta.10.
+        // ShellSyntaxTree 0.4.0-beta.18 rejects a brace word in the command name,
+        // because Bash expands it to another program and its operands. The
+        // unparsed call is denied in an unattended run.
         Case(
-            "unattended-brace-program-word-gets-rewrite-advice",
+            "unattended-brace-program-word-denies",
             Bash52("{\"b\":2,\"nested\":{\"c\":3}}", interactive: false),
             Approvals.None,
-            ExpectedApproval.Correct()),
+            ExpectedApproval.DenyUnattended(approvalChecks: 0)),
         // ShellSyntaxTree 0.4.0-beta.13 and beta.14: while, until, if, case, and a
         // background list. Each command inside them gets its own decision.
         Case(

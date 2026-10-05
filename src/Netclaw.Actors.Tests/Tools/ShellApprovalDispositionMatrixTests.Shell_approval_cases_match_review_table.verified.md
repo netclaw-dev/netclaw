@@ -307,7 +307,10 @@
 | printf-variable-target-hidden-execution-fails-closed | Bash | Personal | Project | Interactive | printf -v'value[$(printf marker >&2)0]' '%s' data | persistent[anywhere]:printf | RequiresApproval | approval required | none | Yes |
 | recursive-builtin-eval-fails-closed | Bash | Personal | Project | Interactive | command -p -- builtin -- eval 'printf marker >&2' | persistent[anywhere]:command, persistent[anywhere]:builtin, persistent[anywhere]:eval, persistent[anywhere]:printf | RequiresApproval | approval required | none | Yes |
 | process-substitution-fails-closed | Bash | Personal | Project | Interactive | cat <(git push) | persistent[anywhere]:cat, persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
-| arithmetic-expansion-fails-closed | Bash | Personal | Project | Interactive | echo $((1 + 2)) | none | RequiresApproval | approval required | none | Yes |
+| arithmetic-expansion-fails-closed | Bash | Personal | Project | Interactive | echo $(( $(id) + 1 )) | none | RequiresApproval | approval required | none | Yes |
+| arithmetic-expansion-is-data | Bash | Personal | Project | Interactive | echo $((1 + 2)) | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| arithmetic-unproved-read-fails-closed | Bash | Personal | Project | Interactive | echo $((count + 1)) | none | RequiresApproval | approval required | none | Yes |
+| arithmetic-command-fails-closed | Bash | Personal | Project | Interactive | (( p = 0 )) | none | RequiresApproval | approval required | none | Yes |
 | function-definition-fails-closed | Bash | Personal | Project | Interactive | deploy() { git push; }; deploy | persistent[anywhere]:git push | RequiresApproval | approval required | none | Yes |
 | unknown-state-named-parameter-fails-closed | Bash | Personal | Project | Interactive | printf '%s' "$value" | persistent[anywhere]:printf | RequiresApproval | approval required | none | Yes |
 | nameref-deferred-execution-fails-closed | Bash | Personal | Project | Interactive | declare -a values; declare -n current='values[$(printf marker >&2)0]'; cat <<EOF\n${current}\nEOF | persistent[anywhere]:declare, persistent[anywhere]:printf, persistent[anywhere]:cat | RequiresApproval | approval required | none | Yes |
@@ -376,9 +379,17 @@
 | test-builtin-guard-keeps-action-prompt | Bash52 | Personal | Project | Interactive | [ 3 -gt 2 ] && git push | none | RequiresApproval | approval required | git push | No |
 | test-builtin-guard-keeps-hard-deny | Bash52 | Personal | Project | Interactive | x=3; [ "$x" -gt 2 ] && rm -rf / | none | Denied | hard_deny_system_destructive | none | Not applicable |
 | test-builtin-credential-path-denies | Bash52 | Personal | Project | Interactive | [ -f ~/.netclaw/keys/x ] && echo yes | none | Denied | shell_references_protected_path | none | Not applicable |
-| loop-control-with-write-stays-unresolved | Bash52 | Personal | Project | Interactive | for d in a b; do touch "$d.txt"; continue; done | none | RequiresApproval | approval required | none | Yes |
+| loop-control-with-write-stays-unresolved | Bash52 | Personal | Project | Interactive | for d in a b; do touch "$d.txt"; continue; done | none | RequiresApproval | approval required | touch "$d.txt" | No |
 | power-shell-test-word-prompts | PowerShell7 | Personal | Project | Interactive | test value | none | RequiresApproval | approval required | test | No |
 | glob-after-cd-keeps-directory-proof | Bash52 | Personal | Project | Interactive | cd src && ls *.cs; dotnet --list-sdks | persistent[anywhere]:cd, persistent[anywhere]:dotnet | Allowed | StoredApproval | none | Not applicable |
+| brace-credential-keys-needs-exact-consent | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/{keys,config}/key-1.xml | persistent[anywhere]:cat | RequiresApproval | approval required | cat ~/.netclaw/{keys,config}/key-1.xml | No |
+| unattended-brace-credential-keys-denies | Bash52 | Personal | Project | Non-interactive | cat ~/.netclaw/{keys,config}/key-1.xml | persistent[anywhere]:cat | Denied | approval_required_unattended | none | Not applicable |
+| ansi-c-credential-keys-denied-as-literal | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/$'\x6beys'/key-1.xml | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
+| unknown-glob-word-read-needs-exact-consent | Bash52 | Personal | Project | Interactive | f=$(date); cat /work/$f | persistent[anywhere]:cat | RequiresApproval | approval required | cat /work/$f | No |
+| unattended-unknown-glob-word-read-denies | Bash52 | Personal | Project | Non-interactive | f=$(date); cat /work/$f | persistent[anywhere]:cat | Denied | approval_required_unattended | none | Not applicable |
+| unknown-glob-word-output-keeps-glob-rule | Bash52 | Personal | Project | Interactive | d=$(date); echo "${d}ret"/* | none | RequiresApproval | approval required | echo "${d}ret"/* | No |
+| quoted-unknown-output-part-is-data | Bash52 | Personal | Project | Interactive | d=$(date); echo pre"$d" | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| brace-credential-secrets-denied-as-literal | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/config/{netclaw,secrets}.json | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
 | assigned-credential-path-denied-as-literal | Bash52 | Personal | Project | Interactive | x=~/.netclaw/config/secrets.json; cat "$x" | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
 | assigned-branch-is-not-covered-by-another-branch-grant | Bash52 | Personal | Project | Interactive | b=main; git push origin "$b" | persistent[anywhere]:git push origin feature-x | RequiresApproval | approval required | git push origin | No |
 | assignment-substitution-sudo-hard-denies | Bash52 | Personal | Project | Interactive | x=$(sudo ls) | none | Denied | hard_deny_privilege_escalation | none | Not applicable |
@@ -386,7 +397,7 @@
 | background-wrapper-child-after-failing-cd-hard-denies | Bash52 | Personal | Project | Interactive | cd sub && git fetch; bash -lc "echo \"a b\"; netclaw daemon stop" & true | persistent[anywhere]:cd, persistent[anywhere]:git fetch, persistent[anywhere]:bash | Denied | hard_deny_self_destructive | none | Not applicable |
 | bracket-program-word-with-space-stays-unresolved | Bash52 | Personal | Project | Interactive | ["batch one"] | none | RequiresApproval | approval required | ["batch one"] | No |
 | unattended-bracket-program-word-denies | Bash52 | Personal | Project | Non-interactive | ["ci","build"] | none | Denied | approval_required_unattended | none | Not applicable |
-| unattended-brace-program-word-gets-rewrite-advice | Bash52 | Personal | Project | Non-interactive | {"b":2,"nested":{"c":3}} | none | RequiresAgentCorrection | approval required | none | Not applicable |
+| unattended-brace-program-word-denies | Bash52 | Personal | Project | Non-interactive | {"b":2,"nested":{"c":3}} | none | Denied | approval_required_unattended | none | Not applicable |
 | if-statement-prompts-for-each-command | Bash52 | Personal | Project | Interactive | if test -f marker; then git push; else git fetch; fi | none | RequiresApproval | approval required | git push, git fetch | No |
 | case-statement-uses-reviewed-phrases | Bash52 | Personal | Project | Interactive | case x in a) cat a.txt ;; *) cat b.txt ;; esac | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | until-loop-prompts-for-each-command | Bash52 | Personal | Project | Interactive | until test -f marker; do git fetch; done | none | RequiresApproval | approval required | git fetch | No |

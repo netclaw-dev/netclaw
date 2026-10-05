@@ -303,6 +303,23 @@ Leaks today:
   that reads a binding (`x=/; rm -rf "$x"`). The hard-deny list also checks
   each proved value, and each value of a loop variable, so the bound form gets
   the decision of its literal twin. More than 256 value combinations deny.
+- Since ShellSyntaxTree 0.4.0-beta.18, a bounded `$((...))` is data: never a
+  path and never a command word. Arithmetic that reads a command substitution
+  or a variable without a proved integer value, and an arithmetic command
+  `((...))`, stay unresolved, because Bash evaluates those values as code. A
+  brace word (`{a,b}`) has an unknown value and no path, and a brace word in
+  the program word is unresolved. A bounded `break`, `continue`, `exit`, or
+  `return` in a loop no longer makes the source unresolved; `break` and
+  `continue` are data commands.
+- Since ShellSyntaxTree 0.4.0-beta.19, an ANSI-C word (`$'\x6beys'`) has its
+  decoded value, and each proved path value also gets the default credential
+  store text hints. For a program that can open files, a word that Bash can
+  glob (`MayPathnameExpand`) with an unknown value is not covered by decision
+  D1: the command is one exact candidate with `Once` and `Deny` only. A proved
+  glob scope keeps decision D5, and a proved authored value with no glob
+  character is exempt. Owner decision (#2349): `echo` and `printf` operands
+  stay data (the worst case is file names in the output), and `test` and `[`
+  keep the proved-value rule.
 - Owner decision D5 (option A): a glob word gets the decision of each literal
   protected path that its segments can match, or of a directory that contains
   one (`ToolPathPolicy.GlobMayReachDeniedPath`). The match is lexical: Netclaw

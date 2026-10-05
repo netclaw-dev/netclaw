@@ -373,7 +373,7 @@ public sealed class ToolPathPolicy
             {
                 if (argument.IsPath
                     && !string.IsNullOrWhiteSpace(argument.Resolved)
-                    && IsShellDenied(shell, argument.Resolved))
+                    && IsProvedValueDenied(shell, argument.Resolved))
                 {
                     return true;
                 }
@@ -411,10 +411,10 @@ public sealed class ToolPathPolicy
         {
             ShellValueDomain.Exact exact =>
                 !string.IsNullOrWhiteSpace(exact.Value)
-                && IsShellDenied(shell, exact.Value),
+                && IsProvedValueDenied(shell, exact.Value),
             ShellValueDomain.FiniteSet finite => finite.Values.Any(value =>
                 !string.IsNullOrWhiteSpace(value)
-                && IsShellDenied(shell, value)),
+                && IsProvedValueDenied(shell, value)),
             ShellValueDomain.PathPattern pattern =>
                 !string.IsNullOrWhiteSpace(pattern.CoveringDirectory)
                 && (IsShellDenied(shell, pattern.CoveringDirectory) || GlobMayReachDeniedPath(pattern, shell)),
@@ -451,6 +451,21 @@ public sealed class ToolPathPolicy
         return match is not null
                && (string.Equals(match, target, StringComparison.OrdinalIgnoreCase) || IsShellDenied(shell, match));
     }
+
+    /// <summary>
+    /// Returns true when a proved path value is protected, or when it names the
+    /// default credential store as the text hints do.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the text hints read the authored text. A decoded value, such as
+    /// <c>~/.netclaw/$'\x6beys'/key-1.xml</c> (ShellSyntaxTree 0.4.0-beta.19),
+    /// can name the store with no hint in the text. The proved value gets the
+    /// same hints, also when an operator moves the Netclaw root.
+    /// </remarks>
+    private static bool IsProvedValueDenied(FileSystemAuthority shell, string value)
+        => IsShellDenied(shell, value)
+           || DefaultLayoutHints.Any(hint =>
+               value.Replace('\\', '/').Contains(hint, StringComparison.OrdinalIgnoreCase));
 
     // The default credential store of the home directory. The text hints deny these
     // paths even when an operator moves the Netclaw root, so a glob gets the same rule.

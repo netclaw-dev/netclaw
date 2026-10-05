@@ -203,9 +203,12 @@ covered:
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
   This rule also applies after `cd dir && action;`. A dynamic operand, such as
   `echo "head: $(git rev-parse HEAD)"`, is data. A value from `$(...)` or
-  `read` in one double-quoted word, such as `n=$(cmd); echo "$n"`, is also
-  data. An unquoted word with such a value (`echo $n`) can expand to file
-  names, so it needs consent. The command inside
+  `read` in a word that the shell cannot glob, such as `n=$(cmd); echo "$n"`
+  or `echo pre"$n"`, is also data (ShellSyntaxTree 0.4.0-beta.19 reports
+  `MayPathnameExpand`). An unquoted word with such a value (`echo $n`) can
+  expand to file names, so it needs consent. For a program that can open
+  files, such as `cat /work/$f`, such a word gets one exact prompt that no
+  grant covers. The command inside
   `$(...)` still needs its own coverage, and a redirect target keeps its own
   check.
 - In Bash, the command is a test builtin, `test` or `[`, and the parser proves

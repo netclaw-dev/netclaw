@@ -825,7 +825,8 @@ public sealed record ShellCommandAnalysis
             || HasUnsupportedWorkingDirectory(command.WorkingDirectory)
             || command.Clause.Verb.IsDynamic
             || HasDynamicProgramWord(command)
-            || HasUnresolvedRedirect(command))
+            || HasUnresolvedRedirect(command)
+            || HasUnboundedPathnameExpansion(command))
         {
             return ShellUnresolvedPart.Command;
         }
@@ -1299,49 +1300,82 @@ public sealed record ShellCommandAnalysis
 
     /// <summary>
     /// Returns true when each operand of a Bash data command is proved data. An
-    /// output operand needs a proved value (an exact value or a finite set) or
-    /// one double-quoted raw word. A test operand needs
+    /// output operand needs a word that Bash cannot glob, or a proved authored
+    /// value (an exact value or a finite set) with no glob character. A test
+    /// operand needs
     /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>.
     /// </summary>
     /// <remarks>
     /// SECURITY: an unquoted word with an unknown value, such as <c>$n</c> or
-    /// <c>../"$d"/*</c>, gets pathname expansion. ShellSyntaxTree 0.4.0-beta.17
-    /// gives no path for such a word, so the protected-path screen cannot see
-    /// what it lists. Inside double quotes Bash does no pathname expansion and
-    /// no word splitting. A quoted unknown value is still not data for a test
+    /// <c>../"$d"/*</c>, gets pathname expansion. ShellSyntaxTree gives no path
+    /// for such a word, so the protected-path screen cannot see what it lists.
+    /// ShellSyntaxTree 0.4.0-beta.19 reports
+    /// <see cref="AnalyzedArgument.MayPathnameExpand"/> from the authored word,
+    /// so a quoted part such as <c>pre"$n"</c> is data. A quoted unknown value is still not data for a test
     /// builtin, because a <c>-v</c> subscript can run code.
     /// </remarks>
     internal static bool HasProvedDataOperands(CommandOccurrence command, bool isTestBuiltin)
         => command.Arguments.All(argument => isTestBuiltin
             ? HasBoundedNameSafeValue(argument)
-            : argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
-              || IsOneDoubleQuotedWord(argument.Argument.Raw));
+            : !argument.MayPathnameExpand
+              || HasGlobFreeAuthoredValue(argument));
 
     /// <summary>
-    /// Returns true when the raw word is one double-quoted string: it starts
-    /// and ends with <c>"</c>, and a backslash escapes each <c>"</c> between them.
+    /// Returns true when a Bash operand with an unknown value can undergo
+    /// pathname expansion at run time.
     /// </summary>
     /// <remarks>
-    /// The scan is lexical and conservative. A word with a quote inside a
-    /// command substitution, such as <c>"$(cmd "a")"</c>, does not pass, so
-    /// it keeps its earlier decision.
+    /// SECURITY: ShellSyntaxTree 0.4.0-beta.19 reports
+    /// <see cref="AnalyzedArgument.MayPathnameExpand"/> from the authored word.
+    /// A word such as <c>"${d}ret"/*</c>, <c>$n</c>, or
+    /// <c>~/.netclaw/{keys,config}/key-1.xml</c> has no proved value and no
+    /// glob scope, so it can list or read the names in any directory, also a
+    /// protected one. Such a command gets one exact candidate with
+    /// <c>Once</c> and <c>Deny</c> only; no grant and no reviewed phrase covers
+    /// it, and an unattended run denies it. A proved glob scope
+    /// (<see cref="ShellValueDomain.PathPattern"/>) keeps decision D5, and a
+    /// quoted unknown value keeps decision D1.
+    /// Owner decision (#2349): a Bash data command keeps its earlier rule. An
+    /// output command (<c>echo</c>, <c>printf</c>) prints its operands, so the
+    /// worst case is file names in the output, never file contents. A test
+    /// builtin keeps the proved-value rule of
+    /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>.
     /// </remarks>
-    internal static bool IsOneDoubleQuotedWord(string raw)
-    {
-        if (raw.Length < 2 || raw[0] != '"' || raw[^1] != '"')
-            return false;
+    private bool HasUnboundedPathnameExpansion(CommandOccurrence command)
+        => Environment.Grammar == ShellGrammar.Bash
+           && !IsBashDataCommand(command)
+           && command.Arguments.Any(argument =>
+               argument.MayPathnameExpand
+               && argument.Value is ShellValueDomain.Unknown
+               && argument.Argument.Kind != ArgKind.Glob
+               && !HasGlobFreeAuthoredValue(argument)
+               && !IsStatusWord(argument));
 
-        var escaped = false;
-        for (var i = 1; i < raw.Length - 1; i++)
+    private static bool IsBashDataCommand(CommandOccurrence command)
+        => command.Clause.Verb.Tokens is [var verb, ..]
+           && ShellVerbPolicyData.IsDataCommand(verb, ApprovalShell.Bash);
+
+    // `$?` is an exit status: an integer with no glob character.
+    private static bool IsStatusWord(AnalyzedArgument argument)
+        => argument.Argument.Kind == ArgKind.EnvVar
+           && argument.Argument.Raw == "$?";
+
+    /// <summary>
+    /// Returns true when the parser proves each authored value of the word
+    /// before splitting and pathname expansion, and no value has a glob
+    /// character. Bash then has nothing to expand, as for <c>$r</c> in
+    /// <c>for r in 1 2; do gh run view $r; done</c>.
+    /// </summary>
+    internal static bool HasGlobFreeAuthoredValue(AnalyzedArgument argument)
+        => argument.AuthoredValue switch
         {
-            if (raw[i] == '"' && !escaped)
-                return false;
+            ShellValueDomain.Exact exact => HasNoGlobCharacter(exact.Value),
+            ShellValueDomain.FiniteSet finite => finite.Values.All(HasNoGlobCharacter),
+            _ => false
+        };
 
-            escaped = raw[i] == '\\' && !escaped;
-        }
-
-        return !escaped;
-    }
+    private static bool HasNoGlobCharacter(string? value)
+        => value is not null && value.IndexOfAny(['*', '?', '[']) < 0;
 
     private static bool IsUnknownOutputData(
         CommandOccurrence command,

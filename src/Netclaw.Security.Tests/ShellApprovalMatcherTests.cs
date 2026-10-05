@@ -1681,7 +1681,6 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     [InlineData("git p?sh")]
     [InlineData("ls *")]
     [InlineData("du -sh *")]
-    [InlineData("echo {a,b}")]
     public void ExtractCandidates_has_no_grant_identity_for_unknown_command_words(string command)
     {
         var candidates = _matcher.ExtractCandidates(
@@ -1689,6 +1688,20 @@ public sealed class ShellApprovalMatcherPathExtractionTests
             Args(command, "/home/user/project"));
 
         Assert.NotEmpty(candidates);
+        Assert.All(candidates, candidate => Assert.Null(candidate.VerbTokens));
+    }
+
+    // ShellSyntaxTree 0.4.0-beta.19 reports that Bash can glob a brace word.
+    // Its value is unknown, so the command is one exact candidate, and no
+    // candidate has a grant identity.
+    [SlopwatchSuppress("SW001", "The case uses the Bash grammar of a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
+    public void ExtractCandidates_has_no_grant_identity_for_a_brace_word()
+    {
+        var candidates = _matcher.ExtractCandidates(
+            new ToolName("shell_execute"),
+            Args("echo {a,b}", "/home/user/project"));
+
         Assert.All(candidates, candidate => Assert.Null(candidate.VerbTokens));
     }
 

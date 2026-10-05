@@ -186,23 +186,63 @@ public sealed class ShellCommandAnalysisMutationTests
             static candidate => Assert.True(ApprovalPatternMatching.IsPureSideEffect(candidate)));
     }
 
-    // Bash does no pathname expansion inside one double-quoted word. A
-    // backslash must escape each other quote in the word.
+    // ShellSyntaxTree 0.4.0-beta.19 reports whether Bash can glob a word. An
+    // operand with an unknown value that can glob makes the command one exact
+    // candidate, because no proved scope bounds what it reads. Owner decision
+    // (#2349): an echo or printf operand keeps its earlier rule, because the
+    // worst case is file names in the output.
     [Theory]
-    [InlineData("\"$n\"", true)]
-    [InlineData("\"x: $(date)\"", true)]
-    [InlineData("\"\"", true)]
-    [InlineData("\"a\\\"b\"", true)]
-    [InlineData("\"a\\\\\"", true)]
-    [InlineData("$n", false)]
-    [InlineData("\"", false)]
-    [InlineData("x\"$n\"", false)]
-    [InlineData("\"$n\"x", false)]
-    [InlineData("\"a\"$n\"b\"", false)]
-    [InlineData("\"a\\\\\"b\"", false)]
-    [InlineData("\"abc\\\"", false)]
-    public void One_double_quoted_word_has_no_unescaped_inner_quote(string raw, bool expected)
-        => Assert.Equal(expected, ShellCommandAnalysis.IsOneDoubleQuotedWord(raw));
+    [InlineData("git push; n=$(date); echo \"$n\"", false)]
+    [InlineData("git push; n=$(date); echo pre\"$n\"", false)]
+    [InlineData("git push; n=$(date); echo \"a\"$'b'\"$n\"", false)]
+    [InlineData("git push; echo $((1 + 2))", false)]
+    [InlineData("git push; n=$(date); echo $n", false)]
+    [InlineData("git push; n=$(date); echo \"${n}ret\"/*", false)]
+    [InlineData("git push; echo {a,b}", false)]
+    [InlineData("git push; echo $@", false)]
+    [InlineData("git push; for pid in $(pgrep x); do echo $pid; done", false)]
+    [InlineData("git push; printf '%s' $(git push)", false)]
+    [InlineData("git push; f=$(date); cat /work/$f", true)]
+    [InlineData("git push; git log -n $?", false)]
+    [InlineData("git push; n=$(date); git log -n $n", true)]
+    [InlineData("git push; for f in '*.cs'; do cat /work/$f; done", true)]
+    [InlineData("git push; n=$(date); cat $n", true)]
+    [InlineData("git push; cat ~/notes/{a,b}.txt", true)]
+    [InlineData("git push; n=$(date); cat \"$n\"", false)]
+    public void Unknown_word_that_can_glob_is_not_data(string command, bool exactCandidate)
+    {
+        var policy = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = policy.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            exactCandidate,
+            analysis.GetUnresolvedPart(analysis.Commands[^1]) == ShellUnresolvedPart.Command);
+    }
+
+    // Bash has nothing to expand when each proved authored value has no glob
+    // character.
+    [Theory]
+    [InlineData("x=/a; echo $x", true)]
+    [InlineData("for r in 1 2; do echo $r; done", true)]
+    [InlineData("x='a*'; echo $x", false)]
+    [InlineData("x='*a'; echo $x", false)]
+    [InlineData("for r in 1 '*'; do echo $r; done", false)]
+    [InlineData("n=$(date); echo $n", false)]
+    public void Glob_free_authored_value_has_nothing_to_expand(string command, bool expected)
+    {
+        var policy = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = policy.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            expected,
+            ShellCommandAnalysis.HasGlobFreeAuthoredValue(analysis.Commands[^1].Arguments[^1]));
+    }
 
     // In PowerShell, test is not a builtin, so it keeps its candidate.
     [Fact]

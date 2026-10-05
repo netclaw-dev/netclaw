@@ -108,15 +108,33 @@ public sealed class ShellWrapperChildSourceTests(ShellApprovalMatrixFixture fixt
         }
     }
 
-    // ShellSyntaxTree 0.4.0-beta.6 cannot parse an ANSI-C quote. The input
-    // stays unresolved: an exact one-time prompt when interactive, and a
-    // denial when unattended. It never becomes allowed or reusable.
-    [Theory]
-    [InlineData("bash -lc $'echo \\'a b\\'; rm -rf ~/work'")]
-    [InlineData("bash -lc $'echo \\'a b\\'; netclaw daemon stop'")]
-    public async Task Ansi_c_quoted_wrapper_source_stays_unresolved(string command)
+    // ShellSyntaxTree 0.4.0-beta.19 decodes an ANSI-C quote, so the child
+    // source is exact. Each child command gets its own decision: the hard-deny
+    // list sees the decoded text.
+    [Fact]
+    public async Task Ansi_c_quoted_wrapper_source_is_decoded_for_hard_deny()
     {
-        await AssertUnresolvedAsync(command);
+        foreach (var interactive in new[] { true, false })
+        {
+            var observed = await EvaluateAsync(
+                "bash -lc $'echo \\'a b\\'; netclaw daemon stop'",
+                interactive);
+
+            Assert.Equal(ApprovalOutcome.Denied, observed.Outcome);
+            Assert.Equal(SelfDestructive, observed.DenyReason);
+        }
+    }
+
+    [Fact]
+    public async Task Ansi_c_quoted_wrapper_source_is_decoded_for_consent()
+    {
+        var interactive = await EvaluateAsync("bash -lc $'echo \\'a b\\'; rm -rf ~/work'", interactive: true);
+        var unattended = await EvaluateAsync("bash -lc $'echo \\'a b\\'; rm -rf ~/work'", interactive: false);
+
+        Assert.Equal(ApprovalOutcome.RequiresApproval, interactive.Outcome);
+        Assert.False(interactive.Prompt!.IsMessy);
+        Assert.Contains("rm", interactive.Prompt.CandidateVerbs);
+        Assert.Equal(ApprovalOutcome.Denied, unattended.Outcome);
     }
 
     // A child source that the parser cannot decode to one exact value stays

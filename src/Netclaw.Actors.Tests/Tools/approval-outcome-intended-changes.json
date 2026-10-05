@@ -605,6 +605,15 @@
       "reason": "Approval taxonomy D4 adds git merge-base to the reviewed catalog. It only reads commits and has no write, code, or network mode. An unreviewed command in the substitution still prompts (see echo-substitution-data-prompts-for-unreviewed-inner-command).",
       "negativeControl": "unsafe-catalog-find-exec-prompts",
       "approvedBy": "Aaron Stannard (owner), approval taxonomy D4 (one reviewed batch of read-only commands, plan page approval-taxonomy.html), 2026-10-05"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "unattended-brace-program-word-denies",
+      "renamedFrom": "unattended-brace-program-word-gets-rewrite-advice",
+      "from": "RequiresAgentCorrection",
+      "to": "Denied",
+      "reason": "ShellSyntaxTree 0.4.0-beta.18 rejects a brace word in the command name, because Bash expands it to another program and its operands (#227). The unparsed call is denied in an unattended run. Neither outcome runs the call; the agent no longer gets the rewrite advice.",
+      "approvedBy": "Aaron Stannard (owner), confirmed for #2349, 2026-10-05"
     }
   ]
 }

@@ -686,10 +686,12 @@ have their glossary meaning.
   candidates and coverage.
 - Bracket-word rule: a program word that is a literal bracket pattern (for
   example `["ci","build"]`), with no command words and no other word except a
-  redirect, SHALL be unresolved, because Bash expands the pattern. Brace text
-  and regex text in the program word (`{"b":2}`, `^\d{4}$`) SHALL NOT be
-  unresolved by this rule; they keep the rewrite advice of a command with
-  unknown command words. This rule SHALL NOT apply to the `[` test builtin
+  redirect, SHALL be unresolved, because Bash expands the pattern. Regex text
+  in the program word (`^\d{4}$`) SHALL NOT be unresolved by this rule; it
+  keeps the rewrite advice of a command with unknown command words. Since
+  ShellSyntaxTree 0.4.0-beta.18, the parser rejects a brace list in the
+  program word (`{"b":2,"c":3}`), because Bash expands it to another program
+  and its operands, so the source is unresolved. This rule SHALL NOT apply to the `[` test builtin
   (`[ -d /work ]`); the data-position rule below applies to it.
 - A source that does not split into commands (incomplete control flow, a
   command-resolution mutation such as `alias` or `hash`, `&&` under Windows
@@ -711,14 +713,34 @@ have their glossary meaning.
   deny a literal or proved protected path.
 - A Bash data command with no redirect SHALL get no assignment digest only
   when each operand is proved data. An output operand SHALL be proved data
-  with an exact value, a finite set, or one double-quoted raw word (Bash does
-  no pathname expansion inside double quotes). A test operand SHALL need an
+  with an exact value, a finite set, a proved authored value with no glob
+  character, or a word that Bash cannot glob (`MayPathnameExpand` is false,
+  from ShellSyntaxTree 0.4.0-beta.19). A test operand SHALL need an
   exact value or a finite set with no `[`. Any other data command, and a data
   command with a redirect, SHALL keep its digest. Thus
   `n=$(cmd); echo "$n"` is data, and `d=key; echo ../netclaw/"${d}s"/*` needs
   consent, because its literal twin is denied.
-- `continue` and `break` inside a loop SHALL stay unresolved until
-  ShellSyntaxTree accepts them. ShellSyntaxTree 0.4.0-beta.17 rejects them.
+- `continue` and `break` SHALL be Bash data commands. ShellSyntaxTree
+  0.4.0-beta.18 parses them with no operand or one decimal level, and it
+  joins the loop state at each one. Other forms stay unresolved.
+- Arithmetic (ShellSyntaxTree 0.4.0-beta.18): a bounded `$((...))` SHALL be
+  data. Arithmetic that reads a command substitution or a variable without a
+  proved integer value, and an arithmetic command `((...))`, SHALL be
+  unresolved, because Bash evaluates those values as code.
+- ANSI-C words (ShellSyntaxTree 0.4.0-beta.19): a `$'...'` word SHALL get the
+  decision of its decoded text. Each proved path value SHALL also get the
+  default credential store text hints, so `cat ~/.netclaw/$'\x6beys'/key-1.xml`
+  is denied as its literal twin.
+- Pathname expansion (ShellSyntaxTree 0.4.0-beta.19): a Bash operand that
+  Bash can glob (`MayPathnameExpand`), whose value is unknown, and whose
+  authored value is not proved free of glob characters SHALL make its command
+  one exact candidate with `Once` and `Deny` only. Decision D1 SHALL NOT cover
+  it, and an unattended run SHALL deny it. A brace word such as
+  `~/.netclaw/{keys,config}/key-1.xml` is such an operand. A proved glob scope
+  keeps decision D5, and `$?` is exempt. Owner decision (#2349): an operand of
+  a Bash data command keeps its earlier rule. An `echo` or `printf` operand
+  can only print file names, never contents, and a test operand keeps the
+  proved-value rule above.
 - Owner decision D1: a command whose command words are known and whose only
   unknown part is an operand value SHALL be covered by a reviewed safe phrase
   or by a grant for anywhere, attended or unattended (D2). A folder,
@@ -796,7 +818,7 @@ call-local. The analysis keeps no state between calls.
 
 - **GIVEN** a Personal session on the Bash 5.2 host with no grants (catalog cases `output-glob-from-binding-prompts` and `output-glob-from-binding-unattended-denies`)
 - **WHEN** the model calls `shell_execute` with `d=key; echo ../netclaw/"${d}s"/*`
-- **THEN** an interactive call returns `RequiresApproval` with the candidate `echo`
+- **THEN** an interactive call returns `RequiresApproval` with the one exact candidate `echo ../netclaw/"${d}s"/*` (ShellSyntaxTree 0.4.0-beta.19 reports that the word can glob)
 - **AND** an unattended call is denied with `approval_required_unattended`
 
 #### Scenario: A dynamic redirect target is not data
@@ -869,10 +891,46 @@ call-local. The analysis keeps no state between calls.
 
 #### Scenario: A brace program word keeps its rewrite advice
 
-- **GIVEN** an unattended Personal session in Approval mode with no grants (catalog case `unattended-brace-program-word-gets-rewrite-advice`)
+The scenario name is historical. Since ShellSyntaxTree 0.4.0-beta.18, the
+parser rejects the brace word, so the call gets no rewrite advice.
+
+- **GIVEN** an unattended Personal session in Approval mode with no grants (catalog case `unattended-brace-program-word-denies`)
 - **WHEN** the model calls `shell_execute` with `{"b":2,"nested":{"c":3}}`
-- **THEN** authorization returns `RequiresAgentCorrection`
-- **AND** the bracket-word rule does not deny the call
+- **THEN** authorization returns `Denied` with reason `approval_required_unattended`
+- **AND** the call does not run
+
+#### Scenario: A bounded arithmetic expansion is data
+
+- **GIVEN** an interactive Personal session with no grants (catalog case `arithmetic-expansion-is-data`)
+- **WHEN** the model calls `shell_execute` with `echo $((1 + 2))`
+- **THEN** authorization returns `Allowed`, because `echo` only prints its operands
+
+#### Scenario: Arithmetic that can run code stays unresolved
+
+- **GIVEN** an interactive Personal session with no grants (catalog cases `arithmetic-expansion-fails-closed`, `arithmetic-unproved-read-fails-closed`, and `arithmetic-command-fails-closed`)
+- **WHEN** the model calls `shell_execute` with `echo $(( $(id) + 1 ))`, `echo $((count + 1))`, or `(( p = 0 ))`
+- **THEN** authorization returns `RequiresApproval` for unresolved syntax, with `Once` and `Deny` only
+
+#### Scenario: A decoded ANSI-C path gets the decision of its literal twin
+
+- **GIVEN** an interactive Personal session with a global `cat` grant (catalog case `ansi-c-credential-keys-denied-as-literal`)
+- **WHEN** the model calls `shell_execute` with `cat ~/.netclaw/$'\x6beys'/key-1.xml`
+- **THEN** authorization returns `Denied` with reason `shell_references_protected_path`
+
+#### Scenario: A word that can glob to an unproved path needs exact consent
+
+- **GIVEN** a Personal session with a global `cat` grant (catalog cases `brace-credential-keys-needs-exact-consent` and `unattended-brace-credential-keys-denies`)
+- **WHEN** the model calls `shell_execute` with `cat ~/.netclaw/{keys,config}/key-1.xml`
+- **THEN** an interactive run returns `RequiresApproval` with the one exact candidate `cat ~/.netclaw/{keys,config}/key-1.xml`
+- **AND** an unattended run returns `Denied` with reason `approval_required_unattended`
+- **AND** the `cat` grant does not cover the call
+
+#### Scenario: A quoted unknown output part is data
+
+- **GIVEN** an interactive Personal session with no grants (catalog cases `quoted-unknown-output-part-is-data` and `unknown-glob-word-output-needs-exact-consent`)
+- **WHEN** the model calls `shell_execute` with `d=$(date); echo pre"$d"`
+- **THEN** authorization returns `Allowed`
+- **AND** `d=$(date); echo "${d}ret"/*` returns `RequiresApproval` with the one exact candidate `echo "${d}ret"/*`
 
 #### Scenario: Unresolved syntax in a headless run
 

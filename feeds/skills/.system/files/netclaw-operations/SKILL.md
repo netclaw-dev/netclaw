@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.93.1"
+  version: "2.94.0"
 ---
 
 # Netclaw Operations
@@ -539,14 +539,20 @@ authorized for the current call by the click but no `ApprovalEntry` is
 written for them. Recording every literal `echo "==="` would be noise.
 A dynamic operand of these verbs is data: `echo "head: $(git rev-parse HEAD)"`
 keeps reusable candidates, and the command inside `$(...)` gets its own. A
-value from `$(...)` or `read` is data too when the word is double-quoted: in
-`n=$(cmd); echo "$n"`, only `cmd` needs approval. Unquoted, `echo $n` needs
-consent. In Bash, `test` and `[` need no approval when each operand is a
+value from `$(...)` or `read` is data too when the shell cannot glob the word:
+in `n=$(cmd); echo "$n"` or `echo pre"$n"`, only `cmd` needs approval.
+Unquoted, `n=$(cmd); echo $n` needs consent. `echo $((1 + 2))` and
+`echo $(cmd)` are data (only `cmd` needs approval). In Bash, `test` and `[` need no approval when each operand is a
 literal or a proved value without `[`: `[ 3 -gt 2 ]`, `x=3; [ "$x" -gt 2 ]`,
 and a guard on a loop over literal words. A test on a value from `$(...)` or
 `read` gets a one-time prompt. A test on a file name from a glob loop gets a
 "write the command words literally" correction, and the call does not run.
-`continue` and `break` inside a loop make the whole command unreadable.
+`continue` and `break` inside a loop need no approval. For a program that can
+open files, such as `cat`, a word that the shell can glob and whose value
+Netclaw cannot prove (`$f`, `/work/$f`, `~/notes/{a,b}.txt`) makes its command
+one exact prompt with `Once` and `Deny`; no grant covers it. Write such paths
+literally. `echo`, `printf`, `test`, and `[` keep their own rules. An ANSI-C word such as
+`$'\x6beys'` gets the decision of its decoded text.
 
 **Prompts survive passivation and restart.** Pending approval prompts are
 journaled with their requester and trust context, so if the session goes idle or

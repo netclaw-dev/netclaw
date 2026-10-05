@@ -441,6 +441,18 @@ value without `[`). `Test_builtin_operand_is_data_only_with_a_bounded_value_with
 and `One_double_quoted_word_has_no_unescaped_inner_quote` kill the new mutants.
 The gate now kills 211 Security and 27 Actors mutants.
 
+The ShellSyntaxTree 0.4.0-beta.19 update replaces `IsOneDoubleQuotedWord` with
+the parser fact `MayPathnameExpand`, and it adds `HasUnboundedPathnameExpansion`
+and `HasGlobFreeAuthoredValue` as targets. `Unknown_word_that_can_glob_is_not_data`
+kills their mutants: a quoted or glob-free word is data or keeps decision D1,
+and an unknown word that can glob makes its command one exact candidate.
+`Glob_free_authored_value_has_nothing_to_expand` kills the mutants of the glob
+character check. An output operand no longer needs the separate proved-value
+test, because a proved value without a glob character already passes. Owner
+decision (#2349) exempts Bash data commands (`echo`, `printf`, `test`, `[`)
+from the exact-candidate rule; the `echo` rows and the `git log -n $?` rows
+kill the new mutants. The gate now kills 212 Security and 27 Actors mutants.
+
 The script groups targets by source project. Stryker analyzes each source project once.
 The local run on 2026-09-24 took under four minutes.
 

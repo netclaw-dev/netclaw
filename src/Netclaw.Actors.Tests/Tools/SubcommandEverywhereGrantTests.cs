@@ -131,7 +131,6 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("gh pr update-branch", "for n in 160 161; do gh pr update-branch $n; done")]
-    [InlineData("git push main", "git push {origin,fork} main")]
     [InlineData("dotnet build", "dotnet build -c Release")]
     public async Task Arguments_after_the_verb_slot_do_not_change_the_words(string grant, string command)
     {
@@ -190,7 +189,6 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("rm *.md", ShellCommandWordsRewrite.UsePathGlob, "rm ./*.md", "Use ./* (a path with /)")]
     [InlineData("for v in push fetch; do git $v origin; done", ShellCommandWordsRewrite.WriteWordsLiterally, "git push origin", "Write the command words literally")]
-    [InlineData("git {push,fetch} origin", ShellCommandWordsRewrite.RunCommandsSeparately, "git push origin", "Run each command separately")]
     public async Task Unknown_command_words_get_a_rewrite_correction(
         string command,
         ShellCommandWordsRewrite expectedRewrite,

@@ -226,18 +226,18 @@ read -r proved_start proved_end < <(
     "$analysis_file" \
     "internal static bool HasProvedDataOperands(" \
     "=> command.Arguments.All(argument => isTestBuiltin" \
-    "|| IsOneDoubleQuotedWord(argument.Argument.Raw));"
+    "|| HasGlobFreeAuthoredValue(argument));"
 )
 security_mutations+=("ShellCommandAnalysis.cs{$proved_start..$proved_end}")
 
-read -r quoted_start quoted_end < <(
+read -r expansion_start expansion_end < <(
   find_span \
     "$analysis_file" \
-    "internal static bool IsOneDoubleQuotedWord(" \
-    "if (raw.Length < 2" \
-    "return !escaped;"
+    "private bool HasUnboundedPathnameExpansion(" \
+    "=> Environment.Grammar == ShellGrammar.Bash" \
+    "=> value is not null && value.IndexOfAny(['*', '?', '[']) < 0;"
 )
-security_mutations+=("ShellCommandAnalysis.cs{$quoted_start..$quoted_end}")
+security_mutations+=("ShellCommandAnalysis.cs{$expansion_start..$expansion_end}")
 
 verb_data_file="$repo_root/src/Netclaw.Security/ShellVerbPolicyData.cs"
 read -r data_verb_start data_verb_end < <(
@@ -245,7 +245,7 @@ read -r data_verb_start data_verb_end < <(
     "$verb_data_file" \
     "internal static bool IsDataCommand(" \
     "=> SingleTokenSideEffectVerbs.Contains(verb)" \
-    "&& BashTestBuiltins.Contains(verb);"
+    "|| BashLoopControlBuiltins.Contains(verb));"
 )
 security_mutations+=("ShellVerbPolicyData.cs{$data_verb_start..$data_verb_end}")
 
@@ -438,7 +438,7 @@ security_mutations+=("ShellCommandPolicy.cs{$combine_start..$combine_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  211 \
+  212 \
   "${security_mutations[@]}"
 
 actor_mutations=()

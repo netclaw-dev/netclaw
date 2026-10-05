@@ -66,13 +66,28 @@ internal static class ShellVerbPolicyData
     };
 
     /// <summary>
+    /// Bash loop-control builtins. They change only which statement runs next.
+    /// </summary>
+    /// <remarks>
+    /// ShellSyntaxTree 0.4.0-beta.18 parses <c>break</c> and <c>continue</c> with no
+    /// operand or one decimal level, and it joins the loop state at each one. Any
+    /// other form is unparseable. In PowerShell they are keywords, so the list is
+    /// Bash only.
+    /// </remarks>
+    internal static readonly HashSet<string> BashLoopControlBuiltins = new(StringComparer.Ordinal)
+    {
+        "break", "continue"
+    };
+
+    /// <summary>
     /// Returns true when the verb is a data command: an output command, or in
-    /// Bash a test builtin. A data command has no path scope, and with no
+    /// Bash a test builtin or a loop-control builtin. A data command has no path scope, and with no
     /// redirect it needs no approval.
     /// </summary>
     internal static bool IsDataCommand(string verb, ApprovalShell? shell)
         => SingleTokenSideEffectVerbs.Contains(verb)
-           || shell == ApprovalShell.Bash && BashTestBuiltins.Contains(verb);
+           || shell == ApprovalShell.Bash
+              && (BashTestBuiltins.Contains(verb) || BashLoopControlBuiltins.Contains(verb));
 
     /// <summary>
     /// Single-token commands with no subcommand grammar. Each operand is call-specific.
