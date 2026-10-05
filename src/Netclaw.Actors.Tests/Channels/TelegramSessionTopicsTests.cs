@@ -15,6 +15,7 @@ using Netclaw.Actors.Tests.Channels.TestHelpers;
 using Netclaw.Channels;
 using Netclaw.Channels.Telegram;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 
 namespace Netclaw.Actors.Tests.Channels;
@@ -53,7 +54,8 @@ public sealed class TelegramSessionTopicsTests(ITestOutputHelper output) : TestK
             new ToolAudienceProfiles(),
             new ModelCapabilities(),
             TestSessionStorageResolver.Instance,
-            ConversationPropsFactory: null);
+            ConversationPropsFactory: null,
+            PromptInjectionDetector: new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));
         var gateway = Sys.ActorOf(TelegramGatewayActor.CreateProps(dependencies), "topics-gateway");
 
         gateway.Tell(new TelegramInboundMessage(

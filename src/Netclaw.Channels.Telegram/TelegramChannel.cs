@@ -32,6 +32,7 @@ public sealed class TelegramChannel : IChannel
     private readonly ModelCapabilities _modelCapabilities;
     private readonly ISessionStorageResolver _storageResolver;
     private readonly IChannelRegistry _channelRegistry;
+    private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly TimeProvider _timeProvider;
 
     private IActorRef? _gateway;
@@ -53,6 +54,7 @@ public sealed class TelegramChannel : IChannel
         TelegramTransport transport,
         ILogger<TelegramChannel> logger,
         IContentScanner contentScanner,
+        IPromptInjectionDetector? promptInjectionDetector,
         ToolConfig toolConfig,
         ModelCapabilities modelCapabilities,
         ISessionStorageResolver storageResolver,
@@ -67,6 +69,11 @@ public sealed class TelegramChannel : IChannel
         _transport = transport;
         _logger = logger;
         _contentScanner = contentScanner;
+        // Fail loud rather than substituting a no-op detector — a no-op reports
+        // every input as safe, silently disabling injection scanning. A null
+        // here means broken DI wiring.
+        _promptInjectionDetector = promptInjectionDetector
+            ?? throw new ArgumentNullException(nameof(promptInjectionDetector));
         _audienceProfiles = toolConfig.AudienceProfiles;
         _modelCapabilities = modelCapabilities;
         _storageResolver = storageResolver;
@@ -146,7 +153,8 @@ public sealed class TelegramChannel : IChannel
                 _audienceProfiles,
                 _modelCapabilities,
                 _storageResolver,
-                _channelRegistry)),
+                _channelRegistry,
+                PromptInjectionDetector: _promptInjectionDetector)),
             "telegram-gateway");
 
         _actorRegistry.Register<TelegramGatewayActorKey>(_gateway);

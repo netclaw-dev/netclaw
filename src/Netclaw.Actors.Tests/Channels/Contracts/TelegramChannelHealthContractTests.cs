@@ -7,6 +7,8 @@ using Akka.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
 using Netclaw.Channels;
 using Netclaw.Channels.Telegram;
+using Netclaw.Actors.Tests.Channels.TestHelpers;
+using Netclaw.Security;
 using Netclaw.Configuration;
 using Xunit;
 
@@ -44,6 +46,7 @@ public sealed class TelegramChannelHealthContractTests(ITestOutputHelper output)
             transport: transport,
             logger: NullLogger<TelegramChannel>.Instance,
             contentScanner: null!,
+            promptInjectionDetector: new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()),
             toolConfig: new ToolConfig(),
             modelCapabilities: new ModelCapabilities(),
             storageResolver: null!,

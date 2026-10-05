@@ -13,7 +13,9 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
 using Netclaw.Channels;
+using Netclaw.Channels.Telemetry;
 using Netclaw.Configuration;
+using Netclaw.Security;
 using Netclaw.Tools;
 using static Netclaw.Actors.Sessions.SessionProtocol;
 using static Netclaw.Actors.Reminders.ReminderProtocol;
@@ -35,12 +37,17 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
     internal const string WrongRequesterText = "Only the requester can approve this action.";
     internal const string NoLongerPendingText = "This approval request is no longer pending.";
     internal const string FeedbackFailedText = "Netclaw could not record this decision.";
+    internal const string LiveInjectionBlockedWarning =
+        ":warning: Message blocked by prompt-injection policy.";
+    internal const string LiveDetectorUnavailableWarning =
+        ":warning: I couldn't safely analyze your message — please try again in a moment.";
     internal const string DecisionRecordedText = "Decision recorded.";
 
     private readonly SessionId _sessionId;
     private readonly TelegramChatId _chatId;
     private readonly int? _messageThreadId;
     private readonly TelegramGatewayDependencies _dependencies;
+    private readonly IPromptInjectionDetector _promptInjectionDetector;
     private readonly SessionPipelineHandle _handle;
     private readonly ILoggingAdapter _log;
     private readonly SafeTransportCall _safeTransport;
@@ -74,6 +81,13 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
             : null;
 
         _dependencies = dependencies;
+        // Fail loud rather than substituting a no-op detector — a no-op reports
+        // every input as safe, silently disabling injection scanning. A null
+        // here means broken wiring.
+        _promptInjectionDetector = dependencies.PromptInjectionDetector
+            ?? throw new InvalidOperationException(
+                "TelegramGatewayDependencies.PromptInjectionDetector is not wired; "
+                + "prompt-injection scanning cannot be silently disabled.");
         _log = Context.GetLogger().WithContext("Adapter", "telegram");
         _handle = new SessionPipelineHandle(dependencies.Pipeline, _log, "telegram");
 
@@ -194,6 +208,36 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
     private async Task HandleInboundAsync(TelegramSessionInbound inbound)
     {
         await EnsureInitializedAsync();
+
+        // Shared prompt-injection gate, the same one the other channel
+        // bindings run before ingress. Telegram classifies the message text,
+        // which already carries photo captions. Attachment payloads stay
+        // under the separate ContentScanner ingress pipeline.
+        if (!string.IsNullOrWhiteSpace(inbound.Text))
+        {
+            using var classificationCts = new CancellationTokenSource(OperationTimeout);
+            var classification = await PromptClassifier.ClassifyAsync(
+                _promptInjectionDetector, inbound.Text, "telegram-live", _log, classificationCts.Token);
+            switch (classification.Outcome)
+            {
+                case ClassificationOutcome.Block:
+                    _log.Warning(
+                        "Blocked Telegram message due to prompt injection risk: {Reason}", classification.Reason);
+                    ChannelTelemetry.For(ChannelType.Telegram).RecordEventDropped("prompt_injection_high");
+                    await PostReplyAsync(LiveInjectionBlockedWarning);
+                    return;
+
+                case ClassificationOutcome.DetectorUnavailable:
+                    _log.Warning("Prompt injection detector unavailable for live message — dropping");
+                    ChannelTelemetry.For(ChannelType.Telegram)
+                        .RecordEventDropped("prompt_injection_detector_unavailable");
+                    await PostReplyAsync(LiveDetectorUnavailableWarning);
+                    return;
+
+                case ClassificationOutcome.Allow:
+                    break;
+            }
+        }
 
         var writer = _handle.InputQueue;
         if (writer is null)

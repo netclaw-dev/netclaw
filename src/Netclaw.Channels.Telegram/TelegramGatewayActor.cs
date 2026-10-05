@@ -91,4 +91,5 @@ public sealed record TelegramGatewayDependencies(
     ModelCapabilities ModelCapabilities,
     ISessionStorageResolver StorageResolver,
     IChannelRegistry? ChannelRegistry = null,
-    Func<TelegramChatId, TelegramGatewayDependencies, Props>? ConversationPropsFactory = null);
+    Func<TelegramChatId, TelegramGatewayDependencies, Props>? ConversationPropsFactory = null,
+    IPromptInjectionDetector? PromptInjectionDetector = null);

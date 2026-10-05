@@ -75,7 +75,8 @@ public sealed class TelegramGatewayContractTests(ITestOutputHelper output)
             AudienceProfiles: ToolAudienceProfileDefaults.CreateProfiles(),
             ModelCapabilities: new ModelCapabilities(),
             StorageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance,
-            ChannelRegistry: null);
+            ChannelRegistry: null,
+            PromptInjectionDetector: new ConfigurablePromptInjectionDetector(PromptInjectionResult.Safe()));
 
         return Sys.ActorOf(TelegramGatewayActor.CreateProps(deps));
     }
