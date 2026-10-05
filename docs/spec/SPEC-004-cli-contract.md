@@ -213,12 +213,14 @@ The JSON form uses `sourceId`, `manifestName`, `sourceFormat`, and `manifestForm
 
 Auto format selection uses this order:
 
-1. Root `plugin.json` with the recognized Agent Plugins 1.0.0 schema.
-2. `.codex-plugin/plugin.json` as a compatibility manifest.
+1. Root `plugin.json` when the file exists.
+2. `.codex-plugin/plugin.json` only when the root file is absent.
 
 An explicit format inspects only that format.
 Netclaw does not combine declarations from multiple manifests.
 A selected invalid manifest fails without a fallback to another manifest.
+For example, a valid portable root wins over a valid Codex manifest.
+A root with malformed JSON fails, even when the Codex manifest is valid.
 
 The portable adapter uses the standard root manifest and fixed `skills/` directory.
 An invalid portable skill is skipped without blocking valid sibling skills.
