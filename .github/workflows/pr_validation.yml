@@ -95,6 +95,19 @@ jobs:
             echo "No blame Sequence file — no test hang detected."
           fi
 
+      # The VSTest adapter shows only "Test Assembly Cleanup Failure" for the temp-leak gate.
+      # The gate also writes its report next to the test assembly. Print it here.
+      - name: "Show test temp leaks (if a test leaked)"
+        if: always()
+        shell: bash
+        run: |
+          reports=$(find ./src ./tests -name 'test-temp-leaks.txt' 2>/dev/null || true)
+          if [ -n "$reports" ]; then
+            for f in $reports; do echo "===== TEST TEMP LEAKS: $f ====="; cat "$f"; echo; done
+          else
+            echo "No test temp leak report."
+          fi
+
       # Upload the hang dump + sequence file so a dedicated agent can open the dump (dotnet-dump
       # analyze / lldb) and read the stalled thread stacks. Per-OS name; only the macOS run is
       # expected to produce one today.

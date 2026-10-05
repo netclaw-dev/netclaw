@@ -19,6 +19,9 @@ internal sealed class DisposableTempDir : IDisposable
         if (!Directory.Exists(Path))
             return;
 
+        // Windows refuses to delete a SQLite file while a pooled connection holds it.
+        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
         // Retry loop for Windows CI where SQLite pooled connections can
         // briefly hold file handles after the test completes.
         for (var i = 0; i < 5; i++)

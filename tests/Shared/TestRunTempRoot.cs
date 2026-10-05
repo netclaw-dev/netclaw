@@ -120,6 +120,9 @@ public sealed class TestRunTempRootFixture : IDisposable
 
     public void Dispose()
     {
+        var reportPath = Path.Combine(AppContext.BaseDirectory, "test-temp-leaks.txt");
+        File.Delete(reportPath);
+
         var leftovers = TestRunTempRoot.FindLeftovers();
         var report = leftovers.Length == 0 ? null : BuildReport(leftovers);
         TestRunTempRoot.TryDeleteRoot();
@@ -128,8 +131,10 @@ public sealed class TestRunTempRootFixture : IDisposable
             return;
 
         // The VSTest adapter shows only "Test Assembly Cleanup Failure" for a fixture
-        // exception. Write the names to stderr so a `dotnet test` log still lists them.
+        // exception. Write the report to stderr and to a file next to the test
+        // assembly. The CI workflow prints the file.
         Console.Error.WriteLine(report);
+        File.WriteAllText(reportPath, report);
         throw new InvalidOperationException(report);
     }
 
