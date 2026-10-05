@@ -571,14 +571,19 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
 
 - Follows: `git status` becomes a phrase from ShellSyntaxTree tokens. The
   reviewed-safe catalog lists that phrase as data.
-- Follows: a shell grant covers exactly its command words, the ShellSyntaxTree
-  `CommandWords` fact (0.4.0-beta.8 position rule). The words are the program,
-  the verb slot (the first word after the program and its options), and the
-  plain words after it. The arguments are free. `ApprovalPatternMatching.VerbChainEquals`
-  compares the stored tokens with the candidate's words, so `gh -R o/r pr view 1`
-  and `gh pr view 1 -R o/r` both match a `gh pr view` grant, a `gh` grant
-  covers `gh --help` but not `gh auth logout`, and a `git push origin feature-x`
-  grant does not cover `git push origin main`. Options, option values, paths,
+- Follows: a shell grant matches the ShellSyntaxTree `CommandWords` fact
+  (0.4.0-beta.8 position rule). The words are the program, the verb slot (the
+  first word after the program and its options), and the plain words after it.
+  `ToolApprovalEntryComparer.CoversCommandWords` is the one rule for the
+  approval matcher and the store hygiene (owner decision, 2026-10-05). A grant
+  of two or more words names a verb and covers the words that start with its
+  words: a `git push` grant covers `git push origin main`, and a
+  `dotnet package search` grant covers each package. A grant of one word names
+  only the program and covers that word alone: a `gh` grant covers
+  `gh --help` but not `gh auth logout`. A grant word is never free, so a
+  `git push origin feature-x` grant does not cover `git push origin main`.
+  `gh -R o/r pr view 1` and `gh pr view 1 -R o/r` both match a `gh pr view`
+  grant. Options, option values, paths,
   path patterns with `/`, words with a digit, quoted text with whitespace, and
   (after the verb slot) expansions and globs are arguments. So
   `dotnet build -c Release` gives `dotnet build`, and
@@ -588,12 +593,16 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   existing file or directory (not a link) in the occurrence directory is a
   path operand, not a command word: with `Phobos.slnx` on disk,
   `dotnet build Phobos.slnx` gives `dotnet build`, and the file gets a path
-  scope for the trusted-root and protected-path checks. The program word and
+  scope for the trusted-root and protected-path checks. A word that names a
+  link stays a command word, and its link path is also a path scope, so a verb
+  grant that covers the word never hides the link target from those checks.
+  The program word and
   the verb slot never drop, so a file named `push` does not change `git push`.
   ShellSyntaxTree is lexical, so `ShellApprovalMatcher.ProjectCommandWords`
   reads the disk once per word. An unknown occurrence directory drops no word,
   and an exact candidate keeps its words. The stored match kind keeps the name
-  `TokenPrefix`, so the version-3 store does not change. A legacy phrase must also equal the words.
+  `TokenPrefix`, so the version-3 store does not change. A legacy phrase uses
+  the same rule for its words.
   Since approval taxonomy fix 5, the display verb does not count: the legacy
   phrase `dotnet list package` covers `dotnet list package --vulnerable`, whose
   prompt shows `dotnet list`. Policy data gives some programs a one-token chain

@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.95.1"
+  version: "2.96.0"
 ---
 
 # Netclaw Operations
@@ -422,6 +422,13 @@ Shell approvals store a typed phrase and a scope in `tool-approvals.json`:
 
 - **verb** — the command head plus subcommand chain only (e.g. `git push`,
   `grep`, `freshdesk`). No flags, no path arguments.
+  A phrase of two or more words names a verb. It covers its command words and
+  any later command words, which are arguments: `git push` covers
+  `git push origin main`, and `dotnet package search` covers each package.
+  A phrase of one word names only the program and covers that word alone:
+  `gh` covers `gh --help`, not `gh auth logout`. A word of the phrase is never
+  free: `git push upstream` does not cover `git push origin main`. A new grant
+  saves the words of the approved call, so it can be narrower than the verb.
 - **directory** — the path field for folder and global grants. Netclaw sets it from:
   - **Path argument** in the original command (`find /repo`, `ls /var/log`,
     `cat ~/.bashrc`). The path argument is the directory; for file targets
@@ -449,14 +456,16 @@ the program again to cover one file.
 A word that names an existing file or folder in the command's directory is
 not a command word, unless it is the program or the first word after it. So
 `dotnet build Phobos.slnx` uses the `dotnet build` grant, and a new grant
-never stores a file name. The store also skips a grant that a saved grant
-already covers. `netclaw doctor --fix` removes a grant that another grant
+never stores a file name. A word that names a link stays a command word, and
+Netclaw also checks the link path. The store also skips a grant that a saved
+grant already covers: a saved `git push` grant covers a new `git push upstream`
+grant. `netclaw doctor --fix` removes a grant that another grant
 covers. It reports and keeps a folder grant that names a file of its folder
 and a grant whose folder is gone. It never touches an "anywhere" grant for a
 file-like word.
-An older exact-phrase grant covers a call whose command words equal its
-phrase. The grant `dotnet list package` covers
-`dotnet list package --vulnerable`, even when the prompt shows `dotnet list`.
+An older exact-phrase grant uses the same rule for its words. The grant
+`dotnet list package` covers `dotnet list package --vulnerable`, even when the
+prompt shows `dotnet list`.
 
 `This repository` stores a distinct Git repository scope. It applies to
 registered worktrees of one repository. Netclaw derives this scope from each

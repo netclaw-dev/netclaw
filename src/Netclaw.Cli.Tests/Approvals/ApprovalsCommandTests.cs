@@ -782,6 +782,6 @@ public sealed class ApprovalsCommandTests : IDisposable
 
         var output = _output.ToString();
         Assert.Contains("trust-verb", output);
-        Assert.Contains("covers exactly its command words", output);
+        Assert.Contains("A one-word phrase covers the program alone", output);
     }
 }

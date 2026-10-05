@@ -15,8 +15,8 @@
 | safe-verb-project-allows | Bash | Personal | Project | Interactive | git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-git-ls-tree-ref-allows | Bash | Personal | Project | Interactive | git ls-tree feature | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-git-ls-tree-external-allows-with-canonical-verb | Bash | Personal | External | Interactive | git ls-tree feature | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| safe-git-ls-tree-external-reuses-canonical-grant | Bash | Personal | External | Interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | ReviewedSafePolicy | none | Not applicable |
-| unattended-external-grant-allows | Bash | Personal | External | Non-interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | ReviewedSafePolicy | none | Not applicable |
+| safe-git-ls-tree-external-reuses-canonical-grant | Bash | Personal | External | Interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | StoredApproval | none | Not applicable |
+| unattended-external-grant-allows | Bash | Personal | External | Non-interactive | git ls-tree feature | persistent[external]:git ls-tree | Allowed | StoredApproval | none | Not applicable |
 | unattended-external-reviewed-safe-allows | Bash | Personal | External | Non-interactive | git ls-tree feature | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | prose-quoted-program-word-prompts | Bash | Personal | Project | Interactive | I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me? | none | RequiresApproval | approval required | 'Im speaking at Stir Trek 2026 - I fly out of IAH. Whats' the best flight | No |
 | powershell7-prose-quoted-program-word-prompts | PowerShell7 | Personal | Project | Interactive | I'm speaking at Stir Trek 2026 - I fly out of IAH. What's the best flight / hotel combination for me? | none | RequiresApproval | approval required | 'Im speaking at Stir Trek 2026 - I fly out of IAH. Whats' the best flight | No |
@@ -26,7 +26,7 @@
 | unattended-cd-semicolon-without-grant-denies | Bash | Personal | Project | Non-interactive | cd /netclaw-approval-external/cd-list; make | none | Denied | approval_required_unattended | none | Not applicable |
 | unattended-cd-or-exit-without-grant-denies | Bash | Personal | Project | Non-interactive | cd /netclaw-approval-external/cd-list \|\| exit 1; make | none | Denied | approval_required_unattended | none | Not applicable |
 | unattended-cd-semicolon-protected-slice-denies | Bash | Personal | Project | Non-interactive | cd /netclaw-approval-external/cd-list; cat ~/.netclaw/config/secrets.json | persistent[anywhere]:cd, persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
-| unattended-external-grant-with-exempt-command-allows | Bash | Personal | External | Non-interactive | git ls-tree feature; echo done | persistent[external]:git ls-tree | Allowed | ReviewedSafePolicy | none | Not applicable |
+| unattended-external-grant-with-exempt-command-allows | Bash | Personal | External | Non-interactive | git ls-tree feature; echo done | persistent[external]:git ls-tree | Allowed | StoredApproval | none | Not applicable |
 | safe-verb-context-project-fallback-allows | Bash | Personal | None | Interactive | cat src/readme.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-verb-context-project-traversal-allows | Bash | Personal | None | Interactive | cat ../secret.txt | none | Allowed | ReviewedSafePolicy | none | Not applicable |
 | safe-verb-session-allows | Bash | Personal | Session | Interactive | git status | none | Allowed | ReviewedSafePolicy | none | Not applicable |

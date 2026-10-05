@@ -168,6 +168,21 @@ public sealed class ToolApprovalStoreTests : IDisposable
         Assert.Single(entries);
     }
 
+    // The save-time skip uses the matcher rule: a verb grant covers a longer
+    // grant, and a program-only grant covers no longer grant.
+    [Theory]
+    [InlineData("git push", "git push upstream", false)]
+    [InlineData("git push", "git push origin main", false)]
+    [InlineData("git push upstream", "git push origin main", true)]
+    [InlineData("git push origin feature-x", "git push origin main", true)]
+    [InlineData("gh", "gh auth logout", true)]
+    public void AddApproval_skips_a_grant_that_a_stored_grant_covers(string stored, string added, bool saved)
+    {
+        _store.AddApproval(TrustAudience.Personal, "shell_execute", Verb(stored));
+
+        Assert.Equal(saved, _store.AddApproval(TrustAudience.Personal, "shell_execute", InDir(added, "/home/user/repo")));
+    }
+
     [Fact]
     public void AddApproval_normalizes_trailing_slash_in_directory()
     {

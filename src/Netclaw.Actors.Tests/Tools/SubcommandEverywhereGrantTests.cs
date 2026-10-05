@@ -15,12 +15,14 @@ using Xunit;
 namespace Netclaw.Actors.Tests.Tools;
 
 /// <summary>
-/// A saved shell grant covers exactly its command words (the ShellSyntaxTree
-/// <c>CommandWords</c> fact), with any arguments. Every option order of one
-/// command has the same words. A grant never covers other words: a <c>gh</c>
-/// grant covers <c>gh --help</c>, not <c>gh auth logout</c>. After the verb
-/// slot, option values, expansions, and globs are arguments. Unknown words
-/// (only in the verb slot) get a rewrite correction: no run and no prompt.
+/// A saved shell grant covers the command words (the ShellSyntaxTree
+/// <c>CommandWords</c> fact) that start with its words. A grant with two or
+/// more words names a verb, and the later words are its arguments. A grant
+/// with one word names only the program and stays exact: a <c>gh</c> grant
+/// covers <c>gh --help</c>, not <c>gh auth logout</c>. Every option order of
+/// one command has the same words. After the verb slot, option values,
+/// expansions, and globs are arguments. Unknown words (only in the verb slot)
+/// get a rewrite correction: no run and no prompt.
 /// </summary>
 [Collection(ShellApprovalMatrixCollection.Name)]
 public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fixture)
@@ -109,6 +111,73 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
         await AssertAllowedByStoredGrantAsync(harness, "gh --version");
     }
 
+    // The owner decision of 2026-10-05: a verb grant covers its command words
+    // and any later words, and a program-only grant stays exact. A word of the
+    // grant is never free. Both stored kinds follow the same rule.
+    public static TheoryData<ApprovalMatchKind, string, string, bool> OwnerReachCases()
+    {
+        var data = new TheoryData<ApprovalMatchKind, string, string, bool>();
+        (string Grant, string Command, bool Covered)[] cases =
+        [
+            ("dotnet package search", "dotnet package search Dapper.AOT", true),
+            ("dotnet package search", "dotnet package search Newtonsoft.Json --take 5", true),
+            ("git push", "git push upstream", true),
+            ("git push", "git push origin main", true),
+            ("git push upstream", "git push upstream feature-x", true),
+            ("git push upstream", "git push origin main", false),
+            ("git push origin feature-x", "git push origin main", false),
+            ("gh", "gh auth logout", false),
+            ("ilspycmd Mattermost.MattermostClient", "ilspycmd Mattermost.MattermostClient", true),
+            ("ilspycmd Mattermost.MattermostClient", "ilspycmd Mattermost.MattermostClient Extra.Word", true),
+            ("ilspycmd Mattermost.MattermostClient", "ilspycmd Other.Type", false),
+        ];
+        foreach (var kind in new[] { ApprovalMatchKind.TokenPrefix, ApprovalMatchKind.LegacyExact })
+        {
+            foreach (var (grant, command, covered) in cases)
+                data.Add(kind, grant, command, covered);
+        }
+
+        return data;
+    }
+
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [MemberData(nameof(OwnerReachCases))]
+    public async Task Verb_grant_covers_its_arguments_and_program_grant_stays_exact(
+        ApprovalMatchKind kind,
+        string grant,
+        string command,
+        bool covered)
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.None);
+        harness.AddStoredShellEntry(
+            TrustAudience.Personal,
+            kind == ApprovalMatchKind.TokenPrefix
+                ? ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, grant.Split(' '))
+                : ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, grant));
+        var stored = harness.GetStoredShellEntries(TrustAudience.Personal);
+
+        if (covered)
+            await AssertAllowedByStoredGrantAsync(harness, command);
+        else
+            await AssertNeedsApprovalAsync(harness, command, stored);
+    }
+
+    // Saving does not change: "Always anywhere" stores the words of the
+    // approved call, so a grant for one remote stays narrow.
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    public async Task Saved_grant_keeps_the_approved_words()
+    {
+        await using var harness = await CreateHarnessAsync(Approvals.None);
+
+        var stored = await ApproveEverywhereAsync(harness, "git push upstream");
+
+        Assert.Equal(["git", "push", "upstream"], Assert.Single(stored).VerbTokens!);
+        await AssertAllowedByStoredGrantAsync(harness, "git push upstream feature-x");
+        await AssertNeedsApprovalAsync(harness, "git push origin main", stored);
+    }
+
     // A plain word is part of the identity: one branch grant does not cover another branch.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
@@ -141,7 +210,8 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
         await AssertNeedsApprovalAsync(harness, command.Replace(grant.Split(' ')[^1], "other-verb", StringComparison.Ordinal), stored);
     }
 
-    // A word with a digit is an argument, so a tag grant covers every tag.
+    // A legacy phrase covers its words and later words. A word with a digit is
+    // an argument, and "main" is a later word.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     public async Task Legacy_exact_grant_matches_the_command_words()
@@ -153,15 +223,16 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
         var stored = harness.GetStoredShellEntries(TrustAudience.Personal);
 
         await AssertAllowedByStoredGrantAsync(harness, "git push origin v1.5.1 --force");
-        await AssertNeedsApprovalAsync(harness, "git push origin main --force", stored);
+        await AssertAllowedByStoredGrantAsync(harness, "git push origin main --force");
+        await AssertNeedsApprovalAsync(harness, "git push upstream main", stored);
     }
 
-    // A legacy phrase covers the calls whose command words equal it, whatever
-    // the prompt shows. Other words still need approval.
+    // A legacy phrase covers the calls whose command words start with it,
+    // whatever the prompt shows. Other words still need approval.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("dotnet list package", "dotnet list package --vulnerable --include-transitive", "dotnet list reference")]
-    [InlineData("git ls-remote", "git ls-remote --heads origin", "git ls-remote origin")]
+    [InlineData("git ls-remote", "git ls-remote --heads origin", "git remote prune origin")]
     public async Task Legacy_exact_grant_covers_its_own_words(string grant, string covered, string other)
     {
         await using var harness = await CreateHarnessAsync(Approvals.None);

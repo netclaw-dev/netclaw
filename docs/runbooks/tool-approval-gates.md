@@ -199,7 +199,22 @@ A call in `Approval` mode runs without a prompt when every part of it is
 covered:
 
 - A grant that you saved (this chat, a folder, a repository, or everywhere)
-  covers the phrase.
+  covers the phrase. A shell grant of two or more words names a verb. It
+  covers its command words and any later command words, which are the
+  arguments of the verb. A shell grant of one word names only the program,
+  and it covers that word alone:
+
+  | Grant | Covers | Does not cover |
+  | --- | --- | --- |
+  | `git push` | `git push upstream`, `git push origin main` | `git pull` |
+  | `git push upstream` | `git push upstream feature-x` | `git push origin main` |
+  | `git push origin feature-x` | `git push origin feature-x --force-with-lease` | `git push origin main` |
+  | `dotnet package search` | `dotnet package search Dapper.AOT` | `dotnet package add` |
+  | `gh` | `gh --help` | `gh auth logout` |
+
+  A word that names a link in the command's directory stays a command word.
+  Netclaw also checks the link path as a path scope, so a grant never hides
+  the link target from the path checks.
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
   This rule also applies after `cd dir && action;`. A dynamic operand, such as
   `echo "head: $(git rev-parse HEAD)"`, is data. A value from `$(...)` or
@@ -312,8 +327,11 @@ The store keeps itself clean when it saves a grant:
   `netclaw approvals trust-verb` saves an "anywhere" grant with the exact
   phrase that the operator typed.
 - It does not save a grant that a stored grant already covers. A grant
-  covers another one when the tool, the shell, the words, and the assignment
-  digest are equal, and it applies "anywhere" or has the same scope. A folder
+  covers another one when the tool, the shell, and the assignment digest are
+  equal, its words cover the other words by the rule above, and it applies
+  "anywhere" or has the same scope. So a stored `git push` grant covers a new
+  `git push upstream` grant, and a stored `gh` grant does not cover a new
+  `gh auth logout` grant. A folder
   never covers another folder, and a repository never covers a folder: a link
   or a nested repository can put a directory outside the wider scope.
 - It never removes a stored grant when it saves one, so a later revoke keeps
@@ -323,9 +341,10 @@ The store keeps itself clean when it saves a grant:
 
 - On the first load of a version 2 file, Netclaw writes a byte-identical
   `tool-approvals.json.v2.bak` and converts the file. Old shell entries become
-  exact-phrase (`LegacyExact`) grants, so an upgrade adds no authority. A
-  legacy grant covers a call whose command words equal its phrase, as a new
-  grant for those words does. The text in the prompt does not count.
+  phrase (`LegacyExact`) grants. A legacy grant covers a call by the rule of
+  a new grant for the same words: a phrase of two or more words covers its
+  words and any later words, and a one-word phrase covers the program alone.
+  The text in the prompt does not count.
 - A word after the verb slot that names an existing file or folder in the
   command's directory is not a command word. A grant such as
   `dotnet build Phobos.slnx` from an earlier version stays in the store, but

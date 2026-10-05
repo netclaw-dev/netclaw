@@ -58,11 +58,12 @@ public sealed class FileWordCommandWordsTests(ShellApprovalMatrixFixture fixture
         await AssertAllowedByStoredGrantAsync(harness, "dotnet build Other.sln -c Release");
     }
 
-    // Negative controls: a word without a file stays a command word.
+    // Negative controls: a word without a file stays a command word. A grant
+    // word is never free, so another word in its position needs approval.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("git push origin feature-x", "git push origin main")]
-    [InlineData("systemctl stop", "systemctl stop nginx.service")]
+    [InlineData("systemctl stop nginx.service", "systemctl stop sshd.service")]
     public async Task Word_without_a_file_stays_a_command_word(string grant, string command)
     {
         await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere(grant));
@@ -84,17 +85,43 @@ public sealed class FileWordCommandWordsTests(ShellApprovalMatrixFixture fixture
         Assert.Contains(stored, entry => entry.VerbTokens!.SequenceEqual(["git", "push", "origin", "topic"]));
     }
 
-    // SECURITY: a link can lead to a protected file, so its word stays.
+    // SECURITY: a link can lead to a protected file, so its word stays. A verb
+    // grant covers the later words, so the link path is also a path scope, and
+    // the path checks see the link target. A folder grant refuses a link below
+    // its root, and no grant covers a link to a protected directory.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Fact(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     public async Task Link_word_stays_a_command_word()
     {
-        await using var harness = await CreateHarnessAsync(Approvals.PersistentAnywhere("dotnet build"));
+        await using var harness = await CreateHarnessAsync(
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "dotnet build"));
         harness.CreateProjectFileSymlinkToExternalFile("Linked.slnx");
 
         var decision = await harness.EvaluateShellDecisionAsync("dotnet build Linked.slnx", Ct);
 
         Assert.NotEqual(ToolAuthorizationOutcome.Allowed, decision.Outcome);
+        Assert.Contains(
+            decision.ApprovalContext!.Candidates!,
+            candidate => candidate.VerbTokens!.SequenceEqual(["dotnet", "build", "Linked.slnx"]));
+    }
+
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Verb_grant_does_not_cover_a_link_word_to_a_protected_directory(bool everywhere)
+    {
+        await using var harness = await CreateHarnessAsync(everywhere
+            ? Approvals.PersistentAnywhere("git add")
+            : Approvals.PersistentHere(ApprovalDirectoryShape.Project, "git add"));
+        Directory.CreateDirectory(harness.Paths.KeysDirectory);
+        Directory.CreateSymbolicLink(Path.Combine(harness.ProjectDirectory, "keylink"), harness.Paths.KeysDirectory);
+
+        var decision = await harness.EvaluateShellDecisionAsync("git add keylink", Ct);
+
+        Assert.Equal(ToolAuthorizationOutcome.Denied, decision.Outcome);
+        // Positive control: the same grant covers a plain later word.
+        await AssertAllowedByStoredGrantAsync(harness, "git add README");
     }
 
     // SECURITY: a file word that leaves the command words is a path operand.

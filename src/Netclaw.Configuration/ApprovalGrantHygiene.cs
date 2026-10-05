@@ -14,7 +14,10 @@ public enum ApprovalHygieneIssue
     /// </summary>
     FileWord = 0,
 
-    /// <summary>Another grant with the same words covers each call that this grant covers.</summary>
+    /// <summary>
+    /// Another grant covers each call that this grant covers: the same words, or
+    /// a verb grant whose words start this grant's words.
+    /// </summary>
     Covered = 1,
 
     /// <summary>The folder of the grant does not exist. The doctor does not guess, so the grant stays.</summary>
@@ -48,8 +51,10 @@ public sealed record ApprovalHygieneReport(
 /// <remarks>
 /// SECURITY: these rules only refuse or remove grants, and they read only the
 /// grant data. A grant covers another grant only when both have the same tool,
-/// shell, words, and assignment digest, and the covering grant applies
-/// "anywhere" or has the same scope. A folder never covers another folder,
+/// shell, and assignment digest, the words of the covering grant cover the
+/// other words by the approval matcher rule
+/// (<see cref="ToolApprovalEntryComparer.CoversCommandWords"/>), and the
+/// covering grant applies "anywhere" or has the same scope. A folder never covers another folder,
 /// and a repository never covers a folder: a link or a nested repository can
 /// put a directory of the narrower scope outside the wider one. So a removal
 /// never changes an allowed decision.
@@ -76,7 +81,7 @@ public static class ApprovalGrantHygiene
     /// <paramref name="narrower"/> covers, from the grant data alone.
     /// </summary>
     public static bool Covers(ApprovalEntry wider, ApprovalEntry narrower)
-        => SameIdentity(wider, narrower)
+        => CoversPhrase(wider, narrower)
            && (wider is { Repository: null, Directory: null } || SameScope(wider, narrower));
 
     private static bool SameScope(ApprovalEntry left, ApprovalEntry right)
@@ -92,25 +97,27 @@ public static class ApprovalGrantHygiene
                   ToolApprovalEntryComparer.NormalizeDirectory(left.Directory, left.Shell),
                   ToolApprovalEntryComparer.NormalizeDirectory(right.Directory, right.Shell));
 
-    // The same tool phrase: shell, words, and assignment digest. A grant with a
-    // legacy relative program covers files that its words do not name, so it is
-    // never compared.
-    private static bool SameIdentity(ApprovalEntry left, ApprovalEntry right)
+    // The phrase of the wider grant covers the phrase of the narrower grant: the
+    // same shell and assignment digest, and the words of the approval matcher
+    // rule (ToolApprovalEntryComparer.CoversCommandWords). A non-shell grant
+    // names a tool, so its phrase must be equal. A grant with a legacy relative
+    // program covers files that its words do not name, so it is never compared.
+    private static bool CoversPhrase(ApprovalEntry wider, ApprovalEntry narrower)
     {
-        if (left.Shell != right.Shell
-            || left.AssignmentDigest != right.AssignmentDigest
-            || left.HasLegacyProgramSpelling
-            || right.HasLegacyProgramSpelling)
+        if (wider.Shell != narrower.Shell
+            || wider.AssignmentDigest != narrower.AssignmentDigest
+            || wider.HasLegacyProgramSpelling
+            || narrower.HasLegacyProgramSpelling)
         {
             return false;
         }
 
-        var leftWords = Words(left);
-        var rightWords = Words(right);
-        return leftWords.Count == rightWords.Count
-               && leftWords.Zip(rightWords).All(pair => left.Shell is { } shell
-                   ? ToolApprovalEntryComparer.Equals(pair.First, pair.Second, shell)
-                   : ToolApprovalEntryComparer.Equals(pair.First, pair.Second));
+        var widerWords = Words(wider);
+        var narrowerWords = Words(narrower);
+        return wider.Shell is { } shell
+            ? ToolApprovalEntryComparer.CoversCommandWords(widerWords, narrowerWords, shell)
+            : widerWords.Count == narrowerWords.Count
+              && widerWords.Zip(narrowerWords).All(static pair => ToolApprovalEntryComparer.Equals(pair.First, pair.Second));
     }
 
     /// <summary>

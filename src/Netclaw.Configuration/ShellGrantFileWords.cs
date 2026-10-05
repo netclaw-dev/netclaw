@@ -36,8 +36,23 @@ public static class ShellGrantFileWords
     /// <param name="directory">The absolute host directory of the command.</param>
     /// <param name="path">The path that the word names.</param>
     public static bool NamesEntry(string word, string? directory, out string path)
+        => TryFindEntry(word, directory, out path, out var isLink) && !isLink;
+
+    /// <summary>
+    /// Returns true when <paramref name="word"/> names one existing link directly
+    /// in <paramref name="directory"/>. The word stays a command word, and the
+    /// approval matcher adds the link path as a path scope.
+    /// </summary>
+    /// <param name="word">One command word.</param>
+    /// <param name="directory">The absolute host directory of the command.</param>
+    /// <param name="path">The path of the link.</param>
+    public static bool NamesLink(string word, string? directory, out string path)
+        => TryFindEntry(word, directory, out path, out var isLink) && isLink;
+
+    private static bool TryFindEntry(string word, string? directory, out string path, out bool isLink)
     {
         path = string.Empty;
+        isLink = false;
         if (string.IsNullOrEmpty(directory)
             || !Path.IsPathFullyQualified(directory)
             || word is "" or "." or ".."
@@ -49,7 +64,8 @@ public static class ShellGrantFileWords
         path = Path.Join(directory, word);
         try
         {
-            return (File.GetAttributes(path) & FileAttributes.ReparsePoint) == 0;
+            isLink = (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0;
+            return true;
         }
         catch (Exception ex) when (ex is IOException
                                        or UnauthorizedAccessException

@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# A shell grant covers exactly its command words. Both mutants of the length
-# equality check must die. The "==" mutant restores prefix matching for a
-# longer candidate, so a "gh" grant would cover "gh auth logout".
+# A verb grant (two or more words) covers its command words and any later
+# words. A program-only grant covers its word alone. Each mutant of the length
+# checks must die: one lets a "gh" grant cover "gh auth logout", one lets a
+# grant cover a shorter word list, and one lets an empty grant cover any call.
+# The approval matcher and the store hygiene share this one rule.
 # Unknown command words get a rewrite correction. A mutant that drops the
 # correction turns the call back into a prompt or a denial, so it must die.
 # R1: a program path names its file. A mutant that skips the join with the
@@ -74,11 +76,12 @@ run_gate() {
   fi
 }
 
-matching_file="$repo_root/src/Netclaw.Security/ApprovalPatternMatching.cs"
+comparer_file="$repo_root/src/Netclaw.Configuration/ToolApprovalEntryComparer.cs"
 read -r span_start span_end < <(
-  find_span $'if (grantLength != candidateLength)\n            return false;' "$matching_file")
-run_gate Netclaw.Security.csproj "ApprovalPatternMatching.cs{$span_start..$span_end}" \
-  "$output_path/security" 2 "exact command words"
+  find_range 'if (grantLength == 0 || candidateLength < grantLength)' \
+  $'if (grantLength == 1 && candidateLength != 1)\n            return false;' "$comparer_file")
+run_gate Netclaw.Configuration.csproj "ToolApprovalEntryComparer.cs{$span_start..$span_end}" \
+  "$output_path/command-words" 11 "grant command words"
 
 coordinator_file="$repo_root/src/Netclaw.Actors/Tools/ShellPolicyCoordinator.cs"
 read -r correction_start correction_end < <(
@@ -100,13 +103,13 @@ run_gate Netclaw.Configuration.csproj "ShellProgramPath.cs{$legacy_start..$legac
 
 read -r file_word_start file_word_end < <(
   find_range 'if (words is null)' \
-  'return new CommandWordProjection(kept.AsReadOnly(), fileWords);' \
+  'return new CommandWordProjection(kept.AsReadOnly(), fileWords, linkPaths);' \
   "$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs")
 run_gate Netclaw.Security.csproj "IToolApprovalMatcher.cs{$file_word_start..$file_word_end}" \
-  "$output_path/file-word" 6 "file word operand"
+  "$output_path/file-word" 9 "file word operand"
 
 read -r link_start link_end < <(
-  find_range 'if (string.IsNullOrEmpty(directory)' 'FileAttributes.ReparsePoint) == 0;' \
+  find_range 'if (string.IsNullOrEmpty(directory)' 'FileAttributes.ReparsePoint) != 0;' \
   "$repo_root/src/Netclaw.Configuration/ShellGrantFileWords.cs")
 run_gate Netclaw.Configuration.csproj "ShellGrantFileWords.cs{$link_start..$link_end}" \
   "$output_path/file-word-entry" 16 "file word entry"

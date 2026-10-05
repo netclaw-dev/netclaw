@@ -24,16 +24,17 @@ public enum ApprovalShell
 public enum ApprovalMatchKind
 {
     /// <summary>
-    /// Match the exact command words. The candidate's ShellSyntaxTree command
-    /// words must equal the stored tokens; the arguments are free. The name is
-    /// historical: the store writes it as <c>TokenPrefix</c>, but a grant never
-    /// covers other words.
+    /// Match the stored tokens against the candidate's ShellSyntaxTree command
+    /// words (<see cref="ToolApprovalEntryComparer.CoversCommandWords"/>). A
+    /// grant of two or more tokens covers the words that start with its tokens.
+    /// A grant of one token (the program) covers that word alone.
     /// </summary>
     TokenPrefix = 0,
 
     /// <summary>
-    /// Match the complete legacy phrase. The phrase must equal the candidate's
-    /// command words; the arguments are free.
+    /// Match a version-2 phrase. The space-separated words of the phrase get
+    /// the same rule as <see cref="TokenPrefix"/> tokens. The kind keeps the
+    /// stored form of an upgraded grant; it does not give a different reach.
     /// </summary>
     LegacyExact = 1,
 }

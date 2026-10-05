@@ -152,7 +152,7 @@ public sealed class ToolApprovalActorTests : TestKit, IAsyncDisposable
     }
 
     [Fact]
-    public async Task Single_token_approval_matches_a_longer_token_phrase()
+    public async Task Single_token_approval_does_not_match_a_longer_token_phrase()
     {
         var ct = TestContext.Current.CancellationToken;
         var actor = Sys.ActorOf(ToolApprovalActor.CreateProps());
@@ -161,7 +161,7 @@ public sealed class ToolApprovalActorTests : TestKit, IAsyncDisposable
         await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh"], persistent: false, cwd: null, ct);
 
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["gh pr"], cwd: null, ct);
-        // A grant covers exactly its verb chain (#2306): "gh" does not cover "gh pr".
+        // A program-only grant stays exact: "gh" does not cover "gh pr".
         Assert.Equal(["gh pr"], unapproved);
     }
 
@@ -175,8 +175,8 @@ public sealed class ToolApprovalActorTests : TestKit, IAsyncDisposable
         await service.RecordApprovalAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push"], persistent: false, cwd: null, ct);
 
         var unapproved = await service.GetUnapprovedPatternsAsync("session-a", TrustAudience.Personal, new ToolName("shell_execute"), ["git push origin"], cwd: null, ct);
-        // A grant covers exactly its verb chain (#2306): "git push" does not cover "git push origin".
-        Assert.Equal(["git push origin"], unapproved);
+        // A verb grant covers its later words (owner decision, 2026-10-05).
+        Assert.Empty(unapproved);
     }
 
     [Theory]
@@ -713,9 +713,9 @@ public sealed class ToolApprovalActorTests : TestKit, IAsyncDisposable
                 cwd: null,
                 ct);
 
-            // A grant covers exactly its verb chain (#2306): "git push" does not cover "git push origin".
-            Assert.Equal(["git push origin"], result.UnapprovedPatterns);
-            Assert.Empty(result.ApprovedMatches);
+            // A verb grant covers its later words (owner decision, 2026-10-05).
+            Assert.Empty(result.UnapprovedPatterns);
+            Assert.Single(result.ApprovedMatches);
         }
         finally
         {

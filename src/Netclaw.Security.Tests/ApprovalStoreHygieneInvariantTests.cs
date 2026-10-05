@@ -26,6 +26,12 @@ public sealed class ApprovalStoreHygieneInvariantTests : IDisposable
         ["npm", "run", "build"],
         ["dotnet", "build"],
         ["dotnet", "build", "Phobos.slnx"],
+        // A verb grant covers longer grants; a program-only grant covers none.
+        ["git", "push"],
+        ["git", "push", "upstream"],
+        ["git", "push", "upstream", "feature-x"],
+        ["gh"],
+        ["gh", "auth", "logout"],
     ];
 
     private static readonly string[] Commands =
@@ -34,6 +40,11 @@ public sealed class ApprovalStoreHygieneInvariantTests : IDisposable
         "npm run build",
         "dotnet build",
         "dotnet build Phobos.slnx",
+        "git push upstream",
+        "git push upstream feature-x",
+        "git push origin main",
+        "gh --help",
+        "gh auth logout",
     ];
 
     private readonly string _root = Directory.CreateDirectory(Path.Combine(

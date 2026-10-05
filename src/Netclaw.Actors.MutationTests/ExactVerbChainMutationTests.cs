@@ -12,9 +12,10 @@ using Xunit;
 namespace Netclaw.Actors.MutationTests;
 
 /// <summary>
-/// A shell grant covers exactly its verb chain. A mutant that turns the
-/// equality check back into prefix matching lets a "gh" grant cover
-/// "gh auth logout", so these tests must reject it.
+/// A verb grant (two or more words) covers its words and any later words. A
+/// program-only grant covers its word alone. A mutant that lets a one-word
+/// grant cover a longer chain lets a "gh" grant cover "gh auth logout", so
+/// these tests must reject it.
 /// </summary>
 public sealed class ExactVerbChainMutationTests
 {
@@ -33,19 +34,32 @@ public sealed class ExactVerbChainMutationTests
     }
 
     [Fact]
-    public void Subcommand_grant_does_not_cover_a_longer_or_shorter_chain()
+    public void Verb_grant_covers_later_words_but_not_a_shorter_or_other_chain()
     {
-        Assert.False(Matches(Grant("git", "push"), "git", "push", "origin"));
+        Assert.True(Matches(Grant("git", "push"), "git", "push", "origin"));
+        Assert.True(Matches(Grant("git", "push", "upstream"), "git", "push", "upstream", "feature-x"));
         Assert.False(Matches(Grant("gh", "pr", "view"), "gh", "pr"));
+        Assert.False(Matches(Grant("git", "push", "upstream"), "git", "push", "origin", "main"));
+        Assert.False(Matches(Grant("git", "push", "origin", "feature-x"), "git", "push", "origin", "main"));
     }
 
     [Fact]
-    public void Legacy_phrase_does_not_cover_a_longer_chain()
+    public void Legacy_phrase_gets_the_same_rule()
     {
         var legacy = ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "git push origin");
 
         Assert.True(Matches(legacy, "git", "push", "origin"));
-        Assert.False(Matches(legacy, "git", "push", "origin", "v1.5.1"));
+        Assert.True(Matches(legacy, "git", "push", "origin", "v1.5.1"));
+        Assert.False(Matches(legacy, "git", "push"));
+        Assert.False(Matches(ApprovalEntry.CreateLegacyExact(ApprovalShell.Bash, "gh"), "gh", "auth", "logout"));
+    }
+
+    // An empty word list is invalid data. It must cover nothing, not everything.
+    [Fact]
+    public void Empty_grant_words_cover_nothing()
+    {
+        Assert.False(ToolApprovalEntryComparer.CoversCommandWords([], ["git", "push"], ApprovalShell.Bash));
+        Assert.False(ToolApprovalEntryComparer.CoversCommandWords([], ["git"], ApprovalShell.Bash));
     }
 
     // R1: a program path names its file. A mutant that skips the join with the
@@ -97,6 +111,9 @@ public sealed class ExactVerbChainMutationTests
             Assert.Equal(["git", "push", "origin", "main"], CommandWords("git push origin main", directory));
             Assert.Equal(["git", "push", "origin", "main"], CommandWords("git push origin main", workingDirectory: null));
             Assert.Equal(["dotnet", "build", "Linked.slnx"], CommandWords("dotnet build Linked.slnx", directory));
+            // A link word stays, and its own path is also a scope, so the path checks resolve it.
+            Assert.Contains(Path.Combine(directory, "Linked.slnx"), Directories("dotnet build Linked.slnx", directory));
+            Assert.DoesNotContain(Path.Combine(directory, "Linked.slnx"), Directories("dotnet build Phobos.slnx", directory));
             Assert.Equal(["dotnet", "build", "Phobos.slnx"], CommandWords("dotnet build Phobos.slnx", workingDirectory: null));
         }
         finally
@@ -133,6 +150,10 @@ public sealed class ExactVerbChainMutationTests
             Assert.False(ShellGrantFileWords.NamesEntry("missing", directory, out _));
             Assert.False(ShellGrantFileWords.NamesEntry("Phobos.slnx", null, out _));
             Assert.False(ShellGrantFileWords.NamesEntry("Phobos.slnx", relative, out _));
+            Assert.True(ShellGrantFileWords.NamesLink("Linked.slnx", directory, out var linkPath));
+            Assert.Equal(Path.Combine(directory, "Linked.slnx"), linkPath);
+            Assert.False(ShellGrantFileWords.NamesLink("Phobos.slnx", directory, out _));
+            Assert.False(ShellGrantFileWords.NamesLink("missing", directory, out _));
         }
         finally
         {

@@ -17,11 +17,14 @@ public sealed class ApprovalPatternV3Tests
     private static readonly ApprovalEntry BashGitPush =
         ApprovalEntry.CreateTokenPrefix(ApprovalShell.Bash, ["git", "push"]);
 
-    // A grant covers exactly its verb chain (#2306): only the equal chain matches.
+    // A verb grant covers its words and any later words: the later words are
+    // arguments (owner decision, 2026-10-05).
     [Theory]
     [InlineData("git push", new[] { "git", "push" }, true)]
-    [InlineData("git push origin", new[] { "git", "push", "origin" }, false)]
-    public void Token_prefix_matches_complete_candidate_prefix(
+    [InlineData("git push origin", new[] { "git", "push", "origin" }, true)]
+    [InlineData("git push origin main", new[] { "git", "push", "origin", "main" }, true)]
+    [InlineData("git pull origin", new[] { "git", "pull", "origin" }, false)]
+    public void Token_prefix_covers_its_words_and_later_words(
         string verb,
         string[] tokens,
         bool expected)
@@ -115,31 +118,11 @@ public sealed class ApprovalPatternV3Tests
             Shell = ApprovalShell.Bash,
         };
 
-        // The parser chain "git ls-tree feature" is longer than the grant (#2306).
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
+        // The parser chain "git ls-tree feature" starts with the grant words.
+        Assert.True(ApprovalPatternMatching.MatchesShellApproval(
             candidate,
             cwd: null,
             [grant]));
-    }
-
-    // A grant covers exactly its verb chain. It never covers a longer chain.
-    [Theory]
-    [InlineData("git push origin", new[] { "git", "push", "origin" })]
-    [InlineData("git push origin main", new[] { "git", "push", "origin", "main" })]
-    public void Token_grant_does_not_match_a_longer_verb_chain(
-        string verb,
-        string[] tokens)
-    {
-        var candidate = new ApprovalCandidate(verb, Directory: null)
-        {
-            VerbTokens = Array.AsReadOnly(tokens),
-            Shell = ApprovalShell.Bash,
-        };
-
-        Assert.False(ApprovalPatternMatching.MatchesShellApproval(
-            candidate,
-            cwd: null,
-            [BashGitPush]));
     }
 
     // Policy data gives echo and which a one-token chain, so the parser's
@@ -163,11 +146,14 @@ public sealed class ApprovalPatternV3Tests
         Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [grant]));
     }
 
-    // A legacy phrase also needs the whole chain of the candidate tokens.
+    // A legacy phrase gets the rule of a new grant for its words: it covers
+    // its words and any later words, but no other word in its own positions.
     [Theory]
     [InlineData(new[] { "git", "push", "origin" }, true)]
-    [InlineData(new[] { "git", "push", "origin", "v1.5.1" }, false)]
-    public void Legacy_exact_matches_the_whole_parser_verb_chain(string[] tokens, bool expected)
+    [InlineData(new[] { "git", "push", "origin", "v1.5.1" }, true)]
+    [InlineData(new[] { "git", "push", "upstream" }, false)]
+    [InlineData(new[] { "git", "push" }, false)]
+    public void Legacy_exact_covers_its_words_and_later_words(string[] tokens, bool expected)
     {
         var grant = ApprovalEntry.CreateLegacyExact(
             ApprovalShell.Bash,
@@ -206,15 +192,16 @@ public sealed class ApprovalPatternV3Tests
         Assert.Equal(expected, ApprovalPatternMatching.MatchesShellApproval(candidate, cwd: null, [grant]));
     }
 
+    // A legacy program-only phrase stays exact, as a new program-only grant does.
     [Fact]
-    public void Legacy_exact_does_not_match_a_longer_candidate()
+    public void Legacy_program_phrase_does_not_cover_a_verb()
     {
         var grant = ApprovalEntry.CreateLegacyExact(
             ApprovalShell.Bash,
-            "git push");
-        var candidate = new ApprovalCandidate("git push origin", Directory: null)
+            "gh");
+        var candidate = new ApprovalCandidate("gh auth logout", Directory: null)
         {
-            VerbTokens = Array.AsReadOnly(["git", "push", "origin"]),
+            VerbTokens = Array.AsReadOnly(["gh", "auth", "logout"]),
             Shell = ApprovalShell.Bash,
         };
 

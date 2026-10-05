@@ -252,12 +252,12 @@ public static class ApprovalPatternMatching
 
         return entry.Match switch
         {
-            // The legacy phrase is the space-joined command words, and it must
-            // equal all of them: "git push origin" does not cover "git push origin main".
+            // The legacy phrase is the space-joined command words. Its words get
+            // the same rule as a new grant for those words: "git push origin"
+            // covers "git push origin main", and "gh" does not cover "gh pr view".
             // The display verb does not count. "dotnet list package --vulnerable"
             // shows "dotnet list", but its words are "dotnet list package", so the
-            // legacy phrase "dotnet list package" covers it, as a new grant for
-            // those words does (approval taxonomy fix 5).
+            // legacy phrase "dotnet list package" covers it (approval taxonomy fix 5).
             ApprovalMatchKind.LegacyExact =>
                 MatchesChain(entry.Verb.Split(' ', StringSplitOptions.RemoveEmptyEntries), candidateTokens, entryShell),
             ApprovalMatchKind.TokenPrefix when entry.VerbTokens is { } grantTokens =>
@@ -340,11 +340,17 @@ public static class ApprovalPatternMatching
         return true;
     }
 
+    /// <summary>
+    /// True when a grant's words cover the candidate's command words
+    /// (<see cref="ToolApprovalEntryComparer.CoversCommandWords"/>): a verb
+    /// grant covers its words and any later words, and a program-only grant
+    /// covers its word alone. The store hygiene uses the same rule.
+    /// </summary>
     private static bool MatchesChain(
         IReadOnlyList<string> grantTokens,
         IReadOnlyList<string> candidateTokens,
         ApprovalShell shell)
-        => VerbChainEquals(grantTokens, candidateTokens, shell)
+        => ToolApprovalEntryComparer.CoversCommandWords(grantTokens, candidateTokens, shell)
            || IsSingleTokenProgramGrant(grantTokens, candidateTokens, shell);
 
     /// <summary>
@@ -360,42 +366,6 @@ public static class ApprovalPatternMatching
         => grantTokens.Count == 1
            && ShellVerbPolicyData.HasSingleTokenVerbChain(grantTokens[0])
            && ToolApprovalEntryComparer.Equals(grantTokens[0], candidateTokens[0], shell);
-
-    /// <summary>
-    /// True when a grant's tokens equal the candidate's command words.
-    /// </summary>
-    /// <remarks>
-    /// SECURITY: a grant covers exactly its command words, and the arguments are
-    /// free. A grant never covers other words: a <c>gh</c> grant covers
-    /// <c>gh --help</c>, not <c>gh auth logout</c>. The stored match kind keeps
-    /// its historical name <see cref="ApprovalMatchKind.TokenPrefix"/> so that
-    /// the version-3 store format does not change.
-    /// </remarks>
-    internal static bool VerbChainEquals(
-        IReadOnlyList<string> grantTokens,
-        IReadOnlyList<string> candidateTokens,
-        ApprovalShell shell)
-    {
-        // Focused mutation gate: run-exact-verb-chain-mutations.sh. Removal of
-        // this check restores prefix matching ("gh" would cover "gh auth logout").
-        var grantLength = grantTokens.Count;
-        var candidateLength = candidateTokens.Count;
-        if (grantLength != candidateLength)
-            return false;
-
-        for (var index = 0; index < grantLength; index++)
-        {
-            if (!ToolApprovalEntryComparer.Equals(
-                    grantTokens[index],
-                    candidateTokens[index],
-                    shell))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
 
     /// <summary>
     /// Returns true when <paramref name="approvedEntries"/> contains an entry

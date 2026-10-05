@@ -66,6 +66,11 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
             Grant(["git", "status"], sub),
             Grant(["docker", "compose"], missing),
             Grant(["git", "fetch", "upstream", "dev", "master"], null),
+            // A verb grant covers a longer grant. A program-only grant does not.
+            Grant(["git", "push", "upstream", "feature-x"], null),
+            Legacy("git push upstream", phobos),
+            Grant(["gh"], null),
+            Grant(["gh", "auth", "status"], null),
         ]);
         (string Command, string Directory)[] calls =
         [
@@ -78,6 +83,9 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
             ("git status", repository),
             ("git status", nested),
             ("git fetch upstream dev master", phobos),
+            ("git push upstream feature-x", phobos),
+            ("gh --help", phobos),
+            ("gh auth status", phobos),
         ];
         var before = Load(paths);
         var allowedBefore = calls.Where(call => Allowed(before, call.Command, call.Directory)).ToArray();
@@ -89,15 +97,17 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
 
         Assert.Equal(DoctorSeverity.Warning, check.Severity);
         var after = Load(paths);
-        // Only covered grants go. An "anywhere" grant with a file name stays: its
-        // directory is unknown. A folder grant with a file word stays: a subfolder
-        // uses it. A repository grant never covers a folder grant: the nested
-        // repository needs the folder grant. Of two equal grants, the canonical
-        // token-prefix grant stays and the legacy phrase goes.
+        // Only covered grants go. A verb grant covers each grant whose words
+        // start with its words: "dotnet build" covers "dotnet build Phobos.slnx",
+        // and "git push" covers "git push upstream feature-x". A program-only
+        // grant covers no longer grant, so "gh auth status" stays. A folder grant
+        // with a file word stays: a subfolder uses it. A repository grant never
+        // covers a folder grant: the nested repository needs the folder grant.
+        // Of two equal grants, the canonical token-prefix grant stays and the
+        // legacy phrase goes.
         Assert.Equal(
             [
                 "TokenPrefix dotnet build anywhere",
-                "TokenPrefix dotnet build Phobos.slnx anywhere",
                 "TokenPrefix dotnet test anywhere",
                 "TokenPrefix git push anywhere",
                 $"TokenPrefix npm run test in {node}",
@@ -107,6 +117,8 @@ public sealed class ToolApprovalHygieneDoctorCheckTests : IDisposable
                 $"TokenPrefix git status in {sub}",
                 $"TokenPrefix docker compose in {missing}",
                 "TokenPrefix git fetch upstream dev master anywhere",
+                "TokenPrefix gh anywhere",
+                "TokenPrefix gh auth status anywhere",
             ],
             after.Select(static entry => $"{entry.Match} {entry.Verb} {(entry.Repository is { } common ? $"in repository {common}" : entry.Directory is { } directory ? $"in {directory}" : "anywhere")}"));
         Assert.True(

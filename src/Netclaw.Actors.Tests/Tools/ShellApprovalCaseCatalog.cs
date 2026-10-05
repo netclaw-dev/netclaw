@@ -312,20 +312,20 @@ public static class ShellApprovalCases
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
-        // #2306: the command words are "git ls-tree feature", so a "git ls-tree" grant does not cover them.
+        // The command words are "git ls-tree feature". The "git ls-tree" verb
+        // grant covers the later word (owner decision, 2026-10-05).
         Case(
             "safe-git-ls-tree-external-reuses-canonical-grant",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
-        // D2: an unattended run uses the audience policy of a chat. The reviewed
-        // phrase covers a path that the Personal profile may read, as in a chat.
-        // #2306: the command words are "git ls-tree feature", so a "git ls-tree" grant does not cover them.
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git ls-tree feature")),
+        // D2: an unattended run uses the audience policy of a chat. The stored
+        // verb grant covers a path that the Personal profile may read, as in a chat.
         Case(
             "unattended-external-grant-allows",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git ls-tree feature")),
         Case(
             "unattended-external-reviewed-safe-allows",
             Bash("git ls-tree feature", ApprovalDirectoryShape.External, interactive: false),
@@ -384,12 +384,12 @@ public static class ShellApprovalCases
             Bash("cd /netclaw-approval-external/cd-list; cat ~/.netclaw/config/secrets.json", interactive: false),
             Approvals.PersistentAnywhere("cd", "cat"),
             ExpectedApproval.Deny("shell_references_protected_path")),
-        // The reviewed phrase and the approval-exempt command cover the call, as in a chat (D2).
+        // The stored verb grant and the approval-exempt command cover the call, as in a chat (D2).
         Case(
             "unattended-external-grant-with-exempt-command-allows",
             Bash("git ls-tree feature; echo done", ApprovalDirectoryShape.External, interactive: false),
             Approvals.PersistentHere(ApprovalDirectoryShape.External, "git ls-tree"),
-            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git ls-tree feature")),
         Case(
             "safe-verb-context-project-fallback-allows",
             Bash("cat src/readme.txt", ApprovalDirectoryShape.None),
