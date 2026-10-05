@@ -147,6 +147,60 @@ public sealed class ShellCommandAnalysisMutationTests
         Assert.Equal(messy, analysis.Candidates.Count == 0);
     }
 
+    // A Bash test builtin (test, [) compares its operands. An operand is data
+    // only with a bounded value and no "[": Bash evaluates an array subscript
+    // in a -v operand, and that arithmetic runs a command substitution. An
+    // assignment does not change a data command without a redirect.
+    [Theory]
+    [InlineData("git push; [ 3 -gt 2 ]", false)]
+    [InlineData("git push; x=3; [ \"$x\" -gt 2 ]", false)]
+    [InlineData("git push; for d in a b; do [ \"$d\" = a ]; done", false)]
+    [InlineData("git push; for i in 1 2 3; do test \"$i\" -gt 2; done", false)]
+    [InlineData("git push; [ -v 'a[x]' ]", true)]
+    [InlineData("git push; for d in 'a[x]' b; do [ -v \"$d\" ]; done", true)]
+    [InlineData("git push; n=$(date); [ -v \"$n\" ]", true)]
+    [InlineData("git push; for f in /work/*; do [ -f \"$f\" ]; done", true)]
+    [InlineData("git push; n=$(date); echo \"$n\"", false)]
+    [InlineData("git push; n=$(date); echo \"$n\" > /work/out", true)]
+    public void Test_builtin_operand_is_data_only_with_a_bounded_value_without_a_subscript(
+        string command,
+        bool messy)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = command,
+                ["WorkingDirectory"] = "/work"
+            });
+
+        Assert.Equal(messy, analysis.IsMessy);
+        Assert.Equal(messy, analysis.Candidates.Count == 0);
+        Assert.All(
+            analysis.Candidates.Where(static candidate => candidate.Verb is "[" or "test" or "echo"),
+            static candidate => Assert.True(ApprovalPatternMatching.IsPureSideEffect(candidate)));
+    }
+
+    // In PowerShell, test is not a builtin, so it keeps its candidate.
+    [Fact]
+    public void Power_shell_test_word_is_not_a_data_command()
+    {
+        var analysis = new ShellApprovalMatcher(PowerShellEnvironment).AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "test value",
+                ["WorkingDirectory"] = @"C:\work"
+            });
+
+        var candidate = Assert.Single(analysis.Candidates);
+        Assert.Equal("test", candidate.Verb);
+        Assert.False(ApprovalPatternMatching.IsPureSideEffect(candidate));
+    }
+
     // PowerShell keeps the bare status rule: only $? keeps the static
     // candidates of an output command without a redirect.
     [Fact]

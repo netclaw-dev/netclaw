@@ -3,6 +3,8 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using Netclaw.Configuration;
+
 namespace Netclaw.Security;
 
 /// <summary>
@@ -46,6 +48,31 @@ internal static class ShellVerbPolicyData
     {
         "echo", "printf", ":", "true", "false"
     };
+
+    /// <summary>
+    /// Bash builtins that only test their operands and set the exit status.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: these builtins can read an operand as a variable name. Bash
+    /// evaluates an array subscript in that name as arithmetic, and the
+    /// arithmetic runs a command substitution: <c>[ -v 'a[$(cmd)]' ]</c> runs
+    /// <c>cmd</c>. Thus an operand is data only when the parser proves a bounded
+    /// value with no <c>[</c>. See <c>ShellCommandAnalysis.HasOnlyDataOperands</c>.
+    /// In PowerShell, <c>test</c> is not a builtin, so the list is Bash only.
+    /// </remarks>
+    internal static readonly HashSet<string> BashTestBuiltins = new(StringComparer.Ordinal)
+    {
+        "test", "["
+    };
+
+    /// <summary>
+    /// Returns true when the verb is a data command: an output command, or in
+    /// Bash a test builtin. A data command has no path scope, and with no
+    /// redirect it needs no approval.
+    /// </summary>
+    internal static bool IsDataCommand(string verb, ApprovalShell? shell)
+        => SingleTokenSideEffectVerbs.Contains(verb)
+           || shell == ApprovalShell.Bash && BashTestBuiltins.Contains(verb);
 
     /// <summary>
     /// Single-token commands with no subcommand grammar. Each operand is call-specific.
@@ -105,16 +132,16 @@ internal static class ShellVerbPolicyData
 
     /// <summary>
     /// Keeps only the first token of a parser verb chain when that token is a
-    /// path-aware verb, a side-effect verb, or a single-token command.
+    /// path-aware verb, a data command, or a single-token command.
     /// </summary>
-    internal static string ApplyVerbShortCircuit(string? parsedVerb)
+    internal static string ApplyVerbShortCircuit(string? parsedVerb, ApprovalShell shell)
     {
         if (string.IsNullOrEmpty(parsedVerb))
             return string.Empty;
 
         var firstSpace = parsedVerb.IndexOf(' ', StringComparison.Ordinal);
         var firstToken = firstSpace < 0 ? parsedVerb : parsedVerb[..firstSpace];
-        return HasSingleTokenVerbChain(firstToken)
+        return HasSingleTokenVerbChain(firstToken) || IsDataCommand(firstToken, shell)
             ? firstToken
             : parsedVerb;
     }

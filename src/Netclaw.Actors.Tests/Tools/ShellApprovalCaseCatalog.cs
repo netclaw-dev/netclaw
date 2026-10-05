@@ -2324,6 +2324,87 @@ public static class ShellApprovalCases
             Bash52("rm */stale.tmp", interactive: false),
             Approvals.PersistentAnywhere("rm"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:rm */stale.tmp")),
+        // The Bash test builtins (test, [) compare their operands. An operand
+        // with a bounded value and no "[" is data, so the builtin needs no
+        // approval and its path operand is not a scope.
+        Case(
+            "test-builtin-literal-operands-allows",
+            Bash52("[ 3 -gt 2 ] && echo yes"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "test-builtin-bounded-variable-allows",
+            Bash52("x=3; [ \"$x\" -gt 2 ] && echo yes"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "test-builtin-loop-value-allows",
+            Bash52("for d in a b; do [ \"$d\" = a ] && echo yes; done"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "test-builtin-file-operand-has-no-scope",
+            Bash52($"test -f {TemporaryFile("marker")} && echo yes"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "test-builtin-unattended-allows",
+            Bash52("[ 3 -gt 2 ] && echo yes", interactive: false),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        // A substitution value is data in an output operand. Only the inner
+        // command needs approval.
+        Case(
+            "echo-substitution-value-is-data",
+            Bash52("n=$(git push); echo \"$n\"; printf '%s\\n' \"$n\""),
+            Approvals.None,
+            ExpectedApproval.Require(["git push"])),
+        Case(
+            "echo-read-value-is-data",
+            Bash52("read -r n < README.md; echo \"$n\""),
+            Approvals.None,
+            ExpectedApproval.Require(["read"])),
+        // Negative controls. Bash evaluates an array subscript in a -v operand as
+        // arithmetic, and the arithmetic runs a command substitution. An operand
+        // with "[" or with a value that the parser cannot prove is not data.
+        Case(
+            "test-builtin-subscript-operand-prompts",
+            Bash52("[ -v 'a[$(printf marker >&2)]' ]"),
+            Approvals.None,
+            ExpectedApproval.Require(["[ -v 'a[$(printf marker >&2)]' ]"])),
+        Case(
+            "test-builtin-unknown-value-prompts",
+            Bash52("n=$(basename src/a.cs); [ -v \"$n\" ]"),
+            Approvals.PersistentAnywhere("basename"),
+            ExpectedApproval.Require(["[ -v \"$n\" ]"], approvalMatches: "persistent:basename")),
+        Case(
+            "test-builtin-guard-keeps-action-prompt",
+            Bash52("[ 3 -gt 2 ] && git push"),
+            Approvals.None,
+            ExpectedApproval.Require(["git push"])),
+        Case(
+            "test-builtin-guard-keeps-hard-deny",
+            Bash52("x=3; [ \"$x\" -gt 2 ] && rm -rf /"),
+            Approvals.None,
+            ExpectedApproval.Deny("hard_deny_system_destructive")),
+        Case(
+            "test-builtin-credential-path-denies",
+            Bash52("[ -f ~/.netclaw/keys/x ] && echo yes"),
+            Approvals.None,
+            ExpectedApproval.Deny("shell_references_protected_path")),
+        // ShellSyntaxTree 0.4.0-beta.17 rejects continue and break inside a loop,
+        // so the call stays unresolved and the write still needs consent.
+        Case(
+            "loop-control-with-write-stays-unresolved",
+            Bash52("for d in a b; do touch \"$d.txt\"; continue; done"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        // In PowerShell, test is not a builtin, so it keeps its candidate.
+        Case(
+            "power-shell-test-word-prompts",
+            PowerShell7("test value"),
+            Approvals.None,
+            ExpectedApproval.Require(["test"])),
         // A cd that can fail gives the next statement two possible directories.
         // The glob in the cd branch keeps its glob fact in each slice.
         Case(
@@ -2389,7 +2470,7 @@ public static class ShellApprovalCases
             "if-statement-prompts-for-each-command",
             Bash52("if test -f marker; then git push; else git fetch; fi"),
             Approvals.None,
-            ExpectedApproval.Require(["test", "git push", "git fetch"])),
+            ExpectedApproval.Require(["git push", "git fetch"])),
         Case(
             "case-statement-uses-reviewed-phrases",
             Bash52("case x in a) cat a.txt ;; *) cat b.txt ;; esac"),
@@ -2399,7 +2480,7 @@ public static class ShellApprovalCases
             "until-loop-prompts-for-each-command",
             Bash52("until test -f marker; do git fetch; done"),
             Approvals.None,
-            ExpectedApproval.Require(["test", "git fetch"])),
+            ExpectedApproval.Require(["git fetch"])),
         Case(
             "background-process-id-kill-prompts",
             Bash52("server & PID=$!; kill \"$PID\""),

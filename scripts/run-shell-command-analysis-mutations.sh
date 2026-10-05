@@ -190,7 +190,7 @@ read -r data_start data_end < <(
     "$analysis_file" \
     "private bool HasOnlyDataOperands(" \
     "=> Environment.Grammar == ShellGrammar.Bash" \
-    "&& ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(verb);"
+    "|| command.Arguments.All(HasBoundedNameSafeValue));"
 )
 security_mutations+=("ShellCommandAnalysis.cs{$data_start..$data_end}")
 
@@ -198,10 +198,38 @@ read -r data_use_start data_use_end < <(
   find_span \
     "$analysis_file" \
     "private ShellUnresolvedPart ClassifyUnresolvedPart(" \
-    "return !HasOnlyDataOperands(command)" \
+    "if (HasOnlyDataOperands(command))" \
     ": ShellUnresolvedPart.None;"
 )
 security_mutations+=("ShellCommandAnalysis.cs{$data_use_start..$data_use_end}")
+
+read -r test_verb_start test_verb_end < <(
+  find_span \
+    "$analysis_file" \
+    "private bool HasTestBuiltinVerb(" \
+    "=> Environment.Grammar == ShellGrammar.Bash" \
+    "&& ShellVerbPolicyData.BashTestBuiltins.Contains(verb);"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$test_verb_start..$test_verb_end}")
+
+read -r name_safe_start name_safe_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool HasBoundedNameSafeValue(" \
+    "=> argument.Value switch" \
+    "&& !value.Contains('[', StringComparison.Ordinal);"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$name_safe_start..$name_safe_end}")
+
+verb_data_file="$repo_root/src/Netclaw.Security/ShellVerbPolicyData.cs"
+read -r data_verb_start data_verb_end < <(
+  find_span \
+    "$verb_data_file" \
+    "internal static bool IsDataCommand(" \
+    "=> SingleTokenSideEffectVerbs.Contains(verb)" \
+    "&& BashTestBuiltins.Contains(verb);"
+)
+security_mutations+=("ShellVerbPolicyData.cs{$data_verb_start..$data_verb_end}")
 
 matcher_file="$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs"
 read -r candidate_start candidate_end < <(
@@ -257,6 +285,15 @@ read -r exact_start exact_end < <(
     "Unresolved = unresolved,"
 )
 security_mutations+=("IToolApprovalMatcher.cs{$exact_start..$exact_end}")
+
+read -r digest_start digest_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool TryCreateAssignmentDigest(" \
+    "if (shell == ApprovalShell.Bash" \
+    "return true;"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$digest_start..$digest_end}")
 
 read -r messy_start messy_end < <(
   find_span \
@@ -383,7 +420,7 @@ security_mutations+=("ShellCommandPolicy.cs{$combine_start..$combine_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  166 \
+  183 \
   "${security_mutations[@]}"
 
 actor_mutations=()

@@ -538,7 +538,14 @@ compound command includes pure side-effect verbs (`echo`, `printf`, `:`,
 authorized for the current call by the click but no `ApprovalEntry` is
 written for them. Recording every literal `echo "==="` would be noise.
 A dynamic operand of these verbs is data: `echo "head: $(git rev-parse HEAD)"`
-keeps reusable candidates, and the command inside `$(...)` gets its own.
+keeps reusable candidates, and the command inside `$(...)` gets its own. A
+value from `$(...)` or `read` is data too: in `n=$(cmd); echo "$n"`, only
+`cmd` needs approval. In Bash, `test` and `[` need no approval when each
+operand is a literal or a proved value without `[`: `[ 3 -gt 2 ]`,
+`x=3; [ "$x" -gt 2 ]`, and a guard on a loop value. A test on a value from
+`$(...)`, `read`, or a glob keeps a one-time prompt. Write the value literally
+when you can. `continue` and `break` inside a loop still make the whole
+command unreadable, so prefer an `if` block around the loop body.
 
 **Prompts survive passivation and restart.** Pending approval prompts are
 journaled with their requester and trust context, so if the session goes idle or

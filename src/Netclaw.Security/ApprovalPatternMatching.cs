@@ -423,10 +423,11 @@ public static class ApprovalPatternMatching
     /// redirect target. Thus, <c>echo X &gt; /tmp/log</c> is not exempt.
     /// </summary>
     /// <remarks>
-    /// The side-effect verb set
-    /// (<see cref="ShellVerbPolicyData.SingleTokenSideEffectVerbs"/>) is shared
+    /// The data command check
+    /// (<see cref="ShellVerbPolicyData.IsDataCommand"/>) is shared
     /// with the verb-chain short-circuit so both paths agree on which
-    /// verbs collapse to depth 1 and which ones skip persistence.
+    /// verbs collapse to depth 1 and which ones skip persistence. The Bash
+    /// test builtins (<c>test</c>, <c>[</c>) count only for a Bash candidate.
     /// Conservative on purpose. <c>eval</c>, <c>command</c>, <c>exec</c>,
     /// and other reflective builtins are NOT in the set because they
     /// execute their arguments. Adding entries there is a
@@ -437,7 +438,7 @@ public static class ApprovalPatternMatching
         if (candidate.Directory is not null || candidate.AssignmentDigest is not null)
             return false;
 
-        return ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(candidate.Verb);
+        return ShellVerbPolicyData.IsDataCommand(candidate.Verb, candidate.Shell);
     }
 }
 

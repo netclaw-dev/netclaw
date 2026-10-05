@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Collections.Immutable;
+using Netclaw.Configuration;
 using Netclaw.Tools;
 using ShellSyntaxTree;
 
@@ -847,8 +848,13 @@ public sealed record ShellCommandAnalysis
             globMayAddOption |= pattern.Glob!.MayStartWithDash;
         }
 
-        return !HasOnlyDataOperands(command)
-               && (globMayAddOption || HasUnresolvedOperand(command, accountedRegionArguments))
+        if (HasOnlyDataOperands(command))
+            return ShellUnresolvedPart.None;
+
+        // A test builtin whose operands are not data can run a subscript.
+        return globMayAddOption
+               || HasUnresolvedOperand(command, accountedRegionArguments)
+               || HasTestBuiltinVerb(command)
             ? ShellUnresolvedPart.Operand
             : ShellUnresolvedPart.None;
     }
@@ -1236,23 +1242,60 @@ public sealed record ShellCommandAnalysis
     /// <summary>
     /// Returns true when every operand of the command is data: an output
     /// command (<c>echo</c>, <c>printf</c>, <c>:</c>, <c>true</c>, <c>false</c>)
-    /// prints or ignores its operands.
+    /// prints or ignores its operands, and a test builtin (<c>test</c>,
+    /// <c>[</c>) compares them.
     /// </summary>
     /// <remarks>
-    /// SECURITY: a dynamic operand of such a command reaches stdout only. It is
-    /// not the program word, and it is not a redirect target:
+    /// SECURITY: a dynamic operand of such a command reaches stdout or the exit
+    /// status only. It is not the program word, and it is not a redirect target:
     /// <see cref="HasUnresolvedRedirect(CommandOccurrence)"/> checks each
     /// redirect target separately. A command substitution inside an operand is
     /// its own occurrence with its own candidate, so the rule hides no command.
     /// ShellSyntaxTree accepts a dynamic printf operand only after a literal
     /// format, and it rejects <c>printf -v</c>, so no dynamic value reaches the
-    /// printf format or a shell variable. The rule is Bash only: in PowerShell
-    /// these words are aliases or external programs with their own parameters.
+    /// printf format or a shell variable. A test builtin can evaluate an array
+    /// subscript in an operand, so its operands must also pass
+    /// <see cref="HasBoundedNameSafeValue(AnalyzedArgument)"/>. The rule is Bash
+    /// only: in PowerShell these words are aliases or external programs with
+    /// their own parameters. The first verb token decides, because the parser
+    /// folds a plain operand into the verb (<c>echo yes</c>, <c>[ abc</c>).
     /// </remarks>
     private bool HasOnlyDataOperands(CommandOccurrence command)
         => Environment.Grammar == ShellGrammar.Bash
-           && command.Clause.Verb.Tokens is [var verb]
-           && ShellVerbPolicyData.SingleTokenSideEffectVerbs.Contains(verb);
+           && command.Clause.Verb.Tokens is [var verb, ..]
+           && ShellVerbPolicyData.IsDataCommand(verb, ApprovalShell.Bash)
+           && (!HasTestBuiltinVerb(command)
+               || command.Arguments.All(HasBoundedNameSafeValue));
+
+    private bool HasTestBuiltinVerb(CommandOccurrence command)
+        => Environment.Grammar == ShellGrammar.Bash
+           && command.Clause.Verb.Tokens is [var verb, ..]
+           && ShellVerbPolicyData.BashTestBuiltins.Contains(verb);
+
+    /// <summary>
+    /// Returns true when the parser proves every value of the operand (an exact
+    /// value or a finite set) and no value has a <c>[</c>.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: <c>[ -v 'a[$(cmd)]' ]</c> runs <c>cmd</c>, because Bash
+    /// evaluates the subscript as arithmetic. Arithmetic also evaluates the
+    /// value of a variable that it names, so <c>[ -v 'a[x]' ]</c> runs a
+    /// substitution in the value of <c>x</c>. A name without <c>[</c> has no
+    /// subscript, and the other test operators do not evaluate their operands.
+    /// An unknown value, a glob match, or a file name can hold any text, so
+    /// such an operand is not data. The rule reads only typed values. It does
+    /// not parse the test operators.
+    /// </remarks>
+    private static bool HasBoundedNameSafeValue(AnalyzedArgument argument)
+        => argument.Value switch
+        {
+            ShellValueDomain.Exact exact => HasNoSubscript(exact.Value),
+            ShellValueDomain.FiniteSet finite => finite.Values.All(HasNoSubscript),
+            _ => false
+        };
+
+    private static bool HasNoSubscript(string? value)
+        => value is not null && !value.Contains('[', StringComparison.Ordinal);
 
     private static bool IsUnknownOutputData(
         CommandOccurrence command,

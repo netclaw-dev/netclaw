@@ -675,7 +675,9 @@ have their glossary meaning.
   decision of the literal value, in path policy and in hard deny (TA-5). A
   name with a run-time value (`PID=$!`, `x=$(cmd)`, `read x`) SHALL be
   unknown. A command that reads it as a word SHALL be one exact candidate with
-  `Once` and `Deny` only, and SHALL get no rewrite advice.
+  `Once` and `Deny` only, and SHALL get no rewrite advice. The data-position
+  rule below is the exception: an `echo` or `printf` operand that reads it
+  SHALL be data.
 - An unresolved command (a dynamic command name, an unknown value, an
   unresolved path or redirect, a command after an unproved directory change
   such as `cd "$x"`, `pushd`, `popd`, or a failed `cd`) SHALL produce one
@@ -687,8 +689,8 @@ have their glossary meaning.
   redirect, SHALL be unresolved, because Bash expands the pattern. Brace text
   and regex text in the program word (`{"b":2}`, `^\d{4}$`) SHALL NOT be
   unresolved by this rule; they keep the rewrite advice of a command with
-  unknown command words. The `[` test builtin (`[ -d /work ]`) SHALL stay an
-  ordinary command.
+  unknown command words. This rule SHALL NOT apply to the `[` test builtin
+  (`[ -d /work ]`); the data-position rule below applies to it.
 - A source that does not split into commands (incomplete control flow, a
   command-resolution mutation such as `alias` or `hash`, `&&` under Windows
   PowerShell 5.1, unresolved PowerShell syntax) SHALL allow only a one-time
@@ -699,6 +701,19 @@ have their glossary meaning.
   `printf -v` SHALL stay unresolved. A command substitution inside the operand
   SHALL be its own command with its own candidate, and a redirect target SHALL
   keep its own check. PowerShell SHALL keep only the bare `$?` rule.
+- Test builtins: in Bash, `test` and `[` SHALL be data commands. Each operand
+  SHALL be data only when the parser proves an exact value or a finite set
+  and no value has a `[`. Bash evaluates an array subscript in a `-v` operand
+  as arithmetic, and the arithmetic runs a command substitution. Thus an operand with a `[`, an
+  unknown value, or a glob or file-name value SHALL make the command one exact
+  candidate. Netclaw SHALL NOT parse the test operators. A path operand of a
+  test builtin SHALL NOT be a scope. The protected-path screen SHALL still
+  deny a literal or proved protected path.
+- A Bash data command with no redirect SHALL get no assignment digest. A
+  builtin cannot change with an assignment, and its operands are data. A data
+  command with a redirect SHALL keep its digest.
+- `continue` and `break` inside a loop SHALL stay unresolved until
+  ShellSyntaxTree accepts them. ShellSyntaxTree 0.4.0-beta.17 rejects them.
 - Owner decision D1: a command whose command words are known and whose only
   unknown part is an operand value SHALL be covered by a reviewed safe phrase
   or by a grant for anywhere, attended or unattended (D2). A folder,
@@ -733,7 +748,8 @@ call-local. The analysis keeps no state between calls.
 
 - **GIVEN** an interactive Personal session with no grants (catalog cases `if-statement-prompts-for-each-command` and `case-statement-uses-reviewed-phrases`)
 - **WHEN** the model calls `shell_execute` with `if test -f marker; then git push; else git fetch; fi`
-- **THEN** authorization returns `RequiresApproval` with the candidates `test`, `git push`, and `git fetch`
+- **THEN** authorization returns `RequiresApproval` with the candidates `git push` and `git fetch`
+- **AND** `test -f marker` is a data command, so it needs no grant
 - **AND** `case x in a) cat a.txt ;; *) cat b.txt ;; esac` returns `Allowed` with allow reason `ReviewedSafePolicy`
 
 #### Scenario: A command substitution is its own command
@@ -742,6 +758,34 @@ call-local. The analysis keeps no state between calls.
 - **WHEN** the model calls `shell_execute` with `echo $(git push)` (catalog case `command-substitution-fails-closed`)
 - **THEN** authorization returns `RequiresApproval` with the candidate `git push`
 - **AND** the `echo` operand is data, so `echo` needs no grant
+
+#### Scenario: A test builtin with bounded operands needs no approval
+
+- **GIVEN** an interactive Personal session on the Bash 5.2 host with no grants (catalog cases `test-builtin-literal-operands-allows`, `test-builtin-bounded-variable-allows`, and `test-builtin-loop-value-allows`)
+- **WHEN** the model calls `shell_execute` with `x=3; [ "$x" -gt 2 ] && echo yes`
+- **THEN** authorization returns `Allowed` with allow reason `ApprovalExemptShellCandidates`
+- **AND** `for d in a b; do [ "$d" = a ] && echo yes; done` returns the same result with no rewrite advice
+
+#### Scenario: A test operand with a subscript is not data
+
+- **GIVEN** an interactive Personal session on the Bash 5.2 host with no grants (catalog case `test-builtin-subscript-operand-prompts`)
+- **WHEN** the model calls `shell_execute` with `[ -v 'a[$(printf marker >&2)]' ]`
+- **THEN** authorization returns `RequiresApproval` with that exact candidate
+- **AND** a run-time value such as `n=$(cmd); [ -v "$n" ]` gets the same result (catalog case `test-builtin-unknown-value-prompts`)
+
+#### Scenario: A test builtin does not hide another command
+
+- **GIVEN** an interactive Personal session on the Bash 5.2 host with no grants (catalog cases `test-builtin-guard-keeps-action-prompt`, `test-builtin-guard-keeps-hard-deny`, and `test-builtin-credential-path-denies`)
+- **WHEN** the model calls `shell_execute` with `[ 3 -gt 2 ] && git push`
+- **THEN** authorization returns `RequiresApproval` with the candidate `git push`
+- **AND** `x=3; [ "$x" -gt 2 ] && rm -rf /` is denied with `hard_deny_system_destructive`
+- **AND** `[ -f ~/.netclaw/keys/x ] && echo yes` is denied with `shell_references_protected_path`
+
+#### Scenario: A run-time value in an output operand is data
+
+- **GIVEN** an interactive Personal session on the Bash 5.2 host with no grants (catalog case `echo-substitution-value-is-data`)
+- **WHEN** the model calls `shell_execute` with `n=$(git push); echo "$n"; printf '%s\n' "$n"`
+- **THEN** authorization returns `RequiresApproval` with the candidate `git push` only
 
 #### Scenario: A dynamic redirect target is not data
 
@@ -842,9 +886,9 @@ SHALL be:
   known path. Under decision D1 it also covers an unknown operand value;
 - under decision D1, a grant for anywhere for an exact candidate whose only
   unknown part is an operand;
-- an approval-exempt output command (`echo`, `printf`, `:`, `true`, `false`)
-  with no directory scope and no assignment digest, while the store is
-  available.
+- an approval-exempt data command with no directory scope and no assignment
+  digest, while the store is available: an output command (`echo`,
+  `printf`, `:`, `true`, `false`), or in Bash a test builtin (`test`, `[`).
 
 The path rule for reviewed-safe policy SHALL NOT depend on the run (D2):
 
