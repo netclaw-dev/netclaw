@@ -162,7 +162,7 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
     [InlineData("dotnet list package", "dotnet list package --vulnerable --include-transitive", "dotnet list reference")]
-    [InlineData("git merge-base", "git merge-base --is-ancestor 0c1265b origin/master", "git merge-base dev")]
+    [InlineData("git ls-remote", "git ls-remote --heads origin", "git ls-remote origin")]
     public async Task Legacy_exact_grant_covers_its_own_words(string grant, string covered, string other)
     {
         await using var harness = await CreateHarnessAsync(Approvals.None);

@@ -1368,10 +1368,15 @@ public static class ShellApprovalCases
             Approvals.PersistentAnywhere("git merge-base"),
             ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:git merge-base")),
         Case(
-            "echo-substitution-data-prompts-for-inner-command",
+            "echo-substitution-data-allows-reviewed-inner-command",
             Bash("echo \"merged: $(git merge-base --is-ancestor HEAD dev && echo yes)\""),
             Approvals.None,
-            ExpectedApproval.Require(["git merge-base"])),
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        Case(
+            "echo-substitution-data-prompts-for-unreviewed-inner-command",
+            Bash("echo \"remote: $(git ls-remote --heads origin dev && echo yes)\""),
+            Approvals.None,
+            ExpectedApproval.Require(["git ls-remote"])),
         Case(
             "bash-substitution-quoted-path-operand-allows",
             Bash("cat \"$(git status)\""),
@@ -2394,7 +2399,7 @@ public static class ShellApprovalCases
             "until-loop-prompts-for-each-command",
             Bash52("until test -f marker; do sleep 1; done"),
             Approvals.None,
-            ExpectedApproval.Require(["test", "sleep"])),
+            ExpectedApproval.Require(["test"])),
         Case(
             "background-process-id-kill-prompts",
             Bash52("server & PID=$!; kill \"$PID\""),

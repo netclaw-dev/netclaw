@@ -31,6 +31,8 @@
     { "tokens": ["git", "diff"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["git", "show"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["git", "branch"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["git", "merge-base"], "classification": "ReviewedDiagnostic" },
+    { "tokens": ["git", "worktree", "list"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["gh", "pr", "status"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["gh", "run", "list"], "classification": "ReviewedDiagnostic" },
     { "tokens": ["gh", "release", "list"], "classification": "ReviewedDiagnostic" },

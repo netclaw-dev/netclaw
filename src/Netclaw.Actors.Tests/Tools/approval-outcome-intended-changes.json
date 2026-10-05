@@ -595,6 +595,15 @@
       "renamedFrom": "unassigned-operand-unattended-denies",
       "negativeControl": "unattended-cd-semicolon-without-grant-denies",
       "approvedBy": "Aaron Stannard (owner), decision D2 (an unattended run uses the audience policy of a chat), 2026-10-04"
+    },
+    {
+      "section": "Fresh Personal approval matrix",
+      "id": "echo-substitution-data-allows-reviewed-inner-command",
+      "renamedFrom": "echo-substitution-data-prompts-for-inner-command",
+      "from": "RequiresApproval",
+      "to": "Allowed",
+      "reason": "Decision D4 adds git merge-base to the reviewed catalog. It only reads commits and has no write, code, or network mode. An unreviewed command in the substitution still prompts (see echo-substitution-data-prompts-for-unreviewed-inner-command).",
+      "negativeControl": "unsafe-catalog-find-exec-prompts"
     }
   ]
 }
