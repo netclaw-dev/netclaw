@@ -422,19 +422,23 @@ the link check, then protection.
   directory is
   [ordinary configuration](../../../docs/spec/GLOSSARY.md#ordinary-configuration)
   and SHALL be readable by a file tool (owner decision D6), except
-  `secrets.json`. This includes `netclaw.json`, the grant store
-  `tool-approvals.json`, webhook files, `daemon.env`, device state, bootstrap
-  state, and the hard-deny override file. Secrets (`secrets.json`), keys, the
-  database, process-control files, and the tooling shadow SHALL be
-  read-denied. The config directory, secrets, keys, the database, process
+  `secrets.json` and the webhook route files, which hold the verification
+  secret. This includes `netclaw.json`, the grant store `tool-approvals.json`,
+  `daemon.env`, device state, bootstrap state, and the hard-deny override
+  file. Secrets (`secrets.json`), webhook route files, keys, the database,
+  process-control files, and the tooling shadow SHALL be read-denied. The config directory, secrets, keys, the database, process
   control files, system skills, and server feeds SHALL be write-denied.
-- Shell text that names secrets, keys, the database, or process-control files
-  SHALL be denied. Shell text that names the config directory itself, a glob
-  below it, or a `..` out of it SHALL be denied. Without a parser proof of the
-  whole source, shell text that names the config directory SHALL be denied.
+- Shell text that names secrets, webhook route files, keys, the database, or
+  process-control files SHALL be denied. Shell text that names the config
+  directory SHALL be denied. Only an exact path argument of a read-only shell
+  program that names one file below the config directory SHALL leave this
+  text check. A `..` segment, a glob, the directory itself, and program text
+  (a `jq` module search path, `python3 -c`, `node -e`) SHALL keep the denial.
 - A read-only shell program SHALL be one of the policy-data programs `cat`,
   `head`, `tail`, `wc`, `grep`, `jq`, and `diff`, with bounded argument
-  values, no assignment prefix, and no redirect that writes a file. A plain
+  values and no assignment prefix. A redirect that writes SHALL keep `Write`
+  protection for its target only, and a null-device redirect SHALL be
+  ignored. A plain
   argument word that names an entry of the command's directory SHALL make the
   program not read-only. Such a program SHALL get `Read` protection only for a
   path that the write list protects. A directory operand that holds a
@@ -492,6 +496,24 @@ process-local. No state of these checks is durable.
 - **WHEN** the model calls `file_read` on `netclaw.json` or on `tool-approvals.json`
 - **THEN** the path access decision allows the read
 - **AND** a `shell_execute` call whose text names the whole config directory (`grep -r token <config dir>` or `cat <config dir>/*.json`) is denied
+
+#### Scenario: Program text that names the config directory stays denied
+
+- **GIVEN** an interactive Personal session
+- **WHEN** the model calls `shell_execute` with `jq -n 'import "secrets" as $s {search: "<config dir>"}; $s'`
+- **THEN** authorization returns `Denied`
+
+#### Scenario: A harmless redirect does not deny a config read
+
+- **GIVEN** an interactive Personal session
+- **WHEN** the model calls `shell_execute` with `grep -n port <config dir>/netclaw.json 2>/dev/null`
+- **THEN** the call is not denied
+
+#### Scenario: Webhook route files stay read-denied
+
+- **GIVEN** an interactive Personal session
+- **WHEN** the model calls `file_read` on a file in the webhooks directory, or `shell_execute` with `cat <config dir>/webhooks/<route>.json`
+- **THEN** the read is denied
 
 #### Scenario: Secrets stay read-denied
 
