@@ -41,38 +41,6 @@ public sealed class MattermostReminderIntegrationTests(
     private readonly ReminderReplyPipeline _pipeline = new();
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
 
-    private static IChannelRegistry BuildMattermostRegistry(IMattermostReplyClient replyClient)
-    {
-        var key = ChannelDescriptorKey.FromChannelType(ChannelType.Mattermost);
-        var descriptor = new ChannelDescriptor(
-            key,
-            ChannelType.Mattermost,
-            ChannelKind.RemoteChat,
-            "Mattermost",
-            IsEnabled: true,
-            ChannelCapabilities.ReceiveMessages
-                | ChannelCapabilities.SendMessages
-                | ChannelCapabilities.ThreadedConversations
-                | ChannelCapabilities.InteractiveApproval,
-            ToolIntents: new HashSet<ChannelToolIntentKind> { ChannelToolIntentKind.SendMessage },
-            AddressKinds: new HashSet<ChannelAddressKind>
-            {
-                ChannelAddressKind.Destination,
-                ChannelAddressKind.Thread
-            },
-            SupportedOutputEffects: new HashSet<ChannelOutputEffectKind>
-            {
-                ChannelOutputEffectKind.TextMessage,
-                ChannelOutputEffectKind.InteractiveApproval,
-                ChannelOutputEffectKind.ProcessingIndicator
-            });
-
-        return new ChannelRegistry(
-            [new StaticChannelDescriptorProvider(descriptor)],
-            [],
-            outputRenderers: [new MattermostProcessingOutputRenderer(replyClient)]);
-    }
-
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
         builder.WithInMemoryJournal().WithInMemorySnapshotStore().WithNetclawSerialization();
@@ -124,7 +92,7 @@ public sealed class MattermostReminderIntegrationTests(
             {
                 MentionOnly = true, AllowedChannelIds = [fixture.ChannelId], AllowedUserIds = [fixture.TestUserId]
             },
-            DefaultChannelId: null, ChannelRegistry: BuildMattermostRegistry(replyClient), ReplyClient: replyClient,
+            DefaultChannelId: null, ChannelRegistry: MattermostIntegrationRegistries.WithProcessingRenderer(replyClient), ReplyClient: replyClient,
             ContentScanner: new NullContentScanner(), AudienceProfiles: ToolAudienceProfileDefaults.CreateProfiles(),
             ModelCapabilities: new ModelCapabilities { ModelId = "test", InputModalities = ModelModality.Text },
             StorageResolver: new TestSessionStorageResolver(_state.Paths),
