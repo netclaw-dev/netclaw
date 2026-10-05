@@ -34,7 +34,7 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
         ":warning: I didn't manage to produce a reply. Please try rephrasing or sending your message again.";
 
     internal const string ExpiredApprovalText = "This approval request expired.";
-    internal const string WrongRequesterText = "Only the requester can approve this action.";
+    internal const string WrongRequesterText = ":warning: Only the requesting user can approve this tool action.";
     internal const string NoLongerPendingText = "This approval request is no longer pending.";
     internal const string FeedbackFailedText = "Netclaw could not record this decision.";
     internal const string LiveInjectionBlockedWarning =
@@ -106,7 +106,7 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
             createPendingRequest: request => new PendingApprovalRequest<int>(request),
             isApprovalRequest: request => string.Equals(request.Kind, "approval", StringComparison.OrdinalIgnoreCase),
             renderTextOutput: output => string.IsNullOrWhiteSpace(output.Text) ? null : output.Text,
-            renderErrorOutput: output => $"Sorry, NetClaw had a problem: {output.Message}",
+            renderErrorOutput: output => $":warning: Sorry, NetClaw had a problem: {output.Message}",
             postTextAsync: PostReplyAsync,
             uploadFileAsync: SendFileOutputAsync,
             postApprovalPromptAsync: SendApprovalPromptAsync,

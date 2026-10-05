@@ -130,9 +130,12 @@ public sealed class TelegramSessionBindingApprovalTests(ITestOutputHelper output
 
         await AwaitAssertAsync(() =>
         {
+            // The alert carries the shared contract phrase, the same stem the
+            // other channel bindings post.
             Assert.Contains(fake.AnsweredCallbacks, answered =>
                 answered.QueryId == "q-wrong"
                 && answered.Text == TelegramSessionBindingActor.WrongRequesterText
+                && answered.Text.Contains("Only the requesting user", StringComparison.OrdinalIgnoreCase)
                 && answered.ShowAlert);
         }, cancellationToken: ct);
 

@@ -257,6 +257,31 @@ public sealed class TelegramSessionBindingOutputTests(ITestOutputHelper output) 
     }
 
     [Fact]
+    public async Task Error_output_carries_the_shared_warning_marker()
+    {
+        var fake = new TelegramTransportTests.FakeTelegramBotApiClient();
+        var sid = new SessionId($"{ChatId}/chat");
+        var pipeline = new RecordingSessionPipeline(_ => new List<SessionOutput>
+        {
+            new ErrorOutput { SessionId = sid, Message = "something broke" },
+            new TurnCompleted { SessionId = sid, TurnNumber = new TurnNumber(1) }
+        });
+        var actor = CreateActor(pipeline, fake);
+
+        WarmUp(actor);
+        await pipeline.Created.WaitAsync(TestContext.Current.CancellationToken);
+
+        // The shared contract requires the warning marker plus the original
+        // message text, the same rendering the other channel bindings use.
+        await AwaitAssertAsync(() =>
+        {
+            var post = Assert.Single(fake.SentTexts);
+            Assert.Contains(":warning:", post.Text, StringComparison.Ordinal);
+            Assert.Contains("something broke", post.Text, StringComparison.Ordinal);
+        }, cancellationToken: TestContext.Current.CancellationToken);
+    }
+
+    [Fact]
     public async Task Processing_state_with_no_registry_does_not_crash_actor()
     {
         var fake = new TelegramTransportTests.FakeTelegramBotApiClient();
