@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Decision D6: a read-only shell program can read a config file that a file
 # tool may read. Every other form keeps the old denial: a credential, a
-# directory that holds one, a glob, a brace, a ".." out of the config directory,
+# directory that holds one, a glob, a brace or ANSI-C quoted word, a ".." out of the config directory,
 # another spelling of the config directory in program text, a
 # program that can write, a write redirect, and a path outside the write roots.
 # A mutant that widens one of these rules must die.
@@ -65,7 +65,7 @@ policy="$repo_root/src/Netclaw.Actors/Tools/ToolAccessPolicy.cs"
 read -r occurrences_start occurrences_end < <(
   find_range 'foreach (var occurrence in analysis.Commands)' 'occurrences.Add(occurrence);' "$policy")
 read -r operand_start operand_end < <(
-  find_range "=> !argument.Element.Raw.Contains('{', StringComparison.Ordinal)" '=> ShellGrantFileWords.NamesEntry(word, directory, out _);' "$policy")
+  find_range '=> !ToolPathPolicy.HasUnmodeledExpansion(argument.Element.Raw)' '=> ShellGrantFileWords.NamesEntry(word, directory, out _);' "$policy")
 read -r redirect_start redirect_end < <(
   find_range 'var read = readOnly' ': ShellPathRead.None;' "$policy")
 read -r relax_start relax_end < <(
@@ -94,7 +94,7 @@ read -r holds_start holds_end < <(
   find_range 'TryResolveLinks(normalized, out var resolved);' \
     'CanonicalPath.IsWithin(protectedPath, resolved, CanonicalPath.HostStyle,' \
     "$repo_root/src/Netclaw.Security/Authorization/Filesystem/FileSystemAuthority.cs")
-run_gate Netclaw.Security.csproj "$output_path/security" 30 "guarded config directory" \
+run_gate Netclaw.Security.csproj "$output_path/security" 34 "guarded config directory" \
   "ToolPathPolicy.cs{$whole_start..$whole_end}" \
   "ToolPathPolicy.cs{$guarded_start..$guarded_end}" \
   "ToolPathPolicy.cs{$proved_start..$proved_end}" \

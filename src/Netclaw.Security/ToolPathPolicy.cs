@@ -160,10 +160,10 @@ public sealed class ToolPathPolicy
     /// argument.
     /// </summary>
     /// <remarks>
-    /// SECURITY: only such an argument leaves the text screen. A glob, a brace
-    /// expansion, a <c>..</c> segment, the directory itself, an option value, a
-    /// redirect, and program text keep the denial. The parser reports a brace word
-    /// as one exact path, but Bash expands it to more paths. The unquoted values
+    /// SECURITY: only such an argument leaves the text screen. A glob, a word
+    /// that <see cref="HasUnmodeledExpansion"/> names, a <c>..</c> segment, the
+    /// directory itself, an option value, a redirect, and program text keep the
+    /// denial. The unquoted values
     /// show a directory that quotes split in the text (<c>"dir/con'fig'"</c>).
     /// The read-only programs are policy data
     /// (<see cref="ShellVerbPolicyData.ReadOnlyOperandVerbs"/>). Without a parser
@@ -183,7 +183,7 @@ public sealed class ToolPathPolicy
                 if (readOnly
                     && argument is { Argument.IsPath: true, Argument.Kind: not ArgKind.Glob, Value: ShellValueDomain.Exact }
                     && !raw.Split('/').Contains("..")
-                    && !raw.Contains('{', StringComparison.Ordinal)
+                    && !HasUnmodeledExpansion(raw)
                     && NamesOneFileBelowGuardedDirectory(argument.Argument.Resolved)
                     && text.IndexOf(raw, StringComparison.Ordinal) is var at and >= 0)
                 {
@@ -202,6 +202,22 @@ public sealed class ToolPathPolicy
 
         return string.Join('\n', [text, .. values.Select(value => value.Replace('\\', '/'))]);
     }
+
+    /// <summary>
+    /// Returns true when a raw shell word holds a form whose exact value the
+    /// parser does not model: a brace (<c>{a,b}</c>), ANSI-C quotes
+    /// (<c>$'\x73'</c>), or locale quotes (<c>$"x"</c>).
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the parser reports such a word as one exact value, but Bash
+    /// expands a brace to more words and decodes the quotes. For example, the
+    /// parser reports <c>$'webhooks'</c> as <c>$webhooks</c>. A decision D6
+    /// exemption must not trust that value.
+    /// </remarks>
+    internal static bool HasUnmodeledExpansion(string raw)
+        => raw.Contains('{', StringComparison.Ordinal)
+           || raw.Contains("$'", StringComparison.Ordinal)
+           || raw.Contains("$\"", StringComparison.Ordinal);
 
     // SECURITY: shell text can spell a guarded directory with "//", "/./", or
     // "name/../". The marker check also reads the text with these forms

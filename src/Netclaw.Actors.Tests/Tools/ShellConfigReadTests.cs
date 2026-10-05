@@ -33,6 +33,15 @@ public sealed class ShellConfigReadTests(ShellApprovalMatrixFixture fixture)
     // parent of the config directory reaches a protected path that no check sees.
     private const string RecursionGap = "#2341: a recursive or brace read from a parent of the config directory.";
 
+    // Issue #2343 (OS-level protection) owns these old gaps, which no policy rule
+    // can see: a value that is known only at run time, or an escape in program
+    // text. They also fail on the base without decision D6.
+    private const string HiddenValueGap = "#2343: a run-time value or a program-text escape hides the protected path.";
+
+    // Issue #2343 also owns this old gap: the parser reads $'\x6beys' as the
+    // literal "$\x6beys", so a path outside the config directory is not seen.
+    private const string AnsiQuoteGap = "#2343: the parser misreads ANSI-C quotes in a path outside the config directory.";
+
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
     // {C} is the config directory, {K} the keys directory, {N} the Netclaw home,
@@ -166,6 +175,63 @@ public sealed class ShellConfigReadTests(ShellApprovalMatrixFixture fixture)
         (Shell, "sed -n 1p {C}/netclaw.json", false, null),
         (Shell, "bash -c 'cat {C}/secrets.json'", false, null),
 
+        // An escaped or quoted name of a protected path stays denied.
+        (Shell, "cat {C}/secret\\s.json", false, null),
+        (Shell, "cat {C}/sec\"\"rets.json", false, null),
+        (Shell, "cat {N}/con''fig/secrets.json", false, null),
+        (Shell, "cat {C}/$'secrets.json'", false, null),
+        (Shell, "cat {C}/$'\\x73ecrets.json'", false, null),
+        (Shell, "cat {C}/$\"secrets.json\"", false, null),
+        (Shell, "cat {C}/$\"webhooks\"/route.json", false, null),
+        (Shell, "cat {K}/key\\-1.xml", false, null),
+        (Shell, "cat {N}/ke\"\"ys/key-1.xml", false, null),
+        (Shell, "cat {N}/$'\\x6beys'/key-1.xml", false, AnsiQuoteGap),
+        (Shell, "cat {C}/web\"\"hooks/route.json", false, null),
+        (Shell, "cat {C}/$'webhooks'/route.json", false, null),
+        (Shell, "cat {C}/webhooks/rou\\te.json", false, null),
+
+        // A name built from variable pieces stays denied.
+        (Shell, "a=sec; cat {C}/${a}rets.json", false, null),
+        (Shell, "cat {C}/\"$(echo secrets).json\"", false, null),
+        (Shell, "a=ke; cat {N}/${a}ys/key-1.xml", false, null),
+        (Shell, "cat {N}/\"$(echo keys)\"/key-1.xml", false, HiddenValueGap),
+        (Shell, "a=web; cat {C}/${a}hooks/route.json", false, null),
+
+        // Program text with an escape or a built name.
+        (Shell, "jq -n 'import \"secrets\" as $s {search: \"{N}/con\\u0066ig\"}; $s'", false, HiddenValueGap),
+        (Shell, "jq -n 'import \"secrets\" as $s {search: \"{N}/\\u002e/config\"}; $s'", false, HiddenValueGap),
+        (Shell, "jq -n 'import \"secrets\" as $s {search: (\"{N}/con\" + \"fig\")}; $s'", false, HiddenValueGap),
+        (Shell, "python3 -c \"print(open('{C}/sec'+'rets.json').read())\"", false, null),
+        (Shell, "python3 -c \"print(open('{N}/con'+'fig/secrets.json').read())\"", false, null),
+        (Shell, "python3 -c \"print(open('{N}/'+chr(99)+'onfig/secrets.json').read())\"", false, null),
+        (Shell, "python3 -c \"print(open('{N}/'+chr(107)+'eys/key-1.xml').read())\"", false, HiddenValueGap),
+
+        // A redirect read or a sourced file stays denied.
+        (Shell, "while read l; do echo \"$l\"; done < {C}/secrets.json", false, null),
+        (Shell, "exec 3< {C}/secrets.json; cat <&3", false, null),
+        (Shell, "source {C}/secrets.json", false, null),
+        (Shell, ". {C}/secrets.json", false, null),
+        (Shell, "cat < {K}/key-1.xml", false, null),
+        (Shell, "while read l; do echo \"$l\"; done < {K}/key-1.xml", false, null),
+        (Shell, "exec 3< {K}/key-1.xml; cat <&3", false, null),
+        (Shell, "source {K}/key-1.xml", false, null),
+        (Shell, "cat < {C}/webhooks/route.json", false, null),
+        (Shell, "while read l; do echo \"$l\"; done < {C}/webhooks/route.json", false, null),
+        (Shell, "exec 3< {C}/webhooks/route.json; cat <&3", false, null),
+        (Shell, ". {C}/webhooks/route.json", false, null),
+
+        // A copy or a link out of the protected set stays denied.
+        (Shell, "cp {C}/secrets.json /tmp/x", false, null),
+        (Shell, "ln {C}/secrets.json /tmp/x", false, null),
+        (Shell, "ln -s {C}/secrets.json /tmp/x", false, null),
+        (Shell, "ln -s {N}/keys /tmp/k", false, null),
+        (Shell, "cp {K}/key-1.xml /tmp/x", false, null),
+        (Shell, "ln {K}/key-1.xml /tmp/x", false, null),
+        (Shell, "cp -r {K} /tmp/k", false, null),
+        (Shell, "cp {C}/webhooks/route.json /tmp/x", false, null),
+        (Shell, "ln {C}/webhooks/route.json /tmp/x", false, null),
+        (Shell, "ln -s {C}/webhooks /tmp/w", false, null),
+
         // A write to a config file stays denied.
         (Shell, "echo x > {C}/netclaw.json", false, null),
         (Shell, "echo x >> {C}/netclaw.json", false, null),
@@ -214,7 +280,7 @@ public sealed class ShellConfigReadTests(ShellApprovalMatrixFixture fixture)
             }));
 
     [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
-    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host. Issue #2341 owns the rows that skip.")]
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host. Issues #2341 and #2343 own the rows that skip.")]
     [MemberData(nameof(Cases))]
     public async Task Config_read_follows_decision_D6(string tool, string target, bool attended, bool readable)
     {

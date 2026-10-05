@@ -81,6 +81,32 @@ public sealed class DaemonToolPathPolicyFactoryTests
         Assert.False(policy.CommandReferencesDeniedPath("jq -n 'import \"x\" as $s {search: \"~/.netclaw/./skills\"}; $s'"));
     }
 
+    // The Netclaw home below the launch HOME, as in the default layout. The shell
+    // screen denies each home form of a credential: "~user", "$HOME", "${HOME}",
+    // and a "/./" segment. No file is read or written.
+    [Theory]
+    [InlineData("cat ~{user}/.netclaw/config/secrets.json")]
+    [InlineData("cat \"$HOME\"/.netclaw/config/secrets.json")]
+    [InlineData("cat ${HOME}/.netclaw/./config/secrets.json")]
+    [InlineData("cat ~{user}/.netclaw/keys/key-1.xml")]
+    [InlineData("cat \"$HOME\"/.netclaw/keys/key-1.xml")]
+    [InlineData("cat ${HOME}/.netclaw/./keys/key-1.xml")]
+    [InlineData("cat ~{user}/.netclaw/config/webhooks/route.json")]
+    [InlineData("cat \"$HOME\"/.netclaw/config/webhooks/route.json")]
+    [InlineData("cat ${HOME}/.netclaw/./config/webhooks/route.json")]
+    public void Home_forms_of_a_credential_stay_denied(string template)
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var environment = ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux);
+        var home = Assert.IsType<string>(environment.HomeDirectory);
+        var policy = DaemonToolPathPolicyFactory.Create(new NetclawPaths(Path.Combine(home, ".netclaw")), environment);
+        var command = template.Replace("{user}", Environment.UserName, StringComparison.Ordinal);
+
+        Assert.True(policy.CommandReferencesDeniedPath(command), command);
+    }
+
     [Theory]
     [InlineData(ShellPlatform.Linux)]
     [InlineData(ShellPlatform.MacOS)]

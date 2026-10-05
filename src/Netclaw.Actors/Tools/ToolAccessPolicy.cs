@@ -564,10 +564,10 @@ public sealed class ToolAccessPolicy
     // must have one value that names no entry of the occurrence directory: such a
     // word (grep -r token config) is a path that no path fact sees, and its scope
     // is not read below, so the occurrence is not read-only. The parser reports a
-    // brace word ({netclaw,secrets}.json) as one exact value, but Bash expands it
-    // to more paths, so a word with a brace is never a read-only operand.
+    // brace word ({netclaw,secrets}.json) or an ANSI-C quoted word ($'\x73') as one
+    // exact value, but Bash expands it, so such a word is never a read-only operand.
     private static bool IsReadOnlyOperand(AnalyzedArgument argument, string? directory)
-        => !argument.Element.Raw.Contains('{', StringComparison.Ordinal)
+        => !ToolPathPolicy.HasUnmodeledExpansion(argument.Element.Raw)
            && argument.Value is ShellValueDomain.Exact or ShellValueDomain.FiniteSet
            && (argument.Argument.IsPath
                || argument.Value is ShellValueDomain.Exact exact && !NamesEntry(exact.Value, directory));

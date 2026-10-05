@@ -248,6 +248,8 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     [InlineData("echo \"$X\" > '{C}/netclaw.json'", true)]
     [InlineData("cp \"$X\" {R}/netclaw.json", true)]
     [InlineData("cat {R}/{netclaw,secrets}.json", true)]
+    [InlineData("cat {R}/$'netclaw.json'", true)]
+    [InlineData("cat {R}/$\"netclaw.json\"", true)]
     public async Task Read_only_program_reads_only_a_readable_config_file(string template, bool denied)
     {
         if (OperatingSystem.IsWindows())
@@ -291,6 +293,8 @@ public sealed class ToolAuthorizerOrderMutationTests : IDisposable
     [InlineData("cat {C}/../config/netclaw.json", true)]
     [InlineData("cat {C}/netclaw.json \"$(cat list)\"", true)]
     [InlineData("cat {C}/{netclaw,secrets}.json", true)]
+    [InlineData("cat {C}/$'netclaw.json'", true)]
+    [InlineData("cat {C}/$\"netclaw.json\"", true)]
     [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}//config\"}; $s'", true)]
     [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/./config\"}; $s'", true)]
     [InlineData("jq -n 'import \"secrets\" as $s {search: \"{N}/xy/../config\"}; $s'", true)]

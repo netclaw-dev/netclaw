@@ -341,7 +341,8 @@ for example `netclaw.json`, `tool-approvals.json`, and
 `ShellVerbPolicyData.ReadOnlyOperandVerbs`) can read a config file by its
 exact path (decision D6). Every other shell command that names a config file
 meets write protection, because shell text cannot show a read from a write.
-A glob, a brace word (`{netclaw,secrets}.json`), an unknown path value, or a
+A glob, a brace word (`{netclaw,secrets}.json`), an ANSI-C quoted word
+(`$'\x73ecrets.json'`), an unknown path value, or a
 directory operand that holds a read-denied path keeps write protection too. A
 `jq` filter with a brace (`jq '{a: .x}' file`) is not a read-only program, so
 use `cat file | jq '{a: .x}'`. Shell text that names the config directory in
