@@ -126,6 +126,58 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
         Recover<PendingApprovalPromptTracked>(ApplyPendingApprovalPromptTracked);
         Recover<PendingApprovalPromptCleared>(ApplyPendingApprovalPromptCleared);
 
+        Initializing();
+    }
+
+    public static Props CreateProps(
+        SessionId sessionId,
+        TelegramChatId chatId,
+        TelegramGatewayDependencies dependencies) =>
+        Props.Create(() => new TelegramSessionBindingActor(sessionId, chatId, dependencies));
+
+    public override string PersistenceId => $"telegram-session-binding-{Uri.EscapeDataString(_sessionId.Value)}";
+
+    protected override void PreStart()
+    {
+        // The command queues behind journal recovery, so pending-approval
+        // replay finishes before the pipeline initializes and before the
+        // first stashed message is processed.
+        Self.Tell(InitializePipeline.Instance);
+        base.PreStart();
+    }
+
+    /// <summary>
+    /// Spawn-time pipeline initialization with stashing, the shared channel
+    /// lifecycle. Messages arriving during initialization are stashed and
+    /// unstashed once the pipeline is up. An initialization failure stops the
+    /// actor instead of leaving a binding that accepts no turns.
+    /// </summary>
+    private void Initializing()
+    {
+        CommandAsync<InitializePipeline>(async _ =>
+        {
+            try
+            {
+                await EnsureInitializedAsync();
+                Become(Ready);
+                Stash.UnstashAll();
+            }
+            catch (Exception ex)
+            {
+                _log.Error(ex, "Failed to initialize Telegram session pipeline; stopping actor");
+                Context.Stop(Self);
+            }
+        });
+
+        CommandAny(msg =>
+        {
+            if (msg is not InitializePipeline)
+                Stash.Stash();
+        });
+    }
+
+    private void Ready()
+    {
         CommandAsync<TelegramSessionInbound>(HandleInboundAsync);
         CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
         CommandAsync<TelegramCallbackQuery>(HandleCallbackAsync);
@@ -138,14 +190,6 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
         });
         CommandAsync<RefreshTyping>(HandleRefreshTypingAsync);
     }
-
-    public static Props CreateProps(
-        SessionId sessionId,
-        TelegramChatId chatId,
-        TelegramGatewayDependencies dependencies) =>
-        Props.Create(() => new TelegramSessionBindingActor(sessionId, chatId, dependencies));
-
-    public override string PersistenceId => $"telegram-session-binding-{Uri.EscapeDataString(_sessionId.Value)}";
 
     private async Task HandleInboundAsync(TelegramSessionInbound inbound)
     {
@@ -660,6 +704,11 @@ internal sealed class TelegramSessionBindingActor : ReceivePersistentActor, IWit
     private sealed record OutputReceived(SessionOutput Output);
 
     private sealed record OutputTerminated(int Generation, Exception? Cause);
+
+    private sealed record InitializePipeline : INoSerializationVerificationNeeded
+    {
+        public static InitializePipeline Instance { get; } = new();
+    }
 
     private sealed record RefreshTyping
     {
