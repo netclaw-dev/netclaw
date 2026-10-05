@@ -19,6 +19,7 @@ using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Reminders;
+using Netclaw.Channels;
 using Netclaw.Channels.Mattermost.Transport;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -39,6 +40,38 @@ public sealed class MattermostReminderIntegrationTests(
     private readonly TestShardRegionResolver _resolver = new();
     private readonly ReminderReplyPipeline _pipeline = new();
     private static readonly TimeSpan Timeout = TimeSpan.FromSeconds(30);
+
+    private static IChannelRegistry BuildMattermostRegistry(IMattermostReplyClient replyClient)
+    {
+        var key = ChannelDescriptorKey.FromChannelType(ChannelType.Mattermost);
+        var descriptor = new ChannelDescriptor(
+            key,
+            ChannelType.Mattermost,
+            ChannelKind.RemoteChat,
+            "Mattermost",
+            IsEnabled: true,
+            ChannelCapabilities.ReceiveMessages
+                | ChannelCapabilities.SendMessages
+                | ChannelCapabilities.ThreadedConversations
+                | ChannelCapabilities.InteractiveApproval,
+            ToolIntents: new HashSet<ChannelToolIntentKind> { ChannelToolIntentKind.SendMessage },
+            AddressKinds: new HashSet<ChannelAddressKind>
+            {
+                ChannelAddressKind.Destination,
+                ChannelAddressKind.Thread
+            },
+            SupportedOutputEffects: new HashSet<ChannelOutputEffectKind>
+            {
+                ChannelOutputEffectKind.TextMessage,
+                ChannelOutputEffectKind.InteractiveApproval,
+                ChannelOutputEffectKind.ProcessingIndicator
+            });
+
+        return new ChannelRegistry(
+            [new StaticChannelDescriptorProvider(descriptor)],
+            [],
+            outputRenderers: [new MattermostProcessingOutputRenderer(replyClient)]);
+    }
 
     protected override void ConfigureAkka(AkkaConfigurationBuilder builder, IServiceProvider provider)
     {
@@ -84,13 +117,14 @@ public sealed class MattermostReminderIntegrationTests(
         var rootId = await fixture.PostAsTestUserAsync(fixture.ChannelId, "Remind me in this thread");
         var sessionId = new SessionId($"{fixture.ChannelId}/{rootId}");
         using var bot = new MattermostClient(fixture.ServerUrl, validToken ? fixture.BotToken : "invalid-token");
+        var replyClient = new MattermostNetReplyClient(bot);
         var gateway = Sys.ActorOf(MattermostGatewayActor.CreateProps(new MattermostGatewayDependencies(
             Pipeline: _pipeline, IngressGate: null, TimeProvider: TimeProvider.System,
             Options: new MattermostChannelOptions
             {
                 MentionOnly = true, AllowedChannelIds = [fixture.ChannelId], AllowedUserIds = [fixture.TestUserId]
             },
-            DefaultChannelId: null, ReplyClient: new MattermostNetReplyClient(bot),
+            DefaultChannelId: null, ChannelRegistry: BuildMattermostRegistry(replyClient), ReplyClient: replyClient,
             ContentScanner: new NullContentScanner(), AudienceProfiles: ToolAudienceProfileDefaults.CreateProfiles(),
             ModelCapabilities: new ModelCapabilities { ModelId = "test", InputModalities = ModelModality.Text },
             StorageResolver: new TestSessionStorageResolver(_state.Paths),

@@ -61,6 +61,11 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly TimeSpan ReinitializeDelay = TimeSpan.FromSeconds(2);
     private static readonly object ReinitializeTimerKey = new();
     private static readonly TimeSpan IdlePassivationTimeout = TimeSpan.FromHours(1);
+    // Mattermost typing pulses are transient; repeat at the documented client
+    // clearing window so a long turn stays visible. See issue #2347.
+    private static readonly TimeSpan TypingPulseIntervalDefault = TimeSpan.FromSeconds(3);
+    private static readonly object TypingPulseTimerKey = new();
+    private bool _processingIndicatorActive;
     private string? _cursorPostId;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
@@ -198,6 +203,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     protected override void PostStop()
     {
+        Timers.Cancel(TypingPulseTimerKey);
         _handle.Dispose();
         base.PostStop();
     }
@@ -205,7 +211,7 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private SessionPipelineOptions BuildOptions() => new()
     {
         ChannelType = ChannelType.Mattermost,
-        Filter = OutputFilter.Text | OutputFilter.Files
+        Filter = OutputFilter.Text | OutputFilter.Files | OutputFilter.ProcessingState
     };
 
     private void Initializing()
@@ -265,6 +271,18 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
         CommandAsync<MattermostApprovalResponse>(HandleApprovalResponseAsync);
         CommandAsync<DeliverTrustedSessionTurn>(HandleTrustedReminderAsync);
         CommandAsync<OutputReceived>(HandleOutputReceivedAsync);
+
+        CommandAsync<SendTypingPulse>(async _ =>
+        {
+            if (!_processingIndicatorActive)
+                return;
+
+            await RenderTypingPulseAsync(new ProcessingStateOutput(true)
+            {
+                IsRequired = false,
+                SessionId = _sessionId
+            });
+        });
 
         Command<OutputStreamTerminated>(msg =>
         {
@@ -612,14 +630,76 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
     /// <summary>
     /// Handles the outputs the shared engine leaves to the channel. Mattermost
-    /// supports none of them, so every one is ignored here. Mattermost threads
-    /// cannot be renamed, so a <c>SessionTitleOutput</c> has no effect, and the
-    /// binding renders no processing indicator. The missing processing
-    /// indicator is a capability difference from Slack and Discord. Whether
-    /// Mattermost should gain one is a product question, recorded as an open
-    /// question in the OpenSpec design for this change.
+    /// cannot rename threads, so a <c>SessionTitleOutput</c> has no effect. A
+    /// <c>ProcessingStateOutput</c> drives a native typing pulse for the
+    /// channel and its thread root.
     /// </summary>
-    private Task HandleChannelSpecificOutputAsync(SessionOutput output) => Task.CompletedTask;
+    private async Task HandleChannelSpecificOutputAsync(SessionOutput output)
+    {
+        switch (output)
+        {
+            case ProcessingStateOutput processing:
+                await RenderProcessingStateAsync(processing);
+                break;
+        }
+    }
+
+    private async Task RenderProcessingStateAsync(ProcessingStateOutput output)
+    {
+        _processingIndicatorActive = output.IsProcessing;
+
+        if (output.IsProcessing)
+        {
+            // Send the initial pulse, then repeat it while the session still
+            // reports processing. The session emits ProcessingStateOutput(true)
+            // once on entering a processing phase, and Mattermost typing pulses
+            // are transient, so a single fire-and-forget pulse would disappear
+            // before a long turn finishes. See issue #2347.
+            await RenderTypingPulseAsync(output);
+            Timers.StartPeriodicTimer(
+                TypingPulseTimerKey,
+                SendTypingPulse.Instance,
+                _dependencies.TypingPulseInterval ?? TypingPulseIntervalDefault);
+        }
+        else
+        {
+            Timers.Cancel(TypingPulseTimerKey);
+        }
+    }
+
+    private async Task RenderTypingPulseAsync(ProcessingStateOutput output)
+    {
+        var requirement = output.IsRequired
+            ? ChannelOutputRequirement.Required
+            : ChannelOutputRequirement.Optional;
+        var request = new ChannelOutputRenderRequest(
+            BuildTypingRenderTarget(),
+            output,
+            ChannelOutputEffectKind.ProcessingIndicator,
+            requirement);
+
+        try
+        {
+            await _dependencies.ChannelRegistry.RenderOutputAsync(request);
+        }
+        catch (Exception ex) when (!output.IsRequired)
+        {
+            _log.Warning(ex, "Failed rendering optional Mattermost processing indicator");
+        }
+    }
+
+    private ChannelDeliveryTarget BuildTypingRenderTarget()
+    {
+        var channelKey = ChannelDescriptorKey.FromChannelType(ChannelType.Mattermost);
+        return new ChannelDeliveryTarget(
+            channelKey,
+            new ResolvedChannelAddress(
+                channelKey,
+                ChannelAddressKind.Destination,
+                _channelId.Value,
+                _channelId.Value),
+            _rootPostId.Value);
+    }
 
     private async Task<MattermostPostId?> SafeReplyWithApprovalPromptAsync(ToolInteractionRequest request)
     {
@@ -988,4 +1068,9 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private sealed record OutputStreamTerminated(int Generation, Exception? Cause);
 
     private sealed record ReinitializePipeline(string Reason);
+
+    private sealed record SendTypingPulse
+    {
+        public static readonly SendTypingPulse Instance = new();
+    }
 }

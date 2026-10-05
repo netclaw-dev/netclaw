@@ -90,6 +90,7 @@ public sealed class ChannelConnectionSetupIdempotenceTests(ITestOutputHelper out
             Sys,
             new FailingSessionPipeline(new InvalidOperationException("not used")),
             new SessionIngressGate(),
+            TestChannelRegistries.MattermostWithProcessingRenderer(new RecordingMattermostReplyClient()),
             gateway,
             new RecordingMattermostReplyClient(),
             new NullContentScanner(),

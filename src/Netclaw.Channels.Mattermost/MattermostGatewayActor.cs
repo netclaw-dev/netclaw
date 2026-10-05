@@ -95,6 +95,7 @@ public sealed record MattermostGatewayDependencies(
     TimeProvider TimeProvider,
     MattermostChannelOptions Options,
     MattermostChannelId? DefaultChannelId,
+    IChannelRegistry ChannelRegistry,
     IMattermostReplyClient ReplyClient,
     IContentScanner ContentScanner,
     ToolAudienceProfiles AudienceProfiles,
@@ -108,5 +109,6 @@ public sealed record MattermostGatewayDependencies(
     IThreadHistoryFetcher? ThreadHistoryFetcher = null,
     MattermostCallbackActionStore? CallbackActionStore = null,
     HttpClient? HttpClient = null,
+    TimeSpan? TypingPulseInterval = null,
     Func<MattermostChannelId, MattermostGatewayDependencies, Props>? ConversationPropsFactory = null,
     Func<SessionId, MattermostChannelId, MattermostRootPostId, MattermostGatewayDependencies, Props>? SessionPropsFactory = null);

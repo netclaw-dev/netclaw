@@ -23,6 +23,7 @@ public sealed class MattermostChannelShutdownContractTests : ChannelShutdownCont
             system: null!,
             pipeline: new FailingSessionPipeline(new InvalidOperationException("not used")),
             ingressGate: new SessionIngressGate(),
+            channelRegistry: TestChannelRegistries.MattermostWithProcessingRenderer(new RecordingMattermostReplyClient()),
             gatewayClient: new TimingOutGatewayClient(),
             replyClient: new RecordingMattermostReplyClient(),
             contentScanner: new NullContentScanner(),
@@ -44,7 +45,7 @@ public sealed class MattermostChannelShutdownContractTests : ChannelShutdownCont
                 AudienceProfiles = TestMattermostGatewayDeps.DefaultAudienceProfiles
             },
             modelCapabilities: TestMattermostGatewayDeps.DefaultVisionCapableModel,
-            Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
+            storageResolver: Netclaw.Actors.Protocol.TestSessionStorageResolver.Instance);
     }
 
     /// <summary>
