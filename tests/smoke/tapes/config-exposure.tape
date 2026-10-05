@@ -20,9 +20,12 @@ Wait+Screen@10s /Settings Areas/
 
 # Root dashboard order: Inference Providers, Models, Channels, Inbound Webhooks,
 # Skill Sources, Search, Browser Automation, Telemetry & Alerting, Security & Access.
+# Anchor on a Security & Access menu row description. The root dashboard and the
+# Security & Access sub-screens also show the text "Security & Access", so that
+# text does not prove that the menu is on screen and bound to input.
 Down 8
 Enter
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 
 # Security & Access order: Security Posture, Enabled Features, Audience Profiles,
 # Exposure Mode.
@@ -51,7 +54,7 @@ Wait+Screen@10s /Reverse Proxy exposure mode saved/
 
 # Exit and prove the non-local write semantically before returning to Local.
 Enter
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 Ctrl+Q
 # Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.
 Sleep 1s
@@ -71,7 +74,7 @@ Enter
 Wait+Screen@10s /Settings Areas/
 Down 8
 Enter
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 Down 3
 Enter
 Wait+Screen@10s /How will this Netclaw daemon be accessed/
@@ -79,7 +82,7 @@ Up
 Enter
 Wait+Screen@10s /Local exposure mode saved/
 Enter
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 Ctrl+Q
 
 # Alt-screen restore guard (CSI ?1049l): give vhs a beat to catch the restored main buffer.

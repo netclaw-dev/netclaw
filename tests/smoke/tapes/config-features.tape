@@ -19,9 +19,12 @@ Wait+Screen@10s /Settings Areas/
 
 # Root dashboard order: Inference Providers, Models, Channels, Inbound Webhooks,
 # Skill Sources, Search, Browser Automation, Telemetry & Alerting, Security & Access.
+# Anchor on a Security & Access menu row description. The root dashboard and the
+# Security & Access sub-screens also show the text "Security & Access", so that
+# text does not prove that the menu is on screen and bound to input.
 Down 8
 Enter
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 
 # Security & Access order: Security Posture, Enabled Features, Audience Profiles,
 # Exposure Mode.
@@ -36,7 +39,7 @@ Down
 Space
 Wait+Screen@5s /\[✓\] Search/
 Escape
-Wait+Screen@10s /Security & Access/
+Wait+Screen@10s /Deployment trust stance\./
 Ctrl+Q
 
 # VHS's screen scraper needs a beat to pick up the restored main buffer after the
