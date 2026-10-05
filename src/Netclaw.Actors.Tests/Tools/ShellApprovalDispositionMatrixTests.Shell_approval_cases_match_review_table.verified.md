@@ -363,6 +363,21 @@
 | glob-that-may-add-option-uses-global-grant | Bash52 | Personal | Project | Interactive | rm */stale.tmp | persistent[anywhere]:rm | Allowed | StoredApproval | none | Not applicable |
 | glob-that-may-add-option-prompts-with-folder-grant | Bash52 | Personal | Project | Interactive | rm */stale.tmp | persistent[project]:rm | RequiresApproval | approval required | rm */stale.tmp | No |
 | glob-that-may-add-option-unattended-uses-global-grant | Bash52 | Personal | Project | Non-interactive | rm */stale.tmp | persistent[anywhere]:rm | Allowed | StoredApproval | none | Not applicable |
+| test-builtin-literal-operands-allows | Bash52 | Personal | Project | Interactive | [ 3 -gt 2 ] && echo yes | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| test-builtin-bounded-variable-allows | Bash52 | Personal | Project | Interactive | x=3; [ "$x" -gt 2 ] && echo yes | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| test-builtin-loop-value-allows | Bash52 | Personal | Project | Interactive | for d in a b; do [ "$d" = a ] && echo yes; done | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| test-builtin-file-operand-has-no-scope | Bash52 | Personal | Project | Interactive | test -f /netclaw-approval-external/marker && echo yes | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| echo-substitution-value-is-data | Bash52 | Personal | Project | Interactive | n=$(git push); echo "$n"; printf '%s\n' "$n" | none | RequiresApproval | approval required | git push | No |
+| echo-read-value-is-data | Bash52 | Personal | Project | Interactive | read -r n < README.md; echo "$n" | none | RequiresApproval | approval required | read | No |
+| test-builtin-subscript-operand-prompts | Bash52 | Personal | Project | Interactive | [ -v 'a[$(printf marker >&2)]' ] | none | RequiresApproval | approval required | [ -v 'a[$(printf marker >&2)]' ] | No |
+| test-builtin-unknown-value-prompts | Bash52 | Personal | Project | Interactive | n=$(basename src/a.cs); [ -v "$n" ] | persistent[anywhere]:basename | RequiresApproval | approval required | [ -v "$n" ] | No |
+| output-glob-from-binding-prompts | Bash52 | Personal | Project | Interactive | d=key; echo ../netclaw/"${d}s"/* | none | RequiresApproval | approval required | echo | No |
+| output-glob-from-binding-unattended-denies | Bash52 | Personal | Project | Non-interactive | d=key; echo ../netclaw/"${d}s"/* | none | Denied | approval_required_unattended | none | Not applicable |
+| test-builtin-guard-keeps-action-prompt | Bash52 | Personal | Project | Interactive | [ 3 -gt 2 ] && git push | none | RequiresApproval | approval required | git push | No |
+| test-builtin-guard-keeps-hard-deny | Bash52 | Personal | Project | Interactive | x=3; [ "$x" -gt 2 ] && rm -rf / | none | Denied | hard_deny_system_destructive | none | Not applicable |
+| test-builtin-credential-path-denies | Bash52 | Personal | Project | Interactive | [ -f ~/.netclaw/keys/x ] && echo yes | none | Denied | shell_references_protected_path | none | Not applicable |
+| loop-control-with-write-stays-unresolved | Bash52 | Personal | Project | Interactive | for d in a b; do touch "$d.txt"; continue; done | none | RequiresApproval | approval required | none | Yes |
+| power-shell-test-word-prompts | PowerShell7 | Personal | Project | Interactive | test value | none | RequiresApproval | approval required | test | No |
 | glob-after-cd-keeps-directory-proof | Bash52 | Personal | Project | Interactive | cd src && ls *.cs; dotnet --list-sdks | persistent[anywhere]:cd, persistent[anywhere]:dotnet | Allowed | StoredApproval | none | Not applicable |
 | assigned-credential-path-denied-as-literal | Bash52 | Personal | Project | Interactive | x=~/.netclaw/config/secrets.json; cat "$x" | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
 | assigned-branch-is-not-covered-by-another-branch-grant | Bash52 | Personal | Project | Interactive | b=main; git push origin "$b" | persistent[anywhere]:git push origin feature-x | RequiresApproval | approval required | git push origin | No |
@@ -372,9 +387,9 @@
 | bracket-program-word-with-space-stays-unresolved | Bash52 | Personal | Project | Interactive | ["batch one"] | none | RequiresApproval | approval required | ["batch one"] | No |
 | unattended-bracket-program-word-denies | Bash52 | Personal | Project | Non-interactive | ["ci","build"] | none | Denied | approval_required_unattended | none | Not applicable |
 | unattended-brace-program-word-gets-rewrite-advice | Bash52 | Personal | Project | Non-interactive | {"b":2,"nested":{"c":3}} | none | RequiresAgentCorrection | approval required | none | Not applicable |
-| if-statement-prompts-for-each-command | Bash52 | Personal | Project | Interactive | if test -f marker; then git push; else git fetch; fi | none | RequiresApproval | approval required | test, git push, git fetch | No |
+| if-statement-prompts-for-each-command | Bash52 | Personal | Project | Interactive | if test -f marker; then git push; else git fetch; fi | none | RequiresApproval | approval required | git push, git fetch | No |
 | case-statement-uses-reviewed-phrases | Bash52 | Personal | Project | Interactive | case x in a) cat a.txt ;; *) cat b.txt ;; esac | none | Allowed | ReviewedSafePolicy | none | Not applicable |
-| until-loop-prompts-for-each-command | Bash52 | Personal | Project | Interactive | until test -f marker; do git fetch; done | none | RequiresApproval | approval required | test, git fetch | No |
+| until-loop-prompts-for-each-command | Bash52 | Personal | Project | Interactive | until test -f marker; do git fetch; done | none | RequiresApproval | approval required | git fetch | No |
 | background-process-id-kill-prompts | Bash52 | Personal | Project | Interactive | server & PID=$!; kill "$PID" | persistent[anywhere]:kill | RequiresApproval | approval required | server, kill "$PID" | No |
 | unassigned-operand-uses-global-grant | Bash52 | Personal | Project | Interactive | rm -rf "$BUILD_DIR/out" | persistent[anywhere]:rm | Allowed | StoredApproval | none | Not applicable |
 | unassigned-operand-prompts-with-folder-grant | Bash52 | Personal | Project | Interactive | rm -rf "$BUILD_DIR/out" | persistent[project]:rm | RequiresApproval | approval required | rm -rf "$BUILD_DIR/out" | No |
