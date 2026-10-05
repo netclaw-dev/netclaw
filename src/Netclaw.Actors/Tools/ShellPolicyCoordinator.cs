@@ -70,7 +70,7 @@ internal sealed class ShellPolicyCoordinator(
         if (preflight is ShellPolicyPreflightResult.Continue { DirectoryScopes.IsCausalList: true })
         {
             // A causal list received one-call advice before its candidates came from the
-            // directory proof. It keeps that advice, and it gets no project advice.
+            // directory proof. It keeps that advice.
             candidates = [];
             isMessy = true;
         }
@@ -90,12 +90,12 @@ internal sealed class ShellPolicyCoordinator(
             isMessy = approval.IsMessy;
         }
 
-        // Relocation changes the directory, so project advice for the original directory no longer applies.
+        // Relocation changes the directory, so other advice for the original directory no longer applies.
         var temporary = policy.EvaluateShellTemporaryCorrection(analysis, candidates, toolCall.Arguments, context.Invocation);
         if (temporary is not null)
             return temporary;
 
-        // Project advice applies to shell calls. The replacement native tool must pass its own policy checks.
+        // One-call directory advice applies to shell calls. The replacement native tool must pass its own policy checks.
         if (native is not null)
             return null;
 
@@ -107,7 +107,7 @@ internal sealed class ShellPolicyCoordinator(
                 ? null
                 : SelectOneCallDirectoryCorrection(analysis, toolCall, context);
 
-        return GetAvailableProjectCorrection(candidates, analysis.WorkingDirectory, context.Invocation);
+        return null;
     }
 
     private static ToolCorrection.ShellWorkingDirectorySuggested? SelectOneCallDirectoryCorrection(
@@ -149,27 +149,6 @@ internal sealed class ShellPolicyCoordinator(
         }
 
         return new ToolCorrection.ShellWorkingDirectorySuggested(target.Value);
-    }
-
-    private ToolCorrection.ProjectDirectorySuggested? GetAvailableProjectCorrection(
-        IReadOnlyList<ApprovalCandidate> candidates,
-        string? workingDirectory,
-        ToolInvocationContext invocation)
-    {
-        var project = policy.EvaluateShellProjectCorrection(candidates, workingDirectory, invocation);
-        if (project is null)
-            return null;
-
-        if (registry.GetByName(SetWorkingDirectoryTool.ToolName) is not SetWorkingDirectoryTool declaration)
-            return null;
-
-        if (!policy.IsToolExposed(declaration, invocation))
-            return null;
-
-        if (!declaration.CanDeclare(project.Directory, invocation))
-            return null;
-
-        return project;
     }
 
     /// <summary>

@@ -23,9 +23,6 @@ internal abstract record ToolCorrection
     /// <summary>Suggests a native tool instead of invoking that tool name through the shell.</summary>
     internal sealed record NativeToolSuggested(ToolName ToolName) : ToolCorrection;
 
-    /// <summary>Suggests declaration of the shell directory as the current project.</summary>
-    internal sealed record ProjectDirectorySuggested(string Directory) : ToolCorrection;
-
     /// <summary>Suggests a one-call shell directory without changing the project declaration.</summary>
     internal sealed record ShellWorkingDirectorySuggested(string Directory) : ToolCorrection;
 
@@ -90,7 +87,6 @@ internal sealed record ToolCorrectionDelivery(
 
         return corrections.Items switch
         {
-            [ToolCorrection.ProjectDirectorySuggested project] => CreateProject(project.Directory),
             [ToolCorrection.ShellWorkingDirectorySuggested shell] => CreateShellDirectory(shell.Directory),
             [ToolCorrection.ShellCommandWordsRewriteSuggested words] => CreateCommandWords(words),
             [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
@@ -105,14 +101,6 @@ internal sealed record ToolCorrectionDelivery(
             _ => throw new InvalidOperationException("The correction collection has an unsupported combination or duplicate fact.")
         };
     }
-
-    private static ToolCorrectionDelivery CreateProject(string directory)
-        => new(
-            "Tool execution deferred: working_directory_not_declared\n" +
-            $"Project directory: '{directory}'.",
-            new ToolInvocationReceipt.Correction(ToolRemediationCode.SetWorkingDirectory),
-            NativeTool: null,
-            ManagedTemporaryStateChange: null);
 
     private static ToolCorrectionDelivery CreateShellDirectory(string directory)
         => new(

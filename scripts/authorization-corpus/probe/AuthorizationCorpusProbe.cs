@@ -325,7 +325,6 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
         {
             ToolCorrection.ManagedTemporaryDirectorySuggested temporary => $"temporary:{temporary.Target}",
             ToolCorrection.NativeToolSuggested native => $"native:{native.ToolName.Value}",
-            ToolCorrection.ProjectDirectorySuggested project => $"project:{project.Directory}",
             ToolCorrection.ShellWorkingDirectorySuggested directory => $"directory:{directory.Directory}",
             // A correction kind that one revision lacks prints its record text.
             _ => correction.ToString()

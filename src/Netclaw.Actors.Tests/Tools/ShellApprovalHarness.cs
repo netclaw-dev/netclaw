@@ -53,7 +53,6 @@ internal enum ApprovalCorrection
 {
     ManagedTemporaryDirectory,
     NativeTool,
-    ProjectDirectory,
     ShellWorkingDirectory,
     ShellCommandWords
 }
@@ -686,7 +685,6 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             AgentCorrectionTarget = decision.AgentCorrection switch
             {
                 ToolCorrection.ShellWorkingDirectorySuggested suggestion => suggestion.Directory,
-                ToolCorrection.ProjectDirectorySuggested suggestion => suggestion.Directory,
                 ToolCorrection.NativeToolSuggested suggestion => suggestion.ToolName.Value,
                 ToolCorrection.ManagedTemporaryDirectorySuggested suggestion => suggestion.Target.ManagedTemporaryDirectory,
                 ToolCorrection.ShellCommandWordsRewriteSuggested suggestion => suggestion.Rewrite.ToString(),
@@ -745,7 +743,6 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             null => null,
             ToolCorrection.ManagedTemporaryDirectorySuggested => ApprovalCorrection.ManagedTemporaryDirectory,
             ToolCorrection.NativeToolSuggested => ApprovalCorrection.NativeTool,
-            ToolCorrection.ProjectDirectorySuggested => ApprovalCorrection.ProjectDirectory,
             ToolCorrection.ShellWorkingDirectorySuggested => ApprovalCorrection.ShellWorkingDirectory,
             ToolCorrection.ShellCommandWordsRewriteSuggested => ApprovalCorrection.ShellCommandWords,
             _ => throw new ArgumentOutOfRangeException(

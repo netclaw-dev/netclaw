@@ -1004,8 +1004,8 @@ and pass every check again.
   the managed path.
 - An exact leading Bash directory change for project work SHALL receive a
   one-call working-directory correction that does not rewrite the command.
-- Corrections SHALL precede an `Auto` allow. Temporary and project advice
-  SHALL keep stored-grant and one-time precedence.
+- Corrections SHALL precede an `Auto` allow. Temporary advice SHALL keep
+  stored-grant and one-time precedence.
 - A repeated equivalent call after a managed temporary correction SHALL
   suppress the correction once and SHALL offer only `Once` and `Deny`.
 - The parent session and a subagent SHALL use the same corrections.
@@ -1029,6 +1029,14 @@ and pass every check again.
 - **WHEN** the model repeats the same call
 - **THEN** authorization returns `RequiresApproval`
 - **AND** the prompt offers only `Once` and `Deny`
+
+#### Scenario: A reviewed phrase in a readable folder gets no project correction
+
+- **GIVEN** a Personal session, attended or unattended, with no grants
+- **AND** the shell folder is readable by the audience but is not the declared project directory
+- **WHEN** the model calls `shell_execute` with a reviewed phrase, for example `git status`, in that folder
+- **THEN** authorization returns `Allowed` through reviewed-safe coverage
+- **AND** the result has no correction that asks for `set_working_directory`
 
 ### Requirement: TA-10 Consent prompts offer only safe options
 

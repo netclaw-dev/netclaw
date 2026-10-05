@@ -869,23 +869,6 @@ public sealed class ToolAccessPolicy
         return correction;
     }
 
-    internal ToolCorrection.ProjectDirectorySuggested? EvaluateShellProjectCorrection(
-        IReadOnlyList<ApprovalCandidate> candidates,
-        string? cwd,
-        ToolInvocationContext invocation)
-    {
-        if (_temporaryPathCorrectionPolicy.IsPlatformTemporaryRoot(cwd))
-            return null;
-
-        if (_safeVerbPolicy is null)
-            return null;
-
-        if (!_safeVerbPolicy.CanShortCircuitAfterProjectDeclaration(candidates, cwd, invocation))
-            return null;
-
-        return new ToolCorrection.ProjectDirectorySuggested(cwd!);
-    }
-
     internal ToolApprovalMode GetApprovalMode(
         ToolName toolName,
         ToolExecutionContext context,

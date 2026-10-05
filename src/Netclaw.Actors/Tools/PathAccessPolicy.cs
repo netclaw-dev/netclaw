@@ -310,18 +310,10 @@ internal sealed class PathAccessPolicy
     /// <param name="canonicalPath">The parser-resolved path to evaluate.</param>
     /// <param name="context">The invocation that supplies session and project roots.</param>
     /// <param name="pathStyle">The path syntax reported by the shell parser.</param>
-    /// <param name="proposedProjectRoot">
-    /// A project root that passed declaration policy but is not active yet.
-    /// </param>
-    /// <param name="includeRootInLinkCheck">
-    /// Whether a link at the trusted root itself makes the relationship unsafe.
-    /// </param>
     public PathAccessDecision EvaluateReviewedShellPath(
         string canonicalPath,
         ToolInvocationContext context,
-        ShellPathStyle pathStyle,
-        string? proposedProjectRoot = null,
-        bool includeRootInLinkCheck = true)
+        ShellPathStyle pathStyle)
     {
         // A reviewed diagnostic can read each path that the audience profile
         // lets a file tool read, attended or not (decision D2). The read
@@ -329,19 +321,16 @@ internal sealed class PathAccessPolicy
         if (IsReadableByAudience(canonicalPath, context, pathStyle))
             return PathAccessDecision.Allow(canonicalPath);
 
-        // Otherwise a reviewed diagnostic can read only session roots and an
-        // admitted project root. It cannot inherit the global read-root catalog.
+        // Otherwise a reviewed diagnostic can read only session roots and the
+        // declared project root. It cannot inherit the global read-root catalog.
         var roots = new List<string>();
         AddSessionRoots(roots, context);
-        if (context.Audience != TrustAudience.Public)
+        if (context.Audience != TrustAudience.Public
+            && !string.IsNullOrWhiteSpace(context.ProjectDirectory))
         {
-            if (!string.IsNullOrWhiteSpace(context.ProjectDirectory))
-                roots.Add(context.ProjectDirectory);
-            if (!string.IsNullOrWhiteSpace(proposedProjectRoot))
-                roots.Add(proposedProjectRoot);
+            roots.Add(context.ProjectDirectory);
         }
 
-        var links = includeRootInLinkCheck ? LinkRule.IncludingRoot : LinkRule.BelowRoot;
         foreach (var root in roots.Distinct(PathComparer))
         {
             // Compare with the parser-declared shell style first. This supports
@@ -363,7 +352,7 @@ internal sealed class PathAccessPolicy
             }
 
             // Shell protected-path policy ran before this bounded-root check.
-            switch (FileSystemAuthority.EvaluateMembership(path, [new PathBoundary.Folder(rootPath, links)]))
+            switch (FileSystemAuthority.EvaluateMembership(path, [new PathBoundary.Folder(rootPath, LinkRule.IncludingRoot)]))
             {
                 case PathDecision.Allowed:
                     return PathAccessDecision.Allow(path.Value);

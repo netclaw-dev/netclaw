@@ -504,7 +504,7 @@ actor_mutations+=("Tools/ToolAccessPolicy.cs{$reusable_start..$reusable_end}")
 read -r d1_safe_start d1_safe_end < <(
   find_span \
     "$reviewed_file" \
-    "string? proposedProjectRoot = null," \
+    "private bool IsReviewedDiagnostic(" \
     "if (candidate.Unresolved == ShellUnresolvedPart.Command" \
     "|| candidate.Unresolved == ShellUnresolvedPart.Operand && !allowUnknownOperands"
 )

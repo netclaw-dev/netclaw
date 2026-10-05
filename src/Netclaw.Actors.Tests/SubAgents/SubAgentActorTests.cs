@@ -787,21 +787,15 @@ public class SubAgentActorTests : TestKit
 
     // A child may read the worktree, attended or not (D2), so the reviewed
     // phrase runs with no project declaration and no prompt.
-    [Theory]
-    [InlineData(false, true)]
-    [InlineData(true, false)]
-    public async Task Subagent_interactive_reviewed_phrase_in_readable_worktree_needs_no_prompt(
-        bool includeScopeTool,
-        bool scopeToolAccepts)
+    [Fact]
+    public async Task Subagent_interactive_reviewed_phrase_in_readable_worktree_needs_no_prompt()
     {
         const string callId = "call-project-scope-approval";
         var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
         var scenario = await RunProjectScopeScenarioAsync(
             CreateShellTool(),
             callId,
-            ProjectScopeCorrectionCommand,
-            includeScopeTool,
-            scopeToolAccepts,
+            ProjectScopeCommand,
             approvalBridge);
 
         Assert.True(scenario.Result.Success, scenario.Result.Output);
@@ -810,36 +804,6 @@ public class SubAgentActorTests : TestKit
             scenario.Worktree,
             GetLastToolResult(scenario.Client, callId),
             StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(
-            "working_directory_not_declared",
-            GetLastToolResult(scenario.Client, callId),
-            StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task Subagent_policy_hidden_project_scope_tool_is_not_revealed()
-    {
-        const string callId = "call-project-scope-hidden";
-        var approvalBridge = new RecordingParentApprovalBridge(ConsentAnswer.Once.Instance);
-        var scenario = await RunProjectScopeScenarioAsync(
-            CreateShellTool(),
-            callId,
-            ProjectScopeCorrectionCommand,
-            includeScopeTool: true,
-            scopeToolAccepts: true,
-            approvalBridge,
-            hideScopeTool: true);
-
-        Assert.True(scenario.Result.Success, scenario.Result.Output);
-        Assert.Equal(0, approvalBridge.RequestCount);
-        Assert.Contains(
-            scenario.Worktree,
-            GetLastToolResult(scenario.Client, callId),
-            StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain(
-            SetWorkingDirectoryTool.ToolName,
-            GetLastToolResult(scenario.Client, callId),
-            StringComparison.Ordinal);
     }
 
     [SlopwatchSuppress("SW001", "This regression requires a POSIX shell cwd and Bash project-scope correction behavior.")]
@@ -886,7 +850,7 @@ public class SubAgentActorTests : TestKit
         var actor = Sys.ActorOf(SubAgentActor.CreatePropsWithProjectInstructionProvider(
             CreateDefinition([shell, setWorkingDirectory]),
             client,
-            CreateProjectScopeCorrectionPolicy(workspacesDirectory),
+            CreateProjectScopePolicy(workspacesDirectory),
             new ProjectPromptProvider(worktree, projectGuidance)));
 
         var result = await actor.Ask<SubAgentResult>(
@@ -1463,32 +1427,17 @@ public class SubAgentActorTests : TestKit
         INetclawTool shell,
         string callId,
         string shellCommand,
-        bool includeScopeTool,
-        bool scopeToolAccepts,
-        IParentApprovalBridge? approvalBridge,
-        bool hideScopeTool = false)
+        IParentApprovalBridge? approvalBridge)
     {
         var worktree = Path.TrimEndingDirectorySeparator(Path.GetFullPath(AppContext.BaseDirectory));
-        var tools = new List<INetclawTool> { shell };
-        if (includeScopeTool)
-        {
-            var allowedRoot = scopeToolAccepts
-                ? worktree
-                : Path.Combine(worktree, "different-workspace-root");
-            tools.Add(new SetWorkingDirectoryTool(
-                new ToolConfig(),
-                new NetclawPaths(allowedRoot, allowedRoot),
-                new ToolPathPolicy([])));
-        }
-
         var client = new FakeChatClient
         {
             ToolCallsOnFirstCall = [ProjectScopeCall(callId, worktree, shellCommand)]
         };
         var agent = Sys.ActorOf(SubAgentActor.CreateProps(
-            CreateDefinition(tools),
+            CreateDefinition([shell]),
             client,
-            CreateProjectScopeCorrectionPolicy(worktree, hideScopeTool)));
+            CreateProjectScopePolicy(worktree)));
         var result = await agent.Ask<SubAgentResult>(
             new RunSubAgent
             {
@@ -1527,9 +1476,7 @@ public class SubAgentActorTests : TestKit
         public string? GetOperatingRules(TrustAudience audience) => null;
     }
 
-    private static ToolAccessPolicy CreateProjectScopeCorrectionPolicy(
-        string workspacesDirectory,
-        bool hideScopeTool = false)
+    private static ToolAccessPolicy CreateProjectScopePolicy(string workspacesDirectory)
     {
         var toolConfig = new ToolConfig { ShellMode = ShellExecutionMode.HostAllowed };
         toolConfig.AudienceProfiles.Personal.ApprovalPolicy = new ToolApprovalConfig
@@ -1537,9 +1484,7 @@ public class SubAgentActorTests : TestKit
             ToolOverrides = new Dictionary<string, ToolApprovalMode>(StringComparer.Ordinal)
             {
                 [ShellTool.ToolName] = ToolApprovalMode.Approval,
-                [SetWorkingDirectoryTool.ToolName] = hideScopeTool
-                    ? ToolApprovalMode.Deny
-                    : ToolApprovalMode.Auto
+                [SetWorkingDirectoryTool.ToolName] = ToolApprovalMode.Auto
             }
         };
         var environment = TestShellEnvironment.Current;
@@ -1593,7 +1538,7 @@ public class SubAgentActorTests : TestKit
             ["_rationale"] = "Inspect the project metric sources."
         });
 
-    private static string ProjectScopeCorrectionCommand =>
+    private static string ProjectScopeCommand =>
         TestShellEnvironment.Current.Grammar == ShellGrammar.Bash
             ? "pwd"
             : "Get-Location";

@@ -702,7 +702,6 @@ public sealed class ShellPolicyEvidenceFixtureTests(ShellApprovalMatrixFixture f
             null => null,
             "ManagedTemporaryDirectorySuggested" => ApprovalCorrection.ManagedTemporaryDirectory,
             "NativeToolSuggested" => ApprovalCorrection.NativeTool,
-            "ProjectDirectorySuggested" => ApprovalCorrection.ProjectDirectory,
             "ShellWorkingDirectorySuggested" => ApprovalCorrection.ShellWorkingDirectory,
             "ShellCommandWordsRewriteSuggested" => ApprovalCorrection.ShellCommandWords,
             _ => throw new InvalidDataException($"Unsupported fixture correction: {correction}.")

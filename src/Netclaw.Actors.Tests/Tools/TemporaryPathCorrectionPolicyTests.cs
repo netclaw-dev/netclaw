@@ -39,7 +39,6 @@ public sealed class TemporaryPathCorrectionPolicyTests
         var correction = Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
         Assert.Equal(Path.Combine(PosixSession, "tmp", "parent"), correction.Target.ManagedTemporaryDirectory);
         Assert.Equal(PosixTemp, correction.Target.PlatformTemporaryRoot);
-        Assert.IsNotType<ToolCorrection.ProjectDirectorySuggested>(decision.AgentCorrection);
     }
 
     [SlopwatchSuppress("SW001", "This test requires a POSIX storage path and Bash temporary path semantics.")]
@@ -73,7 +72,6 @@ public sealed class TemporaryPathCorrectionPolicyTests
             PosixSession);
 
         Assert.IsType<ToolCorrection.ManagedTemporaryDirectorySuggested>(decision.AgentCorrection);
-        Assert.IsNotType<ToolCorrection.ProjectDirectorySuggested>(decision.AgentCorrection);
     }
 
     [SlopwatchSuppress("SW001", "This test requires a POSIX storage path and Bash temporary path semantics.")]

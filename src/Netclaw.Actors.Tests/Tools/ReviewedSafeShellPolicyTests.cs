@@ -17,7 +17,6 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
 {
     private readonly string _rootDir;
     private readonly string _projectDir;
-    private readonly string _undeclaredProjectDir;
     private readonly string _sessionDir;
     private readonly string _outsideDir;
     private readonly NetclawPaths _paths;
@@ -27,11 +26,9 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         _rootDir = CreateTempDir("policy");
         _paths = new NetclawPaths(_rootDir);
         _projectDir = Path.Combine(_paths.WorkspacesDirectory, "project");
-        _undeclaredProjectDir = Path.Combine(_paths.WorkspacesDirectory, "undeclared");
         _sessionDir = Path.Combine(_paths.SessionsDirectory, "session");
         _outsideDir = CreateTempDir("outside");
         Directory.CreateDirectory(_projectDir);
-        Directory.CreateDirectory(_undeclaredProjectDir);
         Directory.CreateDirectory(_sessionDir);
     }
 
@@ -638,79 +635,6 @@ public sealed class ReviewedSafeShellPolicyTests : IDisposable
         var candidates = new[] { Candidate("cat", _outsideDir) };
 
         Assert.False(AllShortCircuit(policy, candidates, _projectDir, ctx));
-    }
-
-    [Fact]
-    public void Reviewed_safe_work_under_a_readable_cwd_needs_no_project_declaration()
-    {
-        // The Bash candidates use POSIX paths, which the read decision can
-        // judge only on a POSIX host.
-        if (OperatingSystem.IsWindows())
-            return;
-
-        var nested = Path.Combine(_undeclaredProjectDir, "src");
-        Directory.CreateDirectory(nested);
-        var candidates = new[]
-        {
-            Candidate("head", nested),
-            Candidate("wc", _undeclaredProjectDir)
-        };
-        var policy = CreatePolicy(VerbList("head", "wc"));
-
-        // The default Personal profile may read the cwd, attended or not (D2),
-        // so the reviewed phrase covers the call with no declaration.
-        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(
-            candidates,
-            _undeclaredProjectDir,
-            PersonalContext(projectDir: _projectDir)));
-        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(
-            candidates,
-            _undeclaredProjectDir,
-            UnattendedPersonalContext(projectDir: _projectDir)));
-    }
-
-    [Fact]
-    public void Already_declared_project_scope_does_not_request_another_declaration()
-    {
-        var policy = CreatePolicy(VerbList("head"));
-        var ctx = PersonalContext(projectDir: _outsideDir);
-        var candidates = new[] { Candidate("head", _outsideDir) };
-
-        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
-    }
-
-    [Fact]
-    public void Unsafe_work_cannot_request_project_declaration()
-    {
-        var policy = CreatePolicy(VerbList("head"));
-        var ctx = PersonalContext(projectDir: _projectDir);
-        var candidates = new[]
-        {
-            Candidate("head", _outsideDir),
-            Candidate("rm", _outsideDir)
-        };
-
-        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
-    }
-
-    [Fact]
-    public void Explicit_path_outside_cwd_cannot_request_project_declaration()
-    {
-        var policy = CreatePolicy(VerbList("head"));
-        var ctx = PersonalContext(projectDir: _projectDir);
-        var candidates = new[] { Candidate("head", _projectDir) };
-
-        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
-    }
-
-    [Fact]
-    public void Public_session_cannot_request_project_declaration()
-    {
-        var policy = CreatePolicy(VerbList("head"));
-        var ctx = PublicContext(projectDir: _projectDir);
-        var candidates = new[] { Candidate("head", _outsideDir) };
-
-        Assert.False(policy.CanShortCircuitAfterProjectDeclaration(candidates, _outsideDir, ctx));
     }
 
     public enum ReadReach
