@@ -6,7 +6,6 @@
 using System.Diagnostics;
 using System.Text.Json;
 using Netclaw.Actors.Authorization;
-using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Tests.Utilities;
 using Xunit;
@@ -292,7 +291,7 @@ public sealed class ApprovalContractBoundaryTests(ShellApprovalMatrixFixture fix
         Directory.CreateSymbolicLink(Path.Combine(harness.ProjectDirectory, "cfg"), harness.Paths.ConfigDirectory);
         var linked = await harness.EvaluateShellAsync("touch cfg/netclaw.json", Ct);
         Assert.Equal(ApprovalOutcome.Denied, linked.Outcome);
-        Assert.Equal(ToolAccessPolicy.ShellPathProtected, linked.DenyReason);
+        Assert.Equal("shell_path_protected", linked.DenyReason);
     }
 
     // ── 3. Unattended and Public path authority for file tools ──

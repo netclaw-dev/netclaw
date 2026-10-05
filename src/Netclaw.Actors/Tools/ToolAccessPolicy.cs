@@ -576,12 +576,6 @@ public sealed class ToolAccessPolicy
     private static bool NamesEntry(string word, string? directory)
         => ShellGrantFileWords.NamesEntry(word, directory, out _);
 
-    /// <summary>Reason code: a shell path is a protected path, such as the config directory or the keys.</summary>
-    internal const string ShellPathProtected = "shell_path_protected";
-
-    /// <summary>Reason code: a bounded (<c>Roots</c>) audience profile does not hold the shell path.</summary>
-    internal const string ShellPathOutsideTrustedRoots = "shell_path_outside_trusted_roots";
-
     private ToolAuthorizationDecision? EnforceKnownShellPaths(
         IEnumerable<ShellPathAccess> paths,
         ToolInvocationContext context)
@@ -594,10 +588,12 @@ public sealed class ToolAccessPolicy
                 continue;
 
             // The code only names the cause. Both codes deny, and no grant opens either one.
+            // shell_path_protected: the path or its link target is protected.
+            // shell_path_outside_trusted_roots: a bounded (Roots) profile does not hold the path.
             return ToolAuthorizationDecision.Deny(
                 access.Path.IsHostStyle && _toolPathPolicy.FileSystem.IsProtected(access.Path.Value, PathOperation.Write)
-                    ? ShellPathProtected
-                    : ShellPathOutsideTrustedRoots);
+                    ? "shell_path_protected"
+                    : "shell_path_outside_trusted_roots");
         }
 
         return null;
