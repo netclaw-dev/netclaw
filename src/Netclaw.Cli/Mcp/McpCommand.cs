@@ -1170,9 +1170,18 @@ internal static class McpCommand
             return 1;
         }
 
-        // Load audience profiles for grant status
-        var toolConfig = LoadToolConfig(paths);
-        var profiles = toolConfig.AudienceProfiles;
+        // Load audience profiles for grant status. An invalid Tools section stops the command:
+        // default profiles here would show, and then save, grants that the daemon does not use.
+        ToolAudienceProfiles profiles;
+        try
+        {
+            profiles = ConfigFileHelper.LoadToolConfig(paths).AudienceProfiles;
+        }
+        catch (Exception ex)
+        {
+            writer.WriteLine($"Error: could not load the Tools configuration: {ex.Message}");
+            return 1;
+        }
 
         // Surgical grant/revoke
         if (grantTools is not null || revokeTools is not null)
@@ -1517,28 +1526,6 @@ internal static class McpCommand
 
         mode = default;
         return false;
-    }
-
-    private static ToolConfig LoadToolConfig(NetclawPaths paths)
-    {
-        if (!File.Exists(paths.NetclawConfigPath))
-            return new ToolConfig();
-
-        try
-        {
-            var text = File.ReadAllText(paths.NetclawConfigPath);
-            using var doc = JsonDocument.Parse(text);
-
-            if (!doc.RootElement.TryGetProperty("Tools", out var toolsSection))
-                return new ToolConfig();
-
-            return JsonSerializer.Deserialize<ToolConfig>(toolsSection.GetRawText(), JsonDefaults.EnumAware)
-                ?? new ToolConfig();
-        }
-        catch
-        {
-            return new ToolConfig();
-        }
     }
 
     private static int WriteHelp(TextWriter writer)

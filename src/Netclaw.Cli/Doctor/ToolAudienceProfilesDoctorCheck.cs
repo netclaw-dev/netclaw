@@ -5,9 +5,9 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using Microsoft.Extensions.Configuration;
 using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
+using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -42,10 +42,7 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         ToolConfig toolConfig;
         try
         {
-            var configuration = new ConfigurationBuilder()
-                .AddJsonFile(paths.NetclawConfigPath, optional: false, reloadOnChange: false)
-                .Build();
-            toolConfig = PolicyConfiguration.Bind(configuration).Tools;
+            toolConfig = ConfigFileHelper.LoadToolConfig(paths);
         }
         catch (Exception ex)
         {
@@ -115,6 +112,19 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             warnings.Add(
                 $"MCP server(s) {string.Join(", ", missingApproval)} have no approval default on Personal — " +
                 "tools invoke without prompting. Run `netclaw mcp permissions` to set a server default.");
+        }
+
+        // Advisory only, with no auto-fix: a Personal allowlist can be intentional, and a fix
+        // that adds servers would widen access without the operator.
+        var outsidePersonalAllowlist = FindEnabledMcpServersOutsidePersonalAllowlist(toolConfig.AudienceProfiles, mcpServers);
+        if (outsidePersonalAllowlist.Count > 0)
+        {
+            warnings.Add(
+                $"MCP server(s) {string.Join(", ", outsidePersonalAllowlist)} are enabled, but the Personal audience cannot use them: "
+                + "Tools.AudienceProfiles.Personal.AllowedMcpServers does not list them. "
+                + "`netclaw mcp permissions` in Netclaw 0.27.1-beta.1 and earlier wrote this allowlist when you enabled one server. "
+                + "Enable each server in `netclaw mcp permissions`, or delete McpServersMode and AllowedMcpServers "
+                + "from the Personal profile to allow every server.");
         }
 
         if (warnings.Count > 0)
@@ -257,6 +267,28 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
         }
 
         return [.. result.Order(StringComparer.OrdinalIgnoreCase)];
+    }
+
+    /// <summary>
+    /// Finds enabled MCP servers that a Personal allowlist does not include. The Personal
+    /// default allows every server, so this state comes from an explicit allowlist.
+    /// </summary>
+    private static List<string> FindEnabledMcpServersOutsidePersonalAllowlist(
+        ToolAudienceProfiles profiles,
+        IReadOnlyDictionary<string, McpServerEntry> mcpServers)
+    {
+        var personal = profiles.Personal;
+        if (personal.McpServersMode != ToolProfileMode.Allowlist)
+            return [];
+
+        return
+        [
+            .. mcpServers
+                .Where(server => server.Value.Enabled
+                    && !personal.AllowedMcpServers.Contains(server.Key, StringComparer.OrdinalIgnoreCase))
+                .Select(server => server.Key)
+                .Order(StringComparer.OrdinalIgnoreCase)
+        ];
     }
 
     private static void CheckApprovalMismatch(ToolConfig toolConfig, List<string> warnings)

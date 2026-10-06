@@ -12,6 +12,7 @@ using Netclaw.Cli.Tui.Config;
 using Netclaw.Cli.Tests.Tui.Wizard;
 using Netclaw.Configuration;
 using Netclaw.Daemon.Configuration;
+using Netclaw.Media;
 using Xunit;
 
 namespace Netclaw.Cli.Tests.Tui.Config;
@@ -228,6 +229,96 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
         Assert.Equal("", vm.AudienceOverrideMarker(TrustAudience.Public));
         Assert.Equal("Customized overrides", vm.SelectedAudienceOverrideStatus);
     }
+
+    // The shape that `netclaw mcp add` writes: each audience has only MCP keys. The daemon reads
+    // the posture defaults for the keys that the file does not set.
+    private const string ProfilesWithOnlyMcpKeys =
+        """
+        {
+          "configVersion": 1,
+          "Security": { "DeploymentPosture": "Personal" },
+          "McpServers": { "textforge": { "Transport": "http", "Url": "https://textforge.net/mcp", "Enabled": true } },
+          "Tools": {
+            "AudienceProfiles": {
+              "Personal": { "ApprovalPolicy": { "McpServerDefaults": { "textforge": "Auto" } } },
+              "Team": {
+                "McpServerToolGrants": { "textforge": [] },
+                "ApprovalPolicy": { "McpServerDefaults": { "textforge": "Approval" } }
+              }
+            }
+          }
+        }
+        """;
+
+    [Fact]
+    public void Edit_of_one_personal_row_on_a_partial_profile_changes_only_that_value()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, ProfilesWithOnlyMcpKeys);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 0;
+        vm.OpenSelectedAudienceProfile();
+        Assert.Equal(TrustAudience.Personal, vm.SelectedAudience);
+        Assert.Equal("All files", vm.AudienceValue(AudienceProfileRowKind.FileAccess));
+
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.IncomingAttachments;
+        vm.ChangeSelectedAudienceProfileRow(-1);
+
+        // Before the fix, this one edit saved empty tool and MCP allowlists and no file access.
+        var personal = BindLikeTheDaemon().AudienceProfiles.Personal;
+        Assert.Equal(ToolProfileMode.All, personal.ToolsMode);
+        Assert.Equal(ToolProfileMode.All, personal.McpServersMode);
+        Assert.Equal(ToolFilesystemMode.All, personal.ReadFiles.Mode);
+        Assert.Equal(ToolFilesystemMode.All, personal.WriteFiles.Mode);
+        Assert.Equal(ToolApprovalMode.Auto, personal.ApprovalPolicy!.McpServerDefaults["textforge"]);
+        Assert.DoesNotContain(AttachmentCategory.Other, personal.ChannelAttachments.AllowedCategories);
+
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.False(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Personal.ToolsMode", out _));
+        Assert.False(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Personal.McpServersMode", out _));
+        Assert.False(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Personal.McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public void Tool_group_toggle_on_a_partial_team_profile_keeps_the_mcp_keys_and_the_other_tools()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, ProfilesWithOnlyMcpKeys);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        Assert.Equal(TrustAudience.Team, vm.SelectedAudience);
+        Assert.True(vm.IsAudienceToggleEnabled(AudienceProfileRowKind.WebAccess));
+
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.WebAccess;
+        vm.ActivateSelectedAudienceProfileRow();
+
+        var team = BindLikeTheDaemon().AudienceProfiles.Team;
+        Assert.Equal(
+            ToolAudienceProfileToolCatalog.TeamDefaultAllowedTools.Except(ToolAudienceProfileToolCatalog.WebTools),
+            team.AllowedTools);
+        Assert.Empty(team.McpServerToolGrants!["textforge"]);
+        Assert.Equal(ToolApprovalMode.Approval, team.ApprovalPolicy!.McpServerDefaults["textforge"]);
+        Assert.Equal(ToolFilesystemMode.Roots, team.ReadFiles.Mode);
+        Assert.NotEmpty(team.ChannelAttachments.AllowedCategories);
+    }
+
+    [Theory]
+    [InlineData("""{ "configVersion": 1 }""", DeploymentPosture.Public)]
+    [InlineData("""{ "configVersion": 1, "Security": { "StrictDefaults": false } }""", DeploymentPosture.Personal)]
+    public void Absent_posture_reads_the_same_as_the_daemon(string json, DeploymentPosture expected)
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath, json);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+
+        var daemon = PolicyConfiguration.Bind(
+            new ConfigurationBuilder().AddNetclawDaemonSources(Context.Paths).Build()).Defaults.DeploymentPosture;
+
+        Assert.Equal(expected, daemon);
+        Assert.Equal(daemon, vm.CurrentPosture);
+        Assert.Null(vm.PostureConfigWarning);
+    }
+
+    private ToolConfig BindLikeTheDaemon()
+        => PolicyConfiguration.Bind(new ConfigurationBuilder().AddNetclawDaemonSources(Context.Paths).Build()).Tools;
 
     [Fact]
     public void Narrowed_team_profile_round_trips_to_the_daemon_binding()

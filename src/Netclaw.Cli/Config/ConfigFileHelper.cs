@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -27,6 +28,24 @@ internal static class ConfigFileHelper
         var config = LoadJsonDict(paths.NetclawConfigPath);
         var secrets = LoadJsonDict(paths.SecretsPath);
         return (config, secrets);
+    }
+
+    /// <summary>
+    /// Binds the <c>Tools</c> section of netclaw.json the same way as the daemon: on top of the
+    /// defaults for the configured posture. A missing file gives the defaults.
+    /// </summary>
+    /// <remarks>
+    /// Do not deserialize <see cref="ToolConfig"/> from the raw JSON. A deserializer replaces a
+    /// partial audience profile with an empty one, so an unset <c>McpServersMode</c> reads as an
+    /// empty allowlist while the daemon reads the posture default. An editor that saves from that
+    /// view narrows the profile (issue #2362).
+    /// </remarks>
+    internal static ToolConfig LoadToolConfig(Configuration.NetclawPaths paths)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+            .Build();
+        return PolicyConfiguration.Bind(configuration).Tools;
     }
 
     /// <summary>

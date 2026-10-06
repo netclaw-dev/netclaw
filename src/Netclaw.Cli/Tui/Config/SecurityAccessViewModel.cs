@@ -546,7 +546,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private void ToggleToolGroup(AudienceProfileRowKind kind, IReadOnlyList<string> tools)
     {
-        var profiles = LoadAudienceProfiles();
+        var profiles = LoadAudienceProfiles(out var malformed);
         var profile = GetProfile(profiles, SelectedAudience);
         var enabled = ToolGroupEnabled(profile, tools);
         EnsureAllowlist(profile);
@@ -555,7 +555,9 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         else
             AddTools(profile.AllowedTools, tools);
 
-        if (!SaveAudienceProfile(profile))
+        if (!SaveAudienceProfileKeys(profile, malformed,
+                ("ToolsMode", profile.ToolsMode.ToString()),
+                ("AllowedTools", profile.AllowedTools)))
             return;
         StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} {AudienceRows.Single(row => row.Kind == kind).Label} {(enabled ? "disabled" : "enabled")}. Saved.";
         RequestRedraw();
@@ -563,12 +565,15 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private void CycleFileAccess(int direction)
     {
-        var profiles = LoadAudienceProfiles();
+        var profiles = LoadAudienceProfiles(out var malformed);
         var profile = GetProfile(profiles, SelectedAudience);
         var next = CycleValue(CurrentFilesystemLevel(profile), FilesystemLevelsFor(SelectedAudience), direction);
 
         ApplyFilesystemLevel(profile, next);
-        if (!SaveAudienceProfile(profile))
+        if (!SaveAudienceProfileKeys(profile, malformed,
+                ("ReadFiles", profile.ReadFiles),
+                ("WriteFiles", profile.WriteFiles),
+                ("AttachFiles", profile.AttachFiles)))
             return;
         StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} file access set to {DescribeFilesystem(profile)}. Saved.";
         RequestRedraw();
@@ -576,15 +581,33 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private void CycleIncomingAttachments(int direction)
     {
-        var profiles = LoadAudienceProfiles();
+        var profiles = LoadAudienceProfiles(out var malformed);
         var profile = GetProfile(profiles, SelectedAudience);
         var next = CycleValue(CurrentAttachmentLevel(profile.ChannelAttachments), AttachmentLevels, direction);
 
         profile.ChannelAttachments = BuildAttachmentPolicy(next);
-        if (!SaveAudienceProfile(profile))
+        if (!SaveAudienceProfileKeys(profile, malformed, ("ChannelAttachments", profile.ChannelAttachments)))
             return;
         StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} attachments set to {DescribeAttachments(profile.ChannelAttachments)}. Saved.";
         RequestRedraw();
+    }
+
+    // An edit writes only the keys that it changed. A write of the whole profile would store the
+    // posture defaults and the bound MCP and approval values as operator decisions, and it would
+    // replace keys that this screen does not show. Unreadable stored profiles are the exception:
+    // there the whole profile replaces them, which is the repair that the summary row promises.
+    private bool SaveAudienceProfileKeys(ToolAudienceProfile profile, bool malformed, params (string Key, object Value)[] changed)
+    {
+        if (malformed)
+            return SaveAudienceProfile(profile);
+
+        var profilePath = $"Tools.AudienceProfiles.{AudienceConfigName(SelectedAudience)}";
+        return TryApplyAndSave(
+            new SectionContribution(
+            [
+                .. changed.Select(change => new SectionFieldAction($"{profilePath}.{change.Key}", SectionFieldActionKind.Set, change.Value))
+            ]),
+            "audience profile");
     }
 
     private bool SaveAudienceProfile(ToolAudienceProfile profile)
@@ -621,46 +644,41 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private ToolAudienceProfiles LoadAudienceProfiles() => LoadAudienceProfiles(out _);
 
-    // Reads stored audience profiles, falling back to the posture baseline when the stored JSON is
-    // malformed (e.g. a migration changed the shape) so a corrupt Tools.AudienceProfiles cannot throw
-    // into the render path or the per-keystroke mutation handlers. `malformed` is true on a fallback.
+    // Reads the audience profiles the same way as the daemon: the Tools section on top of the
+    // posture defaults. A raw deserializer replaces a partial profile with an empty one, so an edit
+    // of one row would then save empty allowlists for the keys that the file does not set (issue
+    // #2362). Unreadable configuration gives the posture baseline, so that it cannot throw into the
+    // render path or a key handler; `malformed` is true then, and the summary row reports it.
     private ToolAudienceProfiles LoadAudienceProfiles(out bool malformed)
-    {
-        malformed = false;
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        if (!ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles", out var value) || value is null)
-            return BuildPostureProfiles(ReadPosture(config));
+        => LoadAudienceProfiles(_paths, out malformed);
 
-        try
+    private static ToolAudienceProfiles LoadAudienceProfiles(NetclawPaths paths, out bool malformed)
+    {
+        // The binder ignores a scalar where it expects an object, so it reads
+        // "AudienceProfiles": "text" as "no profiles". The operator must see that state.
+        malformed = ConfigFileHelper.TryGetPathValue(
+                ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath), "Tools.AudienceProfiles", out var raw)
+            && raw is not (null or Dictionary<string, object>);
+        if (!malformed)
         {
-            return ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
+            try
+            {
+                return ConfigFileHelper.LoadToolConfig(paths).AudienceProfiles;
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or FormatException)
+            {
+                malformed = true;
+            }
         }
-        catch (InvalidOperationException)
-        {
-            malformed = true;
-            return BuildPostureProfiles(ReadPosture(config));
-        }
+
+        return BuildPostureProfiles(ReadPosture(ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath)));
     }
 
     private bool AudienceProfilesCustomized()
     {
-        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
-        if (!ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles", out var value) || value is null)
-            return false;
-
-        ToolAudienceProfiles existing;
-        try
-        {
-            existing = ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
-        }
-        catch (InvalidOperationException)
-        {
-            // Unreadable stored profiles: treat as uncustomised rather than throwing on render.
-            return false;
-        }
-
-        var defaults = BuildPostureProfiles(ReadPosture(config));
-        return !JsonEquivalent(existing, defaults);
+        var existing = LoadAudienceProfiles(out var malformed);
+        // Unreadable stored profiles: treat as uncustomised rather than throwing on render.
+        return !malformed && !JsonEquivalent(existing, BuildPostureProfiles(CurrentPosture));
     }
 
     private void LoadEnabledFeatures()
@@ -689,7 +707,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
                 invalidPosture is null ? posture.ToString() : $"Unknown ('{invalidPosture}') — using Public",
                 "Deployment trust stance."),
             new("Enabled Features", ReadEnabledFeaturesSummary(config), "Deployment-wide runtime feature gates."),
-            new("Audience Profiles", ReadAudienceProfilesSummary(config), "Curated per-audience access rules."),
+            new("Audience Profiles", ReadAudienceProfilesSummary(_paths, config), "Curated per-audience access rules."),
             new("Exposure Mode", ReadExposureModeSummary(config), "Daemon reachability and tunnel topology.", "/exposure-mode"),
             new("Done", "", "Return to Settings Areas.")
         ];
@@ -711,24 +729,13 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         return $"{enabled}/{FeatureConfigPaths.Length} enabled";
     }
 
-    private static string ReadAudienceProfilesSummary(Dictionary<string, object> config)
+    private static string ReadAudienceProfilesSummary(NetclawPaths paths, Dictionary<string, object> config)
     {
-        if (!ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles", out var value) || value is null)
-            return "No overrides";
-
-        ToolAudienceProfiles existing;
-        try
-        {
-            existing = ConvertConfigObject<ToolAudienceProfiles>(value, "Tools.AudienceProfiles");
-        }
-        catch (InvalidOperationException)
-        {
-            // Malformed stored profiles (e.g. a migration changed the shape) must not crash the render.
+        var existing = LoadAudienceProfiles(paths, out var malformed);
+        if (malformed)
             return "Unreadable — re-save to repair";
-        }
 
-        var defaults = BuildPostureProfiles(ReadPosture(config));
-        return JsonEquivalent(existing, defaults) ? "No overrides" : "Customized";
+        return JsonEquivalent(existing, BuildPostureProfiles(ReadPosture(config))) ? "No overrides" : "Customized";
     }
 
     private bool AudienceHasOverrides(TrustAudience audience)
@@ -954,19 +961,6 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private static bool JsonEquivalent<T>(T left, T right)
         => JsonSerializer.Serialize(left, JsonDefaults.ConfigFile) == JsonSerializer.Serialize(right, JsonDefaults.ConfigFile);
-
-    private static T ConvertConfigObject<T>(object value, string path)
-    {
-        try
-        {
-            return ConfigFileHelper.DeserializeSection<T>(value)
-                   ?? throw new InvalidOperationException($"{path} was empty.");
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException)
-        {
-            throw new InvalidOperationException($"Unable to read {path} from config.", ex);
-        }
-    }
 
     private static void Move(ReactiveProperty<int> index, int delta, int count)
     {

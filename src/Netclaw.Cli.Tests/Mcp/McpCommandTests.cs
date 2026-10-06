@@ -862,6 +862,46 @@ public sealed class McpCommandTests : IDisposable
     }
 
     [Fact]
+    public async Task Tools_Revoke_PersonalProfileWithoutModes_UsesTheAllDefaultLikeTheDaemon()
+    {
+        // Issue #2362: an unset McpServersMode on Personal is All, not an empty allowlist.
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        {
+          "configVersion": 1,
+          "Security": { "DeploymentPosture": "Personal" },
+          "Tools": { "AudienceProfiles": { "Personal": { "ApprovalPolicy": { "McpServerDefaults": { "dropbox": "Auto" } } } } }
+        }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy", "delete");
+
+        var exitCode = await McpCommand.RunAsync(
+            ["mcp", "tools", "dropbox", "--revoke", "delete", "--audience", "personal"],
+            _paths, daemonApi, _output);
+
+        Assert.Equal(0, exitCode);
+        using var doc = ReadConfigFile(_paths.NetclawConfigPath);
+        var personal = doc.RootElement.GetProperty("Tools").GetProperty("AudienceProfiles").GetProperty("Personal");
+        Assert.Equal(
+            "Deny",
+            personal.GetProperty("ApprovalPolicy").GetProperty("ToolOverrides").GetProperty("dropbox/delete").GetString());
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public async Task Tools_InvalidToolsSection_StopsWithAnError()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, """
+        { "configVersion": 1, "Tools": { "AudienceProfiles": { "Team": { "AllowedTools": "file_read" } } } }
+        """);
+        var daemonApi = ToolsDaemonApi("dropbox", "copy");
+
+        var exitCode = await McpCommand.RunAsync(["mcp", "tools", "dropbox"], _paths, daemonApi, _output);
+
+        Assert.Equal(1, exitCode);
+        Assert.Contains("could not load the Tools configuration", _output.ToString());
+    }
+
+    [Fact]
     public async Task Tools_Grant_AllMcpServersMode_ClearsDenyOverride()
     {
         File.WriteAllText(_paths.NetclawConfigPath, """

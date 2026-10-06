@@ -56,7 +56,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         var vm = CreateVm();
         File.WriteAllText(_paths.NetclawConfigPath, "{ not json");
 
-        Assert.ThrowsAny<JsonException>(() =>
+        Assert.Throws<InvalidDataException>(() =>
             vm.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" }));
     }
 
@@ -441,6 +441,92 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         reloaded.InitializeForTests(new McpServerName("notion"), new[] { "create-pages" });
         reloaded.SetSelectedAudienceForTests(TrustAudience.Personal);
         Assert.False(reloaded.IsServerAllowedForSelectedAudience());
+    }
+
+    // Issue #2362. `netclaw init` writes the posture, not the Personal modes, so the Personal
+    // profile has no McpServersMode key. The daemon reads the posture default (All).
+    private const string PersonalProfileWithoutModes =
+        """
+        {
+          "configVersion": 1,
+          "Security": { "DeploymentPosture": "Personal" },
+          "McpServers": {
+            "textforge": { "Transport": "http", "Url": "https://textforge.net/mcp", "Enabled": true },
+            "notion": { "Transport": "http", "Url": "https://mcp.notion.com/mcp", "Enabled": true }
+          },
+          "Tools": {
+            "AudienceProfiles": {
+              "Personal": {
+                "ApprovalPolicy": {
+                  "ToolOverrides": { "shell_execute": "Auto" },
+                  "McpServerDefaults": { "textforge": "Auto" }
+                }
+              }
+            }
+          }
+        }
+        """;
+
+    [Fact]
+    public void PartialPersonalProfile_ShowsEachServerEnabledLikeTheDaemon()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, PersonalProfileWithoutModes);
+
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("textforge"), new[] { "list_threads" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        Assert.True(vm.IsServerAllowedForSelectedAudience());
+        Assert.True(vm.IsToolGranted(new ToolName("list_threads")));
+    }
+
+    [Fact]
+    public void Save_EditOfOneServerOnPartialPersonalProfileKeepsTheOtherServers()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, PersonalProfileWithoutModes);
+
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "notion-search", "notion-ai-search" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        vm.CycleServerDefault();
+        vm.ToggleTool(new ToolName("notion-ai-search"));
+        Assert.True(vm.Save());
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var personal = GetAudienceProfile(doc, "Personal");
+        Assert.False(personal.TryGetProperty("McpServersMode", out _));
+        Assert.False(personal.TryGetProperty("AllowedMcpServers", out _));
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
+
+        // The daemon still exposes each server to Personal.
+        var bound = PolicyConfiguration.Bind(
+            new ConfigurationBuilder().AddJsonFile(_paths.NetclawConfigPath).Build()).Tools;
+        Assert.Equal(ToolProfileMode.All, bound.AudienceProfiles.Personal.McpServersMode);
+    }
+
+    [Fact]
+    public void Save_ReversedServerToggleOnAllProfileDoesNotWriteAnAllowlist()
+    {
+        File.WriteAllText(_paths.NetclawConfigPath, PersonalProfileWithoutModes);
+
+        var vm = CreateVm();
+        vm.InitializeForTests(new McpServerName("notion"), new[] { "notion-search" });
+        vm.SetSelectedAudienceForTests(TrustAudience.Personal);
+
+        vm.ToggleServerAccess(); // disable
+        vm.ToggleServerAccess(); // enable again
+        Assert.True(vm.IsServerAllowedForSelectedAudience());
+        Assert.False(vm.HasUnsavedChanges);
+
+        vm.CycleServerDefault();
+        Assert.True(vm.Save());
+
+        using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
+        var personal = GetAudienceProfile(doc, "Personal");
+        Assert.False(personal.TryGetProperty("McpServersMode", out _));
+        Assert.False(personal.TryGetProperty("AllowedMcpServers", out _));
+        Assert.False(personal.TryGetProperty("McpServerToolGrants", out _));
     }
 
     [Fact]

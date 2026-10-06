@@ -10,7 +10,7 @@ Output "/tmp/tape-config-channels.gif"
 # Seed Slack config so `netclaw config` can render the channel management flow.
 Type "mkdir -p $NETCLAW_HOME/config"
 Enter
-Type "c1=C01 c2=C02 u1=U01; jq -n --arg c1 $c1 --arg c2 $c2 --arg u1 $u1 --arg aud team '{configVersion:1,Slack:{Enabled:true,SocketMode:true,AllowedChannelIds:[$c1,$c2],AllowedUserIds:[$u1],AllowDirectMessages:false,ChannelAudiences:{($c1):$aud,($c2):$aud}}}' > $NETCLAW_HOME/config/netclaw.json"
+Type "c1=C01 c2=C02 u1=U01; jq -n --arg c1 $c1 --arg c2 $c2 --arg u1 $u1 --arg aud team --arg posture Personal '{configVersion:1,Security:{DeploymentPosture:$posture},Slack:{Enabled:true,SocketMode:true,AllowedChannelIds:[$c1,$c2],AllowedUserIds:[$u1],AllowDirectMessages:false,ChannelAudiences:{($c1):$aud,($c2):$aud}}}' > $NETCLAW_HOME/config/netclaw.json"
 Enter
 Type "bot=xoxb-test app=xapp-test; jq -n --arg bot $bot --arg app $app '{configVersion:1,Slack:{BotToken:$bot,AppToken:$app}}' > $NETCLAW_HOME/config/secrets.json"
 Enter
