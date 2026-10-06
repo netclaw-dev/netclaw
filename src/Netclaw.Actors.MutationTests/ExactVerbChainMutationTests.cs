@@ -111,9 +111,6 @@ public sealed class ExactVerbChainMutationTests
             Assert.Equal(["git", "push", "origin", "main"], CommandWords("git push origin main", directory));
             Assert.Equal(["git", "push", "origin", "main"], CommandWords("git push origin main", workingDirectory: null));
             Assert.Equal(["dotnet", "build", "Linked.slnx"], CommandWords("dotnet build Linked.slnx", directory));
-            // A link word stays, and its own path is also a scope, so the path checks resolve it.
-            Assert.Contains(Path.Combine(directory, "Linked.slnx"), Directories("dotnet build Linked.slnx", directory));
-            Assert.DoesNotContain(Path.Combine(directory, "Linked.slnx"), Directories("dotnet build Phobos.slnx", directory));
             Assert.Equal(["dotnet", "build", "Phobos.slnx"], CommandWords("dotnet build Phobos.slnx", workingDirectory: null));
         }
         finally
@@ -151,13 +148,50 @@ public sealed class ExactVerbChainMutationTests
             Assert.False(ShellGrantFileWords.NamesEntry("Phobos.slnx", null, out _));
             Assert.False(ShellGrantFileWords.NamesEntry("Phobos.slnx", relative, out _));
             Assert.True(ShellGrantFileWords.NamesLink("Linked.slnx", directory, out var linkPath));
-            Assert.Equal(Path.Combine(directory, "Linked.slnx"), linkPath);
+            Assert.Equal(Path.Join(directory, "Linked.slnx"), linkPath);
             Assert.False(ShellGrantFileWords.NamesLink("Phobos.slnx", directory, out _));
             Assert.False(ShellGrantFileWords.NamesLink("missing", directory, out _));
         }
         finally
         {
             Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    // SECURITY: a plain word that names a link to a protected path is denied,
+    // command word or argument. A link to an ordinary file is not. A mutant that
+    // skips the screen lets a verb grant reach the link target.
+    [Fact]
+    public void Plain_word_link_to_a_protected_path_is_denied()
+    {
+        if (OperatingSystem.IsWindows())
+            return;
+
+        var root = Directory.CreateTempSubdirectory("netclaw-link-word-").FullName;
+        try
+        {
+            var protectedDirectory = Directory.CreateDirectory(Path.Join(root, "keys")).FullName;
+            File.WriteAllText(Path.Join(protectedDirectory, "a.pem"), string.Empty);
+            var work = Directory.CreateDirectory(Path.Join(root, "work")).FullName;
+            File.WriteAllText(Path.Join(work, "README.md"), string.Empty);
+            Directory.CreateSymbolicLink(Path.Join(work, "keylink"), protectedDirectory);
+            Directory.CreateSymbolicLink(Path.Join(work, "keys2"), protectedDirectory);
+            File.CreateSymbolicLink(Path.Join(work, "key1link"), Path.Join(protectedDirectory, "a.pem"));
+            File.CreateSymbolicLink(Path.Join(work, "readmelink"), Path.Join(work, "README.md"));
+            var policy = new ToolPathPolicy(ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux), [protectedDirectory]);
+
+            Assert.True(policy.CommandReferencesDeniedPath("mytool write keylink", work));
+            Assert.True(policy.CommandReferencesDeniedPath("mytool write keys2", work));
+            Assert.True(policy.CommandReferencesDeniedPath("mytool write key1link", work));
+            Assert.True(policy.CommandReferencesDeniedPath("mytool write README.md keylink", work));
+            Assert.True(policy.CommandReferencesDeniedPath($"cd {work} && mytool keylink", root));
+            Assert.False(policy.CommandReferencesDeniedPath("mytool write readmelink", work));
+            Assert.False(policy.CommandReferencesDeniedPath("mytool write keylink", root));
+            Assert.False(policy.CommandReferencesDeniedPath("keylink write", work));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
         }
     }
 

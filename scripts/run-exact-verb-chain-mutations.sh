@@ -103,13 +103,22 @@ run_gate Netclaw.Configuration.csproj "ShellProgramPath.cs{$legacy_start..$legac
 
 read -r file_word_start file_word_end < <(
   find_range 'if (words is null)' \
-  'return new CommandWordProjection(kept.AsReadOnly(), fileWords, linkPaths);' \
+  'return new CommandWordProjection(kept.AsReadOnly(), fileWords);' \
   "$repo_root/src/Netclaw.Security/IToolApprovalMatcher.cs")
 run_gate Netclaw.Security.csproj "IToolApprovalMatcher.cs{$file_word_start..$file_word_end}" \
-  "$output_path/file-word" 9 "file word operand"
+  "$output_path/file-word" 6 "file word operand"
 
 read -r link_start link_end < <(
   find_range 'if (string.IsNullOrEmpty(directory)' 'FileAttributes.ReparsePoint) != 0;' \
   "$repo_root/src/Netclaw.Configuration/ShellGrantFileWords.cs")
 run_gate Netclaw.Configuration.csproj "ShellGrantFileWords.cs{$link_start..$link_end}" \
   "$output_path/file-word-entry" 16 "file word entry"
+
+# A plain word that names a link to a protected path is denied, command word or
+# argument. A mutant that skips the screen, checks no directory, or checks the
+# program word changes a decision, so it must die.
+read -r link_word_start link_word_end < <(
+  find_range '// An unproved directory names no entry.' 'IsShellDenied(shell, link))' \
+  "$repo_root/src/Netclaw.Security/ToolPathPolicy.cs")
+run_gate Netclaw.Security.csproj "ToolPathPolicy.cs{$link_word_start..$link_word_end}" \
+  "$output_path/link-word" 8 "plain word link target"

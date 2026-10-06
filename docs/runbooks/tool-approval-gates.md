@@ -212,9 +212,10 @@ covered:
   | `dotnet package search` | `dotnet package search Dapper.AOT` | `dotnet package add` |
   | `gh` | `gh --help` | `gh auth logout` |
 
-  A word that names a link in the command's directory stays a command word.
-  Netclaw also checks the link path as a path scope, so a grant never hides
-  the link target from the path checks.
+  A plain word after the program word can name a link in the command's
+  directory, for example `git add keylink`. Netclaw checks the link target
+  against the protected paths. A protected target denies the call, also under
+  a grant. A link to an ordinary file keeps the decision of the grant.
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
   This rule also applies after `cd dir && action;`. A dynamic operand, such as
   `echo "head: $(git rev-parse HEAD)"`, is data. A value from `$(...)` or

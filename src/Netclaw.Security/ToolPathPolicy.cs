@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.RegularExpressions;
+using Netclaw.Configuration;
 using Netclaw.Security.Authorization.Filesystem;
 using ShellSyntaxTree;
 
@@ -318,7 +319,8 @@ public sealed class ToolPathPolicy
         if (MentionsGuardedDirectory(screened))
             return true;
 
-        if (StructuredAnalysisReferencesDeniedPath(analysis, shell))
+        if (StructuredAnalysisReferencesDeniedPath(analysis, shell)
+            || PlainWordLinkReachesDeniedPath(analysis, shell))
         {
             return true;
         }
@@ -397,6 +399,51 @@ public sealed class ToolPathPolicy
             {
                 if (redirect is FileRedirectAnalysis file
                     && DomainReferencesDeniedPath(file.Target, shell))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Returns true when a plain word after the program word names a link in the
+    /// directory of its command, and the link target is protected.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: the parser is lexical, so <c>keylink</c> is a plain word, not a
+    /// path, also when it names a link to a protected directory. A verb grant
+    /// covers later words without a name for each one, so this screen checks the
+    /// link target of each such word, command word or argument (<c>keys2</c>).
+    /// It only denies a protected target. It never changes grant coverage, so a
+    /// link to a file in the same folder keeps its decision.
+    /// </remarks>
+    private static bool PlainWordLinkReachesDeniedPath(
+        ShellCommandAnalysis analysis,
+        FileSystemAuthority shell)
+    {
+        if (analysis.Failure != ShellAnalysisFailure.None)
+            return false;
+
+        foreach (var occurrence in analysis.Commands)
+        {
+            // An unproved directory names no entry. Such a command is exact
+            // consent only, so no grant covers it.
+            var directory = (occurrence.WorkingDirectory as ShellValueDomain.Exact)?.Value;
+            var programWord = true;
+            foreach (var element in occurrence.Clause.Elements)
+            {
+                // The program word is a PATH lookup, not a file of the directory.
+                if (programWord && element.Role == ClauseElementRole.Verb)
+                {
+                    programWord = false;
+                    continue;
+                }
+
+                if (ShellGrantFileWords.NamesLink(element.Value, directory, out var link)
+                    && IsShellDenied(shell, link))
                 {
                     return true;
                 }

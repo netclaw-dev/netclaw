@@ -1078,10 +1078,12 @@ use the same rule:
   reach rule SHALL NOT change what a grant saves.
 
 A word after the verb slot that names a link in the occurrence directory SHALL
-stay a command word. Its link path SHALL also be a path scope of the
-candidate, so the trusted-root, protected-path, and folder link checks resolve
-the link target. A verb grant that covers the word SHALL NOT hide the link
-target from those checks.
+stay a command word. The protected-path screen SHALL check each plain word
+after the program word, command word or argument. When the word names a link
+in the occurrence directory and the resolved link target is protected, the
+call SHALL be denied before grant lookup, also under a grant. The link check
+SHALL NOT change folder, repository, or global grant coverage, so a link to an
+ordinary file SHALL keep the decision of its grant.
 
 The store SHALL NOT save a grant that a stored grant already covers, and
 `netclaw doctor --fix` SHALL remove such a grant. A grant covers another grant
@@ -1160,10 +1162,16 @@ result is call-local. `ToolApprovalActor` holds chat grants (actor-local).
 
 #### Scenario: A verb grant does not hide a link target
 
-- **GIVEN** a Personal grant for `git add` and a link `keylink` in the project directory to the protected keys directory
-- **WHEN** the model calls `shell_execute` with `git add keylink` in the project directory
-- **THEN** authorization returns `Denied`
+- **GIVEN** a Personal grant for `git add`, a link `keylink`, and a link `keys2` in the project directory, both to the protected keys directory
+- **WHEN** the model calls `shell_execute` with `git add keylink` or `git add keys2` (a word with a digit is an argument) in the project directory
+- **THEN** authorization returns `Denied` with reason `shell_references_protected_path`, attended or not
 - **AND** the same grant covers `git add README`
+
+#### Scenario: A folder grant covers a link to a file in its folder
+
+- **GIVEN** a Personal folder grant for `mytool write` in the project directory, and a link `readmelink` in that directory to `README.md` in the same directory
+- **WHEN** the model calls `shell_execute` with `mytool write readmelink` in the project directory
+- **THEN** authorization returns `Allowed` with allow reason `StoredApproval`, in an attended and in an unattended run
 
 #### Scenario: Store hygiene uses the reach rule
 

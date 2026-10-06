@@ -594,8 +594,10 @@ See the Shell Approval Abstraction Rule in [`AGENTS.md`](../../AGENTS.md) and
   path operand, not a command word: with `Phobos.slnx` on disk,
   `dotnet build Phobos.slnx` gives `dotnet build`, and the file gets a path
   scope for the trusted-root and protected-path checks. A word that names a
-  link stays a command word, and its link path is also a path scope, so a verb
-  grant that covers the word never hides the link target from those checks.
+  link stays a command word. `ToolPathPolicy` checks the target of each plain
+  word after the program word that names a link, command word or argument, and
+  denies a protected target. It does not change grant coverage, so a link to
+  an ordinary file keeps the decision of its grant.
   The program word and
   the verb slot never drop, so a file named `push` does not change `git push`.
   ShellSyntaxTree is lexical, so `ShellApprovalMatcher.ProjectCommandWords`

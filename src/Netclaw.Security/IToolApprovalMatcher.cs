@@ -499,8 +499,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             Environment.PathStyle,
             resolveUnknownPathsFromEffectiveValues,
             hostLinks,
-            commandWords.FileWords,
-            commandWords.LinkPaths);
+            commandWords.FileWords);
         if (directories is null)
             return null;
 
@@ -579,17 +578,11 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     /// verb slot can name what runs: a subcommand (<c>git push</c>) or a script
     /// (<c>bash deploy.sh</c>). A planted file named <c>push</c> must not change
     /// the identity of <c>git push</c>, and an interpreter grant must not cover
-    /// each script. Each dropped word becomes a path scope of the candidate,
+    /// each script. A link keeps its word, because the link target can be a
+    /// protected path; <see cref="ToolPathPolicy"/> checks that target for each
+    /// plain word. Each dropped word becomes a path scope of the candidate,
     /// the same as <c>./Phobos.slnx</c>, so the trusted-root and protected-path
     /// checks see it. When the occurrence directory is not known, no word drops.
-    /// </para>
-    /// <para>
-    /// SECURITY: a link keeps its word, because the link target can be a
-    /// protected path. A verb grant covers later words without a name for each
-    /// one (<see cref="ToolApprovalEntryComparer.CoversCommandWords"/>), so the
-    /// exact path of the link is also a path scope. The trusted-root and
-    /// protected-path checks resolve the link: <c>git add keylink</c> gets the
-    /// checks of the link target, also under a <c>git add</c> grant.
     /// </para>
     /// </remarks>
     private CommandWordProjection ProjectCommandWords(
@@ -598,32 +591,25 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
     {
         var words = GetCommandWords(occurrence);
         if (words is null)
-            return new CommandWordProjection(null, [], []);
+            return new CommandWordProjection(null, []);
 
         // A directory in another host style is not a full host path, so it names no entry.
         var kept = words.Take(ShellGrantFileWords.FirstOperandWord).ToList();
         var fileWords = new List<CommandFileWord>();
-        var linkPaths = new List<string>();
         foreach (var word in words.Skip(ShellGrantFileWords.FirstOperandWord))
         {
             if (ShellGrantFileWords.NamesEntry(word, occurrenceDirectory, out var path))
-            {
                 fileWords.Add(new CommandFileWord(word, path));
-                continue;
-            }
-
-            kept.Add(word);
-            if (ShellGrantFileWords.NamesLink(word, occurrenceDirectory, out var linkPath))
-                linkPaths.Add(linkPath);
+            else
+                kept.Add(word);
         }
 
-        return new CommandWordProjection(kept.AsReadOnly(), fileWords, linkPaths);
+        return new CommandWordProjection(kept.AsReadOnly(), fileWords);
     }
 
     private sealed record CommandWordProjection(
         IReadOnlyList<string>? Words,
-        IReadOnlyList<CommandFileWord> FileWords,
-        IReadOnlyList<string> LinkPaths);
+        IReadOnlyList<CommandFileWord> FileWords);
 
     private sealed record CommandFileWord(string Word, string Path);
 
@@ -720,8 +706,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellPathStyle pathStyle,
         bool resolveUnknownPathsFromEffectiveValues,
         LinkRule hostLinks,
-        IReadOnlyList<CommandFileWord> fileWords,
-        IReadOnlyList<string> linkPaths)
+        IReadOnlyList<CommandFileWord> fileWords)
     {
         var clause = occurrence.Clause;
         var directories = new List<string?>();
@@ -785,10 +770,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             // A file word that left the command words is a path operand.
             foreach (var fileWord in fileWords)
                 directories.Add(ResolveAuthorizationScope(verb, fileWord.Word, fileWord.Path, pathStyle));
-
-            // A link word that stays a command word is also a path scope. The
-            // scope is the link itself, never its folder, so the checks resolve it.
-            directories.AddRange(linkPaths);
 
             foreach (var argument in occurrence.Arguments)
             {
@@ -1848,8 +1829,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     resolveUnknownPathsFromEffectiveValues: false,
                     hostLinks,
                     // A file word adds a known scope. It never makes a scope unresolved.
-                    fileWords: [],
-                    linkPaths: []) is null))
+                    fileWords: []) is null))
         {
             return true;
         }

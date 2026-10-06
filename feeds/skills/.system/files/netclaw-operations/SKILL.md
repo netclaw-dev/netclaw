@@ -456,8 +456,8 @@ the program again to cover one file.
 A word that names an existing file or folder in the command's directory is
 not a command word, unless it is the program or the first word after it. So
 `dotnet build Phobos.slnx` uses the `dotnet build` grant, and a new grant
-never stores a file name. A word that names a link stays a command word, and
-Netclaw also checks the link path. The store also skips a grant that a saved
+never stores a file name. A word that names a link stays a command word.
+Netclaw denies the call when the link target is a protected path. The store also skips a grant that a saved
 grant already covers: a saved `git push` grant covers a new `git push upstream`
 grant. `netclaw doctor --fix` removes a grant that another grant
 covers. It reports and keeps a folder grant that names a file of its folder

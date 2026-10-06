@@ -56,7 +56,7 @@ coverage. They do not replace positive and negative behavior tests.
 | `McpArtifactMaterializer.TryAdmit` | Scanner approval and verified MIME both precede MCP artifact storage | 4 killed | `./scripts/run-mcp-artifact-admission-mutations.sh` |
 | `SkillManageTool.GuardMutationTarget` and the filesystem authority link and protection results | A skill mutation cannot follow a link, write a protected path, or skip the atomic-write temp file | 5 killed | `./scripts/run-skill-manage-guard-mutations.sh` |
 | `ToolAccessPolicy.ReadOnlyOccurrences`, the read relaxation in `ToolAccessPolicy.EnforceKnownShellPaths`, `PathAccessPolicy.EvaluateShellReadPath`, `FileSystemAuthority.HoldsReadProtectedPath`, and the read-operand exemption of the `ToolPathPolicy` text screen | Decision D6: a read-only shell program (`cat`, `head`, `tail`, `wc`, `grep`, `jq`, `diff`) with bounded arguments can read one exact config file; only a write-protected path gets read protection; a redirect that writes keeps write protection; a directory operand that holds a read-protected path, a plain word that names an entry, a glob, a brace or `$'...'` word, a `..`, the config directory itself, and program text that names it in any spelling (`//`, `/./`, `name/../`, split quotes) stay denied | 58 killed | `./scripts/run-shell-config-read-mutations.sh` |
-| `ToolApprovalEntryComparer.CoversCommandWords`, `ShellPolicyCoordinator.SelectCommandWordsCorrection`, `ShellApprovalMatcher.TryResolveProgramPath`, `ShellProgramPath.MatchesLegacyRelative`, `ShellApprovalMatcher.ProjectCommandWords`, and `ShellGrantFileWords.TryFindEntry` | A verb grant (two or more words) covers its command words and any later words, and a program-only grant covers its word alone, so a `gh` grant does not cover `gh auth logout`; an empty grant covers nothing; the matcher and the store hygiene use this one rule; Unknown command words get a rewrite correction; a program path names its file (R1), so a `./tool` grant does not cover another file named `tool` or `mytool`; a word after the verb slot that names an existing file or directory leaves the command words and becomes a path scope, while the program word, the verb slot, a link, a word without a file, and a word that is not one entry of the directory stay; a link word is also a path scope; the store and the doctor use the same rule | 44 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
+| `ToolApprovalEntryComparer.CoversCommandWords`, `ShellPolicyCoordinator.SelectCommandWordsCorrection`, `ShellApprovalMatcher.TryResolveProgramPath`, `ShellProgramPath.MatchesLegacyRelative`, `ShellApprovalMatcher.ProjectCommandWords`, `ShellGrantFileWords.TryFindEntry`, and `ToolPathPolicy.PlainWordLinkReachesDeniedPath` | A verb grant (two or more words) covers its command words and any later words, and a program-only grant covers its word alone, so a `gh` grant does not cover `gh auth logout`; an empty grant covers nothing; the matcher and the store hygiene use this one rule; Unknown command words get a rewrite correction; a program path names its file (R1), so a `./tool` grant does not cover another file named `tool` or `mytool`; a word after the verb slot that names an existing file or directory leaves the command words and becomes a path scope, while the program word, the verb slot, a link, a word without a file, and a word that is not one entry of the directory stay; a plain word that names a link to a protected path is denied, command word or argument; the store and the doctor use the same rule | 49 detected | `./scripts/run-exact-verb-chain-mutations.sh` |
 
 Run the path-access check locally:
 
@@ -178,7 +178,7 @@ Run the exact verb chain gate:
 ./scripts/run-exact-verb-chain-mutations.sh
 ```
 
-The script runs Stryker six times. The first run selects the length checks in
+The script runs Stryker seven times. The first run selects the length checks in
 `ToolApprovalEntryComparer.CoversCommandWords` (11 mutants). A verb grant (two
 or more words) covers its words and any later words, and a program-only grant
 covers its word alone. A mutant that drops the one-word check lets a `gh` grant
@@ -194,10 +194,12 @@ skips the join with the working directory lets a `./tool` grant cover any file
 named `tool`. The fourth run selects the `/` boundary of
 `ShellProgramPath.MatchesLegacyRelative` (one mutant). Without it, an older
 `./tool` grant covers `mytool`. The fifth run selects
-`ShellApprovalMatcher.ProjectCommandWords` (nine mutants): a file word leaves
-the command words, and a link word stays and adds its link path as a path
-scope. The sixth run selects `ShellGrantFileWords.TryFindEntry`
-(16 mutants). `ExactVerbChainMutationTests` and
+`ShellApprovalMatcher.ProjectCommandWords` (six mutants): a file word leaves
+the command words, and a link word stays. The sixth run selects
+`ShellGrantFileWords.TryFindEntry` (16 mutants). The seventh run selects
+`ToolPathPolicy.PlainWordLinkReachesDeniedPath` (8 mutants): a plain
+word that names a link to a protected path is denied, command word or
+argument, and the program word does not count. `ExactVerbChainMutationTests` and
 `ToolAuthorizerOrderMutationTests` must detect all of them. A missing or
 duplicated span fails before Stryker starts.
 

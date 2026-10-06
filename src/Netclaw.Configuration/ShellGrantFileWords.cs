@@ -40,8 +40,8 @@ public static class ShellGrantFileWords
 
     /// <summary>
     /// Returns true when <paramref name="word"/> names one existing link directly
-    /// in <paramref name="directory"/>. The word stays a command word, and the
-    /// approval matcher adds the link path as a path scope.
+    /// in <paramref name="directory"/>. The word stays a plain word. The
+    /// protected-path screen checks the link target of each such word.
     /// </summary>
     /// <param name="word">One command word.</param>
     /// <param name="directory">The absolute host directory of the command.</param>
