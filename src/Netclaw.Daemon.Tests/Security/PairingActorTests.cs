@@ -22,7 +22,7 @@ using Xunit;
 
 namespace Netclaw.Daemon.Tests.Security;
 
-public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output: output)
+public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output: output), IAsyncDisposable
 {
     private static readonly DateTimeOffset Start =
         new(2026, 8, 28, 12, 0, 0, TimeSpan.Zero);
@@ -59,11 +59,14 @@ public sealed class PairingActorTests(ITestOutputHelper output) : TestKit(output
         builder.WithNetclawActorLogging(LogLevel.Error).WithPairingActor();
     }
 
-    protected override async Task AfterAllAsync()
+    // TestKit stops the actor system and disposes the log provider only after
+    // AfterAllAsync returns. Windows refuses to delete a log file that is open.
+    // Delete the directory after TestKit has disposed.
+    async ValueTask IAsyncDisposable.DisposeAsync()
     {
         try
         {
-            await base.AfterAllAsync();
+            await base.DisposeAsync();
         }
         finally
         {
