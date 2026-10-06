@@ -39,6 +39,9 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
 
     public Exception? ThrowOnUpload { get; set; }
 
+    /// <summary>When set, a typing pulse is recorded and then fails with this exception.</summary>
+    public Exception? ThrowOnTyping { get; set; }
+
     // Throws on the next post only, then auto-clears. Lets a test fail a content
     // post while letting a follow-up (e.g. fallback) succeed and be recorded.
     public Exception? ThrowOnceOnPost { get; set; }
@@ -98,6 +101,6 @@ internal sealed class RecordingMattermostReplyClient : IMattermostReplyClient
         CancellationToken cancellationToken = default)
     {
         lock (_lock) _typingPulses.Add((channelId, rootPostId));
-        return Task.CompletedTask;
+        return ThrowOnTyping is { } ex ? Task.FromException(ex) : Task.CompletedTask;
     }
 }

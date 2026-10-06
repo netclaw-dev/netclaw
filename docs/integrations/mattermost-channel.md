@@ -149,7 +149,8 @@ Reminder channel delivery maps to the generic `send_channel_message` tool with
 - Netclaw sends a native typing pulse to the thread while a session processes
   an accepted message. The pulse repeats every three seconds. It stops when the
   session becomes idle, when the session pipeline resets, or when the thread
-  binding stops. A pulse that fails is logged as a warning and does not affect
+  binding stops. One processing phase sends pulses for ten minutes at most, so
+  a lost idle signal cannot leave a thread in the typing state. A pulse that fails is logged as a warning and does not affect
   the turn.
 
 Common failure patterns:

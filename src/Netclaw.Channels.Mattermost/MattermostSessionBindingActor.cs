@@ -68,10 +68,17 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
     private static readonly TimeSpan TypingPulseInterval = TimeSpan.FromSeconds(3);
     // The actor awaits each pulse on its message path. The limit stays below
     // the repeat interval so a stalled transport cannot delay session output
-    // or queue repeat pulses in the mailbox.
+    // for longer than one interval.
     private static readonly TimeSpan TypingPulseTimeout = TimeSpan.FromSeconds(2);
+    // Upper bound for one processing phase. The idle signal is lost when the
+    // session actor fails during a turn: the new incarnation emits no
+    // ProcessingStateOutput(false), and the output stream stays open. Without
+    // this bound the binding sends pulses until the daemon stops, and each
+    // timer message also resets the idle passivation timeout.
+    private static readonly TimeSpan TypingPulseMaxDuration = TimeSpan.FromMinutes(10);
     private static readonly object TypingPulseTimerKey = new();
     private bool _processingIndicatorActive;
+    private DateTimeOffset _typingPulseDeadline;
     private string? _cursorPostId;
 
     // Set when PerformOneShotHydrationAsync fetched a non-empty thread gap but
@@ -283,6 +290,16 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             if (!_processingIndicatorActive)
                 return;
 
+            if (_dependencies.TimeProvider.GetUtcNow() >= _typingPulseDeadline)
+            {
+                _log.Info(
+                    "Session reported processing for {0}; stopping Mattermost typing pulses",
+                    TypingPulseMaxDuration);
+                StopTypingPulses();
+                return;
+            }
+
+            ScheduleNextTypingPulse();
             await RenderTypingPulseAsync(new ProcessingStateOutput(true)
             {
                 IsRequired = false,
@@ -305,9 +322,10 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
 
         CommandAsync<ReinitializePipeline>(async msg =>
         {
-            // A reinitialize abandons the turn in flight, so its
-            // ProcessingStateOutput(false) never arrives. Stop the pulses here,
-            // or the channel shows typing until the actor stops.
+            // The binding abandons its record of the turn in flight, and the
+            // new subscription does not replay the processing state. Stop the
+            // pulses here so a lost ProcessingStateOutput(false) cannot leave
+            // the thread in the typing state.
             StopTypingPulses();
             _outputEngine.ResetForPipelineReinitialize(msg.Reason);
             await _handle.ReinitializeAsync(
@@ -662,17 +680,28 @@ internal sealed class MattermostSessionBindingActor : ReceivePersistentActor, IW
             return;
         }
 
-        // Start the repeat timer before the first pulse. The session emits
-        // ProcessingStateOutput(true) once for each processing phase, and a
-        // Mattermost typing pulse is transient. A required first pulse that
-        // throws must not leave the flag set with no timer.
+        // The session emits ProcessingStateOutput(true) once for each
+        // processing phase, and a Mattermost typing pulse is transient, so the
+        // binding repeats it. Schedule the repeat before the first pulse: a
+        // required first pulse that throws must not leave the flag set with
+        // no timer.
         _processingIndicatorActive = true;
-        Timers.StartPeriodicTimer(
+        _typingPulseDeadline = _dependencies.TimeProvider.GetUtcNow() + TypingPulseMaxDuration;
+        ScheduleNextTypingPulse();
+        await RenderTypingPulseAsync(output);
+    }
+
+    /// <summary>
+    /// Schedules one repeat pulse. Each handled pulse schedules the next one,
+    /// so at most one timer message waits in the mailbox while the actor
+    /// awaits a slow post or upload. A periodic timer would queue one message
+    /// for each interval, and the actor would send them all after the reply.
+    /// </summary>
+    private void ScheduleNextTypingPulse()
+        => Timers.StartSingleTimer(
             TypingPulseTimerKey,
             SendTypingPulse.Instance,
             TypingPulseInterval);
-        await RenderTypingPulseAsync(output);
-    }
 
     private void StopTypingPulses()
     {

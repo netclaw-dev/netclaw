@@ -8,6 +8,7 @@ using Akka.Configuration;
 using Akka.Hosting;
 using Akka.Hosting.TestKit;
 using Akka.Persistence.Hosting;
+using Microsoft.Extensions.Time.Testing;
 using Netclaw.Actors.Channels;
 using Netclaw.Actors.Hosting;
 using Netclaw.Actors.Protocol;
@@ -33,6 +34,7 @@ public sealed class MattermostTypingPulseTests(ITestOutputHelper output) : TestK
     private static readonly TimeSpan PulseInterval = TimeSpan.FromSeconds(3);
 
     private readonly RecordingMattermostReplyClient _replyClient = new();
+    private readonly FakeTimeProvider _clock = new();
 
     protected override Config? Config => ConfigurationFactory.ParseString("""
         akka.scheduler.implementation = "Akka.TestKit.TestScheduler, Akka.TestKit"
@@ -116,6 +118,55 @@ public sealed class MattermostTypingPulseTests(ITestOutputHelper output) : TestK
         Assert.Single(_replyClient.TypingPulses);
     }
 
+    [Fact]
+    public async Task Pulses_stop_when_the_idle_state_never_arrives()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sid = new SessionId("session-mm-typing-max-duration");
+        var pipeline = new RecordingSessionPipeline(_ => [new ProcessingStateOutput(true) { SessionId = sid }]);
+
+        var actor = CreateActor(sid, pipeline);
+        await AwaitAssertAsync(() => Assert.Single(_replyClient.TypingPulses), cancellationToken: ct);
+
+        // The session never reports idle, as when its actor fails during a
+        // turn. The next timer message finds the deadline in the past.
+        _clock.Advance(TimeSpan.FromMinutes(11));
+        AdvanceScheduler(SeveralPulseIntervals);
+        await AwaitInboundHandledAsync(actor, pipeline, ct);
+
+        Assert.Single(_replyClient.TypingPulses);
+
+        // The stopped timer must not start again.
+        AdvanceScheduler(SeveralPulseIntervals);
+        actor.Tell(new Identify(1), TestActor);
+        await ExpectMsgAsync<ActorIdentity>(cancellationToken: ct);
+        Assert.Single(_replyClient.TypingPulses);
+    }
+
+    [Fact]
+    public async Task Failed_pulse_does_not_stop_the_turn_or_the_repeat()
+    {
+        var ct = TestContext.Current.CancellationToken;
+        var sid = new SessionId("session-mm-typing-failure");
+        _replyClient.ThrowOnTyping = new HttpRequestException("typing rejected");
+        var pipeline = new RecordingSessionPipeline(_ =>
+        [
+            new ProcessingStateOutput(true) { SessionId = sid },
+            new TextOutput("reply") { SessionId = sid }
+        ]);
+
+        CreateActor(sid, pipeline);
+
+        // The reply follows the failed pulse on the same message path.
+        await AwaitAssertAsync(
+            () => Assert.Contains(_replyClient.Posts, post => post.Text == "reply"),
+            cancellationToken: ct);
+        Assert.Single(_replyClient.TypingPulses);
+
+        AdvanceScheduler(PulseInterval);
+        await AwaitAssertAsync(() => Assert.Equal(2, _replyClient.TypingPulses.Count), cancellationToken: ct);
+    }
+
     private void AdvanceScheduler(TimeSpan offset) =>
         ((Akka.TestKit.TestScheduler)Sys.Scheduler).Advance(offset);
 
@@ -153,7 +204,7 @@ public sealed class MattermostTypingPulseTests(ITestOutputHelper output) : TestK
         var deps = new MattermostGatewayDependencies(
             Pipeline: pipeline,
             IngressGate: null,
-            TimeProvider: TimeProvider.System,
+            TimeProvider: _clock,
             Options: new MattermostChannelOptions(),
             DefaultChannelId: null,
             ChannelRegistry: TestChannelRegistries.MattermostWithProcessingRenderer(_replyClient),
