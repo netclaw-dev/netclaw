@@ -726,7 +726,8 @@ have their glossary meaning.
   decision of the literal value, in path policy and in hard deny (TA-5). A
   name with a run-time value (`PID=$!`, `x=$(cmd)`, `read x`) SHALL be
   unknown. A command that reads it as a word SHALL be one exact candidate with
-  `Once` and `Deny` only, and SHALL get no rewrite advice. The data-position
+  `Once` and `Deny` only, and SHALL get no rewrite advice, except the quote
+  correction below for a command with known command words. The data-position
   rule below is the exception: an `echo` or `printf` operand that reads it
   SHALL be data.
 - An unresolved command (a dynamic command name, an unknown value, an
@@ -735,6 +736,13 @@ have their glossary meaning.
   exact candidate: its source text, with no reusable grant. In a Bash session,
   attended or not, each other command of the call SHALL keep its own
   candidates and coverage.
+- Scope-free data commands (0.27.1, owner finding F2): a Bash data command
+  with no redirect and with proved data operands SHALL keep its normal
+  candidate after an unproved directory change, when the analysis proves the
+  rest of the command. Such a command has no path scope, so the directory
+  cannot change what it reaches, and it keeps its approval exemption (TA-8).
+  A data command with a redirect, or with an operand that is not proved data
+  (an unquoted `echo $n`), SHALL stay one exact candidate.
 - Bracket-word rule: a program word that is a literal bracket pattern (for
   example `["ci","build"]`), with no command words and no other word except a
   redirect, SHALL be unresolved, because Bash expands the pattern. Regex text
@@ -801,8 +809,17 @@ have their glossary meaning.
   word, the call SHALL get the rewrite correction, attended or unattended.
   The command SHALL stay exact, so no grant and no reviewed phrase covers it.
   The call does not run, and the rewritten call passes normal approval. A
-  run-time value, as in `f=$(date); cat /work/$f`, has no literal spelling, so
-  that command SHALL keep its prompt or its unattended denial.
+  run-time value in the verb slot, as in `f=$(date); cat /work/$f`, gives
+  unknown command words and has no literal spelling, so that command SHALL
+  keep its prompt or its unattended denial.
+- Quote correction (0.27.1, owner finding F4): when the command words are
+  known and the pathname-expansion rule is the only cause that makes the
+  command exact, the call SHALL get a quote correction that names each such
+  word, attended or unattended. The call does not run. In double quotes, the
+  word gets no pathname expansion and no field splitting, so the retry has one
+  unknown operand, and decision D1 applies. The rule SHALL read only general
+  shell facts, never the grammar of a program. An unknown program word,
+  unknown command words, and any other cause SHALL keep their handling.
 - The pathname-expansion rule SHALL NOT read `MayFieldSplit`. A word that can
   split but cannot glob is a quoted `"$@"` or a bounded arithmetic word.
   Splitting only cuts a value into more words, and each word keeps the check
@@ -1017,6 +1034,32 @@ the command exact, so the call gets the rewrite correction.
 - **WHEN** the model calls `shell_execute` with `cat "$FILE"`
 - **THEN** authorization returns `Denied` with reason `approval_required_unattended`
 - **AND** no prompt is shown
+
+#### Scenario: A known-words command with an unquoted expansion gets a quote correction
+
+- **GIVEN** a Personal session with grants for anywhere for `git rev-list` and `git branch` (catalog cases `substitution-word-with-known-words-gets-quote-correction`, `unattended-substitution-word-with-known-words-gets-quote-correction`, and `quoted-substitution-word-uses-verb-grant`)
+- **WHEN** the model calls `shell_execute` with `git rev-list --left-right --count HEAD...origin/$(git branch --show-current) 2>/dev/null`
+- **THEN** an interactive run and an unattended run return `RequiresAgentCorrection`, and the correction names the word `HEAD...origin/$(git branch --show-current)`
+- **AND** the call does not run
+- **AND** the quoted retry `git rev-list --left-right --count "HEAD...origin/$(git branch --show-current)" 2>/dev/null` returns `Allowed` with allow reason `StoredApproval`
+- **AND** `$(date) rev-list HEAD...origin/$(git branch --show-current)` keeps one exact answer for the call (catalog case `unknown-program-word-with-glob-word-keeps-prompt`)
+- **AND** `f=$(date); git log origin/$f > "$f".log` returns `RequiresApproval` with the one exact candidate `git log origin/$f > "$f".log` (catalog case `glob-word-with-unknown-redirect-keeps-prompt`)
+
+#### Scenario: A data command after an unproved directory change keeps its exemption
+
+- **GIVEN** a Personal session with grants for anywhere for `cd` and `git fetch` (catalog cases `data-commands-after-failing-cd-are-exempt` and `unattended-data-commands-after-failing-cd-are-exempt`)
+- **WHEN** the model calls `shell_execute` with `cd sub && n=$(git fetch) && git fetch "$n"; echo "---"; echo "== $n =="; [ 3 -gt 2 ]`
+- **THEN** an interactive run and an unattended run return `Allowed` with allow reason `StoredApproval`
+- **AND** `cd sub && n=$(git fetch) && git fetch "$n"; echo "---" > /netclaw-approval-external/marker` returns `RequiresApproval` with the one exact candidate `echo "---" > /netclaw-approval-external/marker` (catalog case `data-command-redirect-after-failing-cd-keeps-prompt`)
+- **AND** `cd sub && n=$(git fetch) && git fetch "$n"; echo $n` returns `RequiresApproval` with the one exact candidate `echo $n` (catalog case `unquoted-unknown-echo-after-failing-cd-keeps-prompt`)
+
+#### Scenario: The live CPM survey prompts only for its unscoped reads
+
+- **GIVEN** an interactive Personal session with grants for anywhere for `cd`, `find`, and `grep` (catalog case `live-cpm-props-survey-prompts-only-for-unscoped-reads`)
+- **WHEN** the model calls `shell_execute` with the survey command of the F2 report, which runs `echo`, `find`, and `grep` after a `cd` that can fail
+- **THEN** authorization returns `RequiresApproval`
+- **AND** the candidates are only the `find` and `grep` commands whose directory is not known
+- **AND** no `echo` command is a candidate
 
 ### Requirement: TA-8 Every candidate needs coverage
 
