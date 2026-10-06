@@ -10,6 +10,8 @@ namespace Netclaw.Tests.Utilities;
 
 internal sealed class DisposableTempDir : IDisposable
 {
+    private const int MaxAttempts = 8;
+
     public string Path { get; }
 
     /// <summary>
@@ -29,27 +31,32 @@ internal sealed class DisposableTempDir : IDisposable
         if (!Directory.Exists(Path))
             return;
 
-        // Windows refuses to delete a SQLite file while a pooled connection holds it.
-        Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
-
-        // Retry loop for Windows CI where SQLite pooled connections can
-        // briefly hold file handles after the test completes.
-        for (var i = 0; i < 5; i++)
+        // Windows refuses to delete a file or a working directory that a process
+        // still holds. A killed process tree and a pooled SQLite connection can hold
+        // one for a short time after the test ends. Retry for a few seconds.
+        // The delete succeeds on the first try on Linux and macOS.
+        for (var i = 0; i < MaxAttempts; i++)
         {
             try
             {
                 Directory.Delete(Path, recursive: true);
                 return;
             }
-            catch (IOException) when (i < 4) // slopwatch-ignore: SW003 test cleanup retry
+            catch (IOException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
-                Thread.Sleep(50 * (i + 1));
+                // Clear the pools only after a failure. The call closes the idle
+                // connections of every database in the process, which other tests
+                // can observe.
+                if (i == 0)
+                    Microsoft.Data.Sqlite.SqliteConnection.ClearAllPools();
+
+                Thread.Sleep(100 * (i + 1));
             }
-            catch (UnauthorizedAccessException) when (i < 4) // slopwatch-ignore: SW003 test cleanup retry
+            catch (UnauthorizedAccessException) when (i < MaxAttempts - 1) // slopwatch-ignore: SW003 test cleanup retry
             {
                 // A test can leave a read-only file. Windows refuses to delete it.
                 ClearReadOnlyAttributes(Path);
-                Thread.Sleep(50 * (i + 1));
+                Thread.Sleep(100 * (i + 1));
             }
             catch (DirectoryNotFoundException)
             {
