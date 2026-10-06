@@ -222,6 +222,36 @@ public sealed class ShellCommandAnalysisMutationTests
             analysis.GetUnresolvedPart(analysis.Commands[^1]) == ShellUnresolvedPart.Command);
     }
 
+    // F2 (0.27.1): after a cd that can fail, the directory of a later command
+    // is not known. A Bash data command with no redirect and proved data
+    // operands has no path scope, so it keeps its normal candidate and its
+    // approval exemption. Any other command stays one exact candidate.
+    [Theory]
+    [InlineData("echo \"---\"", true)]
+    [InlineData("echo \"== $n ==\"", true)]
+    [InlineData("[ 3 -gt 2 ]", true)]
+    [InlineData("echo \"---\" > /work/out", false)]
+    [InlineData("echo $n", false)]
+    [InlineData("[ -v \"$n\" ]", false)]
+    [InlineData("cat a.txt", false)]
+    public void Data_command_after_an_unknown_directory_keeps_its_exemption(string command, bool exempt)
+    {
+        var matcher = new ShellApprovalMatcher(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = matcher.AnalyzeInvocation(
+            new ToolName("shell_execute"),
+            new Dictionary<string, object?>
+            {
+                ["Command"] = "cd sub && n=$(git fetch) && git fetch \"$n\"; " + command,
+                ["WorkingDirectory"] = "/work"
+            });
+
+        var candidate = analysis.CommandCandidates[^1];
+        Assert.Equal(exempt, ApprovalPatternMatching.IsPureSideEffect(candidate));
+        Assert.Equal(!exempt, candidate.Unresolved == ShellUnresolvedPart.Command);
+    }
+
     // Bash has nothing to expand when each proved authored value has no glob
     // character.
     [Theory]
