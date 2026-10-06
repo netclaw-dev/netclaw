@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.97.0"
+  version: "2.97.1"
 ---
 
 # Netclaw Operations
@@ -611,6 +611,8 @@ is intended behavior. Mutating verbs in the same directory still prompt.
   Bash call, only the unresolved command is shown, as its exact text; the
   other commands keep their grants. A command whose only unknown part is an
   operand runs under a safe phrase or an `Always anywhere` grant (decision D1).
+  A variable word is such an operand: a folder grant does not cover
+  `for d in ../x; do dotnet build "$d"; done` or `d=../x; dotnet build "$d"`.
   Multi-line `python3 -c` code is not unresolved: its scope is the working
   directory, so the prompt offers reusable grants.
   An API route such as `gh api /repos/o/r/...` is not a folder: a word below a

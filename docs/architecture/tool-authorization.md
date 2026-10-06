@@ -184,6 +184,9 @@ shell rules, in order:
    unresolved command is one exact candidate, and the other commands go to
    rule 8 with their own candidates. Decision D1 lets a safe phrase or a grant
    for anywhere cover an exact candidate whose only unknown part is an operand.
+   A variable word (`"$d"`) is an unknown operand unless the parser resolves
+   it as a path, or types its value as a filesystem value or as data. A loop
+   or assignment value that names a path does not give the candidate a scope.
 8. Consent: a covering grant (stored grant, side-effect exemption, reviewed-safe
    policy), then the uncovered candidates.
 

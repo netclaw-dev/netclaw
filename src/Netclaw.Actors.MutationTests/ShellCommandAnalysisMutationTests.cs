@@ -222,6 +222,34 @@ public sealed class ShellCommandAnalysisMutationTests
             analysis.GetUnresolvedPart(analysis.Commands[^1]) == ShellUnresolvedPart.Command);
     }
 
+    // A variable word gives the candidate no path scope, also with a proved
+    // value. So a loop or an assignment value is an unknown operand (D1), and
+    // a folder grant cannot cover ../x. A literal word and a resolved path
+    // keep their scope.
+    [Theory]
+    [InlineData("for d in ../x; do dotnet build \"$d\"; done", true)]
+    [InlineData("for n in /etc/shadow a; do gh api \"$n\"; done", true)]
+    [InlineData("d=../x; dotnet build \"$d\"", true)]
+    [InlineData("x=/etc; dotnet build \"$x/y\"", true)]
+    [InlineData("dotnet build ../x", false)]
+    [InlineData("dotnet build \"$HOME/x\"", false)]
+    [InlineData("dotnet build -c Release", false)]
+    [InlineData("dotnet build \"$?\"", false)]
+    public void Variable_word_without_a_path_scope_is_an_unknown_operand(
+        string command,
+        bool unknownOperand)
+    {
+        var policy = new ShellCommandPolicy(
+            ShellExecutionEnvironment.CreateBash(ShellPlatform.Linux, new Version(5, 2)));
+
+        var analysis = policy.Analyze(command, "/work");
+
+        Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
+        Assert.Equal(
+            unknownOperand ? ShellUnresolvedPart.Operand : ShellUnresolvedPart.None,
+            analysis.GetUnresolvedPart(analysis.Commands[^1]));
+    }
+
     // F2 (0.27.1): after a cd that can fail, the directory of a later command
     // is not known. A Bash data command with no redirect and proved data
     // operands has no path scope, so it keeps its normal candidate and its

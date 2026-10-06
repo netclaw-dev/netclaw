@@ -706,7 +706,7 @@ public static class ShellApprovalCases
             ExpectedApproval.Allow(
                 ApprovalAllowReason.StoredApproval,
                 1,
-                "persistent:gh run view")),
+                "persistent:gh run view $r --json headSha,headBranch,displayTitle 2>/dev/null")),
 
         Case(
             "live-inline-cd-mixed-read-chain-has-scoped-candidates",
@@ -2574,6 +2574,70 @@ public static class ShellApprovalCases
             Bash52("d=$(date); echo pre\"$d\""),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        // SECURITY: a loop variable over literal words has no path scope.
+        // Netclaw does not compute a scope from the loop words, so the loop
+        // operand is unknown and decision D1 applies: only a safe phrase or a
+        // grant for anywhere covers it. The literal twin keeps its path scope.
+        Case(
+            "loop-outside-operand-prompts-with-folder-grant",
+            Bash52("for d in ../outside/x.slnx; do dotnet build \"$d\"; done"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "dotnet build"),
+            ExpectedApproval.Require(["dotnet build \"$d\""])),
+        Case(
+            "literal-outside-operand-prompts-with-folder-grant",
+            Bash52("dotnet build ../outside/x.slnx"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "dotnet build"),
+            ExpectedApproval.Require(["dotnet build"])),
+        Case(
+            "assigned-outside-operand-prompts-with-folder-grant",
+            Bash52("d=../outside/x.slnx; dotnet build \"$d\""),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "dotnet build"),
+            ExpectedApproval.Require(["dotnet build \"$d\""])),
+        Case(
+            "loop-absolute-operand-prompts-with-folder-grant",
+            Bash52("for n in /etc/shadow a; do gh api \"$n\"; done"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "gh api"),
+            ExpectedApproval.Require(["gh api \"$n\""])),
+        Case(
+            "loop-unquoted-outside-operand-prompts-with-folder-grant",
+            Bash52("for n in ../outside/x a; do gh api $n; done"),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "gh api"),
+            ExpectedApproval.Require(["gh api $n"])),
+        Case(
+            "loop-outside-operand-prompts-with-chat-grant",
+            Bash52("for d in ../outside/x.slnx; do dotnet build \"$d\"; done"),
+            Approvals.Session("dotnet build"),
+            ExpectedApproval.Require(["dotnet build \"$d\""])),
+        Case(
+            "unattended-loop-outside-operand-with-folder-grant-denied",
+            Bash52("for d in ../outside/x.slnx; do dotnet build \"$d\"; done", interactive: false),
+            Approvals.PersistentHere(ApprovalDirectoryShape.Project, "dotnet build"),
+            ExpectedApproval.DenyUnattended()),
+        Case(
+            "loop-outside-operand-uses-global-grant",
+            Bash52("for d in ../outside/x.slnx; do dotnet build \"$d\"; done"),
+            Approvals.PersistentAnywhere("dotnet build"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:dotnet build \"$d\"")),
+        Case(
+            "unattended-loop-outside-operand-uses-global-grant",
+            Bash52("for d in ../outside/x.slnx; do dotnet build \"$d\"; done", interactive: false),
+            Approvals.PersistentAnywhere("dotnet build"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:dotnet build \"$d\"")),
+        // The owner's live loop: a grant for anywhere still covers it.
+        Case(
+            "loop-issue-update-uses-global-grant",
+            Bash52("for n in 8250 8244; do gh api -X PATCH repos/o/r/issues/$n -f milestone=157 >/dev/null && echo \"moved $n\"; done"),
+            Approvals.PersistentAnywhere("gh api"),
+            ExpectedApproval.Allow(
+                ApprovalAllowReason.StoredApproval,
+                1,
+                "persistent:gh api -X PATCH repos/o/r/issues/$n -f milestone=157 >/dev/null")),
+        // F2: a data command over a listing keeps its exemption.
+        Case(
+            "cd-loop-over-listing-output-stays-allowed",
+            Bash52("cd sub && for f in $(ls); do echo \"$f\"; done"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
         Case(
             "brace-credential-secrets-denied-as-literal",
             Bash52("cat ~/.netclaw/config/{netclaw,secrets}.json"),
@@ -2589,7 +2653,7 @@ public static class ShellApprovalCases
             "assigned-branch-is-not-covered-by-another-branch-grant",
             Bash52("b=main; git push origin \"$b\""),
             Approvals.PersistentAnywhere("git push origin feature-x"),
-            ExpectedApproval.Require(["git push origin"])),
+            ExpectedApproval.Require(["git push origin \"$b\""])),
         // ShellSyntaxTree 0.4.0-beta.12 shows the command inside an assignment
         // substitution, so the hard-deny list sees it.
         Case(

@@ -278,19 +278,23 @@ public sealed class ShellCommandAnalysisTests
         Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
     }
 
+    // SECURITY: a loop item list is an authored value with no typed domain. It
+    // can name a path outside every candidate scope, so the operand is unknown
+    // (decision D1). Only the operand is unknown: the structure stays proved.
     [Fact]
-    public void Bash_finite_loop_data_keeps_static_structure()
+    public void Bash_finite_loop_item_without_a_typed_domain_is_an_unknown_operand()
     {
         var analysis = _analyzer.Analyze(
             "for value in first second; do status-report \"$value\"; done",
             "/work");
 
         Assert.Equal(ShellAnalysisFailure.None, analysis.Failure);
-        Assert.False(analysis.HasDynamicSyntax, Describe(analysis));
-        var argument = Assert.Single(Assert.Single(analysis.Commands).Arguments);
+        var command = Assert.Single(analysis.Commands);
+        var argument = Assert.Single(command.Arguments);
         Assert.IsType<ShellValueDomain.Unknown>(argument.Value);
         var authored = Assert.IsType<ShellValueDomain.FiniteSet>(argument.AuthoredValue);
         Assert.Equal(["first", "second"], authored.Values);
+        Assert.Equal(ShellUnresolvedPart.Operand, analysis.GetUnresolvedPart(command));
     }
 
     [Fact]

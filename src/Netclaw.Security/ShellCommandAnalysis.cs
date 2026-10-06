@@ -917,8 +917,34 @@ public sealed record ShellCommandAnalysis
                 !IsAccountedExecutionRegionArgument(
                     argument,
                     accountedRegionArguments)
-                && HasUnsupportedArgumentDomain(argument)
+                && (HasUnsupportedArgumentDomain(argument) || IsUnscopedVariableWord(argument))
                 && !IsUnknownOutputData(command, argument));
+
+    /// <summary>
+    /// Returns true when a variable word is not a path word, so it has no path
+    /// scope.
+    /// </summary>
+    /// <remarks>
+    /// SECURITY: Netclaw computes a path scope only from a path word that the
+    /// parser resolves, from a file word, and from a typed filesystem value. A
+    /// variable word such as <c>"$d"</c> is not a path word, also when the
+    /// parser proves its value. In
+    /// <c>for d in ../x; do dotnet build "$d"; done</c> or
+    /// <c>d=../x; dotnet build "$d"</c>, the value <c>../x</c> is outside the
+    /// folder, but the candidate keeps only the working directory scope. Such a
+    /// word is an unknown operand, so decision D1 lets only a safe phrase or a
+    /// grant for anywhere cover the command. ShellSyntaxTree 0.4.0-beta.19
+    /// gives a typed filesystem or data value only to a
+    /// <see cref="ArgKind.DynamicSkip"/> word, which keeps its own rule above.
+    /// A variable word that the parser marks as a path keeps its path scope,
+    /// or the path rule above makes it unknown when it has no resolved value.
+    /// A word whose proved value is an integer range (<c>"$?"</c>) is data, as
+    /// in <see cref="HasUnsupportedArgumentDomain(AnalyzedArgument)"/>.
+    /// </remarks>
+    private static bool IsUnscopedVariableWord(AnalyzedArgument argument)
+        => argument.Argument.Kind == ArgKind.EnvVar
+           && !argument.Argument.IsPath
+           && argument.Value is not ShellValueDomain.IntegerRange;
 
     internal static bool TryCollectKnownExecutionRegionArguments(
         ShellSyntaxNode node,

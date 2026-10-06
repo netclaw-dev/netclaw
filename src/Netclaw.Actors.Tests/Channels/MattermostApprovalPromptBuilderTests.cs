@@ -190,7 +190,7 @@ public sealed class MattermostApprovalPromptBuilderTests
             request, "http://callback:5199/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1", actionStore);
 
         var approveOnce = attachments[0].Actions![0];
-        Assert.Equal("tool_approval_approve_once", approveOnce.Id);
+        Assert.Equal("toolapproval0", approveOnce.Id);
         Assert.Equal(ApprovalOptionKeys.ApproveOnceLabel, approveOnce.Name);
         Assert.Equal("http://callback:5199/api/mattermost/actions", approveOnce.IntegrationUrl);
         Assert.Contains("action_token", approveOnce.Context.Keys);
@@ -205,7 +205,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
             request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1");
 
-        var denyButton = attachments[0].Actions!.Single(a => a.Id == "tool_approval_deny");
+        var denyButton = attachments[0].Actions!.Single(a => a.Name == ApprovalOptionKeys.DenyLabel);
         Assert.Equal("danger", denyButton.Style);
     }
 
@@ -231,7 +231,7 @@ public sealed class MattermostApprovalPromptBuilderTests
             "prompt-corr-1");
 
         var everywhere = attachments[0].Actions!.Single(action =>
-            action.Id == $"tool_approval_{ApprovalOptionKeys.ApproveAssignmentEverywhereV1}");
+            action.Name == ApprovalOptionKeys.ApproveEverywhereLabel);
         Assert.Equal("danger", everywhere.Style);
     }
 
@@ -243,7 +243,7 @@ public sealed class MattermostApprovalPromptBuilderTests
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
             request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1");
 
-        var approveOnce = attachments[0].Actions!.Single(a => a.Id == "tool_approval_approve_once");
+        var approveOnce = attachments[0].Actions!.Single(a => a.Name == ApprovalOptionKeys.ApproveOnceLabel);
         Assert.Equal("primary", approveOnce.Style);
     }
 
@@ -356,24 +356,45 @@ public sealed class MattermostApprovalPromptBuilderTests
         }
     }
 
-    [Fact]
-    public void BuildButtonPrompt_action_token_resolves_expected_action_once()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BuildButtonPrompt_routes_alphanumeric_ids_and_preserves_one_time_option_tokens(bool versionedOption)
     {
         var request = CreateStandardRequest();
+        if (versionedOption)
+        {
+            request = request with
+            {
+                Options =
+                [
+                    new ToolInteractionOption(
+                        ApprovalOptionKeys.ApproveAssignmentEverywhereV1Key,
+                        ApprovalOptionKeys.ApproveEverywhereLabel),
+                    new ToolInteractionOption(ApprovalOptionKeys.DenyKey, ApprovalOptionKeys.DenyLabel)
+                ]
+            };
+        }
         var actionStore = new MattermostCallbackActionStore(TimeProvider.System);
 
         var (_, attachments) = MattermostApprovalPromptBuilder.BuildButtonPrompt(
             request, "http://localhost/api/mattermost/actions", "ch-1", "root-post-1", "prompt-corr-1", actionStore);
 
-        var approveOnce = attachments[0].Actions![0];
-        Assert.True(actionStore.TryConsume(approveOnce.Context["action_token"], out var stored));
-        Assert.NotNull(stored);
-        Assert.Equal("ch-1", stored!.ChannelId);
-        Assert.Equal("call-btn-1", stored.CallId);
-        Assert.Equal(ApprovalOptionKeys.ApproveOnce, stored.SelectedKey);
-        Assert.Equal("root-post-1", stored.RootPostId);
-        Assert.Equal("requester-1", stored.RequesterSenderId);
-        Assert.False(actionStore.TryConsume(approveOnce.Context["action_token"], out _));
+        var actions = attachments[0].Actions!;
+        Assert.Equal(request.Options.Count, actions.Select(action => action.Id).Distinct().Count());
+        for (var index = 0; index < actions.Count; index++)
+        {
+            var action = actions[index];
+            Assert.Matches("^[A-Za-z0-9]+$", action.Id);
+            Assert.True(actionStore.TryConsume(action.Context["action_token"], out var stored));
+            Assert.NotNull(stored);
+            Assert.Equal("ch-1", stored!.ChannelId);
+            Assert.Equal("call-btn-1", stored.CallId);
+            Assert.Equal(request.Options[index].Key.Value, stored.SelectedKey);
+            Assert.Equal("root-post-1", stored.RootPostId);
+            Assert.Equal("requester-1", stored.RequesterSenderId);
+            Assert.False(actionStore.TryConsume(action.Context["action_token"], out _));
+        }
     }
 
     private static ToolInteractionRequest CreateStandardRequest()
