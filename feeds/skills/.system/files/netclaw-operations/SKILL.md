@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.96.0"
+  version: "2.97.0"
 ---
 
 # Netclaw Operations
@@ -557,13 +557,22 @@ literal or a proved value without `[`: `[ 3 -gt 2 ]`, `x=3; [ "$x" -gt 2 ]`,
 and a guard on a loop over literal words. A test on a value from `$(...)` or
 `read` gets a one-time prompt. A test on a file name from a glob loop gets a
 "write the command words literally" correction, and the call does not run.
-`continue`, `break`, `exit`, and `return` need no approval. For a program that
+`continue`, `break`, `exit`, and `return` need no approval. These rules also
+apply after `cd dir && action;`, where the directory is not known: `echo "---"`
+there needs no approval, but a redirect or an unquoted `echo $n` still needs
+consent. For a program that
 can open files, such as `cat`, a word that the shell can glob and whose value
 Netclaw cannot prove (`$f`, `/work/$f`, `~/notes/{a,b}.txt`) makes its command
 exact; no grant covers it. When a rewrite can remove the word (a brace list or
 a loop over literal words), you get a "write the command words literally"
-correction, and the call does not run. A value from `$(...)` or `read` gets one
-exact prompt with `Once` and `Deny`. Write such paths literally. `echo`, `printf`, `test`, and `[` keep their own rules. An ANSI-C word such as
+correction, and the call does not run. When the command words are known and
+the unquoted word comes after them, as in
+`git rev-list --count HEAD...origin/$(git branch --show-current)`, you get a
+quote correction that names the word, and the call does not run. Put the word
+in double quotes (`"HEAD...origin/$(git branch --show-current)"`) and call
+again: a grant for anywhere for the command words then covers it. A value from
+`$(...)` or `read` in the verb slot (`f=$(cmd); cat /work/$f`) gets one exact
+prompt with `Once` and `Deny`. Write such paths literally. `echo`, `printf`, `test`, and `[` keep their own rules. An ANSI-C word such as
 `$'\x6beys'` gets the decision of its decoded text.
 
 **Prompts survive passivation and restart.** Pending approval prompts are

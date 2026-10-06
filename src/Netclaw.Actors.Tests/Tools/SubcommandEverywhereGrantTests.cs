@@ -289,6 +289,48 @@ public sealed class SubcommandEverywhereGrantTests(ShellApprovalMatrixFixture fi
         await AssertAllowedByStoredGrantAsync(harness, corrected);
     }
 
+    // F4: the command words are known, and only an unquoted word with an
+    // unknown value makes the command exact. The model gets a quote
+    // correction that names the word: no prompt and no run. The quoted retry
+    // has one unknown operand, so the verb grant covers it (decision D1).
+    [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]
+    [Theory(SkipUnless = nameof(IsPosix), Skip = "The Bash cases require a POSIX host.")]
+    [InlineData(
+        "git rev-list --count HEAD...origin/$(git branch --show-current)",
+        "HEAD...origin/$(git branch --show-current)",
+        "Put the word in double quotes: \"HEAD...origin/$(git branch --show-current)\".",
+        "git rev-list --count \"HEAD...origin/$(git branch --show-current)\"")]
+    [InlineData(
+        "git rev-list --count origin/$(git branch --show-current)'^'",
+        "origin/$(git branch --show-current)'^'",
+        "Put each expansion in that word in double quotes.",
+        "git rev-list --count origin/\"$(git branch --show-current)\"'^'")]
+    public async Task Known_words_with_an_unquoted_expansion_get_a_quote_correction(
+        string command,
+        string expectedWord,
+        string expectedAdvice,
+        string corrected)
+    {
+        await using var harness = await CreateHarnessAsync(
+            Approvals.PersistentAnywhere("git rev-list", "git branch"));
+
+        var decision = await harness.EvaluateShellDecisionAsync(command, Ct);
+
+        Assert.Equal(ToolAuthorizationOutcome.RequiresAgentCorrection, decision.Outcome);
+        Assert.Null(decision.ApprovalContext);
+        var correction = Assert.IsType<ToolCorrection.ShellWordQuoteSuggested>(decision.AgentCorrection);
+        Assert.Equal([expectedWord], correction.Words);
+        var delivery = ToolCorrectionDelivery.Create(new ToolCorrectionCollection([correction]), managedTemporaryCall: null);
+        Assert.StartsWith("Tool execution deferred: rewrite_shell_command_words\n", delivery.Content, StringComparison.Ordinal);
+        Assert.Contains(expectedAdvice, delivery.Content, StringComparison.Ordinal);
+
+        var run = await harness.RunShellAsync(command, Ct);
+        Assert.Equal(ApprovalOutcome.RequiresAgentCorrection, run.Outcome);
+        Assert.Null(run.Output);
+
+        await AssertAllowedByStoredGrantAsync(harness, corrected);
+    }
+
     // A bare glob can expand to a subcommand: "git p?sh" with a file named
     // "push" runs "git push". A git grant must never run it.
     [SlopwatchSuppress("SW001", "The Bash cases require a POSIX host.")]

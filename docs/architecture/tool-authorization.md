@@ -254,6 +254,10 @@ Leaks today:
   owner changes the outcomes that they protect. The side-effect exemption
   (`echo`, `printf`, `:`, `true`, `false`) applies in a causal list too: the
   exempt command has no directory, so the list role does not change it.
+  After a directory change that can fail, the directory of a later command is
+  not known, and an unresolved call makes that command exact. A data command
+  with no redirect and proved data operands is the exception (0.27.1): it has
+  no path scope, so it keeps its normal candidate and its exemption.
 - `ResolveAuthorizationScope` in `IToolApprovalMatcher.cs` names `find`, `cd`,
   `pushd`, and `Set-Location`. This conflicts with the Shell Approval
   Abstraction Rule in [`AGENTS.md`](../../AGENTS.md).
@@ -324,7 +328,12 @@ Leaks today:
   glob (`MayPathnameExpand`) with an unknown value is not covered by decision
   D1: the command is one exact candidate with `Once` and `Deny` only. When
   this rule is the only cause and a rewrite of the words can remove the word,
-  the call gets the rewrite correction instead; the candidate stays exact. The
+  the call gets the rewrite correction instead; the candidate stays exact.
+  When the command words are known, that correction is the quote correction
+  (`ShellWordQuoteSuggested`, 0.27.1): it names each such word
+  (`ShellCommandAnalysis.GetUnboundedPathnameExpansionWords`). In double
+  quotes, the word gets no pathname expansion, so the retry has one unknown
+  operand, and decision D1 applies. The
   rule does not read `MayFieldSplit`: a word that can split but cannot glob
   (`"$@"`, a bounded arithmetic word) keeps the check of a normal operand. A proved
   glob scope keeps decision D5, and a proved authored value with no glob

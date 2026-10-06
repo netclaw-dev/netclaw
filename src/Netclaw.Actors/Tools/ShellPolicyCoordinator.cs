@@ -429,22 +429,27 @@ internal sealed class ShellPolicyCoordinator(
     }
 
     /// <summary>
-    /// Returns a rewrite correction when an uncovered candidate has Unknown
-    /// command words and every such candidate has a cause that the model can
-    /// fix (a bare glob, or in Bash an expansion, brace list, or word
-    /// splitting). Returns null otherwise, so a dynamic program name or a
+    /// Returns a rewrite correction when an uncovered candidate has a cause
+    /// that the model can fix. A candidate with Unknown command words gets the
+    /// command-words rewrite (a bare glob, or in Bash an expansion, brace list,
+    /// or word splitting). A candidate with known command words that is exact
+    /// only because a word can glob with an unknown value gets the quote
+    /// correction. Returns null otherwise, so a dynamic program name or a
     /// PowerShell script block keeps the one-time prompt or the denial.
     /// </summary>
     /// <remarks>
     /// SECURITY: the correction grants no authority. The call does not run and
     /// does not prompt. The rewritten call passes normal approval. A candidate
     /// that other coverage (reviewed-safe, approval-exempt output) already
-    /// covers needs no command words, so it never causes a correction.
+    /// covers needs no command words, so it never causes a correction. In
+    /// double quotes, the word gets no pathname expansion, so its unknown value
+    /// is one operand: decision D1 then lets only a grant for anywhere cover it.
+    /// The rule reads general shell facts only, never the grammar of a program.
     /// </remarks>
     internal static ToolCorrectionCollection? SelectCommandWordsCorrection(
         IReadOnlyList<ShellPolicyCandidate> uncovered)
     {
-        ToolCorrection.ShellCommandWordsRewriteSuggested? correction = null;
+        ToolCorrection? correction = null;
         foreach (var candidate in uncovered)
         {
             // A rewrite of the words cannot prove a directory, a redirect, a
@@ -456,7 +461,19 @@ internal sealed class ShellPolicyCoordinator(
                 return null;
 
             if (candidate.Candidate.VerbTokens is not null)
+            {
+                if (!candidate.Candidate.WordRewriteCanResolve)
+                    continue;
+
+                if (candidate.SourceOccurrence is not { } source
+                    || ShellCommandAnalysis.GetUnboundedPathnameExpansionWords(source) is not { Count: > 0 } words)
+                {
+                    return null;
+                }
+
+                correction ??= new ToolCorrection.ShellWordQuoteSuggested(words);
                 continue;
+            }
 
             if (candidate.SourceOccurrence is not { } occurrence
                 || candidate.Candidate.Shell is not { } shell

@@ -1372,12 +1372,14 @@ public sealed record ShellCommandAnalysis
     private bool HasUnboundedPathnameExpansion(CommandOccurrence command)
         => Environment.Grammar == ShellGrammar.Bash
            && !IsBashDataCommand(command)
-           && command.Arguments.Any(argument =>
-               argument.MayPathnameExpand
-               && argument.Value is ShellValueDomain.Unknown
-               && argument.Argument.Kind != ArgKind.Glob
-               && !HasGlobFreeAuthoredValue(argument)
-               && !IsStatusWord(argument));
+           && command.Arguments.Any(IsUnboundedPathnameExpansionWord);
+
+    private static bool IsUnboundedPathnameExpansionWord(AnalyzedArgument argument)
+        => argument.MayPathnameExpand
+           && argument.Value is ShellValueDomain.Unknown
+           && argument.Argument.Kind != ArgKind.Glob
+           && !HasGlobFreeAuthoredValue(argument)
+           && !IsStatusWord(argument);
 
     private static bool IsBashDataCommand(CommandOccurrence command)
         => command.Clause.Verb.Tokens is [var verb, ..]
@@ -1404,6 +1406,24 @@ public sealed record ShellCommandAnalysis
 
     private static bool HasNoGlobCharacter(string? value)
         => value is not null && value.IndexOfAny(['*', '?', '[']) < 0;
+
+    /// <summary>
+    /// Returns the source text of each word that makes a Bash command exact by
+    /// the pathname-expansion rule
+    /// (<see cref="HasUnboundedPathnameExpansion(CommandOccurrence)"/>).
+    /// </summary>
+    /// <remarks>
+    /// The approval coordinator names these words in its quote correction. In
+    /// double quotes, such a word gets no pathname expansion and no field
+    /// splitting, so its unknown value is one operand (decision D1). The list
+    /// grants no authority.
+    /// </remarks>
+    internal static IReadOnlyList<string> GetUnboundedPathnameExpansionWords(CommandOccurrence command)
+        => command.Arguments
+            .Where(IsUnboundedPathnameExpansionWord)
+            .Select(static argument => argument.Argument.Raw)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
 
     private static bool IsUnknownOutputData(
         CommandOccurrence command,

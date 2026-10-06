@@ -308,10 +308,23 @@ read -r digest_start digest_end < <(
   find_span \
     "$matcher_file" \
     "private static bool TryCreateAssignmentDigest(" \
-    "if (shell == ApprovalShell.Bash" \
+    "if (IsScopeFreeDataCommand(occurrence, shell, verb))" \
     "return true;"
 )
 security_mutations+=("IToolApprovalMatcher.cs{$digest_start..$digest_end}")
+
+# F2: a data command with no redirect and proved data operands has no path
+# scope, so an unknown directory keeps its normal candidate. A mutant that drops
+# a condition gives another command (cat, a redirect, an unproved operand) the
+# call directory as a wrong scope, so it must die.
+read -r scope_free_start scope_free_end < <(
+  find_span \
+    "$matcher_file" \
+    "private static bool IsScopeFreeDataCommand(" \
+    "=> shell == ApprovalShell.Bash" \
+    "isTestBuiltin: ShellVerbPolicyData.BashTestBuiltins.Contains(verb));"
+)
+security_mutations+=("IToolApprovalMatcher.cs{$scope_free_start..$scope_free_end}")
 
 read -r messy_start messy_end < <(
   find_span \

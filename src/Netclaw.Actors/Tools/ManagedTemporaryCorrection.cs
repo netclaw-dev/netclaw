@@ -36,6 +36,15 @@ internal abstract record ToolCorrection
         ApprovalShell Shell) : ToolCorrection;
 
     /// <summary>
+    /// Suggests double quotes around each word that the shell can expand to
+    /// file names with a value that Netclaw cannot prove. The command words are
+    /// known, so a quoted word is one unknown operand that a grant for anywhere
+    /// can cover (decision D1). The call does not run.
+    /// </summary>
+    /// <param name="Words">The source text of each such word, in command order.</param>
+    internal sealed record ShellWordQuoteSuggested(IReadOnlyList<string> Words) : ToolCorrection;
+
+    /// <summary>
     /// Asks for a shorter shell command. The approval prompt cannot show the
     /// full command, so the operator could not see what they approve.
     /// </summary>
@@ -97,6 +106,7 @@ internal sealed record ToolCorrectionDelivery(
         {
             [ToolCorrection.ShellWorkingDirectorySuggested shell] => CreateShellDirectory(shell.Directory),
             [ToolCorrection.ShellCommandWordsRewriteSuggested words] => CreateCommandWords(words),
+            [ToolCorrection.ShellWordQuoteSuggested quote] => CreateWordQuote(quote),
             [ToolCorrection.ShellCommandTooLongToShow tooLong] => CreateShorterCommand(tooLong.Length),
             [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
             [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] when managedTemporaryCall is not null
@@ -125,6 +135,30 @@ internal sealed record ToolCorrectionDelivery(
             new ToolInvocationReceipt.Correction(ToolRemediationCode.RewriteShellCommandWords),
             NativeTool: null,
             ManagedTemporaryStateChange: null);
+
+    private static ToolCorrectionDelivery CreateWordQuote(ToolCorrection.ShellWordQuoteSuggested quote)
+        => new(
+            "Tool execution deferred: rewrite_shell_command_words\n" + DescribeWordQuote(quote),
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.RewriteShellCommandWords),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
+
+    /// <summary>
+    /// Names each word and shows the word in double quotes. The example is
+    /// shown only when double quotes keep the meaning of every other part of
+    /// the word: a word with a quote, a backslash, a glob character, a brace,
+    /// or a tilde gets the advice without the example.
+    /// </summary>
+    internal static string DescribeWordQuote(ToolCorrection.ShellWordQuoteSuggested quote)
+    {
+        var lines = quote.Words.Select(static word =>
+            word.IndexOfAny(['"', '\'', '\\', '*', '?', '[', '{', '~']) < 0
+                ? $"The shell can expand the word {word} to file names, and Netclaw cannot prove its value. Put the word in double quotes: \"{word}\"."
+                : $"The shell can expand the word {word} to file names, and Netclaw cannot prove its value. Put each expansion in that word in double quotes.");
+        return string.Join('\n', lines)
+               + "\nA word in double quotes stays one word, and the shell does not expand it to file names. "
+               + "If the word must expand to file names, write each path literally.";
+    }
 
     private static ToolCorrectionDelivery CreateShorterCommand(int length)
         => new(

@@ -217,7 +217,10 @@ covered:
   against the protected paths. A protected target denies the call, also under
   a grant. A link to an ordinary file keeps the decision of the grant.
 - The command is an output command: `echo`, `printf`, `:`, `true`, or `false`.
-  This rule also applies after `cd dir && action;`. A dynamic operand, such as
+  This rule also applies after `cd dir && action;`, where the directory is not
+  known: a data command with no redirect and proved data operands has no path
+  scope. A redirect or an unquoted unknown word (`echo $n`) keeps the exact
+  prompt there. A dynamic operand, such as
   `echo "head: $(git rev-parse HEAD)"`, is data. A value from `$(...)` or
   `read` in a word that the shell cannot glob, such as `n=$(cmd); echo "$n"`
   or `echo pre"$n"`, is also data (ShellSyntaxTree 0.4.0-beta.19 reports
@@ -225,7 +228,12 @@ covered:
   expand to file names, so it needs consent. For a program that can open
   files, such as `cat /work/$f`, such a word gets one exact prompt that no
   grant covers. A brace word or a loop over literal words in that place gets
-  a rewrite correction instead, and the call does not run. `exit` and `return`
+  a rewrite correction instead, and the call does not run. When the command
+  words are known and such a word after them is the only cause, as in
+  `git rev-list HEAD...origin/$(git branch --show-current)`, the agent gets a
+  quote correction: no prompt and no run. The quoted retry
+  (`"HEAD...origin/$(git branch --show-current)"`) has one unknown operand, so
+  a grant for anywhere covers it (decision D1). `exit` and `return`
   need no approval. The command inside
   `$(...)` still needs its own coverage, and a redirect target keeps its own
   check.

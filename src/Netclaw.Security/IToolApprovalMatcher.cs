@@ -370,8 +370,16 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
             // SECURITY: after an unproved directory change (cd "$x", pushd,
             // popd, a failed cd), the parser has no exact directory for the
             // command. The call's directory would be a wrong scope, so the
-            // command stays exact as a whole.
+            // command stays exact as a whole. A data command with no redirect
+            // and proved data operands is the exception: it has no path scope,
+            // so the directory changes nothing that it can reach. It keeps its
+            // normal candidate and its approval exemption. Its other facts
+            // (program word, structure) still come from the analysis.
             var part = occurrence.WorkingDirectory is ShellValueDomain.Exact
+                       || IsScopeFreeDataCommand(
+                           occurrence,
+                           ApprovalShell.Bash,
+                           NormalizedVerb(occurrence, ApprovalShell.Bash))
                 ? result.GetUnresolvedPart(occurrence)
                 : ShellUnresolvedPart.Command;
             if (part == ShellUnresolvedPart.None
@@ -503,7 +511,7 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         if (directories is null)
             return null;
 
-        if (!TryCreateAssignmentDigest(occurrence, shell, verb, isSideEffectVerb, out var assignmentDigest))
+        if (!TryCreateAssignmentDigest(occurrence, shell, verb, out var assignmentDigest))
             return null;
 
         var verbTokens = commandWords.Words;
@@ -1802,7 +1810,6 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
                     command,
                     shell,
                     NormalizedVerb(command, shell),
-                    IsSideEffectCommand(command, shell),
                     out _)))
         {
             return true;
@@ -1889,7 +1896,8 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
     /// <summary>
     /// Returns the assignment digest of a command. A Bash data command with no
-    /// redirect and with proved data operands gets no digest.
+    /// redirect and with proved data operands
+    /// (<see cref="IsScopeFreeDataCommand"/>) gets no digest.
     /// </summary>
     /// <remarks>
     /// SECURITY: a Bash data command is a builtin, so an assignment cannot
@@ -1905,15 +1913,9 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
         ShellSyntaxTree.CommandOccurrence occurrence,
         ApprovalShell shell,
         string verb,
-        bool isDataCommand,
         out ApprovalAssignmentDigest? digest)
     {
-        if (shell == ApprovalShell.Bash
-            && isDataCommand
-            && occurrence.Redirects.Count == 0
-            && ShellCommandAnalysis.HasProvedDataOperands(
-                occurrence,
-                isTestBuiltin: ShellVerbPolicyData.BashTestBuiltins.Contains(verb)))
+        if (IsScopeFreeDataCommand(occurrence, shell, verb))
         {
             digest = null;
             return true;
@@ -1921,6 +1923,24 @@ public sealed class ShellApprovalMatcher : IToolApprovalMatcher
 
         return ShellAssignmentDigestFactory.TryCreate(shell, occurrence.Assignments, out digest);
     }
+
+    /// <summary>
+    /// Returns true when a Bash data command has no redirect and each operand
+    /// is proved data
+    /// (<see cref="ShellCommandAnalysis.HasProvedDataOperands"/>). Such a
+    /// command touches no path, so neither an assignment nor the working
+    /// directory can change what it can reach.
+    /// </summary>
+    private static bool IsScopeFreeDataCommand(
+        ShellSyntaxTree.CommandOccurrence occurrence,
+        ApprovalShell shell,
+        string verb)
+        => shell == ApprovalShell.Bash
+           && ShellVerbPolicyData.IsDataCommand(verb, shell)
+           && occurrence.Redirects.Count == 0
+           && ShellCommandAnalysis.HasProvedDataOperands(
+               occurrence,
+               isTestBuiltin: ShellVerbPolicyData.BashTestBuiltins.Contains(verb));
 
     // SECURITY: the phrase quotes a word with whitespace, so the program
     // "echo x" never reads as the side-effect verb echo.

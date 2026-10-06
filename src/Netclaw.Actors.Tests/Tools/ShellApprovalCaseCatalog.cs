@@ -2468,6 +2468,8 @@ public static class ShellApprovalCases
         // unknown value that can glob makes a program that can open files one
         // exact candidate. An echo or printf operand keeps its earlier rule
         // (owner decision, #2349): the worst case is file names in the output.
+        // The verb slot of cat holds the expansion, so the command words are
+        // unknown, and a run-time value has no literal spelling: the prompt stays.
         Case(
             "unknown-glob-word-read-needs-exact-consent",
             Bash52("f=$(date); cat /work/$f"),
@@ -2478,6 +2480,88 @@ public static class ShellApprovalCases
             Bash52("f=$(date); cat /work/$f", interactive: false),
             Approvals.PersistentAnywhere("cat"),
             ExpectedApproval.DenyUnattended()),
+        // F4 (0.27.1): the command words are known, and an unquoted word with an
+        // unknown value is the only cause that makes the command exact. The
+        // model gets a quote correction, attended or unattended, and the call
+        // does not run. In double quotes, the word is one unknown operand, so a
+        // grant for anywhere covers it under decision D1.
+        Case(
+            "substitution-word-with-known-words-gets-quote-correction",
+            Bash52("git rev-list --left-right --count HEAD...origin/$(git branch --show-current) 2>/dev/null"),
+            Approvals.PersistentAnywhere("git rev-list", "git branch"),
+            ExpectedApproval.Correct(1, "persistent:git branch")),
+        Case(
+            "unattended-substitution-word-with-known-words-gets-quote-correction",
+            Bash52("git rev-list --left-right --count HEAD...origin/$(git branch --show-current) 2>/dev/null", interactive: false),
+            Approvals.PersistentAnywhere("git rev-list", "git branch"),
+            ExpectedApproval.Correct(1, "persistent:git branch")),
+        Case(
+            "quoted-substitution-word-uses-verb-grant",
+            Bash52("git rev-list --left-right --count \"HEAD...origin/$(git branch --show-current)\" 2>/dev/null"),
+            Approvals.PersistentAnywhere("git rev-list", "git branch"),
+            ExpectedApproval.Allow(
+                ApprovalAllowReason.StoredApproval,
+                1,
+                "persistent:git branch",
+                "persistent:git rev-list --left-right --count \"HEAD...origin/$(git branch --show-current)\" 2>/dev/null")),
+        Case(
+            "assigned-word-with-known-words-gets-quote-correction",
+            Bash52("f=$(date); git log origin/$f"),
+            Approvals.PersistentAnywhere("git log"),
+            ExpectedApproval.Correct()),
+        // Negative controls: an unknown program word, or a second cause (an
+        // unknown redirect target), keeps today's exact handling.
+        Case(
+            "unknown-program-word-with-glob-word-keeps-prompt",
+            Bash52("$(date) rev-list HEAD...origin/$(git branch --show-current)"),
+            Approvals.PersistentAnywhere("git rev-list", "git branch"),
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "glob-word-with-unknown-redirect-keeps-prompt",
+            Bash52("f=$(date); git log origin/$f > \"$f\".log"),
+            Approvals.PersistentAnywhere("git log"),
+            ExpectedApproval.Require(["git log origin/$f > \"$f\".log"])),
+        // F2 (0.27.1): after a cd that can fail, the directory is unknown. A data
+        // command with no redirect and proved data operands has no path scope,
+        // so it keeps its approval exemption.
+        Case(
+            "data-commands-after-failing-cd-are-exempt",
+            Bash52("cd sub && n=$(git fetch) && git fetch \"$n\"; echo \"---\"; echo \"== $n ==\"; [ 3 -gt 2 ]"),
+            Approvals.PersistentAnywhere("cd", "git fetch"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:git fetch", "persistent:git fetch \"$n\"")),
+        Case(
+            "unattended-data-commands-after-failing-cd-are-exempt",
+            Bash52("cd sub && n=$(git fetch) && git fetch \"$n\"; echo \"---\"; echo \"== $n ==\"; [ 3 -gt 2 ]", interactive: false),
+            Approvals.PersistentAnywhere("cd", "git fetch"),
+            ExpectedApproval.Allow(ApprovalAllowReason.StoredApproval, 1, "persistent:cd", "persistent:git fetch", "persistent:git fetch \"$n\"")),
+        // The live command of the F2 report. Only the find and grep commands
+        // after the ";" stay exact, because their directory is unknown.
+        Case(
+            "live-cpm-props-survey-prompts-only-for-unscoped-reads",
+            Bash52("cd sub && echo \"=== CPM props ===\" && find . -name \"Directory.Packages.props\" | grep -v worktree; echo \"---\"; for f in $(find . -name \"Directory.Packages.props\" | grep -v worktree); do echo \"== $f ==\"; grep -c \"<PackageVersion\" \"$f\"; done; echo \"=== Directory.Build.props ===\" && find . -name \"Directory.Build.props\" | grep -v worktree"),
+            Approvals.PersistentAnywhere("cd", "find", "grep"),
+            ExpectedApproval.Require(
+                [
+                    "find . -name \"Directory.Packages.props\"",
+                    "grep -v worktree",
+                    "grep -c \"<PackageVersion\" \"$f\"",
+                    "find . -name \"Directory.Build.props\""
+                ],
+                approvalMatches: ["persistent:cd", "persistent:find", "persistent:grep"])),
+        Case(
+            "data-command-redirect-after-failing-cd-keeps-prompt",
+            Bash52($"cd sub && n=$(git fetch) && git fetch \"$n\"; echo \"---\" > {TemporaryFile("marker")}"),
+            Approvals.PersistentAnywhere("cd", "git fetch"),
+            ExpectedApproval.Require(
+                [$"echo \"---\" > {TemporaryFile("marker")}"],
+                approvalMatches: ["persistent:cd", "persistent:git fetch", "persistent:git fetch \"$n\""])),
+        Case(
+            "unquoted-unknown-echo-after-failing-cd-keeps-prompt",
+            Bash52("cd sub && n=$(git fetch) && git fetch \"$n\"; echo $n"),
+            Approvals.PersistentAnywhere("cd", "git fetch"),
+            ExpectedApproval.Require(
+                ["echo $n"],
+                approvalMatches: ["persistent:cd", "persistent:git fetch", "persistent:git fetch \"$n\""])),
         // The glob rule of dev still applies to an echo operand: a glob with no
         // proved scope makes the command one exact candidate.
         Case(

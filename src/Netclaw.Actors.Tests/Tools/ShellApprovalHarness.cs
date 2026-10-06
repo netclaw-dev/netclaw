@@ -55,6 +55,7 @@ internal enum ApprovalCorrection
     NativeTool,
     ShellWorkingDirectory,
     ShellCommandWords,
+    ShellWordQuote,
     ShellCommandTooLongToShow
 }
 
@@ -734,6 +735,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
                 ToolCorrection.NativeToolSuggested suggestion => suggestion.ToolName.Value,
                 ToolCorrection.ManagedTemporaryDirectorySuggested suggestion => suggestion.Target.ManagedTemporaryDirectory,
                 ToolCorrection.ShellCommandWordsRewriteSuggested suggestion => suggestion.Rewrite.ToString(),
+                ToolCorrection.ShellWordQuoteSuggested quote => string.Join(' ', quote.Words),
                 ToolCorrection.ShellCommandTooLongToShow tooLong => tooLong.Length.ToString(CultureInfo.InvariantCulture),
                 _ => null
             },
@@ -792,6 +794,7 @@ internal sealed class ShellApprovalHarness : IAsyncDisposable
             ToolCorrection.NativeToolSuggested => ApprovalCorrection.NativeTool,
             ToolCorrection.ShellWorkingDirectorySuggested => ApprovalCorrection.ShellWorkingDirectory,
             ToolCorrection.ShellCommandWordsRewriteSuggested => ApprovalCorrection.ShellCommandWords,
+            ToolCorrection.ShellWordQuoteSuggested => ApprovalCorrection.ShellWordQuote,
             ToolCorrection.ShellCommandTooLongToShow => ApprovalCorrection.ShellCommandTooLongToShow,
             _ => throw new ArgumentOutOfRangeException(
                 nameof(correction), correction, "Unknown approval correction.")
