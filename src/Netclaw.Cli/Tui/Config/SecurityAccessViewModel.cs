@@ -4,6 +4,7 @@
 // </copyright>
 // -----------------------------------------------------------------------
 using System.Text.Json;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Config;
 using Netclaw.Cli.Json;
 using Netclaw.Cli.Mcp;
@@ -555,7 +556,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         else
             AddTools(profile.AllowedTools, tools);
 
-        if (!SaveAudienceProfileKeys(profile, malformed,
+        if (!SaveAudienceProfileKeys(malformed,
                 ("ToolsMode", profile.ToolsMode.ToString()),
                 ("AllowedTools", profile.AllowedTools)))
             return;
@@ -570,7 +571,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         var next = CycleValue(CurrentFilesystemLevel(profile), FilesystemLevelsFor(SelectedAudience), direction);
 
         ApplyFilesystemLevel(profile, next);
-        if (!SaveAudienceProfileKeys(profile, malformed,
+        if (!SaveAudienceProfileKeys(malformed,
                 ("ReadFiles", profile.ReadFiles),
                 ("WriteFiles", profile.WriteFiles),
                 ("AttachFiles", profile.AttachFiles)))
@@ -586,7 +587,7 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
         var next = CycleValue(CurrentAttachmentLevel(profile.ChannelAttachments), AttachmentLevels, direction);
 
         profile.ChannelAttachments = BuildAttachmentPolicy(next);
-        if (!SaveAudienceProfileKeys(profile, malformed, ("ChannelAttachments", profile.ChannelAttachments)))
+        if (!SaveAudienceProfileKeys(malformed, ("ChannelAttachments", profile.ChannelAttachments)))
             return;
         StatusMessage.Value = $"{AudienceLabel(SelectedAudience)} attachments set to {DescribeAttachments(profile.ChannelAttachments)}. Saved.";
         RequestRedraw();
@@ -594,18 +595,29 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     // An edit writes only the keys that it changed. A write of the whole profile would store the
     // posture defaults and the bound MCP and approval values as operator decisions, and it would
-    // replace keys that this screen does not show. Unreadable stored profiles are the exception:
-    // there the whole profile replaces them, which is the repair that the summary row promises.
-    private bool SaveAudienceProfileKeys(ToolAudienceProfile profile, bool malformed, params (string Key, object Value)[] changed)
+    // replace keys that this screen does not show. When the stored profiles do not bind, the screen
+    // shows the posture baseline, and an edit of that view would replace what the operator stored.
+    // The edit is refused then.
+    private bool SaveAudienceProfileKeys(bool malformed, params (string Key, object Value)[] changed)
     {
         if (malformed)
-            return SaveAudienceProfile(profile);
+        {
+            StatusMessage.Value = "Tools.AudienceProfiles is unreadable, so this edit was not saved. "
+                + "Fix the value in netclaw.json, or use \"Reset overrides\" to replace this audience with the posture baseline.";
+            RequestRedraw();
+            return false;
+        }
 
+        // Use the key spelling that the file already has. See ResolveExistingKeyPath.
+        var config = ConfigFileHelper.LoadJsonDict(_paths.NetclawConfigPath);
         var profilePath = $"Tools.AudienceProfiles.{AudienceConfigName(SelectedAudience)}";
         return TryApplyAndSave(
             new SectionContribution(
             [
-                .. changed.Select(change => new SectionFieldAction($"{profilePath}.{change.Key}", SectionFieldActionKind.Set, change.Value))
+                .. changed.Select(change => new SectionFieldAction(
+                    ConfigFileHelper.ResolveExistingKeyPath(config, $"{profilePath}.{change.Key}"),
+                    SectionFieldActionKind.Set,
+                    change.Value))
             ]),
             "audience profile");
     }
@@ -644,41 +656,58 @@ public sealed class SecurityAccessViewModel : ReactiveViewModel
 
     private ToolAudienceProfiles LoadAudienceProfiles() => LoadAudienceProfiles(out _);
 
-    // Reads the audience profiles the same way as the daemon: the Tools section on top of the
-    // posture defaults. A raw deserializer replaces a partial profile with an empty one, so an edit
+    // Reads the audience profiles the same way as the daemon: on top of the posture defaults, with
+    // the daemon binder. A raw deserializer replaces a partial profile with an empty one, so an edit
     // of one row would then save empty allowlists for the keys that the file does not set (issue
-    // #2362). Unreadable configuration gives the posture baseline, so that it cannot throw into the
-    // render path or a key handler; `malformed` is true then, and the summary row reports it.
+    // #2362).
+    //
+    // The bind covers ONLY Tools.AudienceProfiles, with the posture from the fail-closed reader. A
+    // fault in another key (an unknown posture, a bad Tools.WebFetch value) must not make the
+    // profiles look unreadable: this screen is where the operator repairs the posture.
+    //
+    // `malformed` is true only when the profiles themselves do not bind. The posture baseline is
+    // then returned for display, so the render path cannot throw. No caller may save it: a row edit
+    // is refused, and only the explicit "Reset overrides" action replaces the stored profile.
     private ToolAudienceProfiles LoadAudienceProfiles(out bool malformed)
         => LoadAudienceProfiles(_paths, out malformed);
 
     private static ToolAudienceProfiles LoadAudienceProfiles(NetclawPaths paths, out bool malformed)
     {
-        // The binder ignores a scalar where it expects an object, so it reads
-        // "AudienceProfiles": "text" as "no profiles". The operator must see that state.
-        malformed = ConfigFileHelper.TryGetPathValue(
-                ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath), "Tools.AudienceProfiles", out var raw)
-            && raw is not (null or Dictionary<string, object>);
-        if (!malformed)
+        malformed = false;
+        var config = ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath);
+        var posture = ReadPosture(config);
+        var profilesPath = ConfigFileHelper.ResolveExistingKeyPath(config, "Tools.AudienceProfiles");
+        if (!ConfigFileHelper.TryGetPathValue(config, profilesPath, out var raw) || raw is null)
+            return BuildPostureProfiles(posture);
+
+        if (raw is Dictionary<string, object>)
         {
             try
             {
-                return ConfigFileHelper.LoadToolConfig(paths).AudienceProfiles;
+                var tools = new Dictionary<string, object> { ["Tools"] = new Dictionary<string, object> { ["AudienceProfiles"] = raw } };
+                using var stream = new MemoryStream(JsonSerializer.SerializeToUtf8Bytes(tools, JsonDefaults.ConfigFile));
+                var section = new ConfigurationBuilder().AddJsonStream(stream).Build().GetSection("Tools");
+                return ToolConfig.BindFromConfiguration(section, posture, out _).AudienceProfiles;
             }
-            catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or FormatException)
+            catch (Exception ex) when (ex is InvalidOperationException or InvalidDataException or FormatException or ArgumentException)
             {
                 malformed = true;
             }
         }
+        else
+        {
+            // The binder ignores a scalar where it expects an object. The operator must see it.
+            malformed = true;
+        }
 
-        return BuildPostureProfiles(ReadPosture(ConfigFileHelper.LoadJsonDict(paths.NetclawConfigPath)));
+        return BuildPostureProfiles(posture);
     }
 
+    // Unreadable profiles count as customized: a posture change must ask before it replaces them.
     private bool AudienceProfilesCustomized()
     {
         var existing = LoadAudienceProfiles(out var malformed);
-        // Unreadable stored profiles: treat as uncustomised rather than throwing on render.
-        return !malformed && !JsonEquivalent(existing, BuildPostureProfiles(CurrentPosture));
+        return malformed || !JsonEquivalent(existing, BuildPostureProfiles(CurrentPosture));
     }
 
     private void LoadEnabledFeatures()

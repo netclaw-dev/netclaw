@@ -25,8 +25,9 @@ internal static class DeploymentPostureReader
         invalidValue = null;
         if (!ConfigFileHelper.TryGetPathValue(config, "Security.DeploymentPosture", out var value))
         {
+            // The daemon binder also accepts the text "false".
             var strictDefaults = !ConfigFileHelper.TryGetPathValue(config, "Security.StrictDefaults", out var strict)
-                || strict is not false;
+                || !(strict is false || (strict is string strictText && bool.TryParse(strictText, out var strictValue) && !strictValue));
             posture = SecurityPolicyDefaults.ResolveDeploymentPosture(configured: null, strictDefaults);
             return true;
         }

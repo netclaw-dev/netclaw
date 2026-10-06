@@ -180,6 +180,21 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
         NotifyStateChanged();
     }
 
+    /// <summary>
+    /// Test seam for a second server in the same session. Like <see cref="SelectServer"/>, it does
+    /// not reload the audience profiles from disk.
+    /// </summary>
+    internal void SelectServerForTests(McpServerName serverName, IEnumerable<string> tools)
+    {
+        SelectedServer = serverName.Value;
+        DiscoveredTools.Clear();
+        DiscoveredTools.AddRange(tools);
+        if (!_pendingGrants.ContainsKey(serverName.Value))
+            InitializePendingGrantsFromConfig(serverName);
+        CurrentState.Value = ToolPermissionsState.ToolGrid;
+        NotifyStateChanged();
+    }
+
     internal void SetSelectedAudienceForTests(TrustAudience audience)
     {
         SelectedAudience = audience;
@@ -559,6 +574,10 @@ public sealed class McpToolPermissionsViewModel : ReactiveViewModel
             SaveToolOverrides(profilesSection);
 
             ConfigFileHelper.WriteConfigFile(_paths.NetclawConfigPath, config);
+
+            // The next edit and the next save start from what the file now says. A stale All
+            // profile would seed a later allowlist with a server that this save disabled.
+            Profiles = ConfigFileHelper.LoadToolConfig(_paths).AudienceProfiles;
             _pendingGrants.Clear();
             _pendingServerAccess.Clear();
             _pendingServerDefaults.Clear();

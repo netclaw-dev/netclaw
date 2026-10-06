@@ -304,6 +304,7 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
     [Theory]
     [InlineData("""{ "configVersion": 1 }""", DeploymentPosture.Public)]
     [InlineData("""{ "configVersion": 1, "Security": { "StrictDefaults": false } }""", DeploymentPosture.Personal)]
+    [InlineData("""{ "configVersion": 1, "Security": { "StrictDefaults": "false" } }""", DeploymentPosture.Personal)]
     public void Absent_posture_reads_the_same_as_the_daemon(string json, DeploymentPosture expected)
     {
         File.WriteAllText(Context.Paths.NetclawConfigPath, json);
@@ -315,6 +316,125 @@ public sealed class SecurityAccessViewModelTests : WizardStepTestBase
         Assert.Equal(expected, daemon);
         Assert.Equal(daemon, vm.CurrentPosture);
         Assert.Null(vm.PostureConfigWarning);
+    }
+
+    private const string CustomTeamProfile =
+        """
+        "AudienceProfiles": {
+          "Team": {
+            "AllowedTools": ["file_read"],
+            "AllowedMcpServers": ["textforge"],
+            "McpServerToolGrants": { "textforge": ["search"] },
+            "ApprovalPolicy": { "McpServerDefaults": { "textforge": "Approval" } }
+          }
+        }
+        """;
+
+    // A fault outside Tools.AudienceProfiles must not make the profiles look unreadable. The screen
+    // then showed the posture baseline, and one row edit replaced the custom Team profile with it.
+    [Theory]
+    [InlineData(""" "Security": { "DeploymentPosture": "Trusted" }, "Tools": { PROFILES } """)]
+    [InlineData(""" "Security": { "DeploymentPosture": 7 }, "Tools": { PROFILES } """)]
+    [InlineData(""" "Security": { "DeploymentPosture": "Team", "ShellExecutionMode": "Host" }, "Tools": { PROFILES } """)]
+    [InlineData(""" "Security": { "DeploymentPosture": "Team" }, "Tools": { "WebFetch": { "HttpAllowList": "example.com" }, PROFILES } """)]
+    [InlineData(""" "Security": { "DeploymentPosture": "Team" }, "Tools": { "MaxOutputChars": "lots", PROFILES } """)]
+    public void Fault_outside_the_audience_profiles_keeps_a_custom_profile_on_a_row_edit(string sections)
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            "{ \"configVersion\": 1, " + sections.Replace("PROFILES", CustomTeamProfile, StringComparison.Ordinal) + " }");
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+
+        Assert.Equal("Customized", vm.Items.Single(static i => i.Label == "Audience Profiles").Summary);
+
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        Assert.Equal(TrustAudience.Team, vm.SelectedAudience);
+        Assert.False(vm.IsAudienceToggleEnabled(AudienceProfileRowKind.WebAccess));
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.IncomingAttachments;
+        vm.ChangeSelectedAudienceProfileRow(-1);
+
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.AllowedTools", out var tools));
+        Assert.Equal(["file_read"], Assert.IsAssignableFrom<IEnumerable<object>>(tools).Select(static tool => tool.ToString()));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.McpServerToolGrants.textforge", out var grants));
+        Assert.Single(Assert.IsAssignableFrom<IEnumerable<object>>(grants));
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.ApprovalPolicy.McpServerDefaults.textforge", out var approval));
+        Assert.Equal("Approval", approval?.ToString());
+    }
+
+    [Fact]
+    public void Posture_change_on_a_file_with_an_unknown_posture_asks_before_it_resets_custom_profiles()
+    {
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            "{ \"configVersion\": 1, \"Security\": { \"DeploymentPosture\": \"Trusted\" }, \"Tools\": { " + CustomTeamProfile + " } }");
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.Activate(vm.Items.Single(static item => item.Label == "Security Posture"));
+        vm.SelectedPostureIndex.Value = vm.PostureOptions.ToList().FindIndex(static option => option.Value == DeploymentPosture.Team);
+
+        vm.ApplySelectedPosture();
+
+        Assert.Equal(SecurityAccessEditorMode.PostureCascade, vm.Mode.Value);
+        var config = ConfigFileHelper.LoadJsonDict(Context.Paths.NetclawConfigPath);
+        Assert.True(ConfigFileHelper.TryGetPathValue(config, "Tools.AudienceProfiles.Team.McpServerToolGrants", out _));
+    }
+
+    [Fact]
+    public void Unreadable_audience_profiles_refuse_a_row_edit_and_ask_before_a_posture_reset()
+    {
+        const string json =
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" },
+              "Tools": { "AudienceProfiles": { "Team": {
+                "AllowedTools": "file_read",
+                "McpServerToolGrants": { "textforge": ["search"] } } } }
+            }
+            """;
+        File.WriteAllText(Context.Paths.NetclawConfigPath, json);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        Assert.Contains("Unreadable", vm.Items.Single(static i => i.Label == "Audience Profiles").Summary, StringComparison.Ordinal);
+
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.IncomingAttachments;
+        vm.ChangeSelectedAudienceProfileRow(-1);
+
+        Assert.Equal(json, File.ReadAllText(Context.Paths.NetclawConfigPath));
+        Assert.Contains("unreadable", vm.StatusMessage.Value, StringComparison.Ordinal);
+
+        vm.GoBack();
+        vm.Activate(vm.Items.Single(static item => item.Label == "Security Posture"));
+        vm.SelectedPostureIndex.Value = vm.PostureOptions.ToList().FindIndex(static option => option.Value == DeploymentPosture.Personal);
+        vm.ApplySelectedPosture();
+        Assert.Equal(SecurityAccessEditorMode.PostureCascade, vm.Mode.Value);
+    }
+
+    [Fact]
+    public void Row_edit_writes_to_the_key_spelling_that_the_file_has()
+    {
+        // The daemon reads keys without case. A second key that differs only in case is a duplicate
+        // for the daemon, and it then stops at startup.
+        File.WriteAllText(Context.Paths.NetclawConfigPath,
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Team" },
+              "tools": { "audienceProfiles": { "team": { "allowedTools": ["file_read"] } } }
+            }
+            """);
+        using var vm = new SecurityAccessViewModel(Context.Paths);
+        vm.SelectedAudienceIndex.Value = 1;
+        vm.OpenSelectedAudienceProfile();
+        Assert.False(vm.IsAudienceToggleEnabled(AudienceProfileRowKind.WebAccess));
+        vm.SelectedAudienceRowIndex.Value = (int)AudienceProfileRowKind.WebAccess;
+        vm.ActivateSelectedAudienceProfileRow();
+
+        var team = BindLikeTheDaemon().AudienceProfiles.Team;
+        Assert.Contains("file_read", team.AllowedTools);
+        Assert.Contains(ToolAudienceProfileToolCatalog.WebTools[0], team.AllowedTools);
+        Assert.DoesNotContain("\"Tools\"", File.ReadAllText(Context.Paths.NetclawConfigPath), StringComparison.Ordinal);
+        Assert.DoesNotContain("\"AllowedTools\"", File.ReadAllText(Context.Paths.NetclawConfigPath), StringComparison.Ordinal);
     }
 
     private ToolConfig BindLikeTheDaemon()

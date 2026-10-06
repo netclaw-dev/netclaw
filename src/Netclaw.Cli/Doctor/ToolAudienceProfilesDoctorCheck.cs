@@ -122,9 +122,10 @@ public sealed class ToolAudienceProfilesDoctorCheck(NetclawPaths paths) : IDocto
             warnings.Add(
                 $"MCP server(s) {string.Join(", ", outsidePersonalAllowlist)} are enabled, but the Personal audience cannot use them: "
                 + "Tools.AudienceProfiles.Personal.AllowedMcpServers does not list them. "
-                + "`netclaw mcp permissions` in Netclaw 0.27.1-beta.1 and earlier wrote this allowlist when you enabled one server. "
-                + "Enable each server in `netclaw mcp permissions`, or delete McpServersMode and AllowedMcpServers "
-                + "from the Personal profile to allow every server.");
+                + "Ignore this if the allowlist is intended. If it is not: `netclaw mcp permissions` in Netclaw 0.27.1-beta.1 "
+                + "and earlier wrote such an allowlist when you enabled one server. To repair it, enable each server in "
+                + "`netclaw mcp permissions`, or delete McpServersMode and AllowedMcpServers from the Personal profile "
+                + "to allow every server.");
         }
 
         if (warnings.Count > 0)

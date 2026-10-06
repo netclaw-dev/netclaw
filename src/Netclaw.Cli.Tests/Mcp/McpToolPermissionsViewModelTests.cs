@@ -530,7 +530,7 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
     }
 
     [Fact]
-    public void Save_DoesNotMutateTheLiveInMemoryProfile()
+    public void Save_ReloadsTheProfilesSoALaterSaveKeepsTheDisabledServer()
     {
         File.WriteAllText(_paths.NetclawConfigPath,
             """
@@ -554,14 +554,21 @@ public sealed class McpToolPermissionsViewModelTests : IDisposable
         vm.ToggleServerAccess(); // disable notion -> pending All->Allowlist conversion
         Assert.True(vm.Save());
 
-        // The save writes the Allowlist conversion to disk, but must NOT coerce the live in-memory
-        // profile that backs runtime ACL queries (IsServerAllowed, etc.). The prior code mutated it
-        // mid-save, so a mid-save exception would leave the ACL in a post-save allowlist state.
-        Assert.Equal(ToolProfileMode.All, vm.Profiles.Personal.McpServersMode);
-        Assert.Empty(vm.Profiles.Personal.AllowedMcpServers);
+        // After a successful write, the view holds what the file says. A stale All profile showed
+        // notion as enabled again, and a second save in the same session seeded its allowlist from
+        // each known server, which enabled notion again in the file.
+        Assert.Equal(ToolProfileMode.Allowlist, vm.Profiles.Personal.McpServersMode);
+        Assert.False(vm.IsServerAllowedForSelectedAudience());
+
+        vm.GoBack();
+        vm.SelectServerForTests(new McpServerName("github"), new[] { "list-repos" });
+        vm.ToggleServerAccess(); // disable github
+        Assert.True(vm.Save());
 
         using var doc = JsonDocument.Parse(File.ReadAllText(_paths.NetclawConfigPath));
-        Assert.Equal("Allowlist", GetAudienceProfile(doc, "Personal").GetProperty("McpServersMode").GetString());
+        var personal = GetAudienceProfile(doc, "Personal");
+        Assert.Equal("Allowlist", personal.GetProperty("McpServersMode").GetString());
+        Assert.Empty(ReadAllowedServers(personal));
     }
 
     [Fact]

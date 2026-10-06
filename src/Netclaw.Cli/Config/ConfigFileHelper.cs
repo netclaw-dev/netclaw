@@ -49,6 +49,37 @@ internal static class ConfigFileHelper
     }
 
     /// <summary>
+    /// Returns <paramref name="path"/> with each segment replaced by the key that the file already
+    /// has, when one differs only in letter case. The daemon reads keys without case, so a write
+    /// to <c>AllowedTools</c> beside an existing <c>allowedTools</c> gives a duplicate key, and
+    /// the daemon then stops at startup.
+    /// </summary>
+    internal static string ResolveExistingKeyPath(Dictionary<string, object> root, string path)
+    {
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        object? current = root;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            // A loaded file holds nested objects as JsonElement until a writer converts them.
+            IEnumerable<string>? keys = current switch
+            {
+                Dictionary<string, object> dictionary => dictionary.Keys,
+                JsonElement { ValueKind: JsonValueKind.Object } element => element.EnumerateObject().Select(static property => property.Name),
+                _ => null
+            };
+            var segment = segments[i];
+            var existing = keys?.FirstOrDefault(key => string.Equals(key, segment, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+                break;
+
+            segments[i] = existing;
+            current = current is Dictionary<string, object> parent ? parent[existing] : ((JsonElement)current!).GetProperty(existing);
+        }
+
+        return string.Join('.', segments);
+    }
+
+    /// <summary>
     /// Load a JSON file as a mutable dictionary. Returns a default skeleton if the file doesn't exist.
     /// </summary>
     internal static Dictionary<string, object> LoadJsonDict(string path)

@@ -17,7 +17,7 @@ public sealed class ToolConfigReaderGuardTests
     // generic call with one of these types, because the Security & Access screen read them
     // through a local helper that a list of method names did not cover.
     private static readonly Regex RawToolConfigRead = new(
-        @"\w+<(ToolConfig|ToolAudienceProfiles|ToolAudienceProfile)>\s*\(",
+        @"(?<!AddSingleton|GetRequiredService|GetService)<(ToolConfig|ToolAudienceProfiles|ToolAudienceProfile)>\s*\(",
         RegexOptions.Compiled);
 
     [Fact]

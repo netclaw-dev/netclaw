@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.97.0"
+  version: "2.98.0"
 ---
 
 # Netclaw Operations
@@ -785,8 +785,20 @@ add to it. This applies to `AllowedTools`, `ReadFiles`/`WriteFiles`/`AttachFiles
 - `netclaw doctor` warns when a Public or Team allowlist does not include
   `tool_output_read`. A spilled tool result tells the model to call that tool. The warning
   has no auto-fix, because a narrow list can be intentional.
+- `netclaw doctor` warns when the Personal profile has `McpServersMode: Allowlist` and
+  an enabled MCP server is not in `AllowedMcpServers`. The Personal audience cannot use
+  that server. `netclaw mcp permissions` in 0.27.1-beta.1 and earlier wrote such a list
+  when the operator enabled one server. The warning has no auto-fix, because the list can
+  be intentional. To repair it, enable the server in `netclaw mcp permissions`, or delete
+  `McpServersMode` and `AllowedMcpServers` from the Personal profile.
+- `netclaw mcp tools` stops with an error when the `Tools` section is not valid. Fix the
+  key that the error names, then run the command again.
+- An absent `Security.DeploymentPosture` means the Public posture, unless
+  `Security.StrictDefaults` is `false`. The daemon and the `netclaw config` screens use
+  the same rule.
 - The daemon reads `netclaw.json`, `secrets.json`, and `NETCLAW_*` variables.
-  `netclaw doctor` reads only `netclaw.json`, so it can show a different list.
+  `netclaw doctor`, `netclaw mcp permissions`, `netclaw mcp tools`, and the
+  `netclaw config` screens read only `netclaw.json`, so they can show a different value.
 - `netclaw init` writes only the posture (`Security.DeploymentPosture`,
   `Security.ShellExecutionMode`, `Security.StrictDefaults`) and `Tools.ShellMode`. It does
   not write `Tools.AudienceProfiles`. The daemon computes the profiles from the posture. An
