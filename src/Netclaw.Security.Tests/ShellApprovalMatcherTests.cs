@@ -1707,18 +1707,22 @@ public sealed class ShellApprovalMatcherPathExtractionTests
     }
 
     // A loop variable or a "~" program path gives Unknown command words for
-    // that command (#2306). The call then gets a rewrite correction.
+    // that command (#2306). The call then gets a rewrite correction. The loop
+    // item of curl has no typed domain, so the loop source is unresolved and
+    // its candidates are the candidates of each command.
     [SlopwatchSuppress("SW001", "The cases resolve POSIX paths with the Bash grammar.")]
     [Theory(SkipUnless = nameof(IsPosix), Skip = "POSIX-only path semantics")]
     [InlineData("for u in /api/first /api/second; do echo \"=== $u ===\"; curl -sS -m 10 \"$u\" | head -c 1500; echo; done")]
     [InlineData("~/.dotnet/dotnet test tests/Project.Tests/Project.Tests.csproj --filter \"FullyQualifiedName~SchemaTests\" --nologo 2>&1 | tail -30")]
     public void Live_shapes_with_an_expansion_in_a_command_word_have_no_grant_identity(string command)
     {
-        var candidates = _matcher.ExtractCandidates(
+        var analysis = _matcher.AnalyzeInvocation(
             new ToolName("shell_execute"),
             Args(command, "/work/project"));
 
-        Assert.Contains(candidates, static candidate => candidate.VerbTokens is null);
+        Assert.Contains(
+            analysis.Candidates.Concat(analysis.CommandCandidates),
+            static candidate => candidate.VerbTokens is null);
     }
 
     // PowerShell cmdlets bind named parameters; a parameter value is an argument.

@@ -278,6 +278,16 @@ covered:
   the decision of the literal value. A name with a run-time value (`PID=$!`,
   `x=$(cmd)`, `read x`) is unknown. A command that reads it as a word gets
   `Once` and `Deny`.
+- A variable word has no path scope, also when the parser proves its value.
+  In `for d in ../x; do dotnet build "$d"; done` and in
+  `d=../x; dotnet build "$d"`, the value `../x` is outside the folder, but the
+  candidate keeps only the working directory scope. So the word is an unknown
+  operand (decision D1): a safe phrase or an `Always anywhere` grant covers the
+  command, and a folder, repository, or chat grant does not. The literal twin
+  `dotnet build ../x` keeps the scope of its path. A word that the parser
+  resolves as a path (`"$HOME/x"`) or types as a file value (`cat "$x"`) keeps
+  its scope. A data command (`echo "$f"`) and a protected path keep their own
+  rules.
 - Each command inside `if`, `case`, `while`, `until`, or a background list
   (`server &`) gets its own decision.
 - A Bash redirect to `/dev/null` (for example `2>/dev/null`) writes no file,

@@ -239,6 +239,25 @@ read -r expansion_start expansion_end < <(
 )
 security_mutations+=("ShellCommandAnalysis.cs{$expansion_start..$expansion_end}")
 
+# A variable word with no path scope is an unknown operand (D1).
+read -r unscoped_start unscoped_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool IsUnscopedVariableWord(AnalyzedArgument argument)" \
+    "=> argument.Argument.Kind == ArgKind.EnvVar" \
+    "&& argument.Value is not ShellValueDomain.IntegerRange;"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$unscoped_start..$unscoped_end}")
+
+read -r unscoped_use_start unscoped_use_end < <(
+  find_span \
+    "$analysis_file" \
+    "private static bool HasUnresolvedOperand(" \
+    "(HasUnsupportedArgumentDomain(argument) || IsUnscopedVariableWord(argument))" \
+    "(HasUnsupportedArgumentDomain(argument) || IsUnscopedVariableWord(argument))"
+)
+security_mutations+=("ShellCommandAnalysis.cs{$unscoped_use_start..$unscoped_use_end}")
+
 verb_data_file="$repo_root/src/Netclaw.Security/ShellVerbPolicyData.cs"
 read -r data_verb_start data_verb_end < <(
   find_span \
@@ -462,7 +481,7 @@ security_mutations+=("ShellCommandPolicy.cs{$combine_start..$combine_end}")
 run_group \
   "stryker-shell-command-analysis.json" \
   "$output_path/security" \
-  215 \
+  221 \
   "${security_mutations[@]}"
 
 actor_mutations=()
