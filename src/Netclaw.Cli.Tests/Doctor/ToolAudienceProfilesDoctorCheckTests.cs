@@ -554,6 +554,65 @@ public sealed class ToolAudienceProfilesDoctorCheckTests : IDisposable
     }
 
     [Fact]
+    public async Task PersonalAllowlistWarning_NamesOnlyEnabledServersOutsideTheAllowlist()
+    {
+        // The shape that `netclaw mcp permissions` wrote in issue #2362.
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal" },
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "McpServersMode": "Allowlist",
+                    "AllowedMcpServers": ["notion"]
+                  }
+                }
+              },
+              "McpServers": {
+                "notion": { "Transport": "http", "Url": "https://mcp.notion.com/mcp", "Enabled": true },
+                "textforge": { "Transport": "http", "Url": "https://textforge.net/mcp", "Enabled": true },
+                "parked": { "Transport": "http", "Url": "https://example.com/mcp", "Enabled": false }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.Equal(DoctorSeverity.Warning, result.Severity);
+        Assert.Contains("MCP server(s) textforge are enabled, but the Personal audience cannot use them", result.Message);
+    }
+
+    [Fact]
+    public async Task PersonalAllowlistWarning_DoesNotFireWhenPersonalFollowsTheDefault()
+    {
+        WriteConfig(
+            """
+            {
+              "configVersion": 1,
+              "Security": { "DeploymentPosture": "Personal" },
+              "Tools": {
+                "AudienceProfiles": {
+                  "Personal": {
+                    "ApprovalPolicy": { "McpServerDefaults": { "textforge": "Auto" } }
+                  }
+                }
+              },
+              "McpServers": {
+                "textforge": { "Transport": "http", "Url": "https://textforge.net/mcp", "Enabled": true }
+              }
+            }
+            """);
+
+        var check = new ToolAudienceProfilesDoctorCheck(_paths);
+        var result = await check.RunAsync(TestContext.Current.CancellationToken);
+
+        Assert.DoesNotContain("the Personal audience cannot use them", result.Message);
+    }
+
+    [Fact]
     public async Task MissingApprovalWarning_DoesNotFireForServerNotInMcpServers()
     {
         // Server is in AllowedMcpServers but not in McpServers (stale allowlist).

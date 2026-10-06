@@ -63,8 +63,9 @@ public sealed class MattermostFixture : IAsyncLifetime
             // mattermost-preview is amd64-only; ARM hosts need an explicit
             // platform so Docker pulls the emulated image instead of failing
             // manifest resolution.
+            // Pin the server so the action-route compatibility test cannot drift.
             var builder = new ContainerBuilder(
-                new DockerImage("mattermost/mattermost-preview:latest", new Platform("linux/amd64")))
+                new DockerImage("mattermost/mattermost-preview:11.7.7", new Platform("linux/amd64")))
                 .WithPortBinding(8065, true);
 
             foreach (var (name, value) in MattermostBootstrapper.DefaultEnvironmentVariables)

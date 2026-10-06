@@ -170,7 +170,7 @@ public sealed class ConfigDashboardViewModelTests
         Assert.Equal("– disabled", Summary(vm, "Browser Automation"));
         Assert.Equal("OTLP off · 0 webhooks", Summary(vm, "Telemetry & Alerting"));
         // Features default to enabled when absent, so a bare config reports 6/6.
-        Assert.Equal("Personal · 6/6 enabled", Summary(vm, "Security & Access"));
+        Assert.Equal("Public · 6/6 enabled", Summary(vm, "Security & Access"));
         Assert.Equal(paths.WorkspacesDirectory, Summary(vm, "Workspaces Directory"));
     }
 

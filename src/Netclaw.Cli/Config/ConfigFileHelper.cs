@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.Extensions.Configuration;
 using Netclaw.Cli.Json;
 using Netclaw.Configuration;
 using Netclaw.Configuration.Secrets;
@@ -27,6 +28,55 @@ internal static class ConfigFileHelper
         var config = LoadJsonDict(paths.NetclawConfigPath);
         var secrets = LoadJsonDict(paths.SecretsPath);
         return (config, secrets);
+    }
+
+    /// <summary>
+    /// Binds the <c>Tools</c> section of netclaw.json the same way as the daemon: on top of the
+    /// defaults for the configured posture. A missing file gives the defaults.
+    /// </summary>
+    /// <remarks>
+    /// Do not deserialize <see cref="ToolConfig"/> from the raw JSON. A deserializer replaces a
+    /// partial audience profile with an empty one, so an unset <c>McpServersMode</c> reads as an
+    /// empty allowlist while the daemon reads the posture default. An editor that saves from that
+    /// view narrows the profile (issue #2362).
+    /// </remarks>
+    internal static ToolConfig LoadToolConfig(Configuration.NetclawPaths paths)
+    {
+        var configuration = new ConfigurationBuilder()
+            .AddJsonFile(paths.NetclawConfigPath, optional: true, reloadOnChange: false)
+            .Build();
+        return PolicyConfiguration.Bind(configuration).Tools;
+    }
+
+    /// <summary>
+    /// Returns <paramref name="path"/> with each segment replaced by the key that the file already
+    /// has, when one differs only in letter case. The daemon reads keys without case, so a write
+    /// to <c>AllowedTools</c> beside an existing <c>allowedTools</c> gives a duplicate key, and
+    /// the daemon then stops at startup.
+    /// </summary>
+    internal static string ResolveExistingKeyPath(Dictionary<string, object> root, string path)
+    {
+        var segments = path.Split('.', StringSplitOptions.RemoveEmptyEntries);
+        object? current = root;
+        for (var i = 0; i < segments.Length; i++)
+        {
+            // A loaded file holds nested objects as JsonElement until a writer converts them.
+            IEnumerable<string>? keys = current switch
+            {
+                Dictionary<string, object> dictionary => dictionary.Keys,
+                JsonElement { ValueKind: JsonValueKind.Object } element => element.EnumerateObject().Select(static property => property.Name),
+                _ => null
+            };
+            var segment = segments[i];
+            var existing = keys?.FirstOrDefault(key => string.Equals(key, segment, StringComparison.OrdinalIgnoreCase));
+            if (existing is null)
+                break;
+
+            segments[i] = existing;
+            current = current is Dictionary<string, object> parent ? parent[existing] : ((JsonElement)current!).GetProperty(existing);
+        }
+
+        return string.Join('.', segments);
     }
 
     /// <summary>
