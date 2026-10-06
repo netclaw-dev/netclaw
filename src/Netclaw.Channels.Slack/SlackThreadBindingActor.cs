@@ -123,7 +123,7 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             uploadFileAsync: UploadOutputFileAsync,
             postApprovalPromptAsync: HandleApprovalRequestAsync,
             readPromptIdValue: promptMessageTs => promptMessageTs.Value,
-            onApprovalPromptFailedAsync: SendApprovalDenyOnFailureAsync,
+            onApprovalPromptFailedAsync: SendApprovalPromptUnavailableAsync,
             persistPromptTracked: tracked => Persist(tracked, ApplyPendingApprovalPromptTracked),
             handleChannelSpecificOutputAsync: HandleChannelSpecificOutputAsync,
             advanceCursor: cursor => AdvanceCursor(new SlackEventTs(cursor)),
@@ -1085,10 +1085,16 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
         }
     }
 
-    private async Task SendApprovalDenyOnFailureAsync(ToolInteractionRequest request)
+    /// <summary>
+    /// Tells the session that the approval prompt could not be posted. The
+    /// session refuses the call with <c>approval_prompt_unavailable</c>, so the
+    /// call does not run and the model does not read the failure as a user
+    /// decision. The requester sender ID passes the session's requester check.
+    /// </summary>
+    private async Task SendApprovalPromptUnavailableAsync(ToolInteractionRequest request)
     {
         _log.Warning(
-            "Auto-denying approval for {CallId} ({ToolName}) because the Slack prompt could not be posted",
+            "Refusing {CallId} ({ToolName}) because the Slack approval prompt could not be posted",
             request.CallId,
             request.ToolName);
 
@@ -1098,17 +1104,17 @@ internal sealed class SlackThreadBindingActor : ReceivePersistentActor, IWithTim
             {
                 SessionId = _sessionId,
                 CallId = request.CallId,
-                SelectedKey = ApprovalOptionKeys.DenyKey,
+                SelectedKey = ApprovalOptionKeys.PromptUnavailableKey,
                 SenderId = request.RequesterSenderId ?? new Netclaw.Actors.Protocol.SenderId(string.Empty)
             });
         }
         catch (Exception ex)
         {
-            _log.Error(ex, "Failed to send auto-deny feedback for {CallId}", request.CallId);
+            _log.Error(ex, "Failed to send prompt-unavailable feedback for {CallId}", request.CallId);
         }
 
         await SafePostAsync(
-            $":warning: I couldn't post the approval prompt for `{request.ToolName}`. The action was automatically denied — please ask me to try again.");
+            $":warning: Netclaw could not show the approval prompt for `{request.ToolName}` in this channel. The call did not run.");
     }
 
     private async Task TryResolveApprovalPromptAsync(

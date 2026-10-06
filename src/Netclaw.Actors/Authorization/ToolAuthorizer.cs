@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using Microsoft.Extensions.AI;
 using Netclaw.Actors.Authorization.Consent;
+using Netclaw.Actors.Protocol;
 using Netclaw.Actors.Tools;
 using Netclaw.Configuration;
 using Netclaw.Security;
@@ -77,10 +78,12 @@ internal sealed class ToolAuthorizer
         if (_registry.GetByName(call.Name) is not { } tool)
             return AuthorizationDecision.From(ToolAuthorizationDecision.Deny("tool_not_found"), analysis: null);
 
-        var decision = string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal)
+        var isShell = string.Equals(tool.Name, ShellTool.ToolName, StringComparison.Ordinal);
+        var decision = isShell
             ? await AuthorizeShellAsync(new ShellCall(this, tool, call, context), ct)
             : AuthorizationDecision.From(await DecideOtherAsync(new OtherCall(this, tool, call, context), ct), analysis: null);
-        return DenyConsentWhenUnattended(decision, context);
+        decision = DenyConsentWhenUnattended(decision, context);
+        return isShell ? CorrectCommandTooLongToShow(decision) : decision;
     }
 
     /// <summary>
@@ -108,6 +111,32 @@ internal sealed class ToolAuthorizer
                 + "audience (for example with /run-reminder), then run it again.",
                 consent.Trace)
             : decision;
+
+    // The operator must see the full command that they approve. A shell prompt
+    // whose text does not fit on every channel becomes a correction: the call
+    // does not run and does not prompt. This rule runs after the unattended
+    // denial, so only an attended consent request reaches it. Allowed, denied,
+    // and unattended calls do not change. The same long call gets the same
+    // correction again, never a prompt. The trace keeps the policy result, as
+    // for the unattended denial.
+    private static AuthorizationDecision CorrectCommandTooLongToShow(AuthorizationDecision decision)
+    {
+        if (decision is not AuthorizationDecision.NeedsConsent consent)
+            return decision;
+
+        // The display text holds the full command. An exact candidate verb can
+        // also be the full command text, and the header and verb list show it.
+        var length = consent.Request.CandidateVerbs
+            .Select(static verb => verb.Length)
+            .Append(consent.Request.DisplayText.Length)
+            .Max();
+        return length > ApprovalOptionKeys.MaxCommandTextChars
+            ? new AuthorizationDecision.CorrectionRequired(
+                new ToolCorrectionCollection([new ToolCorrection.ShellCommandTooLongToShow(length)]),
+                consent.Matches,
+                consent.Trace)
+            : decision;
+    }
 
     private async Task<AuthorizationDecision> AuthorizeShellAsync(ShellCall call, CancellationToken ct)
     {
@@ -139,6 +168,8 @@ internal sealed class ToolAuthorizer
     // projected candidates) precede the covering grant. An attended and an
     // unattended call use the same rules (D2). The only difference comes after
     // this method: the session denies a consent request that nobody can answer.
+    // An attended consent request with a command too long to show then becomes
+    // a correction (CorrectCommandTooLongToShow).
     // ---------------------------------------------------------------------
     private async Task<ToolAuthorizationDecision> DecideShellAsync(ShellCall call, CancellationToken ct)
     {

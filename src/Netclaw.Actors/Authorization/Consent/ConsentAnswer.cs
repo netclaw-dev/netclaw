@@ -24,6 +24,12 @@ internal abstract record ConsentAnswer
     /// <summary>Gets the refusal for a prompt that nobody answered in time.</summary>
     public static Refused TimedOut { get; } = new(RefusalKind.TimedOut);
 
+    /// <summary>
+    /// Gets the refusal for a prompt that the channel could not show. Nobody
+    /// saw the prompt, so this is not a user decision.
+    /// </summary>
+    public static Refused PromptUnavailable { get; } = new(RefusalKind.PromptUnavailable);
+
     /// <summary>Allow the blocked call one time. Nothing is stored.</summary>
     public sealed record Once : ConsentAnswer
     {
@@ -49,6 +55,31 @@ internal enum RefusalKind
 {
     Denied,
     TimedOut,
+    PromptUnavailable,
+}
+
+/// <summary>
+/// The tool result text for a refused call. The model reads this text, so each
+/// reason must be honest: only <see cref="RefusalKind.Denied"/> says that the
+/// user declined.
+/// </summary>
+internal static class ConsentRefusalText
+{
+    public const string TimedOut = "Tool access denied: approval_timed_out";
+
+    public const string PromptUnavailable =
+        "Tool access denied: approval_prompt_unavailable "
+        + "(Netclaw could not show the approval prompt in this channel. The call did not run.)";
+
+    /// <summary>Returns the result text for a refusal.</summary>
+    /// <param name="kind">Why the call did not run.</param>
+    /// <param name="deniedText">The text for an explicit "Deny" answer.</param>
+    public static string For(RefusalKind kind, string deniedText) => kind switch
+    {
+        RefusalKind.TimedOut => TimedOut,
+        RefusalKind.PromptUnavailable => PromptUnavailable,
+        _ => deniedText,
+    };
 }
 
 /// <summary>
@@ -68,6 +99,7 @@ internal static class ConsentAnswerCodec
     private const string ApprovedEverywhereText = "ApprovedEverywhere";
     private const string DeniedText = "Denied";
     private const string TimedOutText = "TimedOut";
+    private const string PromptUnavailableText = "PromptUnavailable";
 
     /// <summary>
     /// Parses a selected option key. It returns false when the prompt did not
@@ -79,6 +111,15 @@ internal static class ConsentAnswerCodec
         string? repositoryCommonDirectory,
         out ConsentAnswer answer)
     {
+        // SECURITY: no prompt offers this key. Only a channel binding sends it,
+        // when it could not post the prompt. It maps to a refusal, so to accept
+        // it without an offer cannot allow a call.
+        if (selectedKey == ApprovalOptionKeys.PromptUnavailable)
+        {
+            answer = ConsentAnswer.PromptUnavailable;
+            return true;
+        }
+
         // Legacy journal entries lack offered option keys. They cannot prove
         // that the repository scope appeared in the original prompt.
         if (!IsOffered(offeredKeys, selectedKey, repositoryCommonDirectory))
@@ -152,12 +193,14 @@ internal static class ConsentAnswerCodec
         ConsentAnswer.Grant { Scope: GrantScopeKind.Everywhere } => ApprovedEverywhereText,
         ConsentAnswer.Refused { Kind: RefusalKind.Denied } => DeniedText,
         ConsentAnswer.Refused { Kind: RefusalKind.TimedOut } => TimedOutText,
+        ConsentAnswer.Refused { Kind: RefusalKind.PromptUnavailable } => PromptUnavailableText,
         _ => throw new ArgumentOutOfRangeException(nameof(answer), answer, "Unknown consent answer."),
     };
 
     /// <summary>
     /// Reads journal text. The comparison ignores case, as the earlier enum
-    /// parse did. Unknown text fails closed to a refusal.
+    /// parse did. Unknown text fails closed to a refusal. An earlier binary
+    /// reads <c>PromptUnavailable</c> as <c>Denied</c>, which also refuses.
     /// </summary>
     public static ConsentAnswer FromJournalText(string? text)
     {
@@ -171,6 +214,8 @@ internal static class ConsentAnswerCodec
             return new ConsentAnswer.Grant(GrantScopeKind.Repository);
         if (Is(text, ApprovedEverywhereText))
             return new ConsentAnswer.Grant(GrantScopeKind.Everywhere);
+        if (Is(text, PromptUnavailableText))
+            return ConsentAnswer.PromptUnavailable;
         return Is(text, TimedOutText) ? ConsentAnswer.TimedOut : ConsentAnswer.Denied;
 
         static bool Is(string? text, string expected)

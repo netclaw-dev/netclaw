@@ -196,6 +196,13 @@ bridge), the authorizer turns a consent request into the denial
 unattended unresolved-input denial, and the PR 6e rule that let a stored grant
 replace a trusted-root denial for an unattended call.
 
+After the unattended denial, an attended shell consent request whose command
+text is longer than `ApprovalOptionKeys.MaxCommandTextChars` (900) becomes the
+correction `shorten_shell_command`. The operator must see the full command
+that they approve, and 900 characters is the command length that a Discord
+prompt (2,000 characters) can show in full. The call does not run, and a
+resend of the same call gets the same correction.
+
 Each context below lists its question, the classes that answer it today, its
 published contract today, what it must not know, and where its data lives.
 "Leaks today" lists known places where the current code breaks the "must not
@@ -742,7 +749,8 @@ service calls, a compound or pipeline form of the same command, and a
 ### 7.5 Add a channel prompt
 
 1. Consent delivery: render the `ToolInteractionRequest` options with their
-   keys. Keep labels within `ApprovalOptionKeys.MaxLabelLength` (76).
+   keys. Keep labels within `ApprovalOptionKeys.MaxLabelLength` (76). Show a
+   command of `ApprovalOptionKeys.MaxCommandTextChars` (900) characters in full.
 2. Route the answer as a `ToolInteractionResponse` with the selected key.
 3. Check the requester through `ApprovalButtonValueCodec`. Do not invent a
    second rule.

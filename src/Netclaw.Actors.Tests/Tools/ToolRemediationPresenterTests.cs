@@ -37,6 +37,10 @@ public class ToolRemediationPresenterTests
             "Next action: rewrite the command as this result says and call shell_execute again. The new call passes normal approval."
         },
         {
+            nameof(ToolRemediationCode.ShortenShellCommand),
+            "Next action: call shell_execute again with the shorter command. The new call passes normal approval."
+        },
+        {
             nameof(ToolRemediationCode.UseNativeTool),
             "Next action: call the native Netclaw tool named in this result directly instead of shell_execute."
         }
