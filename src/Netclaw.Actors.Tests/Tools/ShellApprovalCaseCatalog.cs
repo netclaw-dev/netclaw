@@ -2638,6 +2638,58 @@ public static class ShellApprovalCases
             Bash52("cd sub && for f in $(ls); do echo \"$f\"; done"),
             Approvals.None,
             ExpectedApproval.Allow(ApprovalAllowReason.ReviewedSafePolicy)),
+        // SECURITY: ShellSyntaxTree 0.4.0-beta.22 shows three command forms
+        // that the parser hid before. Bash runs "touch x" in each form. Each
+        // form must show "touch" as a candidate or fail closed. Before
+        // beta.22, Netclaw allowed each form with no prompt.
+        // Bash removes a backslash-newline pair before it reads "$(".
+        Case(
+            "continuation-inside-substitution-shows-command",
+            Bash52("echo \"$\\\n(touch x)\""),
+            Approvals.None,
+            ExpectedApproval.Require(["touch"])),
+        // A "#" right after a quote is word text, not a comment.
+        Case(
+            "hash-after-double-quote-shows-command",
+            Bash52("echo \"a\"# ; touch x"),
+            Approvals.None,
+            ExpectedApproval.Require(["touch"])),
+        Case(
+            "hash-after-single-quote-shows-command",
+            Bash52("ls 'a'#;touch x"),
+            Approvals.None,
+            ExpectedApproval.Require(["touch"])),
+        Case(
+            "unattended-hash-after-quote-denied",
+            Bash52("echo \"a\"# ; touch x", interactive: false),
+            Approvals.None,
+            ExpectedApproval.DenyUnattended()),
+        // Bash reads a carriage return as a word character. A backslash before
+        // CR LF is not a line continuation, and a CR does not end a line. The
+        // parser cannot read such a source, so the call gets only a one-time
+        // approval.
+        Case(
+            "escaped-crlf-fails-closed",
+            Bash52("echo a\\\r\ntouch x"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        Case(
+            "bare-cr-before-hash-fails-closed",
+            Bash52("echo a\r# ; touch x"),
+            Approvals.None,
+            ExpectedApproval.Require([], isMessy: true, approvalChecks: 0)),
+        // Positive controls: a "#" that starts a word is a comment, and a
+        // backslash-newline pair outside an expansion joins the words.
+        Case(
+            "word-start-hash-comment-stays-allowed",
+            Bash52("echo \"a\" # ; touch x"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
+        Case(
+            "continuation-between-words-stays-allowed",
+            Bash52("echo a \\\nb"),
+            Approvals.None,
+            ExpectedApproval.Allow(ApprovalAllowReason.ApprovalExemptShellCandidates)),
         Case(
             "brace-credential-secrets-denied-as-literal",
             Bash52("cat ~/.netclaw/config/{netclaw,secrets}.json"),

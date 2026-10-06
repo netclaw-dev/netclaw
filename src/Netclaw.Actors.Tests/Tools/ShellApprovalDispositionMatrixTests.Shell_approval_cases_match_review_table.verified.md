@@ -411,6 +411,14 @@
 | unattended-loop-outside-operand-uses-global-grant | Bash52 | Personal | Project | Non-interactive | for d in ../outside/x.slnx; do dotnet build "$d"; done | persistent[anywhere]:dotnet build | Allowed | StoredApproval | none | Not applicable |
 | loop-issue-update-uses-global-grant | Bash52 | Personal | Project | Interactive | for n in 8250 8244; do gh api -X PATCH repos/o/r/issues/$n -f milestone=157 >/dev/null && echo "moved $n"; done | persistent[anywhere]:gh api | Allowed | StoredApproval | none | Not applicable |
 | cd-loop-over-listing-output-stays-allowed | Bash52 | Personal | Project | Interactive | cd sub && for f in $(ls); do echo "$f"; done | none | Allowed | ReviewedSafePolicy | none | Not applicable |
+| continuation-inside-substitution-shows-command | Bash52 | Personal | Project | Interactive | echo "$\\n(touch x)" | none | RequiresApproval | approval required | touch | No |
+| hash-after-double-quote-shows-command | Bash52 | Personal | Project | Interactive | echo "a"# ; touch x | none | RequiresApproval | approval required | touch | No |
+| hash-after-single-quote-shows-command | Bash52 | Personal | Project | Interactive | ls 'a'#;touch x | none | RequiresApproval | approval required | touch | No |
+| unattended-hash-after-quote-denied | Bash52 | Personal | Project | Non-interactive | echo "a"# ; touch x | none | Denied | approval_required_unattended | none | Not applicable |
+| escaped-crlf-fails-closed | Bash52 | Personal | Project | Interactive | echo a\\r\ntouch x | none | RequiresApproval | approval required | none | Yes |
+| bare-cr-before-hash-fails-closed | Bash52 | Personal | Project | Interactive | echo a\r# ; touch x | none | RequiresApproval | approval required | none | Yes |
+| word-start-hash-comment-stays-allowed | Bash52 | Personal | Project | Interactive | echo "a" # ; touch x | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
+| continuation-between-words-stays-allowed | Bash52 | Personal | Project | Interactive | echo a \\nb | none | Allowed | ApprovalExemptShellCandidates | none | Not applicable |
 | brace-credential-secrets-denied-as-literal | Bash52 | Personal | Project | Interactive | cat ~/.netclaw/config/{netclaw,secrets}.json | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
 | assigned-credential-path-denied-as-literal | Bash52 | Personal | Project | Interactive | x=~/.netclaw/config/secrets.json; cat "$x" | persistent[anywhere]:cat | Denied | shell_references_protected_path | none | Not applicable |
 | assigned-branch-is-not-covered-by-another-branch-grant | Bash52 | Personal | Project | Interactive | b=main; git push origin "$b" | persistent[anywhere]:git push origin feature-x | RequiresApproval | approval required | git push origin "$b" | No |
