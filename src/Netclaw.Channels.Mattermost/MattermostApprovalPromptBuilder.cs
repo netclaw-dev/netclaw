@@ -3,6 +3,7 @@
 //      Copyright (C) 2026 - 2026 Petabridge, LLC <https://petabridge.com>
 // </copyright>
 // -----------------------------------------------------------------------
+using System.Globalization;
 using System.Text;
 using Netclaw.Actors.Protocol;
 using Netclaw.Channels;
@@ -51,7 +52,7 @@ internal static class MattermostApprovalPromptBuilder
 
         var requesterSenderId = request.RequesterSenderId?.Value ?? string.Empty;
         var actions = request.Options
-            .Select(option =>
+            .Select((option, optionIndex) =>
             {
                 var optionKey = option.Key.Value;
                 var actionToken = actionStore?.CreateAction(
@@ -69,7 +70,9 @@ internal static class MattermostApprovalPromptBuilder
                     };
 
                 return new MattermostAttachmentAction(
-                    Id: $"tool_approval_{optionKey}",
+                    // Mattermost routes action IDs with [A-Za-z0-9]+.
+                    // The token retains the original approval option key.
+                    Id: $"toolapproval{optionIndex.ToString(CultureInfo.InvariantCulture)}",
                     Name: option.Label,
                     IntegrationUrl: callbackUrl,
                     Context: context,

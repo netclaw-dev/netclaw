@@ -99,6 +99,11 @@ Mattermost delivers interactive button clicks over an inbound HTTP POST, unlike
 Slack Socket Mode or the Discord gateway. When `CallbackUrl` is configured the
 daemon exposes `/api/mattermost/actions`:
 
+- The user's client sends the click to Mattermost. The Mattermost server sends
+  the callback to Netclaw; the client does not need access to `CallbackUrl`.
+- Button action IDs contain only ASCII letters and digits. Mattermost 11.7.7
+  rejects other characters before it calls Netclaw. Approval option keys stay in the
+  token store and do not become action IDs.
 - Button callbacks carry opaque one-time action tokens. Tokens are consumed once,
   expire automatically, and buttons minted by a previous daemon process are
   rejected after a restart.
