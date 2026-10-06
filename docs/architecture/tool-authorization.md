@@ -343,6 +343,19 @@ Leaks today:
   character is exempt. Owner decision (#2349): `echo` and `printf` operands
   stay data (the worst case is file names in the output), and `test` and `[`
   keep the proved-value rule.
+- Since ShellSyntaxTree 0.4.0-beta.22, the parser shows three Bash forms that
+  it hid before. Netclaw needs no change for them: each hidden command is now a
+  candidate, or the source is unresolved.
+  - A line continuation inside an expansion (`echo "$\<LF>(touch x)"`) shows
+    `touch`.
+  - A `#` right after a quote is word text (`echo "a"# ; touch x`), so the
+    parser shows `touch`.
+  - A carriage return outside quotes, comments, and heredoc bodies makes the
+    source unresolved, as does a backslash before a CR in double quotes.
+  - A reserved word across a continuation is unresolved. An inline
+    `--name=value` value comes from the decoded word, else it is `Unknown`. A
+    `~` after `=` or `:` in an argument expands only in a proved non-POSIX
+    Bash with a launch-proved `HOME`, else it is `Unknown`.
 - Owner decision D5 (option A): a glob word gets the decision of each literal
   protected path that its segments can match, or of a directory that contains
   one (`ToolPathPolicy.GlobMayReachDeniedPath`). The match is lexical: Netclaw
