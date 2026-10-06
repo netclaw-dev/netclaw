@@ -30,7 +30,8 @@
 ## Focused Mutation Tests
 
 All focused gates run in one job definition, `mutation-gates` in `pr_validation.yml`, on each pull request, merge group, and `dev` push.
-The job has three Linux matrix groups that run in parallel with the normal test matrix.
+The job has four Linux matrix groups that run in parallel with the normal test matrix.
+The groups hold about 13 to 14 minutes of gates each. The sum of all gates is about 54 minutes of runner time. The job timeout is 25 minutes.
 Each group runs its gates in sequence after one checkout and tool restore, and it reports every failed gate.
 To add a gate, add its script name (`scripts/run-<name>-mutations.sh`) to the lightest group. Do not add a new job.
 
@@ -166,7 +167,7 @@ under a bounded profile, and a protected path with a grant.
 
 The tests pick the host shell and a temporary root without links, so they also
 pass in the normal Windows and macOS test jobs. The local run took about
-2 minutes after package restore. CI runs it in the `authorization` group of the
+2 minutes after package restore. CI runs it in the `shell-analysis` group of the
 `mutation-gates` job. Its report directory is
 `artifacts/stryker/tool-authorizer-order`.
 
@@ -204,7 +205,7 @@ argument, and the program word does not count. `ExactVerbChainMutationTests` and
 duplicated span fails before Stryker starts.
 
 The local run took about 1 minute after package restore. CI runs it in the
-`approval-and-execution` group of the `mutation-gates` job. Its report
+`verb-chain-and-reminder` group of the `mutation-gates` job. Its report
 directory is `artifacts/stryker/exact-verb-chain`.
 
 ### Approval Directory Gate
