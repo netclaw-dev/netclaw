@@ -24,9 +24,10 @@ internal static class DiscordApprovalPromptBuilder
     /// <summary>
     /// Display-text budget. With the field budgets below, the largest prompt
     /// (a verb list, the complex-command hint, and adopted context) stays under
-    /// <see cref="MaxMessageChars"/>.
+    /// <see cref="MaxMessageChars"/>. Discord has the smallest limit, so this
+    /// budget sets the command length that every approval prompt can show.
     /// </summary>
-    internal const int MaxDisplayTextChars = 900;
+    internal const int MaxDisplayTextChars = ApprovalOptionKeys.MaxCommandTextChars;
 
     // Field budgets. A candidate verb can be the full text of one command, so
     // the header, the verb list, and the resolution line bound it again.

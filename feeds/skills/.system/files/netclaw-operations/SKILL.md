@@ -3,7 +3,7 @@ name: netclaw-operations
 description: "REQUIRED when the user asks about scheduling, reminders, cron jobs, timers, background jobs, diagnostics, troubleshooting, MCP tools, daemon health, identity updates, or Netclaw capabilities and self-maintenance."
 metadata:
   author: netclaw
-  version: "2.94.1"
+  version: "2.94.2"
 ---
 
 # Netclaw Operations
@@ -74,7 +74,7 @@ Keep shell approval friction bounded:
 11. Advice grants no authority. Every replacement call passes current policy.
 12. If you require the exact platform path, retry unchanged once through normal policy.
 13. Reviewed diagnostics without file output do not receive temporary relocation advice. Normal approval and denial rules still apply.
-14. Write long text (PR bodies, issue bodies, commit messages, file contents) to a file first, then pass the file to the command (for example `gh pr create --body-file <file>`, `gh issue create --body-file <file>`, `git commit -F <file>`). Do not inline long text in a shell command: the approval prompt shows the whole command.
+14. Write long text (PR bodies, issue bodies, commit messages, file contents) to a file first, then pass the file to the command (for example `gh pr create --body-file <file>`, `gh issue create --body-file <file>`, `git commit -F <file>`). Do not inline long text in a shell command: a command that needs approval and is longer than 900 characters gets a `shorten_shell_command` correction, not a prompt.
 
 ## Project Directory
 

@@ -5,6 +5,7 @@
 // -----------------------------------------------------------------------
 using System.Collections.Concurrent;
 using Microsoft.Extensions.AI;
+using Netclaw.Actors.Protocol;
 using Netclaw.Configuration;
 using Netclaw.Security;
 using Netclaw.Tools;
@@ -33,6 +34,13 @@ internal abstract record ToolCorrection
     internal sealed record ShellCommandWordsRewriteSuggested(
         ShellCommandWordsRewrite Rewrite,
         ApprovalShell Shell) : ToolCorrection;
+
+    /// <summary>
+    /// Asks for a shorter shell command. The approval prompt cannot show the
+    /// full command, so the operator could not see what they approve.
+    /// </summary>
+    /// <param name="Length">The length of the longest text that the prompt would show.</param>
+    internal sealed record ShellCommandTooLongToShow(int Length) : ToolCorrection;
 }
 
 /// <summary>Groups compatible correction facts for one tool attempt.</summary>
@@ -89,6 +97,7 @@ internal sealed record ToolCorrectionDelivery(
         {
             [ToolCorrection.ShellWorkingDirectorySuggested shell] => CreateShellDirectory(shell.Directory),
             [ToolCorrection.ShellCommandWordsRewriteSuggested words] => CreateCommandWords(words),
+            [ToolCorrection.ShellCommandTooLongToShow tooLong] => CreateShorterCommand(tooLong.Length),
             [ToolCorrection.NativeToolSuggested native] => CreateNative(native.ToolName, temporaryTarget: null),
             [ToolCorrection.ManagedTemporaryDirectorySuggested temporary] when managedTemporaryCall is not null
                 => CreateTemporary(temporary.Target, managedTemporaryCall),
@@ -114,6 +123,16 @@ internal sealed record ToolCorrectionDelivery(
         => new(
             "Tool execution deferred: rewrite_shell_command_words\n" + DescribeRewrite(words),
             new ToolInvocationReceipt.Correction(ToolRemediationCode.RewriteShellCommandWords),
+            NativeTool: null,
+            ManagedTemporaryStateChange: null);
+
+    private static ToolCorrectionDelivery CreateShorterCommand(int length)
+        => new(
+            "Tool execution deferred: shorten_shell_command\n"
+            + $"This command is too long to show for approval ({length} characters, limit {ApprovalOptionKeys.MaxCommandTextChars}). "
+            + "Write long text (a body, a script, file contents) to a file, then pass the file to the command "
+            + "(for example `--body-file <file>` or `git commit -F <file>`). Then run the command again.",
+            new ToolInvocationReceipt.Correction(ToolRemediationCode.ShortenShellCommand),
             NativeTool: null,
             ManagedTemporaryStateChange: null);
 

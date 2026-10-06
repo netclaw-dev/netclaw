@@ -35,6 +35,8 @@ internal static class ToolRemediationPresenter
                 "Next action: call the native Netclaw tool named in this result directly instead of shell_execute.",
             ToolRemediationCode.RewriteShellCommandWords =>
                 "Next action: rewrite the command as this result says and call shell_execute again. The new call passes normal approval.",
+            ToolRemediationCode.ShortenShellCommand =>
+                "Next action: call shell_execute again with the shorter command. The new call passes normal approval.",
             ToolRemediationCode.BreakToolCycle =>
                 "Next action: choose a different action, load a missing tool, or finish the task.",
             _ => throw new InvalidOperationException("Unsupported tool remediation code.")

@@ -78,6 +78,19 @@ public static class ApprovalOptionKeys
     public const int MaxLabelLength = 76;
 
     /// <summary>
+    /// The longest command text that an approval prompt shows in full on every
+    /// channel. Discord has the smallest message limit: 2,000 characters. The
+    /// other fields of the largest Discord prompt (the header, the verb list,
+    /// the hint, the options, and adopted context) can use 1,100 characters.
+    /// The command gets the remaining 900 characters.
+    /// </summary>
+    /// <remarks>
+    /// The operator must see the full command that they approve. A shell call
+    /// whose prompt text is longer gets a correction, not a prompt.
+    /// </remarks>
+    public const int MaxCommandTextChars = 900;
+
+    /// <summary>
     /// Returns true when the option key represents a "danger"-styled action
     /// — global-wildcard persistence (<see cref="ApproveEverywhere"/>) and
     /// hard refusal (<see cref="Deny"/>) both warrant visual emphasis to
