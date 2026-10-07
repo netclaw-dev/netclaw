@@ -74,6 +74,11 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
         "netclaw-(approval-matrix|testrun)-[0-9a-f]{32}",
         RegexOptions.CultureInvariant);
 
+    // The script names the revision worktree folder with the first 12 characters
+    // of the commit hash. A ".." path or a basename can show that name without
+    // the full path, and it differs for each revision.
+    private static readonly Regex RevisionFolder = new("^[0-9a-f]{12}$", RegexOptions.CultureInvariant);
+
     [Fact]
     public async Task Run()
     {
@@ -91,7 +96,11 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
             throw new InvalidOperationException("NETCLAW_CORPUS_PARALLELISM must be 1 or more.");
 
         var temporaryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(Path.GetTempPath()));
-        var cleaner = new Cleaner(temporaryRoot, Path.TrimEndingDirectorySeparator(Path.GetFullPath(repository)));
+        var repositoryRoot = Path.TrimEndingDirectorySeparator(Path.GetFullPath(repository));
+        var revisionFolder = Path.GetFileName(repositoryRoot);
+        if (!RevisionFolder.IsMatch(revisionFolder))
+            throw new InvalidOperationException($"NETCLAW_CORPUS_REPOSITORY must end in a 12-character revision folder, but it is '{repository}'.");
+        var cleaner = new Cleaner(temporaryRoot, repositoryRoot, revisionFolder);
         var file = new FileInfo(output);
         using var materializer = fixture.ActorSystem.Materializer();
 
@@ -478,7 +487,7 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
         };
 
     /// <summary>Replaces each run-specific path with a placeholder, longest path first.</summary>
-    private sealed class Cleaner(string temporaryRoot, string repository)
+    private sealed class Cleaner(string temporaryRoot, string repository, string revisionFolder)
     {
         public string Clean(string text, ShellApprovalHarness harness, string root)
         {
@@ -497,7 +506,8 @@ public sealed class AuthorizationCorpusProbe(ShellApprovalMatrixFixture fixture)
             foreach (var (path, placeholder) in replacements)
                 text = text.Replace(path, placeholder, StringComparison.Ordinal);
 
-            text = RunFolderGuid.Replace(text, "netclaw-$1-{GUID}");
+            text = RunFolderGuid.Replace(text, "netclaw-$1-{GUID}")
+                .Replace(revisionFolder, "{REVISION}", StringComparison.Ordinal);
             return WindowsHarnessRoot.Replace(text, "C:$1{W}")
                 .Replace("\\", "\\\\", StringComparison.Ordinal)
                 .Replace("\n", "\\n", StringComparison.Ordinal)

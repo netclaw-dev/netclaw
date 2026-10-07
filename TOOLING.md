@@ -649,6 +649,8 @@ python3 scripts/authorization-corpus/run.py --base upstream/dev                 
 python3 scripts/authorization-corpus/run.py --base upstream/dev --quick         # 3 states, a few minutes
 python3 scripts/authorization-corpus/run.py --base upstream/dev --jobs 1        # one decision lane
 python3 scripts/authorization-corpus/run.py --base upstream/dev --head-adapter authorizer
+python3 scripts/authorization-corpus/run.py --base upstream/dev --keep          # keep the head output and worktrees
+python3 scripts/authorization-corpus/run.py --base REV --head REV --fresh-head  # two probes of one revision
 ```
 
 How it works:
@@ -681,9 +683,25 @@ The probe replaces run-specific paths with placeholders (`{P}`, `{S}`, `{X}`,
 `{R}`, `{T}`, `{REPOSITORY}`, and the GUID of the fake Windows root). It also
 replaces the GUID in the `netclaw-approval-matrix-<GUID>` harness folder and
 in the `netclaw-testrun-<GUID>` temporary folder of the test process with
-`{GUID}`. A `..` path or a basename can show these names. The
-compare step also replaces the parent of the private temporary root, which a
-`..` path can reach. Grant timestamps compare by presence only.
+`{GUID}`. A `..` path or a basename can show these names. Grant timestamps
+compare by presence only.
+
+A `..` path can also reach the folders above the test process temporary root.
+These folders hold the revision hash (the first 12 characters), so they differ
+for each revision. The probe replaces the revision folder name with
+`{REVISION}`, also when a basename shows it alone. The probe fails when the
+folder name of `NETCLAW_CORPUS_REPOSITORY` is not a 12-character hash. The
+compare step then replaces the paths with fixed tokens before it compares two
+lines:
+
+| Text in the line | Token |
+|------------------|-------|
+| `<out>/worktrees/{REVISION}` (the revision worktree root) | `{REVISION_ROOT}` |
+| `<out>/run/{REVISION}` (the parent of the private temporary root) | `{RUN_ROOT}` |
+| `<out>` (the work directory) | `{WORK_ROOT}` |
+
+Two revisions with the same behavior therefore give the same lines. The
+report shows the tokens, never a revision hash.
 
 Bash 5.2 states:
 
@@ -735,7 +753,43 @@ Notes:
 - The script tests committed revisions only. Commit the work before a run.
 - The work directory is `artifacts/authorization-corpus` (`--out` changes it).
   The script reuses an output when the `src/` tree, adapter, probe, corpus,
-  and states are the same. A full output is about 600 MB.
+  and states are the same. A full output (a `src-*.tsv` file) is about
+  650 MB. A `--quick` output is about 90 MB.
+- The report (`report-*.txt` in the work directory) is the durable output.
+  Unless `--keep` is set, the script deletes the head output after the
+  compare. It also deletes each worktree with its build output (`bin` and
+  `obj`) and a failed probe's `.partial` output. The `.log` file stays.
+- The base output is the cache. It stays in the work directory, so the next
+  run against the same base skips the build and the probe for the base. A
+  self-compare (same `src/` tree on both sides) keeps its one output for the
+  same reason. The script prints the number and size of the cached outputs.
+  Each new base adds one output, so delete old ones, or run with
+  `--prune-cache` to delete every output except the current base output.
+- `--fresh-head` probes the head again even when an output exists, and writes
+  it to its own file. With the same revision for `--base` and `--head`, zero
+  differences shows that two probes of one revision agree.
+- Before a full run, check `df -h /` and `uptime`. A full run holds the base
+  output (650 MB), the head output (650 MB), and one worktree with its build
+  output at a time. Other jobs on the machine slow the build and the probe.
+- Each run records its own speed. The script prints a timing block and writes
+  it into the report, before the examples. This block comes from a `--quick`
+  self-compare on 8 CPUs, with a load average near 90 from other jobs:
+
+```text
+timing:
+  lanes: 7
+  cpus: 8
+  load average at the end (1 min): 90.9
+  corpus: 0m 10s (10 s)
+  build base: 8m 38s (518 s)
+  probe base: 23m 16s (1396 s)
+  build head: 4m 33s (273 s)
+  probe head: 21m 28s (1288 s)
+  compare: 0m 45s (45 s)
+  total: 59m 04s (3544 s)
+```
+
+  A phase that reuses a cached output shows `cache hit (not run)`.
 - Bash states need POSIX filesystem semantics. On Windows, the probe runs the
   PowerShell and tool states only.
 - Exit status 0 means no difference. Exit status 1 means at least one

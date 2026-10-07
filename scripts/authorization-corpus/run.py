@@ -14,8 +14,10 @@ Usage (from the repository root):
     python3 scripts/authorization-corpus/run.py --base upstream/dev --jobs 1
 
 The script exits with 0 when the two revisions give the same decision for
-every input, and with 1 when a decision differs. See TOOLING.md, section
-"Authorization corpus differential".
+every input, and with 1 when a decision differs. After the compare, it deletes
+the head output and the disposable worktrees unless --keep is set. The base
+output stays as the cache. The report lists the time of each phase. See
+TOOLING.md, section "Authorization corpus differential".
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -125,6 +128,9 @@ def run_revision(
     states: str | None,
     jobs: int,
     keep: bool,
+    timing: dict[str, float | None],
+    label: str,
+    fresh: bool = False,
 ) -> Path:
     sha = resolve(repository, revision)
     # The probe reads only src/. Two revisions with the same src/ tree give the
@@ -137,12 +143,16 @@ def run_revision(
     git(repository, "worktree", "add", "--detach", str(worktree), sha)
     # A locked worktree survives "git worktree prune" in other checkouts during a long run.
     git(repository, "worktree", "lock", "--reason", "authorization corpus run", str(worktree))
+    partial: Path | None = None
     try:
         adapter = detect_adapter(worktree, adapter_request)
         key = f"src-{tree[:12]}-{adapter}-{probe_digest(adapter, corpus_path)}{'-' + hashlib.sha256(states.encode()).hexdigest()[:8] if states else ''}"
-        result = out / f"{key}.tsv"
-        if result.exists():
+        # A fresh probe writes its own file, so that two probes of one revision stay apart.
+        result = out / f"{key}{'-fresh' if fresh else ''}.tsv"
+        if result.exists() and not fresh:
             print(f"[{revision}] {sha[:12]} reuse {result.name}")
+            timing[f"build {label}"] = None
+            timing[f"probe {label}"] = None
             return result
 
         print(f"[{revision}] {sha[:12]} src tree {tree[:12]}")
@@ -151,10 +161,13 @@ def run_revision(
         shutil.copy(PROBE_DIR / f"{adapter.capitalize()}Adapter.cs", tests / "AuthorizationCorpusProbeAdapter.cs")
 
         print(f"[{revision}] {sha[:12]} adapter={adapter}: build")
+        build_started = time.monotonic()
         subprocess.run(
             ["dotnet", "build", str(TEST_PROJECT), "-c", "Debug", "-v", "quiet", "-nologo"],
             cwd=worktree,
             check=True)
+        timing[f"build {label}"] = time.monotonic() - build_started
+        print(f"[{revision}] build: {format_seconds(timing[f'build {label}'])}")
 
         temporary = out / "run" / sha[:12] / "tmp"
         shutil.rmtree(temporary.parent, ignore_errors=True)
@@ -175,7 +188,7 @@ def run_revision(
         if states:
             environment["NETCLAW_CORPUS_STATES"] = states
         print(f"[{revision}] probe with {jobs} lane(s) (this takes several minutes)")
-        log = out / f"{key}.log"
+        log = result.with_suffix(".log")
         started = time.monotonic()
         with log.open("w", encoding="utf-8") as handle:
             process = subprocess.Popen(
@@ -199,14 +212,20 @@ def run_revision(
                 raise
         if process.returncode != 0 or "Total:     1" not in log.read_text(encoding="utf-8"):
             raise SystemExit(f"[{revision}] the probe failed (exit status {process.returncode}). See {log}.")
-        print(f"[{revision}] probe: {int(time.monotonic() - started)} s")
+        timing[f"probe {label}"] = time.monotonic() - started
+        print(f"[{revision}] probe: {format_seconds(timing[f'probe {label}'])}")
         partial.replace(result)
         shutil.rmtree(temporary.parent, ignore_errors=True)
         return result
     finally:
         git(repository, "worktree", "unlock", str(worktree))
         if not keep:
+            # The worktree holds the build output (bin and obj). A failed or
+            # interrupted probe leaves a partial output of hundreds of MB.
             git(repository, "worktree", "remove", "--force", str(worktree))
+            shutil.rmtree(out / "run" / sha[:12], ignore_errors=True)
+            if partial is not None:
+                partial.unlink(missing_ok=True)
 
 
 PROGRESS_SECONDS = 60
@@ -235,16 +254,59 @@ class Progress:
         return f"{self.rows:,} lines, current state {self.state or '<none>'}"
 
 
-# The private temporary root is <out>/run/<revision>/tmp. A ".." path in the
-# corpus reaches its parent, which differs for each revision.
-RUN_DIRECTORY = re.compile(r"/run/[0-9a-f]{12}(?=[/|;\\]|$)")
+def format_seconds(seconds: float | None) -> str:
+    if seconds is None:
+        return "cache hit (not run)"
+    whole = int(round(seconds))
+    return f"{whole // 3600}h {whole % 3600 // 60:02d}m {whole % 60:02d}s ({whole} s)" if whole >= 3600 else f"{whole // 60}m {whole % 60:02d}s ({whole} s)"
 
 
-def normalize(text: str) -> str:
-    return RUN_DIRECTORY.sub("/run/{REVISION}", text)
+# The probe escapes a backslash as two characters, so a Windows separator is
+# one or two backslashes in the output text.
+SEPARATOR = r"(?:/|\\{1,2})"
+# What may follow a path in the output text: a separator, a field mark, a
+# space, a quote, or the end.
+PATH_END = r"""(?=[/|;\\\s"')]|$)"""
+# The probe replaces the revision folder name with this text.
+REVISION_FOLDER = re.escape("{REVISION}")
 
 
-def load(path: Path) -> tuple[str, dict[tuple[str, str], tuple[str, str]]]:
+def path_pattern(path: Path) -> str:
+    """Matches a path in the probe output with either separator."""
+    parts = [re.escape(part) for part in re.split(r"[/\\]+", str(path)) if part]
+    return SEPARATOR + SEPARATOR.join(parts)
+
+
+def make_normalizer(out: Path):
+    """Returns a function that replaces the run-specific text of a decision line.
+
+    A decision line can show a revision folder when an input path uses "..".
+    The two revisions have different folders, so each folder gets a fixed token:
+
+    - <out>/worktrees/{REVISION}  becomes {REVISION_ROOT}
+    - <out>/run/{REVISION}        becomes {RUN_ROOT}  (the parent of the private temporary root)
+    - <out>                       becomes {WORK_ROOT}
+
+    The probe replaces the paths that it knows and the revision folder name
+    (see Cleaner in the probe). A ".." path reaches the folders above them,
+    which the probe does not know by path.
+    """
+    work = path_pattern(out)
+    rules = [
+        (re.compile(f"{work}{SEPARATOR}worktrees{SEPARATOR}{REVISION_FOLDER}{PATH_END}"), "{REVISION_ROOT}"),
+        (re.compile(f"{work}{SEPARATOR}run{SEPARATOR}{REVISION_FOLDER}{PATH_END}"), "{RUN_ROOT}"),
+        (re.compile(f"{work}{PATH_END}"), "{WORK_ROOT}"),
+    ]
+
+    def normalize(text: str) -> str:
+        for rule, token in rules:
+            text = rule.sub(token, text)
+        return text
+
+    return normalize
+
+
+def load(path: Path, normalize) -> tuple[str, dict[tuple[str, str], tuple[str, str]]]:
     """Returns the adapter name and, for each decision, its outcome and a digest of its text."""
     adapter = "unknown"
     rows: dict[tuple[str, str], tuple[str, str]] = {}
@@ -259,7 +321,7 @@ def load(path: Path) -> tuple[str, dict[tuple[str, str], tuple[str, str]]]:
     return adapter, rows
 
 
-def text_of(path: Path, wanted: set[tuple[str, str]]) -> dict[tuple[str, str], str]:
+def text_of(path: Path, wanted: set[tuple[str, str]], normalize) -> dict[tuple[str, str], str]:
     found: dict[tuple[str, str], str] = {}
     with path.open(encoding="utf-8") as handle:
         for line in handle:
@@ -271,9 +333,11 @@ def text_of(path: Path, wanted: set[tuple[str, str]]) -> dict[tuple[str, str], s
     return found
 
 
-def compare(base: Path, head: Path, corpus: list[str], report: Path, examples: int) -> int:
-    base_adapter, before = load(base)
-    head_adapter, after = load(head)
+def compare(base: Path, head: Path, corpus: list[str], report: Path, examples: int, out: Path, timing: Timing) -> int:
+    normalize = make_normalizer(out)
+    started = time.monotonic()
+    base_adapter, before = load(base, normalize)
+    head_adapter, after = load(head, normalize)
     keys = sorted(set(before) | set(after))
     outcomes = collections.Counter(after[key][0] for key in after)
     transitions: collections.Counter[tuple[str, str, str]] = collections.Counter()
@@ -298,7 +362,7 @@ def compare(base: Path, head: Path, corpus: list[str], report: Path, examples: i
         lines.append(f"  {family}: {old} -> {new}: {count}")
 
     shown = differing[:examples]
-    base_text, head_text = text_of(base, set(shown)), text_of(head, set(shown))
+    base_text, head_text = text_of(base, set(shown), normalize), text_of(head, set(shown), normalize)
     for state, index in shown:
         number = int(index.split("+", 1)[0])
         subject = corpus[number] if state.startswith(("bash", "pwsh")) and number < len(corpus) else f"tool input {number}"
@@ -308,10 +372,71 @@ def compare(base: Path, head: Path, corpus: list[str], report: Path, examples: i
         for field in sorted(set(old_fields) ^ set(new_fields), key=lambda value: (value not in old_fields, value)):
             lines.append(f"  {'-' if field in old_fields else '+'} {field[:400]}")
 
-    report.write_text("\n".join(lines) + "\n", encoding="utf-8")
-    print("\n".join(lines[: 6 + len(transitions)]))
+    timing.phases["compare"] = time.monotonic() - started
+    timing.phases["total"] = time.monotonic() - timing.started
+    block = timing.lines()
+    # The report is the durable output. The timing block comes before the examples.
+    head_lines = lines[: 6 + len(transitions)]
+    report.write_text("\n".join(head_lines + block + lines[6 + len(transitions):]) + "\n", encoding="utf-8")
+    print("\n".join(head_lines))
+    print("\n".join(block))
     print(f"report: {report}")
     return 1 if differing else 0
+
+
+class Timing:
+    """Wall-clock time of each phase, with the lane and CPU count of the run."""
+
+    def __init__(self, jobs: int):
+        self.started = time.monotonic()
+        self.jobs = jobs
+        self.phases: dict[str, float | None] = {}
+
+    def lines(self) -> list[str]:
+        load_average = os.getloadavg()[0] if hasattr(os, "getloadavg") else None
+        rows = [
+            "timing:",
+            f"  lanes: {self.jobs}",
+            f"  cpus: {os.cpu_count()}",
+        ]
+        if load_average is not None:
+            rows.append(f"  load average at the end (1 min): {load_average:.1f}")
+        for name in ("corpus", "build base", "probe base", "build head", "probe head", "compare", "total"):
+            if name in self.phases:
+                rows.append(f"  {name}: {format_seconds(self.phases[name])}")
+        return rows
+
+
+def directory_size(path: Path) -> int:
+    return sum(item.stat().st_size for item in path.rglob("*") if item.is_file()) if path.is_dir() else 0
+
+
+def clean_up(out: Path, base: Path, head: Path, keep: bool, prune_cache: bool) -> None:
+    """Makes the report the durable output.
+
+    The base output stays: it is the cache that the next run reuses. The head
+    output goes unless it is the base output (a self-compare). --prune-cache
+    also removes every other output in the work directory.
+    """
+    for folder in ("worktrees", "run"):
+        try:
+            (out / folder).rmdir()  # only when empty: no disposable folder is left
+        except OSError:
+            pass
+    if keep:
+        print(f"kept: {head.name} and the worktrees (--keep)")
+    else:
+        if head != base:
+            head.unlink(missing_ok=True)
+            print(f"deleted: {head.name}")
+        if prune_cache:
+            for other in out.glob("src-*.tsv"):
+                if other != base:
+                    size = other.stat().st_size
+                    other.unlink()
+                    print(f"deleted: {other.name} ({size / 1e6:.0f} MB)")
+    cache = sorted(out.glob("src-*.tsv"))
+    print(f"cache: {out} holds {len(cache)} output(s), {sum(item.stat().st_size for item in cache) / 1e6:.0f} MB; base output {base.name}")
 
 
 def main() -> int:
@@ -328,8 +453,16 @@ def main() -> int:
                         help="the number of parallel decision lanes in the probe (default: the CPU count minus 1)")
     parser.add_argument("--out", type=Path, help="the work directory (default: artifacts/authorization-corpus)")
     parser.add_argument("--examples", type=int, default=20, help="the number of differences to print in the report")
-    parser.add_argument("--keep-worktrees", action="store_true")
+    parser.add_argument("--fresh-head", action="store_true",
+                        help="probe the head again even when an output exists. With the same revision for --base and --head, "
+                             "the report then shows whether two probes of one revision agree.")
+    parser.add_argument("--keep", action="store_true",
+                        help="keep the head output and the worktrees with their build output (default: delete them after the compare)")
+    parser.add_argument("--prune-cache", action="store_true",
+                        help="also delete every output in the work directory except the base output")
     arguments = parser.parse_args()
+    # A stopped script must still remove its worktree and partial output.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
 
     repository = Path(str(git(Path.cwd(), "rev-parse", "--show-toplevel")).strip())
     out = (arguments.out or repository / "artifacts" / "authorization-corpus").resolve()
@@ -340,20 +473,26 @@ def main() -> int:
         if os.name == "nt":
             states = "pwsh-none-i-approval,tools-Personal-u-Approval"
 
+    if arguments.jobs < 1:
+        parser.error("--jobs must be 1 or more")
+    timing = Timing(arguments.jobs)
+    corpus_started = time.monotonic()
     corpus = build_corpus(repository, resolve(repository, arguments.corpus_revision))
+    timing.phases["corpus"] = time.monotonic() - corpus_started
     corpus_path = out / f"corpus-{arguments.corpus_revision}.json"
     # Write and rename, so that a parallel run never reads a partial corpus.
     partial_corpus = corpus_path.with_suffix(f".{os.getpid()}.partial")
     partial_corpus.write_text(json.dumps(corpus, ensure_ascii=False, indent=0), encoding="utf-8")
     partial_corpus.replace(corpus_path)
     print(f"corpus: {len(corpus)} shell inputs from {arguments.corpus_revision}")
+    print(f"lanes: {arguments.jobs}, cpus: {os.cpu_count()}")
 
-    if arguments.jobs < 1:
-        parser.error("--jobs must be 1 or more")
-    base = run_revision(repository, out, arguments.base, arguments.base_adapter, corpus_path, states, arguments.jobs, arguments.keep_worktrees)
-    head = run_revision(repository, out, arguments.head, arguments.head_adapter, corpus_path, states, arguments.jobs, arguments.keep_worktrees)
+    base = run_revision(repository, out, arguments.base, arguments.base_adapter, corpus_path, states, arguments.jobs, arguments.keep, timing.phases, "base")
+    head = run_revision(repository, out, arguments.head, arguments.head_adapter, corpus_path, states, arguments.jobs, arguments.keep, timing.phases, "head", arguments.fresh_head)
     report = out / f"report-{base.stem}-vs-{head.stem}.txt"
-    return compare(base, head, corpus, report, arguments.examples)
+    status = compare(base, head, corpus, report, arguments.examples, out, timing)
+    clean_up(out, base, head, arguments.keep, arguments.prune_cache)
+    return status
 
 
 if __name__ == "__main__":
